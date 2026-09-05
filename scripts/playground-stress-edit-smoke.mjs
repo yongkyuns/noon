@@ -47,10 +47,14 @@ async function snapshot(page) {
     const scroller = document.querySelector("#scene-editor-panel .cm-scroller");
     return {
       runtimeState: status?.dataset.state ?? "",
+      runtimeStartup: status?.dataset.runtimeStartup ?? "",
+      liveAuthoring: status?.dataset.liveAuthoring ?? "",
       rendererBackend: status?.dataset.rendererBackend ?? "",
       executionMode: status?.dataset.executionMode ?? "",
+      presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
       patchState: patch?.dataset.state ?? "",
       patchText: patch?.value ?? patch?.textContent ?? "",
+      patchSequence: patch?.dataset.sequence ?? "",
       exampleId: patch?.dataset.exampleId ?? "",
       objectCount: document.querySelector("#metric-objects")?.value ?? "",
       editorHeight: pane?.getBoundingClientRect().height ?? 0,
@@ -63,26 +67,56 @@ async function snapshot(page) {
   });
 }
 
-async function runAndWait(page) {
-  const button = page.locator("#replace-scene");
-  assert.equal(await button.isEnabled(), true, "Run must be enabled before stress-scene execution");
-  await button.click();
-  await page.waitForFunction(
-    () => document.querySelector("#replace-scene")?.disabled === true,
-    null,
-    { timeout: 15_000 },
-  );
+async function waitForPreloadedScene(page) {
   await page.waitForFunction(
     () => {
+      const status = document.querySelector("#status");
       const patch = document.querySelector("#patch-status");
-      const run = document.querySelector("#replace-scene");
-      return (patch?.dataset.state === "applied" || patch?.dataset.state === "error") && !run?.disabled;
+      return (
+        status?.dataset.liveAuthoring === "ready" &&
+        status?.dataset.state === "running" &&
+        Number(status?.dataset.presentedFrames ?? "0") > 0 &&
+        patch?.dataset.state === "applied" &&
+        !document.querySelector("#replace-scene")?.disabled
+      );
     },
     null,
     { timeout: 120_000 },
   );
   const state = await snapshot(page);
-  assert.equal(state.patchState, "applied", `stress scene must run successfully: ${state.patchText}`);
+  assert.equal(
+    state.runtimeStartup,
+    "started-on-demand",
+    "stress playground must preload the existing execution owner without an explicit Run",
+  );
+  assert.equal(state.liveAuthoring, "ready");
+  assert.ok(state.presentedFrames > 0, "stress preload must present a frame");
+  assert.equal(state.patchState, "applied", `stress preload must succeed: ${state.patchText}`);
+  return state;
+}
+
+async function waitForAutomaticRun(page, previousObjectCount) {
+  await page.waitForFunction(
+    (priorObjectCount) => {
+      const patch = document.querySelector("#patch-status");
+      const run = document.querySelector("#replace-scene");
+      if (run?.disabled) return false;
+      if (patch?.dataset.state === "error") return true;
+      return (
+        patch?.dataset.state === "applied" &&
+        document.querySelector("#metric-objects")?.value !== priorObjectCount
+      );
+    },
+    previousObjectCount,
+    { timeout: 120_000 },
+  );
+  const state = await snapshot(page);
+  assert.equal(state.patchState, "applied", `stress scene must rerun successfully: ${state.patchText}`);
+  assert.notEqual(
+    state.objectCount,
+    previousObjectCount,
+    "successful structural edit must publish a different object count",
+  );
   return state;
 }
 
@@ -155,7 +189,7 @@ try {
     `focusing CodeMirror must not expand the editor pane (${diagnostics.snapshots.loaded.editorHeight} -> ${focused.editorHeight})`,
   );
 
-  diagnostics.snapshots.baseline = await runAndWait(page);
+  diagnostics.snapshots.baseline = await waitForPreloadedScene(page);
   assert.equal(diagnostics.snapshots.baseline.exampleId, "manim-parity-stress-grid");
   assert.equal(diagnostics.snapshots.baseline.executionMode, "retained");
   assert.match(diagnostics.snapshots.baseline.patchText, /Scene rebuilt atomically/);
@@ -165,12 +199,13 @@ try {
   );
   assert.match(source, /rows = 20/);
   let editedSource = source;
+  let previousObjectCount = diagnostics.snapshots.baseline.objectCount;
   for (const rows of [5, 7, 20]) {
     const nextSource = editedSource.replace(/rows = \d+/, `rows = ${rows}`);
     assert.notEqual(nextSource, editedSource);
 
-    // Use the real CodeMirror input path on every edit so identity stabilization is
-    // exercised across consecutive authoring results, not just one structural rerun.
+    // Use the real CodeMirror input path on every edit so identity stabilization and the
+    // latest-source debounce are exercised across consecutive automatic authoring results.
     await editor.click();
     await page.keyboard.press("Control+A");
     await page.keyboard.insertText(nextSource);
@@ -188,12 +223,16 @@ try {
       "editing the long source must not grow the editor pane",
     );
 
-    diagnostics.snapshots[`rows${rows}Rerun`] = await runAndWait(page);
+    diagnostics.snapshots[`rows${rows}Rerun`] = await waitForAutomaticRun(
+      page,
+      previousObjectCount,
+    );
     assert.equal(diagnostics.snapshots[`rows${rows}Rerun`].executionMode, "retained");
     assert.match(
       diagnostics.snapshots[`rows${rows}Rerun`].patchText,
       /Scene rebuilt atomically/,
     );
+    previousObjectCount = diagnostics.snapshots[`rows${rows}Rerun`].objectCount;
     editedSource = nextSource;
   }
 
@@ -208,7 +247,7 @@ try {
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground repeated structural stress edits ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, rows=5 -> 7 -> 20 applied`,
+    `playground live structural stress edits ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, rows=5 -> 7 -> 20 applied`,
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);

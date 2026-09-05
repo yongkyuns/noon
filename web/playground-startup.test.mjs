@@ -21,12 +21,12 @@ const runtimeReadyBody = main.slice(runtimeReadyStart, executionReadyStart);
 assert.match(
   createRuntimeBody,
   /new AuthoringExecutionClient\(canvas,/,
-  "first Run must create the GPU execution owner on demand",
+  "first authored Run must create the GPU execution owner on demand",
 );
 assert.match(
   preparationBody,
   /const ready = candidate\.prepare\(\);/,
-  "first Run must prepare the mode-free render owner before engine selection",
+  "first authored Run must prepare the mode-free render owner before engine selection",
 );
 assert.doesNotMatch(
   preparationBody,
@@ -116,7 +116,7 @@ const reconcileCall = runSceneBody.indexOf("await player.reconcileScene(sceneJso
 assert.ok(authoringCall >= 0, "Run must author the selected Python source");
 assert.ok(
   preparationCall >= 0 && preparationCall < authoringCall,
-  "cold Run must kick render/WASM preparation before awaiting Python authoring",
+  "cold authored Run must kick render/WASM preparation before awaiting Python authoring",
 );
 assert.ok(
   ensureRuntimeCall > authoringCall,
@@ -150,27 +150,27 @@ const bootBody = main.slice(bootStart, bootCatch);
 assert.doesNotMatch(
   bootBody,
   /ensureAuthoringClient\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
-  "initial page boot must not create Python or GPU runtime resources",
+  "initial main boot must not synchronously create Python or GPU runtime resources before the post-paint preload",
 );
 assert.doesNotMatch(
   bootBody,
   /scheduleStartupAutoplay|(?:await|void) runScene\(\)/,
-  "initial page boot must not autoplay a Python scene",
+  "initial main boot must not directly autoplay a Python scene before the post-paint preload",
 );
 assert.match(
   bootBody,
   /await selectExample\(initialExample, \{ run: false \}\);/,
-  "initial page boot must load only the selected source",
+  "initial main boot must load the selected source before preload begins",
 );
 assert.match(
   bootBody,
   /status\.dataset\.runtimeStartup = "deferred"/,
-  "initial page boot must expose deferred runtime state",
+  "initial main boot must expose deferred runtime state until the post-paint preload starts",
 );
 assert.match(
   bootBody,
   /window\.__noonExampleGallery =/,
-  "gallery API must become available without waiting for Pyodide or GPU startup",
+  "gallery API must become available without synchronously waiting for Pyodide or GPU startup",
 );
 
 assert.doesNotMatch(
@@ -260,5 +260,5 @@ assert.match(
 );
 
 console.log(
-  "✓ playground defers page-load work, overlaps first-Run Python/render preparation, and selects the authored engine only after authoring",
+  "✓ playground paints source first, post-paint preload reuses the existing authored Run path, and Python/render preparation remains overlapped",
 );
