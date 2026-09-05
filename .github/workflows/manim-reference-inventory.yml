@@ -36,11 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Noon
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: noon
       - name: Checkout pinned ManimCE source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ManimCommunity/manim
           ref: ${{ env.MANIM_REFERENCE_SHA }}
@@ -113,7 +113,7 @@ jobs:
           NODE
       - name: Upload reference inventory
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: manim-v0.21.0-reference-inventory
           path: |

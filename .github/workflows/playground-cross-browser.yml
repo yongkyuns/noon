@@ -35,13 +35,13 @@ jobs:
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -54,7 +54,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -64,7 +64,7 @@ jobs:
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
       - name: Upload browser runtime assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playground-cross-browser-web-runtime
           path: |
@@ -90,14 +90,14 @@ jobs:
             profile: mobile-dpr2
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Download browser runtime assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: playground-cross-browser-web-runtime
           path: web
       - name: Cache Playwright browser
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
@@ -119,7 +119,7 @@ jobs:
         run: node scripts/playground-browser-matrix-smoke.mjs
       - name: Upload playground diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playground-matrix-${{ matrix.browser }}-${{ matrix.profile }}
           path: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
