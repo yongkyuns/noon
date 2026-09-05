@@ -212,7 +212,9 @@ impl CanonicalAuthoringScene {
         if self.live_player_transferred {
             return Err("live execution session is running in the semantic engine".into());
         }
-        if self.live_player.is_none() {
+        if let Some(player) = self.live_player.as_mut() {
+            player.set_loop_duration(duration)?;
+        } else {
             let execution = self.lower_execution()?;
             self.live_player = Some(crate::SemanticExecutionPlayer::from_live_session(
                 execution,
@@ -220,17 +222,11 @@ impl CanonicalAuthoringScene {
                 duration,
                 0,
             )?);
-        } else {
-            self.live_player
-                .as_mut()
-                .expect("live player initialized")
-                .set_loop_duration(duration)
-                .map_err(|error| error.to_string())?;
         }
         Ok(self.live_player.as_mut().expect("live player initialized"))
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn active_live_player(&mut self) -> Result<&mut crate::SemanticExecutionPlayer, String> {
         if self.live_player_transferred {
             return Err("live execution session is running in the semantic engine".into());
