@@ -893,28 +893,54 @@ mod tests {
 
     #[test]
     fn transient_surface_acquire_retains_pending_session_publication() {
-        use noon_core::{SemanticObjectState, SemanticStore, StoredGeometry};
+        use noon_core::{
+            SemanticObjectProperty, SemanticObjectState, SemanticStore, SemanticVec3,
+            StoredGeometry,
+        };
 
         let mut store = SemanticStore::new();
+        let viewport = store
+            .insert_semantic_input_signal(SemanticVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        store
+            .bind_semantic_native_state_input(viewport, NativeStateSource::ViewportSize)
+            .unwrap();
         let object =
             store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
                 radius: 1.0,
             }));
         store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(viewport, object, SemanticObjectProperty::Translation)
+            .unwrap();
         let session = ExecutionSession::from_semantic_store(&store).unwrap();
         let mut app = NativeApp::new(session, NativeViewportConfig::default());
 
+        assert!(app.session.take_frame_changes().is_all());
+        assert!(!app.publication_pending());
+
+        app.dispatch_state(
+            NativeStateSource::ViewportSize,
+            NativeInputValue::Vec2(Vec2::new(640.0, 360.0)),
+        )
+        .unwrap();
+        assert!(!app.force_full_redraw);
         assert!(app.publication_pending());
         assert!(app.take_frame_changes_after_acquire::<()>(None).is_none());
         assert!(
             app.session.wake_state().frame_pending(),
             "a failed surface acquisition must not consume the runtime publication"
         );
+        assert!(
+            !app.force_full_redraw,
+            "a failed surface acquisition must not promote an incremental publication to a full redraw"
+        );
 
         let Some(((), changes)) = app.take_frame_changes_after_acquire(Some(())) else {
             panic!("the retry must receive the pending runtime publication");
         };
-        assert!(!changes.is_empty());
+        assert!(!changes.is_all());
+        assert_eq!(changes.object_indices(), &[0]);
         assert!(!app.session.wake_state().frame_pending());
     }
 

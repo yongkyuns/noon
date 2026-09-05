@@ -124,11 +124,11 @@ try {
   server.kill("SIGTERM");
 }
 
-// Keep a compact sustained WebGPU profiling regression in the existing browser
-// gate. This is a correctness/lifetime oracle, not a performance result, so pin
-// its headless Linux backend to the same deterministic SwiftShader/Vulkan stack
-// used by the dedicated WebGPU recovery tests. Timestamp queries are not exposed
-// by ExecutionCanvasRenderer yet; perf-profile reports that capability explicitly.
+// Keep a compact sustained timestamp-query regression in the existing WebGPU
+// browser gate. This is a correctness/lifetime oracle, not a performance result,
+// so pin its headless Linux backend to the same deterministic SwiftShader/Vulkan
+// stack used by the dedicated WebGPU recovery tests. Normal perf-profile runs
+// remain hardware-selected unless the caller explicitly requests software WebGPU.
 const sustained = spawnSync(process.execPath, ["scripts/perf-profile.mjs"], {
   cwd: repoRoot,
   encoding: "utf8",
@@ -136,6 +136,7 @@ const sustained = spawnSync(process.execPath, ["scripts/perf-profile.mjs"], {
     ...process.env,
     NOON_PERF_BACKEND: "webgpu",
     NOON_PERF_FORCE_SOFTWARE_WEBGPU: "1",
+    NOON_PERF_REQUIRE_GPU_TIMESTAMPS: "1",
     NOON_PERF_COUNTS: "10000",
     NOON_PERF_LAYOUTS: "fixed",
     NOON_PERF_WARMUP: "8",
@@ -145,7 +146,7 @@ const sustained = spawnSync(process.execPath, ["scripts/perf-profile.mjs"], {
 });
 if (sustained.status !== 0) {
   throw new Error(
-    `Sustained WebGPU profiling failed:\n${sustained.stdout}\n${sustained.stderr}`,
+    `Sustained WebGPU timestamp profiling failed:\n${sustained.stdout}\n${sustained.stderr}`,
   );
 }
-console.log("Sustained WebGPU profiler regression passed (64 measured frames)");
+console.log("Sustained WebGPU timestamp profiler regression passed (64 measured frames)");
