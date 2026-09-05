@@ -82,6 +82,12 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1
           npx playwright install chromium
+      - name: Measure preloaded Python cold start
+        env:
+          NOON_COLD_START_BACKEND: webgl
+          NOON_COLD_START_EXAMPLES: geometry:parity-create-circle
+          NOON_COLD_START_ARTIFACT: perf-artifacts/playground-cold-start-webgl.json
+        run: node scripts/playground-cold-start.mjs
       - name: Test authoring error recovery
         env:
           NOON_PLAYGROUND_AUTHORING_RECOVERY_ARTIFACTS: browser-smoke-artifacts/playground-authoring-recovery
@@ -102,5 +108,6 @@ jobs:
           path: |
             browser-smoke-artifacts/playground-authoring-recovery
             browser-smoke-artifacts/playground-stress-edit
+            perf-artifacts/playground-cold-start-webgl.json
           if-no-files-found: error
           retention-days: 7
