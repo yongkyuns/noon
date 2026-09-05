@@ -29,6 +29,10 @@ pub struct CanonicalAuthoringScene {
     live_player: Option<crate::SemanticExecutionPlayer>,
     #[cfg(any(target_arch = "wasm32", test))]
     live_player_transferred: bool,
+    /// Whether the locally held player was returned by a presentation lease.
+    /// Only that dormant runtime may be superseded by later direct authoring.
+    #[cfg(any(target_arch = "wasm32", test))]
+    live_player_returned: bool,
 }
 
 impl Default for CanonicalAuthoringScene {
@@ -54,6 +58,8 @@ impl CanonicalAuthoringScene {
             live_player: None,
             #[cfg(any(target_arch = "wasm32", test))]
             live_player_transferred: false,
+            #[cfg(any(target_arch = "wasm32", test))]
+            live_player_returned: false,
         }
     }
 
@@ -287,9 +293,7 @@ impl CanonicalAuthoringScene {
         &mut self,
         duration: f64,
     ) -> Result<&mut crate::SemanticExecutionPlayer, String> {
-        if self.live_player_transferred {
-            return Err("live execution session is running in the semantic engine".into());
-        }
+        self.prepare_local_player_for_run()?;
         if let Some(player) = self.live_player.as_mut() {
             player.set_loop_duration(duration)?;
         } else {
@@ -302,7 +306,39 @@ impl CanonicalAuthoringScene {
                 0,
             )?);
         }
+        self.live_player_returned = false;
         Ok(self.live_player.as_mut().expect("live player initialized"))
+    }
+
+    /// Refresh a dormant presentation runtime only at an explicit run or lease
+    /// boundary. Direct edits during an active live authoring session remain an
+    /// error rather than silently replacing that session.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn prepare_local_player_for_run(&mut self) -> Result<(), String> {
+        if self.live_player_transferred {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let authored_revision = self.scene.store().borrow().scene_revision();
+        let stale = self
+            .live_player
+            .as_ref()
+            .is_some_and(|player| player.scene_revision() != authored_revision);
+        if stale && !self.live_player_returned {
+            return Err("authored scene changed while live execution is active".into());
+        }
+        if stale {
+            self.live_player = None;
+            self.live_player_returned = false;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn returned_player_is_stale(&self) -> bool {
+        self.live_player_returned
+            && self.live_player.as_ref().is_some_and(|player| {
+                player.scene_revision() != self.scene.store().borrow().scene_revision()
+            })
     }
 
     /// Begin an explicit authoring-run publication boundary.
@@ -313,18 +349,7 @@ impl CanonicalAuthoringScene {
     /// now-stale returned runtime and lower a fresh one on attach.
     #[cfg(any(target_arch = "wasm32", test))]
     fn prepare_execution_run(&mut self) -> Result<(), String> {
-        if self.live_player_transferred {
-            return Err("semantic execution session is running in the semantic engine".into());
-        }
-        if self
-            .live_player
-            .as_ref()
-            .map(crate::SemanticExecutionPlayer::scene_revision)
-            != Some(self.scene.store().borrow().scene_revision())
-        {
-            self.live_player = None;
-        }
-        Ok(())
+        self.prepare_local_player_for_run()
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -352,6 +377,9 @@ impl CanonicalAuthoringScene {
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("mobject is not bound to this canonical Scene".into());
         }
+        if self.returned_player_is_stale() {
+            return authored_mobject_layout(handle);
+        }
         if let Some(player) = self.live_player.as_mut() {
             let observed = player.live_effective_layout(handle)?;
             return Ok((
@@ -361,16 +389,7 @@ impl CanonicalAuthoringScene {
                 observed.height,
             ));
         }
-        let Some(bounds) = handle.layout_bounds()? else {
-            let (center_x, center_y) = handle.center()?;
-            return Ok((center_x, center_y, 0.0, 0.0));
-        };
-        Ok((
-            (bounds.min_x + bounds.max_x) * 0.5,
-            (bounds.min_y + bounds.max_y) * 0.5,
-            bounds.width(),
-            bounds.height(),
-        ))
+        authored_mobject_layout(handle)
     }
 
     /// Read only the live runtime's authored handoff duration.
@@ -455,14 +474,13 @@ impl CanonicalAuthoringScene {
         duration: f64,
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
+        self.prepare_local_player_for_run()?;
         if let Some(player) = self.live_player.as_mut() {
             player.rebind_transport(duration, transport_session)?;
             let player = self.live_player.take().expect("live player initialized");
             self.live_player_transferred = true;
+            self.live_player_returned = false;
             return Ok(player);
-        }
-        if self.live_player_transferred {
-            return Err("live execution session was already transferred".into());
         }
         let execution = self.lower_execution()?;
         let store = std::rc::Rc::clone(self.scene.store());
@@ -474,6 +492,7 @@ impl CanonicalAuthoringScene {
             transport_session,
         )?;
         self.live_player_transferred = true;
+        self.live_player_returned = false;
         Ok(player)
     }
 
@@ -489,6 +508,7 @@ impl CanonicalAuthoringScene {
         }
         self.live_player = Some(player);
         self.live_player_transferred = false;
+        self.live_player_returned = true;
         Ok(())
     }
 
@@ -550,6 +570,20 @@ impl CanonicalAuthoringScene {
             .copied()
             .ok_or_else(|| format!("unknown canonical object {}", id.get()))
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn authored_mobject_layout(handle: &noon::Mobject) -> Result<(f64, f64, f64, f64), String> {
+    let Some(bounds) = handle.layout_bounds()? else {
+        let (center_x, center_y) = handle.center()?;
+        return Ok((center_x, center_y, 0.0, 0.0));
+    };
+    Ok((
+        (bounds.min_x + bounds.max_x) * 0.5,
+        (bounds.min_y + bounds.max_y) * 0.5,
+        bounds.width(),
+        bounds.height(),
+    ))
 }
 
 /// Reconstruct the legacy source document only when the normal semantic session
@@ -1746,18 +1780,48 @@ mod tests {
         context.return_execution_player(initial).unwrap();
 
         // A direct authoring operation happens outside the returned runtime.
-        // The next registration boundary lowers precisely one fresh runtime.
         circle.shift(3.0, -1.0).unwrap();
+        circle.scale(2.0, 0.5).unwrap();
+        circle.set_fill(0.25, 0.5, 0.75, 0.8).unwrap();
+
+        // Ordinary authoring reads observe the shared store without relowering
+        // or treating the dormant returned runtime as active live authority.
+        assert_eq!(
+            context.mobject_layout(&circle).unwrap(),
+            (3.0, -1.0, 4.0, 1.0)
+        );
+        assert!(context.live_player.is_some());
+
+        // The next registration boundary lowers precisely one fresh runtime.
         context.prepare_execution_run().unwrap();
         assert!(context.live_player.is_none());
 
         let mut rerun = context.take_execution_player(1.0, 18).unwrap();
         let effective = rerun.live_effective(&circle).unwrap();
         assert_eq!(effective.transform.translation, Vec2::new(3.0, -1.0));
+        assert_eq!(effective.transform.scale, Vec2::new(2.0, 0.5));
+        assert_eq!(effective.style.fill_opacity, 0.8);
         let snapshot: crate::RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&rerun.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 18);
         assert_eq!(snapshot.objects[0].transform.translation.x, 3.0);
+    }
+
+    #[test]
+    fn direct_authoring_cannot_hide_a_stale_active_live_runtime() {
+        let mut context = CanonicalAuthoringScene::default();
+        let mut circle = context.scene.circle(1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context.live_player(1.0).unwrap();
+
+        circle.shift(3.0, -1.0).unwrap();
+
+        let query_error = context.mobject_layout(&circle).unwrap_err();
+        assert!(query_error.contains("semantic scene revision"));
+        let run_error = context.prepare_execution_run().unwrap_err();
+        assert!(run_error.contains("authored scene changed while live execution is active"));
+        assert!(context.live_player.is_some());
+        assert!(!context.live_player_returned);
     }
 
     #[test]
