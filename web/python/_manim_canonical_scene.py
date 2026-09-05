@@ -325,8 +325,12 @@ class LiveExecution:
         return float(self._context.liveWait(float(duration)))
 
     def advance_to(self, time: float) -> bool:
-        """Drive the current segment through the existing Rust runtime."""
+        """Drive the current segment; affine endpoints require ``complete()``."""
         return bool(self._context.liveAdvanceSegmentTo(float(time)))
+
+    def complete(self) -> None:
+        """Publish the active endpoint before sequential authoring continues."""
+        self._context.liveCompleteSegment()
 
 
 class LiveAnimation:

@@ -3,12 +3,12 @@
 //! This facade owns neither semantic nor runtime state.  It only coordinates a
 //! transaction with the session that already lowered the same semantic store.
 //! Membership and property publication use the same prepared semantic transaction.
-//! Existing affine declarations use session-local segments; persistent completion
-//! reconciliation remains a separate contract.
+//! Existing affine declarations use session-local segments, whose endpoint
+//! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 use crate::{
-    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentError,
-    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentCompletionError,
+    ExecutionSegmentError, ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionPublicationError, Mobject,
 };
 use noon_core::{
@@ -38,6 +38,7 @@ pub enum LiveSessionError {
     Animation(String),
     Activation(ExecutionSessionAnimationError),
     Segment(ExecutionSegmentError),
+    Completion(ExecutionSegmentCompletionError),
     Publication(ExecutionSessionPublicationError),
 }
 
@@ -51,6 +52,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
+            Self::Completion(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
         }
     }
@@ -73,6 +75,12 @@ impl From<ExecutionSessionAnimationError> for LiveSessionError {
 impl From<ExecutionSegmentError> for LiveSessionError {
     fn from(value: ExecutionSegmentError) -> Self {
         Self::Segment(value)
+    }
+}
+
+impl From<ExecutionSegmentCompletionError> for LiveSessionError {
+    fn from(value: ExecutionSegmentCompletionError) -> Self {
+        Self::Completion(value)
     }
 }
 
@@ -183,8 +191,8 @@ impl<'a> LiveSession<'a> {
     /// handle is replayable authored state, while activation atomically adds
     /// execution-local tracks and captures the current effective affine source.
     /// The returned segment can be driven with [`Self::advance_segment_to`] and
-    /// observed with [`Self::segment_state`]. Completion exposes its effective
-    /// endpoint but does not yet reconcile it into persistent authored state.
+    /// observed with [`Self::segment_state`]. Call [`Self::complete_segment`]
+    /// at its coherent endpoint before sequential authoring resumes.
     pub fn play_animation(
         &mut self,
         animation: &DeclaredAnimation,
@@ -222,6 +230,20 @@ impl<'a> LiveSession<'a> {
             .advance_segment_to(segment, requested_time)
             .map(|_| ())
             .map_err(|error| LiveSessionError::Animation(error.to_string()))
+    }
+
+    /// Reconcile one endpoint through the existing session publication path.
+    ///
+    /// The session validates that the segment reached its boundary and that any
+    /// required callback phase is coherent, releases its runtime driver, and
+    /// publishes the resulting authored/effective endpoint atomically. This
+    /// facade retains no endpoint copy or completion state.
+    pub fn complete_segment(&mut self, segment: ExecutionSegment) -> Result<(), LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        self.session
+            .complete_segment(&mut store, segment)
+            .map(|_| ())
+            .map_err(Into::into)
     }
 
     /// Set any already-supported semantic property through one atomic publish.
@@ -377,6 +399,62 @@ mod tests {
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation.x,
             2.0
+        );
+    }
+
+    #[test]
+    fn completion_reconciles_the_endpoint_before_the_next_live_segment() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut first_target = circle.target_editor().unwrap();
+        first_target.set_translation(4.0, -2.0).unwrap();
+        let mut second_target = circle.target_editor().unwrap();
+        second_target.set_translation(8.0, -2.0).unwrap();
+        scene.add(&circle).unwrap();
+        let first = scene
+            .declare_transform_to(
+                &circle,
+                &first_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let second = scene
+            .declare_transform_to(
+                &circle,
+                &second_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+
+        let first_segment = live.play_animation(&first).unwrap();
+        live.advance_segment_to(first_segment, first_segment.end_time())
+            .unwrap();
+        assert!(!live.segment_state(first_segment).is_complete());
+        live.complete_segment(first_segment).unwrap();
+        assert!(live.segment_state(first_segment).is_complete());
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            4.0
+        );
+
+        live.set_translation(&circle, 5.0, -2.0).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            5.0
+        );
+        let second_segment = live.play_animation(&second).unwrap();
+        live.advance_segment_to(second_segment, second_segment.end_time())
+            .unwrap();
+        live.complete_segment(second_segment).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            8.0
         );
     }
 

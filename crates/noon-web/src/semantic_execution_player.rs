@@ -377,6 +377,25 @@ impl SemanticExecutionPlayer {
         Ok(live.segment_state(segment).is_complete())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_complete_segment(&mut self) -> Result<(), String> {
+        let segment = self
+            .live_segment
+            .ok_or("play an animation or wait before completing a live segment")?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .complete_segment(segment)
+        .map_err(|error| error.to_string())
+    }
+
     #[cfg(test)]
     pub(crate) fn session_mut_for_test(&mut self) -> &mut ExecutionSession {
         &mut self.session

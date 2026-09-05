@@ -25,8 +25,10 @@ class LiveAffineAnimation(Scene):
         end_time = live.play(animation)
         assert not live.advance_to(1.0)
         assert live.effective_center(circle) == (2.0, -1.0)
-        assert live.advance_to(end_time)
+        assert not live.advance_to(end_time)
+        live.complete()
         assert live.effective_center(circle) == (4.0, -2.0)
 
         wait_end = live.wait(0.25)
         assert live.advance_to(wait_end)
+        live.complete()

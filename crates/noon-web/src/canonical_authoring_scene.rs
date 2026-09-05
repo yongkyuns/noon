@@ -925,6 +925,15 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveCompleteSegment)]
+        pub fn live_complete_segment(&mut self) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_complete_segment()
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = prepareExecutionRun)]
         pub fn prepare_execution_run(&mut self) -> Result<(), JsValue> {
             self.inner.prepare_execution_run().map_err(js_error)
@@ -1526,9 +1535,11 @@ mod tests {
         {
             let player = context.live_player(1.0).unwrap();
             assert_eq!(player.live_play_animation(&animation).unwrap(), 2.0);
-            assert!(player.live_advance_segment_to(2.0).unwrap());
+            assert!(!player.live_advance_segment_to(2.0).unwrap());
+            player.live_complete_segment().unwrap();
             assert_eq!(player.live_wait(0.25).unwrap(), 2.25);
             assert!(player.live_advance_segment_to(2.25).unwrap());
+            player.live_complete_segment().unwrap();
         }
         assert_eq!(context.live_handoff_duration(), Some(2.25));
 
