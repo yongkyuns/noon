@@ -1508,6 +1508,10 @@ mod tests {
             Err(SemanticSignalError::NativeOwnedSignal { signal: native })
         );
         store.clear_semantic_native_input(native).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .set_signal(other, 2.0_f64)
+            .set_signal(native, 0.5_f64);
         transaction.apply(&mut store).unwrap();
         assert_eq!(store.semantic_input_scalar_value_at(native, 0.0), Ok(0.5));
     }
