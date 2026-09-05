@@ -812,7 +812,6 @@ impl ExecutionSession {
             source,
             target_state,
             options,
-            options,
             self.runtime.frame().time,
             |object| self.runtime.effective_transform(object),
         )?;

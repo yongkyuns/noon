@@ -116,8 +116,7 @@ pub fn lower_prepared_semantic_transform_to<F>(
     index: &SemanticExecutionIndex,
     target: SemanticNodeId,
     target_state: SemanticNodeId,
-    declaration_options: AnimationOptions,
-    play_options: AnimationOptions,
+    options: AnimationOptions,
     start_time: f64,
     mut effective_transform: F,
 ) -> Result<PreparedSemanticTransformToProjection, PreparedSemanticTransformToError>
@@ -144,9 +143,8 @@ where
     let execution_object_id = index.execution_object_id(target).ok_or(
         PreparedSemanticTransformToError::MissingExecutionTarget(target),
     )?;
-    let options =
-        resolve_animation_options(AnimationDefaults::MANIM, declaration_options, play_options)
-            .map_err(PreparedSemanticTransformToError::Options)?;
+    let options = resolve_animation_options(AnimationDefaults::MANIM, options, options)
+        .map_err(PreparedSemanticTransformToError::Options)?;
     validate_affine_payload(source, target_object, options)
         .map_err(|issue| prepared_payload_error(target, issue))?;
     let from = effective_transform(execution_object_id).ok_or(
@@ -247,7 +245,6 @@ mod tests {
             &index,
             source,
             target,
-            AnimationOptions::new(),
             AnimationOptions::new()
                 .run_time(2.0)
                 .rate_func(RateFunction::Linear),
@@ -294,7 +291,6 @@ mod tests {
                 source,
                 target,
                 AnimationOptions::new(),
-                AnimationOptions::new(),
                 0.0,
                 |_| Some(Transform2D::default()),
             ),
@@ -338,7 +334,6 @@ mod tests {
             &index,
             source,
             target,
-            options,
             options,
             4.0,
             |_| Some(effective),
