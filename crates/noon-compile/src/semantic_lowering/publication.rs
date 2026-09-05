@@ -359,7 +359,7 @@ fn collect_existing_exit_leaves(
     if !seen.insert(node) || !reachability.is_reachable(node) {
         return Ok(());
     }
-    let semantic = store.node(node).ok_or_else(|| {
+    let semantic = store.node(node).ok_or({
         SemanticLoweringError::Store(noon_core::SemanticStoreError::UnknownNode(node))
     })?;
     match semantic.kind() {
