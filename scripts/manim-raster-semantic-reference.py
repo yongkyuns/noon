@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Capture Manim semantic state at the exact PNG-sequence sample frames.
 
-Manim Cairo can encode a static wait as one materialized PNG frame with a repeat count
-while still advancing renderer time by the full wait duration.  This oracle therefore
-tracks materialized frame state and logical scene time separately.
+Manim Cairo quantizes each animated segment to materialized frames and can encode
+a static wait as one PNG with a repeat count. Neither frame count nor the renderer's
+accumulated frame time is the authored timeline. Track sample offsets within each
+logical segment separately, leaving Cairo's own clock behavior unchanged.
 """
 
 from __future__ import annotations
@@ -47,11 +48,16 @@ class SemanticRenderer(CairoRenderer):
     def __init__(self, camera_class: type[Camera] = Camera) -> None:
         self.frames: list[dict[str, Any]] = []
         self._active_scene = None
+        self.logical_time = 0.0
         super().__init__(file_writer_class=NullFileWriter, camera_class=camera_class)
 
     def play(self, scene, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         self._active_scene = scene
         super().play(scene, *args, **kwargs)
+        # compile_animation_data/play_internal resolves the segment's run time.
+        # Summing rendered frame durations instead would round every short play
+        # up independently and drift away from the authored segment boundaries.
+        self.logical_time += float(scene.duration)
 
     def save_static_frame_data(self, _scene, _static_mobjects):  # type: ignore[no-untyped-def]
         self.static_image = None
@@ -62,7 +68,9 @@ class SemanticRenderer(CairoRenderer):
 
     def render(self, scene, time, moving_mobjects=None) -> None:  # type: ignore[no-untyped-def]
         del moving_mobjects
-        self.frames.append(_scene_state(scene, len(self.frames), self.time, float(time)))
+        self.frames.append(
+            _scene_state(scene, len(self.frames), self.logical_time + float(time), float(time))
+        )
         self.time += 1.0 / float(config.frame_rate)
 
     def freeze_current_frame(self, duration: float) -> None:
@@ -70,7 +78,7 @@ class SemanticRenderer(CairoRenderer):
         if self._active_scene is None:
             raise RuntimeError("semantic renderer has no active scene for frozen frame")
         self.frames.append(
-            _scene_state(self._active_scene, len(self.frames), self.time, 0.0)
+            _scene_state(self._active_scene, len(self.frames), self.logical_time, 0.0)
         )
         self.time += float(duration)
 
@@ -196,9 +204,9 @@ def _render_fixture(
         scene.tear_down()
 
     expected_duration = float(fixture["expected_duration"])
-    if not math.isclose(renderer.time, expected_duration, rel_tol=0.0, abs_tol=1e-9):
+    if not math.isclose(renderer.logical_time, expected_duration, rel_tol=0.0, abs_tol=1e-9):
         raise RuntimeError(
-            f"{fixture['id']}: logical Manim duration {renderer.time} != "
+            f"{fixture['id']}: logical Manim duration {renderer.logical_time} != "
             f"expected {expected_duration}"
         )
 
@@ -216,7 +224,7 @@ def _render_fixture(
         "id": fixture["id"],
         "scene": fixture["scene"],
         "frame_count": len(renderer.frames),
-        "logical_duration": float(renderer.time),
+        "logical_duration": renderer.logical_time,
         "frame_rate": frame_rate,
         "frames": renderer.frames,
     }
