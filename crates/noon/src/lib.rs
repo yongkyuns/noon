@@ -30,8 +30,8 @@ pub use execution_session::*;
 pub use live_session::{EffectiveMobjectState, LiveSession, LiveSessionError};
 pub use noon_core::*;
 pub use noon_runtime::{
-    EvaluationError, FrameChanges, FrameObjectState, FrameState, RuntimeWakeState,
-    TimelineWakeState,
+    EvaluationError, FrameChanges, FrameObjectState, FrameState, RendererPublication,
+    RuntimeWakeState, TimelineWakeState,
 };
 pub use reactive_authoring::*;
 pub use retained_family_authoring_lowering::*;

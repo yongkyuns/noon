@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::HashMap,
     hash::{Hash, Hasher},
     mem::{size_of, size_of_val},
@@ -7,13 +8,13 @@ use std::{
 
 use noon_core::{
     Color, FontResourceHandle, FontResourceLookup, GeometryRef, GeometryResource,
-    GeometryResourceLookup, GlyphRun, ObjectContentRef, ObjectId, PathCommand, StrokeCap,
-    StrokeJoin, StrokeWidthMode, Style, TextAffineTransform, TextGlyphStroke, TextRenderItem,
-    TextResourceLookup, TextVectorItem, Transform2D, Vec2, VectorPath,
+    GeometryResourceLookup, GlyphRun, ObjectContentRef, ObjectId, PathCommand, PublicationContext,
+    StrokeCap, StrokeJoin, StrokeWidthMode, Style, TextAffineTransform, TextGlyphStroke,
+    TextRenderItem, TextResourceLookup, TextVectorItem, Transform2D, Vec2, VectorPath,
 };
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena};
-use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
 use noon_text_atlas::GpuGlyphAtlas;
 use noon_text_render_wgpu::{
     GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
@@ -141,6 +142,10 @@ impl PreparedRetainedGpuFrame<'_> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetainedPrepareError {
+    StalePublication {
+        received: PublicationContext,
+        applied: PublicationContext,
+    },
     MissingTextResource,
     MissingGeometryResource,
     MissingFontResource,
@@ -154,6 +159,12 @@ pub enum RetainedPrepareError {
 impl std::fmt::Display for RetainedPrepareError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::StalePublication { received, applied } => write!(
+                formatter,
+                "renderer publication frame epoch {} is stale relative to applied epoch {}",
+                received.frame_epoch().get(),
+                applied.frame_epoch().get()
+            ),
             Self::MissingTextResource => formatter.write_str("retained text resource is missing"),
             Self::MissingGeometryResource => {
                 formatter.write_str("retained vector geometry resource is missing")
@@ -568,6 +579,7 @@ pub struct RetainedFramePreparer {
     prepared_generation_ready: bool,
     prepared_generation_reuses: u64,
     text_generation: u64,
+    last_applied_publication: Cell<Option<PublicationContext>>,
 }
 
 impl Default for RetainedFramePreparer {
@@ -605,6 +617,7 @@ impl Default for RetainedFramePreparer {
             prepared_generation_ready: false,
             prepared_generation_reuses: 0,
             text_generation: 0,
+            last_applied_publication: Cell::new(None),
         }
     }
 }
@@ -694,6 +707,59 @@ impl RetainedFramePreparer {
         self.prepare_with_changes(
             device, queue, frame, &changes, texts, fonts, geometries, metrics,
         )
+    }
+
+    /// Prepare one coherent runtime publication and retain its applied revision
+    /// metadata for later stale-publication rejection.
+    pub fn prepare_publication<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        publication: &RendererPublication<'_>,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        let received = publication.context();
+        let previous = self.last_applied_publication.get();
+        if let Some(applied) = previous {
+            if publication_is_stale(received, applied) {
+                return Err(RetainedPrepareError::StalePublication { received, applied });
+            }
+        }
+
+        // The marker is restored on every failed preparation. `prepare_with_changes`
+        // does not yield control, so callers observe this candidate only once its
+        // successful prepared frame is returned.
+        self.last_applied_publication.set(Some(received));
+        match self.prepare_with_changes(
+            device,
+            queue,
+            publication.frame(),
+            publication.changes(),
+            publication.text_resources(),
+            publication.font_resources(),
+            publication.geometry_resources(),
+            metrics,
+        ) {
+            Ok(prepared) => Ok(prepared),
+            Err(error) => {
+                self.last_applied_publication.set(previous);
+                Err(error)
+            }
+        }
+    }
+
+    /// Last successfully applied runtime publication, if this preparer has one.
+    pub fn last_applied_publication(&self) -> Option<PublicationContext> {
+        self.last_applied_publication.get()
+    }
+
+    /// Reset retained renderer state before deliberately binding this preparer to a
+    /// different runtime instance. Frame epochs order one runtime only, and retained
+    /// geometry/text caches cannot be shared across independent resource projections.
+    pub fn reset_publication_context(&mut self) {
+        let outline_limits = self.outlines.limits();
+        *self = Self::default();
+        self.outlines.set_limits(outline_limits);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1458,6 +1524,11 @@ impl RetainedFramePreparer {
     }
 }
 
+fn publication_is_stale(received: PublicationContext, applied: PublicationContext) -> bool {
+    received.frame_epoch().get() < applied.frame_epoch().get()
+        || (received.frame_epoch() == applied.frame_epoch() && received != applied)
+}
+
 fn text_item_ranges(
     items: &[PreparedTextItem],
     object_count: usize,
@@ -2095,8 +2166,9 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::FontResourceId;
-    use noon_runtime::FrameObjectState;
+    use noon_compile::CompiledScene;
+    use noon_core::{FontResourceId, SceneDefinition};
+    use noon_runtime::{FrameObjectState, SceneInstance};
 
     use super::*;
 
@@ -2226,6 +2298,85 @@ mod tests {
         cache.set_limits(GlyphOutlineCacheLimits::new(1, usize::MAX));
         assert_eq!(cache.total_entries(), 1);
         assert_eq!(cache.stats().evictions, 2);
+    }
+
+    fn runtime_publication_scene() -> SceneInstance {
+        let mut scene = SceneDefinition::new();
+        scene.add(GeometryRef::circle(1.0));
+        SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"))
+    }
+
+    #[test]
+    fn publication_order_rejects_stale_or_ambiguous_frame_contexts() {
+        use noon_core::{ExecutionRevision, FrameEpoch, SceneRevision};
+
+        let applied = PublicationContext::new(
+            SceneRevision::new(3),
+            ExecutionRevision::new(5),
+            FrameEpoch::new(11),
+        );
+        assert!(!publication_is_stale(applied, applied));
+        assert!(publication_is_stale(
+            applied.with_frame_epoch(FrameEpoch::new(10)),
+            applied
+        ));
+        assert!(publication_is_stale(
+            PublicationContext::new(
+                SceneRevision::new(4),
+                ExecutionRevision::new(6),
+                FrameEpoch::new(11),
+            ),
+            applied,
+        ));
+        assert!(!publication_is_stale(
+            PublicationContext::new(
+                SceneRevision::new(4),
+                ExecutionRevision::new(6),
+                FrameEpoch::new(12),
+            ),
+            applied,
+        ));
+    }
+
+    #[test]
+    fn prepare_publication_applies_current_runtime_and_rejects_stale_runtime_view() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let mut preparer = RetainedFramePreparer::new();
+
+        let mut stale_instance = runtime_publication_scene();
+        let stale = stale_instance.take_renderer_publication();
+        let stale_context = stale.context();
+
+        let mut current_instance = runtime_publication_scene();
+        current_instance.advance_to(1.0).unwrap();
+        let current = current_instance.take_renderer_publication();
+        let current_context = current.context();
+        assert!(current_context.frame_epoch().get() > stale_context.frame_epoch().get());
+        {
+            let prepared = preparer
+                .prepare_publication(&device, &queue, &current, metrics)
+                .unwrap();
+            assert_eq!(prepared.time(), 1.0);
+        }
+        assert_eq!(preparer.last_applied_publication(), Some(current_context));
+
+        assert!(matches!(
+            preparer.prepare_publication(&device, &queue, &stale, metrics),
+            Err(RetainedPrepareError::StalePublication { received, applied })
+                if received == stale_context && applied == current_context
+        ));
+        assert_eq!(preparer.last_applied_publication(), Some(current_context));
+
+        preparer.reset_publication_context();
+        {
+            let prepared = preparer
+                .prepare_publication(&device, &queue, &stale, metrics)
+                .unwrap();
+            assert_eq!(prepared.time(), 0.0);
+            assert_eq!(prepared.geometry_stats().full_rebuilds, 1);
+        }
+        assert_eq!(preparer.last_applied_publication(), Some(stale_context));
     }
 
     #[test]

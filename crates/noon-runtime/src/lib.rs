@@ -4,10 +4,12 @@
 
 mod execution_slots;
 mod reactive;
+mod renderer_publication;
 mod spatial_index;
 
 pub use execution_slots::*;
 pub use reactive::*;
+pub use renderer_publication::*;
 pub use spatial_index::*;
 
 use std::{collections::BTreeMap, sync::Arc};
@@ -312,6 +314,19 @@ impl SceneInstance {
 
     pub fn take_frame_changes(&mut self) -> FrameChanges {
         std::mem::take(&mut self.changes)
+    }
+
+    /// Consume one renderer publication atomically with its accumulated changes.
+    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        let changes = self.take_frame_changes();
+        RendererPublication::new(
+            self.publication,
+            &self.frame,
+            changes,
+            self.compiled.text_resources(),
+            self.compiled.font_resources(),
+            self.compiled.geometry_resources(),
+        )
     }
 
     pub(crate) fn take_spatial_changes(&mut self) -> FrameChanges {
@@ -1868,6 +1883,31 @@ mod tests {
         assert_eq!(
             sought.frame_epoch(),
             advanced.frame_epoch().checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn renderer_publication_binds_one_frame_context_and_consumes_its_changes() {
+        let mut instance = SceneInstance::new(compile_linear_scene());
+        let initial_context = instance.publication_context();
+        {
+            let publication = instance.take_renderer_publication();
+            assert_eq!(publication.context(), initial_context);
+            assert!(publication.changes().is_all());
+            assert_eq!(publication.frame().time, 0.0);
+            assert_eq!(publication.frame().objects.len(), 1);
+        }
+        assert!(instance.take_frame_changes().is_empty());
+
+        instance.advance_to(2.0).expect("valid time");
+        let advanced_context = instance.publication_context();
+        let publication = instance.take_renderer_publication();
+        assert_eq!(publication.context(), advanced_context);
+        assert_eq!(publication.frame().time, 2.0);
+        assert!(!publication.changes().is_empty());
+        assert_ne!(
+            publication.context().frame_epoch(),
+            initial_context.frame_epoch()
         );
     }
 

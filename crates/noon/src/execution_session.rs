@@ -13,7 +13,9 @@ use noon_core::{
     NativeInputRuntimeError, NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId,
     ReactiveError, ReactiveValue, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
 };
-use noon_runtime::{EvaluationError, FrameChanges, FrameState, RuntimeWakeState, SceneInstance};
+use noon_runtime::{
+    EvaluationError, FrameChanges, FrameState, RendererPublication, RuntimeWakeState, SceneInstance,
+};
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
@@ -313,6 +315,11 @@ impl ExecutionSession {
     /// Consume renderer-facing invalidation state accumulated by the runtime.
     pub fn take_frame_changes(&mut self) -> FrameChanges {
         self.runtime.take_frame_changes()
+    }
+
+    /// Consume one coherent renderer publication from this typed session.
+    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        self.runtime.take_renderer_publication()
     }
 
     /// Evaluate deterministically at an absolute time.

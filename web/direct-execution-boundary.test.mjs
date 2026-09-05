@@ -60,7 +60,7 @@ for (const required of [
   "self.sync_camera(camera)?;",
   "BrowserExecutionWakePlan::from_session(session)",
   "session.wake_state().frame_pending()",
-  "session.take_frame_changes()",
+  "session.take_renderer_publication()",
   "directWakeDirectiveJson",
   "advanceDirectRealtime",
 ]) {
@@ -70,9 +70,9 @@ for (const required of [
   );
 }
 assert.equal(
-  directCanvasHost.includes("let pending_changes = session.take_frame_changes();"),
-  false,
-  "direct canvas host must not drain session invalidation before presentation",
+  directCanvasHost.includes("let publication = session.take_renderer_publication();"),
+  true,
+  "direct canvas host must consume one typed publication only after presentation work begins",
 );
 
 for (const required of [

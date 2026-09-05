@@ -1066,19 +1066,10 @@ mod wasm {
             let session = self.source.direct_mut().ok_or_else(|| {
                 js_message("direct retained rendering requires a direct ExecutionSession source")
             })?;
-            let changes = session.take_frame_changes();
+            let publication = session.take_renderer_publication();
             let prepared = self
                 .direct_preparer
-                .prepare_with_changes(
-                    &self.device,
-                    &self.queue,
-                    session.frame(),
-                    &changes,
-                    session.text_resources(),
-                    session.font_resources(),
-                    session.geometry_resources(),
-                    metrics,
-                )
+                .prepare_publication(&self.device, &self.queue, &publication, metrics)
                 .map_err(js_error)?;
             let upload = self.renderer.upload_retained(
                 &self.device,
