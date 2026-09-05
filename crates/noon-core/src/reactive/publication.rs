@@ -2,9 +2,7 @@ use serde::{Deserialize, Serialize};
 
 macro_rules! define_publication_revision {
     ($name:ident) => {
-        #[derive(
-            Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize,
-        )]
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
         pub struct $name(u64);
 
         impl $name {
@@ -112,16 +110,20 @@ mod tests {
         assert_eq!(context.scene_revision().get(), 2);
         assert_eq!(context.execution_revision().get(), 5);
         assert_eq!(context.frame_epoch().get(), 11);
-        assert_eq!(SceneRevision::new(2).checked_next(), Some(SceneRevision::new(3)));
+        assert_eq!(
+            SceneRevision::new(2).checked_next(),
+            Some(SceneRevision::new(3))
+        );
         assert_eq!(FrameEpoch::new(u64::MAX).checked_next(), None);
     }
 
     #[test]
     fn semantic_transaction_mints_one_scene_revision_only_for_changed_commit() {
         let mut store = SemanticStore::new();
-        let object = store.insert_semantic_object(SemanticObjectState::new(
-            StoredGeometry::Circle { radius: 1.0 },
-        ));
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
         store.attach_to_scene(object).unwrap();
         let initial = store.scene_revision();
 

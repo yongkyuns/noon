@@ -223,11 +223,8 @@ impl SceneInstance {
             .frame_epoch()
             .checked_next()
             .expect("Noon frame epoch space exhausted");
-        self.publication = PublicationContext::new(
-            self.publication.scene_revision(),
-            execution,
-            frame,
-        );
+        self.publication =
+            PublicationContext::new(self.publication.scene_revision(), execution, frame);
     }
 
     pub const fn last_reactive_stats(&self) -> ReactiveRuntimeStats {

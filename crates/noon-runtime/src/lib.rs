@@ -15,9 +15,10 @@ use std::collections::BTreeMap;
 use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, TransformGeometryPlan,
 };
+use noon_core::PublicationContext;
 use noon_core::{
-    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, PublicationContext,
-    ScenePatch, StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
+    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
+    StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
 };
 
 #[derive(Clone, Debug, PartialEq)]

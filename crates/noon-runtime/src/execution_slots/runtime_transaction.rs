@@ -129,6 +129,9 @@ mod tests {
             after.execution_revision(),
             before.execution_revision().checked_next().unwrap()
         );
-        assert_eq!(after.frame_epoch(), before.frame_epoch().checked_next().unwrap());
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
     }
 }

@@ -785,9 +785,9 @@ impl SemanticStore {
             self.node_mut(replacement)
                 .expect("scene-root splice replacement validated above")
                 .scene_membership = SemanticSceneMembership::Attached {
-                    previous: replacement_previous,
-                    next: replacement_next,
-                };
+                previous: replacement_previous,
+                next: replacement_next,
+            };
         }
 
         self.node_mut(root)

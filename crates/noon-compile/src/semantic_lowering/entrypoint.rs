@@ -266,12 +266,18 @@ mod tests {
         assert_eq!(lowered.compiled().objects().len(), 1);
         assert_eq!(lowered.compiled().objects()[0].id, execution_id);
         assert_eq!(lowered.camera_object(), None);
-        assert_eq!(lowered.publication_context().scene_revision(), store.scene_revision());
+        assert_eq!(
+            lowered.publication_context().scene_revision(),
+            store.scene_revision()
+        );
         assert_eq!(
             lowered.publication_context().execution_revision(),
             ExecutionRevision::default()
         );
-        assert_eq!(lowered.publication_context().frame_epoch(), FrameEpoch::default());
+        assert_eq!(
+            lowered.publication_context().frame_epoch(),
+            FrameEpoch::default()
+        );
         assert_eq!(lowered.reactive().signal_count(), 1);
         assert_eq!(lowered.compute().signal_count(), 1);
         assert_eq!(
