@@ -99,7 +99,7 @@ class MixedPainterOrder(Scene):
 
 function canonicalTextObject(result, { source, fontSize, order, objectId }) {
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.retained_document, null, "SceneSpec is the canonical mixed-content export");
+  assert.equal(result.retained_document, null, "the canonical export carries mixed content");
   assert.ok(result.scene_spec, "scene result must include canonical SceneSpec");
   const object = result.scene_spec.objects[order];
   assert.equal(object.id, objectId, "text must use the scene-global object ID allocator");
@@ -319,7 +319,7 @@ try {
   await page.evaluate(() => window.noonRetainedTextSmoke.stop());
   assert.deepEqual(errors, [], `browser errors while testing retained text authoring:\n${errors.join("\n")}`);
   console.log(
-    "Text authoring smoke passed: native Text layout/placement and pinned Manim v0.21 Typst/MathTypst sources emit canonical source-only SceneSpec content with zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
+    "Text authoring smoke passed: native Text layout/placement and pinned Manim v0.21 Typst/MathTypst sources emit canonical source-only mixed content with zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
   );
 } finally {
   await browser?.close();
