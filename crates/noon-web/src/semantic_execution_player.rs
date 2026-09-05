@@ -295,6 +295,28 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_scale(
+        &mut self,
+        mobject: &noon::Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .scale(mobject, x, y)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_rotation(
         &mut self,
@@ -312,6 +334,27 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .set_rotation(mobject, angle)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_rotate(
+        &mut self,
+        mobject: &noon::Mobject,
+        angle: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .rotate(mobject, angle)
         .map(|_| ())
         .map_err(|error| error.to_string())
     }

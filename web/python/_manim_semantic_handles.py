@@ -832,14 +832,8 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
         value = _base.Vec2(scalar, scalar)
     context = _live_mutation_context(self)
     if context is not None:
-        if not _has_wire_projection(handle):
-            raise NotImplementedError("canonical live affine scale needs a typed transform handle")
         try:
-            context.liveSetScale(
-                handle,
-                float(handle.wireScaleX) * value.x,
-                float(handle.wireScaleY) * value.y,
-            )
+            context.liveScale(handle, value.x, value.y)
         except Exception as error:
             raise ValueError(str(error)) from None
         return self
@@ -873,12 +867,8 @@ def _rotate(
             raise NotImplementedError(
                 "canonical live affine rotation supports only rotation about the current center"
             )
-        if not _has_wire_projection(handle):
-            raise NotImplementedError("canonical live affine rotation needs a typed transform handle")
         try:
-            context.liveSetRotation(
-                handle, float(handle.wireRotation) + _compat._rotation_angle_2d(angle, axis)
-            )
+            context.liveRotate(handle, _compat._rotation_angle_2d(angle, axis))
         except Exception as error:
             raise ValueError(str(error)) from None
         return self

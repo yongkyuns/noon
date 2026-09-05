@@ -7,8 +7,9 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 use crate::{
-    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentCompletionError,
-    ExecutionSegmentError, ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    semantic_mobject::authoring_render_f64, DeclaredAnimation, EffectiveSemanticObject,
+    ExecutionSegment, ExecutionSegmentCompletionError, ExecutionSegmentError,
+    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionPublicationError, Mobject,
 };
 use noon_core::{
@@ -389,6 +390,41 @@ impl<'a> LiveSession<'a> {
         self.set_property(mobject, SemanticObjectProperty::Translation, translation)
     }
 
+    /// Multiply an object's authored affine scale through the shared live
+    /// transaction. The current scale is read from the semantic store, never a
+    /// wrapper projection, so detached session targets follow the same path.
+    pub fn scale(
+        &mut self,
+        mobject: &Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let x = authoring_render_f64("scale.x", x).map_err(LiveSessionError::Mobject)?;
+        let y = authoring_render_f64("scale.y", y).map_err(LiveSessionError::Mobject)?;
+        let mut scale = self.authored(mobject)?.transform.scale;
+        scale.x *= x;
+        scale.y *= y;
+        scale
+            .lower_xy_f32()
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        self.set_property(mobject, SemanticObjectProperty::Scale, scale)
+    }
+
+    /// Add a center-relative affine rotation through the shared live
+    /// transaction. Pivot/layout rotation remains outside the bounded ordinary
+    /// affine facade.
+    pub fn rotate(
+        &mut self,
+        mobject: &Mobject,
+        angle: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let angle = authoring_render_f64("rotation", angle).map_err(LiveSessionError::Mobject)?;
+        let rotation = self.authored(mobject)?.transform.rotation_z + angle;
+        let rotation =
+            authoring_render_f64("rotation result", rotation).map_err(LiveSessionError::Mobject)?;
+        self.set_property(mobject, SemanticObjectProperty::RotationZ, rotation)
+    }
+
     pub fn set_scale(
         &mut self,
         mobject: &Mobject,
@@ -460,6 +496,30 @@ mod tests {
         };
         assert_eq!(observed.transform.translation.x, 2.0);
         assert_eq!(session.frame().objects.len(), 1);
+    }
+
+    #[test]
+    fn relative_affine_edits_use_shared_authored_state_for_live_and_detached_targets() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+
+        live.scale(&circle, 2.0, 0.5).unwrap();
+        live.rotate(&circle, 0.25).unwrap();
+        let effective = live.effective(&circle).unwrap();
+        assert_eq!(effective.transform.scale, noon_core::Vec2::new(2.0, 0.5));
+        assert_eq!(effective.transform.rotation, 0.25);
+
+        live.session.take_frame_changes();
+        let target = live.target_editor(&circle).unwrap();
+        live.scale(&target, 0.5, 4.0).unwrap();
+        live.rotate(&target, 0.75).unwrap();
+        let authored = live.authored(&target).unwrap();
+        assert_eq!(authored.transform.scale, SemanticVec3::new(1.0, 2.0, 1.0));
+        assert_eq!(authored.transform.rotation_z, 1.0);
+        assert!(live.session.take_frame_changes().is_empty());
     }
 
     #[test]

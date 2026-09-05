@@ -1820,6 +1820,21 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveScale)]
+        pub fn live_scale(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_scale(handle.semantic_mobject(), x, y)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetRotation)]
         pub fn live_set_rotation(
             &mut self,
@@ -1831,6 +1846,20 @@ mod wasm {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_set_rotation(handle.semantic_mobject(), angle)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveRotate)]
+        pub fn live_rotate(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_rotate(handle.semantic_mobject(), angle)
                 .map_err(js_error)
         }
 
