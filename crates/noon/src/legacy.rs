@@ -20,22 +20,15 @@ pub use noon_core::*;
 mod composition_authoring;
 pub use composition_authoring::{AnimationGroup, LaggedStart, Succession};
 
-/// Legacy `SignalId` tracker handle retained only while native-input authoring
-/// migrates from `ReactiveTimelineScene` (#61/#959).
-pub use crate::reactive_authoring::ValueTracker;
-
 /// Common imports for normal Noon authoring.
 pub mod prelude {
-    pub use super::ValueTracker;
     pub use super::{
         Animate, AnimationGroup, AuthoringError, Circle, Create, FadeIn, FadeOut, LaggedStart,
         Line, Mobject, MobjectEditor, Path, Rectangle, Rotate, Scene, Square, Succession,
         Transform,
     };
     pub use crate::legacy::*;
-    pub use crate::{
-        ExecutionSession, ReactiveScene, ReactiveTimelineScene, RetainedScene, VectorSignal,
-    };
+    pub use crate::{ExecutionSession, RetainedScene};
     pub use noon_core::{
         Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, RateFunction, Style, Vec2,
         VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E,
