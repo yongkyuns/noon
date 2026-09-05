@@ -292,10 +292,21 @@ async function handleRequest(request) {
       const entry = semanticContexts.get(request.contextId);
       if (!entry || entry.released) throw new Error("unknown or retired semantic execution context");
       let endpoint;
-      endpoint = attachSemanticEngine(entry.context, request, () => {
+      if (request.callbackSessionId !== null && request.callbackSessionId !== undefined) {
+        if (entry.callbackSessionId !== undefined && entry.callbackSessionId !== request.callbackSessionId) {
+          throw new Error("semantic callback session does not belong to this execution context");
+        }
+        entry.callbackSessionId = request.callbackSessionId;
+        entry.releaseCallbackSession = () =>
+          releaseCanonicalCallbackSession(pyodide, request.callbackSessionId);
+      }
+      const runRequiredCallbackPhase = entry.callbackSessionId === undefined
+        ? null
+        : (frame) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame);
+      endpoint = await attachSemanticEngine(entry.context, request, () => {
         entry.endpoints.delete(endpoint);
         retireSemanticContext(request.contextId, entry);
-      });
+      }, runRequiredCallbackPhase);
       entry.endpoints.add(endpoint);
       post("semantic_execution_attached", { requestId });
       return;
@@ -342,6 +353,7 @@ async function handleRequest(request) {
 function retireSemanticContext(token, entry) {
   if (entry.released && entry.endpoints.size === 0) {
     semanticContexts.delete(token);
+    void entry.releaseCallbackSession?.();
     // Python may still retain this same wrapper on a reusable Scene. Dropping
     // our registry reference lets wasm-bindgen finalize it after all owners leave.
   }
@@ -415,19 +427,24 @@ if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
     import _manim_canonical_scene
     from js import noonRegisterSemanticExecution
-    __noon_callbacks = _manim_updaters.register_scene(__noon_result)
     __noon_context = (None if __noon_export_document else
-        _manim_canonical_scene.execution_context(__noon_result, __noon_callbacks))
+        _manim_canonical_scene.execution_context(__noon_result))
     __noon_semantic = None
     __noon_live_duration = None
     if __noon_context is not None:
         __noon_live_duration = __noon_context.liveHandoffDuration()
-        __noon_semantic = {"context_id": str(noonRegisterSemanticExecution(__noon_context))}
+        __noon_callback_session = _manim_updaters.canonical_callback_session_id(__noon_result)
+        __noon_semantic = {
+            "context_id": str(noonRegisterSemanticExecution(__noon_context)),
+            "callback_session_id": __noon_callback_session,
+        }
+        __noon_callbacks = None
         __noon_scene_spec = None
         __noon_document = None
         __noon_retained = None
         __noon_identities = None
     else:
+        __noon_callbacks = _manim_updaters.register_scene(__noon_result)
         if __noon_callbacks and getattr(__noon_result, "_semantic_text_handles", {}):
             raise RuntimeError(
                 "native Text with Python callbacks is not supported by the retained "
@@ -509,6 +526,47 @@ _manim_updaters.run_callback_phase(
   }
 }
 
+async function runCanonicalCallbackPhase(pyodide, sessionId, frame) {
+  const dictConstructor = pyodide.globals.get("dict");
+  const globals = dictConstructor();
+  dictConstructor.destroy();
+  globals.set("__noon_callback_session", sessionId);
+  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
+  try {
+    return await pyodide.runPythonAsync(
+      `
+import json
+import _manim_updaters
+_manim_updaters.run_canonical_callback_phase(
+    int(__noon_callback_session),
+    json.loads(__noon_callback_frame_json),
+)
+`,
+      { globals },
+    );
+  } finally {
+    globals.destroy();
+  }
+}
+
+async function releaseCanonicalCallbackSession(pyodide, sessionId) {
+  const dictConstructor = pyodide.globals.get("dict");
+  const globals = dictConstructor();
+  dictConstructor.destroy();
+  globals.set("__noon_callback_session", sessionId);
+  try {
+    await pyodide.runPythonAsync(
+      `
+import _manim_updaters
+_manim_updaters.release_session(int(__noon_callback_session))
+`,
+      { globals },
+    );
+  } finally {
+    globals.destroy();
+  }
+}
+
 function validateRequest(request) {
   if (!isRecord(request) || request.channel !== AUTHORING_CHANNEL) {
     throw new Error("Received a message from an unknown authoring channel");
@@ -554,6 +612,10 @@ function validateRequest(request) {
     if (typeof request.contextId !== "string" || !request.contextId ||
         !(request.controlPort instanceof MessagePort) || !(request.renderPort instanceof MessagePort)) {
       throw new Error("semantic attachment requires a context and two ports");
+    }
+    if (request.callbackSessionId !== null && request.callbackSessionId !== undefined &&
+        (!Number.isSafeInteger(request.callbackSessionId) || request.callbackSessionId < 0)) {
+      throw new Error("semantic attachment has an invalid callback session ID");
     }
     return;
   }

@@ -5,6 +5,8 @@ use noon_core::{
     SemanticStyle, SemanticTransform2_5D, Style, TextSourceKind, TrackDefinition, Transform2D,
     Vec2,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::{HostCallbackId, SemanticMutationTransaction};
 use noon_ir::{ObjectSpec, SceneSpec, TextSpec};
 #[cfg(target_arch = "wasm32")]
 use noon_ir::{ObjectSpecContent, TextSpecKind, TextSpecOptions};
@@ -208,6 +210,81 @@ impl CanonicalAuthoringScene {
         self.scene
             .execution_session()
             .map_err(|error| error.to_string())
+    }
+
+    /// Author one host-owned callable occurrence into this scene's semantic store.
+    ///
+    /// The callback ID has no semantic meaning: Python resolves it only after the
+    /// compiler selects this occurrence. Semantic identity, activation interval,
+    /// occurrence order, lowering, and session publication remain Rust-owned.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn add_updater(
+        &mut self,
+        handle: &noon::Mobject,
+        callback: HostCallbackId,
+        active_from: f64,
+        position: Option<usize>,
+    ) -> Result<(), String> {
+        self.require_pre_execution_updater_target(handle)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(handle.node_id(), callback, active_from, position);
+        transaction
+            .apply(&mut self.scene.store().borrow_mut())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    /// Close the first open occurrence for this host callback at an exclusive
+    /// authored time. The store validates the complete mutation before commit.
+    #[cfg(target_arch = "wasm32")]
+    fn remove_updater(
+        &mut self,
+        handle: &noon::Mobject,
+        callback: HostCallbackId,
+        inactive_from: f64,
+    ) -> Result<(), String> {
+        self.require_pre_execution_updater_target(handle)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.remove_updater(handle.node_id(), callback, inactive_from);
+        transaction
+            .apply(&mut self.scene.store().borrow_mut())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    /// Close every open callback occurrence on this target at an exclusive
+    /// authored time before the canonical execution session exists.
+    #[cfg(target_arch = "wasm32")]
+    fn clear_updaters(
+        &mut self,
+        handle: &noon::Mobject,
+        inactive_from: f64,
+    ) -> Result<(), String> {
+        self.require_pre_execution_updater_target(handle)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.clear_updaters(handle.node_id(), inactive_from);
+        transaction
+            .apply(&mut self.scene.store().borrow_mut())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn require_pre_execution_updater_target(&self, handle: &noon::Mobject) -> Result<(), String> {
+        if self.live_player.is_some() || self.live_player_transferred {
+            return Err(
+                "callback registrations must be authored before canonical execution begins"
+                    .into(),
+            );
+        }
+        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        handle.validate()?;
+        if !self.identities.contains_key(&handle.node_id()) {
+            return Err("callback target is not bound to this canonical Scene".into());
+        }
+        Ok(())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -648,6 +725,13 @@ mod wasm {
             .map_err(|error| js_error(format!("invalid {label} {value:?}: {error}")))
     }
 
+    fn parse_callback_id(value: &str) -> Result<HostCallbackId, JsValue> {
+        value
+            .parse::<u64>()
+            .map(HostCallbackId::new)
+            .map_err(|error| js_error(format!("invalid callback ID {value:?}: {error}")))
+    }
+
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
         inner: CanonicalAuthoringScene,
@@ -712,6 +796,49 @@ mod wasm {
             let id = parse_object_id("object ID", object_id)?;
             self.inner
                 .bind_mobject(id, handle.semantic_mobject())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addUpdater)]
+        pub fn add_updater(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            callback_id: &str,
+            active_from: f64,
+            position: Option<u32>,
+        ) -> Result<(), JsValue> {
+            let callback = parse_callback_id(callback_id)?;
+            self.inner
+                .add_updater(
+                    handle.semantic_mobject(),
+                    callback,
+                    active_from,
+                    position.map(usize::from),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = removeUpdater)]
+        pub fn remove_updater(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            callback_id: &str,
+            inactive_from: f64,
+        ) -> Result<(), JsValue> {
+            let callback = parse_callback_id(callback_id)?;
+            self.inner
+                .remove_updater(handle.semantic_mobject(), callback, inactive_from)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = clearUpdaters)]
+        pub fn clear_updaters(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            inactive_from: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .clear_updaters(handle.semantic_mobject(), inactive_from)
                 .map_err(js_error)
         }
 
@@ -1456,5 +1583,32 @@ mod tests {
             serde_json::from_str(&rerun.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 18);
         assert_eq!(snapshot.objects[0].transform.translation.x, 3.0);
+    }
+
+    #[test]
+    fn callback_occurrences_publish_before_session_lowering_and_reject_late_edits() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+
+        context
+            .add_updater(&circle, HostCallbackId::new(12), 0.0, None)
+            .unwrap();
+        let registrations = context
+            .scene
+            .store()
+            .borrow()
+            .semantic_updater_registrations(circle.node_id())
+            .unwrap()
+            .to_vec();
+        assert_eq!(registrations.len(), 1);
+        assert_eq!(registrations[0].callback(), HostCallbackId::new(12));
+        assert_eq!(registrations[0].active_from(), 0.0);
+
+        context.live_player(2.0).unwrap();
+        let error = context
+            .add_updater(&circle, HostCallbackId::new(13), 1.0, None)
+            .unwrap_err();
+        assert!(error.contains("before canonical execution begins"));
     }
 }

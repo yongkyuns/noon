@@ -14,19 +14,26 @@ const nextMatching = (port, predicate) => new Promise((resolve) => {
   };
   port.on("message", receive);
 });
+const turn = () => new Promise((resolve) => setImmediate(resolve));
 const request = (port, type, requestId, fields = {}) => {
   const result = next(port);
   port.postMessage({ channel: "noon.engine", protocolVersion: 1, type, requestId, ...fields });
   return result;
 };
-function fixture(transportMode = "transferable") {
+function fixture(transportMode = "transferable", runRequiredCallbackPhase = null) {
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: json,
+    initialCallbackPhaseJson: () => null,
     resourceBundleBytes: () => new Uint8Array([1]),
+    tickCallbackPhaseJson: () => null,
+    drainDeltaJson: () => null,
+    commitCallbackPhaseJson: () => {},
+    failCallbackPhaseJson: () => {},
+    callbackTerminationJson: () => null,
     tickDeltaJson: () => null,
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
@@ -40,7 +47,7 @@ function fixture(transportMode = "transferable") {
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode,
-    }, () => { stopped += 1; }),
+    }, () => { stopped += 1; }, runRequiredCallbackPhase),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
 }
@@ -51,7 +58,7 @@ test("semantic producer installs mixed resources before its retained snapshot an
     const ready = next(f.control.port2);
     const resources = nextMatching(f.render.port2, (message) => message.type === "retained_resources");
     const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
-    const endpoint = f.attach();
+    const endpoint = await f.attach();
     assert.equal((await ready).type, "ready");
     const resourceBundle = await resources;
     assert.equal(resourceBundle.type, "retained_resources");
@@ -72,18 +79,18 @@ test("semantic producer installs mixed resources before its retained snapshot an
   } finally { f.close(); }
 });
 
-test("initial snapshot failure returns the exact player for retry", () => {
+test("initial snapshot failure returns the exact player for retry", async () => {
   const f = fixture();
   f.player.initialDeltaJson = () => { throw new Error("snapshot failed"); };
   try {
-    assert.throws(f.attach, /snapshot failed/);
+    await assert.rejects(f.attach(), /snapshot failed/);
     assert.equal(f.stats().returned, 1);
     assert.equal(f.stats().returnedPlayer, f.player);
     assert.equal(f.stats().stopped, 1);
   } finally { f.close(); }
 });
 
-test("player construction failure closes both transferred ports", () => {
+test("player construction failure closes both transferred ports", async () => {
   const control = new MessageChannel();
   const render = new MessageChannel();
   let closed = 0;
@@ -92,7 +99,7 @@ test("player construction failure closes both transferred ports", () => {
     port.close = () => { closed += 1; close(); };
   }
   let stopped = 0;
-  assert.throws(() => attachSemanticEngine({
+  await assert.rejects(attachSemanticEngine({
     createExecutionPlayer: () => { throw new Error("lowering failed"); },
     returnExecutionPlayer: () => { throw new Error("must not return an uncreated player"); },
   }, {
@@ -126,7 +133,114 @@ test("shared setup cannot expose a snapshot before its resource bundle", async (
         } catch (error) { reject(error); }
       });
     });
-    endpoint = f.attach();
+    endpoint = await f.attach();
     await setup;
   } finally { endpoint?.stop(); f.close(); }
+});
+
+test("required initial callback withholds the first delta until its exact batch commits", async () => {
+  let resolvePhase;
+  const phase = new Promise((resolve) => { resolvePhase = resolve; });
+  const f = fixture("transferable", () => phase);
+  let committed = 0;
+  try {
+    f.player.initialCallbackPhaseJson = () => JSON.stringify({ token: { sequence: "0" } });
+    f.player.commitCallbackPhaseJson = (batch) => {
+      assert.equal(batch, "{\"token\":{\"sequence\":\"0\"},\"writes\":[]}");
+      committed += 1;
+    };
+    const resources = nextMatching(f.render.port2, (message) => message.type === "retained_resources");
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    const attached = f.attach();
+    await resources;
+    let early = false;
+    initial.then(() => { early = true; });
+    await turn();
+    assert.equal(early, false);
+    assert.equal(committed, 0);
+    resolvePhase("{\"token\":{\"sequence\":\"0\"},\"writes\":[]}");
+    const endpoint = await attached;
+    assert.equal(committed, 1);
+    const delta = await initial;
+    assert.equal(JSON.parse(decodeTransferableExecutionDelta(delta).json).snapshot, true);
+    endpoint.stop();
+  } finally { f.close(); }
+});
+
+test("stopping an attachment discards a late callback result before returning its player", async () => {
+  let resolvePhase;
+  let phaseStarted;
+  const phase = new Promise((resolve) => { resolvePhase = resolve; });
+  const began = new Promise((resolve) => { phaseStarted = resolve; });
+  const f = fixture("transferable", () => {
+    phaseStarted();
+    return phase;
+  });
+  let committed = 0;
+  let failed = 0;
+  try {
+    const ready = next(f.control.port2);
+    const endpoint = await f.attach();
+    await ready;
+    const initial = await nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    f.render.port2.postMessage({ type: "execution_ack", session: initial.session, sequence: initial.sequence });
+    f.player.tickCallbackPhaseJson = () => JSON.stringify({ token: { sequence: "1" } });
+    f.player.commitCallbackPhaseJson = () => { committed += 1; };
+    f.player.failCallbackPhaseJson = () => { failed += 1; };
+    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    await began;
+    endpoint.stop();
+    resolvePhase("{\"token\":{\"sequence\":\"1\"},\"writes\":[]}");
+    await turn();
+    assert.equal(committed, 0);
+    assert.equal(failed, 1);
+    assert.equal(f.stats().returned, 1);
+  } finally { f.close(); }
+});
+
+test("a callback failure latches the endpoint and never invokes the opaque callback again", async () => {
+  let invocations = 0;
+  const failure = new Error("opaque callback failed");
+  const f = fixture("transferable", async () => {
+    invocations += 1;
+    throw failure;
+  });
+  let failed = 0;
+  try {
+    const ready = next(f.control.port2);
+    const endpoint = await f.attach();
+    await ready;
+    const initial = await nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    f.render.port2.postMessage({ type: "execution_ack", session: initial.session, sequence: initial.sequence });
+    f.player.tickCallbackPhaseJson = () => JSON.stringify({ token: { sequence: "2" } });
+    f.player.failCallbackPhaseJson = () => { failed += 1; };
+
+    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    await nextMatching(f.control.port2, (message) => message.type === "error" && /opaque callback failed/.test(message.message));
+    f.render.port2.postMessage({ type: "tick", timestamp: 32 });
+    await turn();
+    assert.equal(invocations, 1);
+    assert.equal(failed, 1);
+    endpoint.stop();
+  } finally { f.close(); }
+});
+
+test("full transport queues controls until a writable event without recursive draining", async () => {
+  const f = fixture();
+  try {
+    const ready = next(f.control.port2);
+    const endpoint = await f.attach();
+    await ready;
+    const initial = await nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    f.player.drainDeltaJson = () => f.player.initialDeltaJson();
+    const tick = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    const second = await tick;
+    const paused = request(f.control.port2, "pause", 8);
+    await turn();
+    f.render.port2.postMessage({ type: "execution_ack", session: initial.session, sequence: initial.sequence });
+    assert.equal((await paused).playing, false);
+    f.render.port2.postMessage({ type: "execution_ack", session: second.session, sequence: second.sequence });
+    endpoint.stop();
+  } finally { f.close(); }
 });

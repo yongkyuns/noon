@@ -51,6 +51,7 @@ export class ExecutionWorkerClient {
   #hostCallbacks = null;
   #semanticAuthoringClient = null;
   #semanticContextId = null;
+  #semanticCallbackSessionId = null;
   #fatalOwner = null;
   #lifecycleGeneration = 0;
   #staleWorkerEvents = { engine: 0, render: 0 };
@@ -194,6 +195,7 @@ export class ExecutionWorkerClient {
     const sharedSlotCapacity =
       options.sharedSlotCapacity ??
       (this.#renderPrepared === null ? DEFAULT_SHARED_SLOT_CAPACITY : this.#sharedSlotCapacity);
+    const callbackSessionId = validateOptionalCallbackSessionId(options.callbackSessionId);
     if (this.#renderWorker === null) {
       await this.prepare({ transportMode, sharedSlotCapacity });
     }
@@ -207,10 +209,11 @@ export class ExecutionWorkerClient {
       contextId,
       authoringClient,
       validateLoopDurationSeconds(loopDurationSeconds),
+      callbackSessionId,
     );
   }
 
-  async #startPreparedSemantic(contextId, authoringClient, loopDurationSeconds) {
+  async #startPreparedSemantic(contextId, authoringClient, loopDurationSeconds, callbackSessionId) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
     }
@@ -246,7 +249,7 @@ export class ExecutionWorkerClient {
         contextId,
         control.port2,
         render.port1,
-        this.#semanticAttachmentOptions(loopDurationSeconds, this.#session),
+        this.#semanticAttachmentOptions(loopDurationSeconds, this.#session, callbackSessionId),
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
         ([engine, renderResult]) => ({
@@ -260,6 +263,7 @@ export class ExecutionWorkerClient {
       this.#renderPrepared = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
+      this.#semanticCallbackSessionId = callbackSessionId;
       this.#hostAuthoringClient = null;
       this.#hostCallbacks = null;
       this.#playing = true;
@@ -487,13 +491,15 @@ export class ExecutionWorkerClient {
     this.#session = checkedNextSession(this.#session);
   }
 
-  #semanticAttachmentOptions(loopDurationSeconds, session) {
-    return {
+  #semanticAttachmentOptions(loopDurationSeconds, session, callbackSessionId = null) {
+    const options = {
       transportMode: this.#transportMode,
       sharedSlotCapacity: this.#sharedSlotCapacity,
       loopDurationSeconds,
       session,
     };
+    if (callbackSessionId !== null) options.callbackSessionId = callbackSessionId;
+    return options;
   }
 
   #prepareCanvasDimensions() {
@@ -579,10 +585,11 @@ export class ExecutionWorkerClient {
   async switchToSemanticExecution(
     contextId,
     authoringClient,
-    { loopDurationSeconds = null } = {},
+    { loopDurationSeconds = null, callbackSessionId = null } = {},
   ) {
     return this.#transitionSemanticExecution(contextId, authoringClient, {
       loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
+      callbackSessionId: validateOptionalCallbackSessionId(callbackSessionId),
       renderCommand:
         this.#mode === EXECUTION_MODE_LEGACY ? "switch_engine" : "rebuild_engine",
     });
@@ -591,7 +598,7 @@ export class ExecutionWorkerClient {
   async #transitionSemanticExecution(
     contextId,
     authoringClient,
-    { loopDurationSeconds, renderCommand },
+    { loopDurationSeconds, callbackSessionId, renderCommand },
   ) {
     this.#requireStarted();
     validateSemanticContextId(contextId);
@@ -618,7 +625,7 @@ export class ExecutionWorkerClient {
         contextId,
         control.port2,
         render.port1,
-        this.#semanticAttachmentOptions(duration, nextSession),
+        this.#semanticAttachmentOptions(duration, nextSession, callbackSessionId),
       );
       [candidateReady] = await Promise.all([candidateReadyPromise, attached]);
       this.#assertLifecycleCurrent(generation);
@@ -678,6 +685,7 @@ export class ExecutionWorkerClient {
       this.#sceneSpecJson = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
+      this.#semanticCallbackSessionId = callbackSessionId;
       this.#loopDurationSeconds = duration;
       this.#hostAuthoringClient = null;
       this.#hostCallbacks = null;
@@ -873,6 +881,7 @@ export class ExecutionWorkerClient {
       this.#sceneSpecJson = nextMode === EXECUTION_MODE_RETAINED ? sceneSpecJson : null;
       this.#semanticAuthoringClient = null;
       this.#semanticContextId = null;
+      this.#semanticCallbackSessionId = null;
       this.#loopDurationSeconds = duration;
       this.#fatalOwner = null;
       if (previousMode === EXECUTION_MODE_SEMANTIC) {
@@ -1028,7 +1037,11 @@ export class ExecutionWorkerClient {
       return this.#transitionSemanticExecution(
         this.#semanticContextId,
         this.#semanticAuthoringClient,
-        { loopDurationSeconds: this.#loopDurationSeconds, renderCommand: "rebuild_engine" },
+        {
+          loopDurationSeconds: this.#loopDurationSeconds,
+          callbackSessionId: this.#semanticCallbackSessionId,
+          renderCommand: "rebuild_engine",
+        },
       );
     }
     const generation = this.#lifecycleGeneration;
@@ -1117,6 +1130,7 @@ export class ExecutionWorkerClient {
       mode === EXECUTION_MODE_LEGACY ? this.#hostAuthoringClient : null;
     const semanticAuthoringClient = this.#semanticAuthoringClient;
     const semanticContextId = this.#semanticContextId;
+    const semanticCallbackSessionId = this.#semanticCallbackSessionId;
 
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       this.terminate({ preserveHostConfiguration: true });
@@ -1126,9 +1140,10 @@ export class ExecutionWorkerClient {
     const ready =
       mode === EXECUTION_MODE_SEMANTIC
         ? await this.startSemanticExecution(semanticContextId, semanticAuthoringClient, {
-            loopDurationSeconds,
-            transportMode,
-            sharedSlotCapacity,
+          loopDurationSeconds,
+          transportMode,
+          sharedSlotCapacity,
+          callbackSessionId: semanticCallbackSessionId,
           })
         : await this.#startMode(
             mode,
@@ -1189,6 +1204,7 @@ export class ExecutionWorkerClient {
       this.#hostCallbacks = null;
       this.#semanticAuthoringClient = null;
       this.#semanticContextId = null;
+      this.#semanticCallbackSessionId = null;
     }
     this.#fatalOwner = null;
   }
@@ -1700,6 +1716,16 @@ function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
     return null;
   }
   return validateLoopDurationSeconds(loopDurationSeconds);
+}
+
+function validateOptionalCallbackSessionId(callbackSessionId) {
+  if (callbackSessionId === null || callbackSessionId === undefined) {
+    return null;
+  }
+  if (!Number.isSafeInteger(callbackSessionId) || callbackSessionId < 0) {
+    throw new TypeError("semantic callback session must be a non-negative safe integer");
+  }
+  return callbackSessionId;
 }
 
 function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {

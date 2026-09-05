@@ -6,7 +6,12 @@ import {
   createSharedExecutionMailbox,
 } from "./execution-transport.js";
 
-export function attachSemanticEngine(context, request, onStop = () => {}) {
+export async function attachSemanticEngine(
+  context,
+  request,
+  onStop = () => {},
+  runRequiredCallbackPhase = null,
+) {
   const { controlPort, renderPort, transportMode, loopDurationSeconds, session } = request;
   if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
     throw new Error("semantic execution requires control and render ports");
@@ -21,6 +26,10 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
   let transport;
   let stopped = false;
   let latestTick = null;
+  let draining = false;
+  let callbackGeneration = 0;
+  let pendingPhaseJson = null;
+  let callbackFault = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
@@ -31,9 +40,47 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
     if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
   };
   const state = (type) => ({ type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" });
-  function drain() {
-    if (stopped || !transport) return;
-    while (controls.length && writable()) {
+  async function publishCallbackPhase(phaseJson, { initial = false } = {}) {
+    if (phaseJson !== null && phaseJson !== undefined) {
+      if (runRequiredCallbackPhase === null) {
+        try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve original phase error */ }
+        throw new Error("canonical execution requires a Python callback phase handler");
+      }
+      let phase;
+      try {
+        phase = JSON.parse(phaseJson);
+      } catch (error) {
+        try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve parse failure */ }
+        throw new Error(`canonical callback phase view was not valid JSON: ${error}`);
+      }
+      const phaseGeneration = callbackGeneration;
+      pendingPhaseJson = phaseJson;
+      try {
+        const batchJson = await runRequiredCallbackPhase(phase);
+        if (stopped || phaseGeneration !== callbackGeneration || player === null) {
+          return false;
+        }
+        player.commitCallbackPhaseJson(batchJson);
+        pendingPhaseJson = null;
+      } catch (error) {
+        if (!stopped && phaseGeneration === callbackGeneration && player !== null) {
+          try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve callback failure */ }
+          pendingPhaseJson = null;
+          callbackFault = error instanceof Error ? error : new Error(String(error));
+        }
+        throw error;
+      }
+    }
+    if (stopped || player === null) return false;
+    send(initial ? player.initialDeltaJson() : player.drainDeltaJson());
+    return true;
+  }
+
+  async function drain() {
+    if (stopped || !transport || draining) return;
+    draining = true;
+    try {
+      while (controls.length && writable()) {
       const message = controls.shift();
       try {
         switch (message.type) {
@@ -46,19 +93,45 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
         }
         post({ requestId: message.requestId, ...state(message.type) });
       } catch (error) { fail(error, message.requestId); }
-    }
-    if (!controls.length && latestTick !== null && writable()) {
-      const timestamp = latestTick;
-      latestTick = null;
-      try { send(player.tickDeltaJson(timestamp)); } catch (error) { fail(error); }
+      }
+      if (!controls.length && latestTick !== null && writable()) {
+        const timestamp = latestTick;
+        latestTick = null;
+        // An opaque callback failure/interruption is terminal in the retained
+        // session. Do not emit repeated errors or retry its externally visible
+        // side effects while this player is retained for recovery.
+        if (callbackFault === null) {
+          try {
+            await publishCallbackPhase(player.tickCallbackPhaseJson(timestamp));
+          } catch (error) { fail(error); }
+        }
+      }
+    } finally {
+      draining = false;
+      if (!stopped && ((controls.length && writable()) || (latestTick !== null && writable()))) {
+        void drain();
+      }
     }
   }
   function stop() {
     if (stopped) return;
     stopped = true;
+    callbackGeneration += 1;
     controls.length = 0;
     latestTick = null;
     if (player !== null) {
+      if (pendingPhaseJson !== null) {
+        const interruption = new Error("canonical callback phase interrupted by endpoint stop");
+        try {
+          if (typeof player.interruptCallbackPhaseJson === "function") {
+            player.interruptCallbackPhaseJson(pendingPhaseJson);
+          } else {
+            player.failCallbackPhaseJson(pendingPhaseJson);
+          }
+        } catch { /* teardown owns final release */ }
+        callbackFault = interruption;
+        pendingPhaseJson = null;
+      }
       // The authoring context retains this exact runtime for renderer recovery
       // and setup retries. Dropping the context is the only genuine teardown.
       context.returnExecutionPlayer(player);
@@ -95,7 +168,7 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         controls.push(message);
-        drain();
+        void drain();
       } catch (error) { fail(error, message?.requestId ?? null); }
     });
     renderPort.addEventListener("message", ({ data: message }) => {
@@ -103,8 +176,8 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
       if (message?.type === "tick") {
         if (!Number.isFinite(message.timestamp)) { fail(new Error("invalid render timestamp")); return; }
         latestTick = message.timestamp;
-        drain();
-      } else if (message?.type === "transport_writable") drain();
+        void drain();
+      } else if (message?.type === "transport_writable") void drain();
       else if (message?.type === "render_error") fail(new Error(message.message));
     });
     const resources = Uint8Array.from(player.resourceBundleBytes());
@@ -119,7 +192,7 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
       transport = new SharedExecutionDeltaWriter(mailbox);
       renderPort.postMessage({ type: "transport_setup", mode: transportMode, mailbox });
     } else transport = new TransferableExecutionDeltaSender(renderPort, { maxInFlight: 2, onWritable: drain });
-    send(player.initialDeltaJson());
+    await publishCallbackPhase(player.initialCallbackPhaseJson(), { initial: true });
     controlPort.start();
     renderPort.start();
     post({ type: "ready", transportMode });

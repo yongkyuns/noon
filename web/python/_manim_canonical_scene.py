@@ -207,7 +207,8 @@ def _identity_document(self: _ir.Scene) -> dict[str, list[dict[str, Any]]]:
 
 def execution_context(scene, callbacks=None):
     """Select typed geometry/native-Text execution; unsupported contracts stay explicit."""
-    if callbacks or getattr(scene, "_legacy_geometry_materialized", False):
+    del callbacks  # Callback declarations now lower through the canonical context.
+    if getattr(scene, "_legacy_geometry_materialized", False):
         return None
     # The canonical static context does not yet lower the legacy reactive/native
     # declarations.  Reject them here rather than silently constructing a live
@@ -233,7 +234,14 @@ def execution_context(scene, callbacks=None):
                 float(track["timing"]["start_time"]) != 0.0 or
                 track.get("values", {}).get("bool", {}).get("to") is not True):
             return None
-    return _context(scene)
+    context = _context(scene)
+    # Python keeps callable identity only. This bootstrap writes the authored
+    # occurrence intervals into the one shared Rust semantic store before the
+    # execution session is lowered; it does not construct slots or a scheduler.
+    import _manim_updaters
+
+    _manim_updaters.prepare_canonical_callbacks(scene, context)
+    return context
 
 
 class LiveExecution:
@@ -249,8 +257,8 @@ class LiveExecution:
         context = execution_context(scene)
         if context is None:
             raise RuntimeError(
-                "live execution currently supports typed static geometry/native Text without "
-                "callbacks, retained text, or timeline tracks"
+                "live execution currently supports typed static geometry/native Text and "
+                "predeclared property callbacks, without retained text or timeline tracks"
             )
         self._scene = scene
         context.beginLiveExecution(float(duration))
@@ -356,8 +364,8 @@ def _declare_live_transform_to(
     context = execution_context(self)
     if context is None:
         raise RuntimeError(
-            "live animation currently supports typed static geometry/native Text without "
-            "callbacks, retained text, or timeline tracks"
+            "live animation currently supports typed static geometry/native Text and "
+            "predeclared property callbacks, without retained text or timeline tracks"
         )
     if not isinstance(source, _base.Mobject) or source._scene is not self:
         raise ValueError("live animation source must belong to this Scene")

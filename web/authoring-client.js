@@ -118,6 +118,7 @@ export class PythonAuthoringClient {
       sharedSlotCapacity,
       loopDurationSeconds,
       session,
+      callbackSessionId = null,
     },
   ) {
     validateSemanticExecutionContextId(contextId);
@@ -136,20 +137,26 @@ export class PythonAuthoringClient {
     if (!Number.isSafeInteger(session) || session < 0) {
       throw new TypeError("semantic execution session must be a non-negative safe integer");
     }
+    if (callbackSessionId !== null &&
+        (!Number.isSafeInteger(callbackSessionId) || callbackSessionId < 0)) {
+      throw new TypeError("semantic callback session must be a non-negative safe integer");
+    }
     await this.ready();
     const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
+    const payload = {
+      requestId,
+      contextId,
+      controlPort,
+      renderPort,
+      transportMode,
+      sharedSlotCapacity,
+      loopDurationSeconds,
+      session,
+    };
+    if (callbackSessionId !== null) payload.callbackSessionId = callbackSessionId;
     this.#worker.postMessage(
-      envelope("attach_semantic_execution", {
-        requestId,
-        contextId,
-        controlPort,
-        renderPort,
-        transportMode,
-        sharedSlotCapacity,
-        loopDurationSeconds,
-        session,
-      }),
+      envelope("attach_semantic_execution", payload),
       [controlPort, renderPort],
     );
     return result;
@@ -348,7 +355,18 @@ export function validateSemanticExecutionDescriptor(descriptor) {
     throw new Error("Python semantic execution descriptor must be an object");
   }
   validateSemanticExecutionContextId(descriptor.context_id);
-  return Object.freeze({ contextId: descriptor.context_id });
+  const callbackSessionId = descriptor.callback_session_id;
+  if (
+    callbackSessionId !== null &&
+    callbackSessionId !== undefined &&
+    (!Number.isSafeInteger(callbackSessionId) || callbackSessionId < 0)
+  ) {
+    throw new TypeError("semantic callback session ID must be a non-negative safe integer");
+  }
+  return Object.freeze({
+    contextId: descriptor.context_id,
+    callbackSessionId: callbackSessionId ?? null,
+  });
 }
 
 function validateSemanticExecutionContextId(contextId) {

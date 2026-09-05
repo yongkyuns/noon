@@ -185,7 +185,7 @@ export class AuthoringExecutionClient {
     if (this.#player !== null || this.#transition !== null) {
       throw new Error("AuthoringExecutionClient is already started");
     }
-    const contextId = validateSemanticExecutionDescriptor(descriptor);
+    const semantic = validateSemanticExecutionDescriptor(descriptor);
     validateSemanticAuthoringClient(authoringClient);
     this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
     this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
@@ -200,7 +200,10 @@ export class AuthoringExecutionClient {
     const player = this.#preparedPlayer ?? this.#createPlayer();
     const terminateCandidate = createIdempotentTerminator(player);
     try {
-      const ready = await player.startSemanticExecution(contextId, authoringClient, options);
+      const ready = await player.startSemanticExecution(semantic.contextId, authoringClient, {
+        ...options,
+        callbackSessionId: semantic.callbackSessionId,
+      });
       this.#assertLifecycleCurrent(generation, terminateCandidate);
       if (this.#preparedPlayer === player) {
         this.#preparedPlayer = null;
@@ -234,15 +237,16 @@ export class AuthoringExecutionClient {
       await this.#transition;
     }
     this.#requireStarted();
-    const contextId = validateSemanticExecutionDescriptor(descriptor);
+    const semantic = validateSemanticExecutionDescriptor(descriptor);
     validateSemanticAuthoringClient(authoringClient);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
     if (duration !== null) {
       this.#loopDurationSeconds = duration;
     }
     return this.#runTransition(async () => {
-      const ready = await this.#player.switchToSemanticExecution(contextId, authoringClient, {
+      const ready = await this.#player.switchToSemanticExecution(semantic.contextId, authoringClient, {
         loopDurationSeconds: duration,
+        callbackSessionId: semantic.callbackSessionId,
       });
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
@@ -748,7 +752,14 @@ function validateSemanticExecutionDescriptor(descriptor) {
   if (typeof descriptor.contextId !== "string" || descriptor.contextId.trim() === "") {
     throw new TypeError("semantic execution context ID must be a non-empty string");
   }
-  return descriptor.contextId;
+  if (descriptor.callbackSessionId !== null && descriptor.callbackSessionId !== undefined &&
+      (!Number.isSafeInteger(descriptor.callbackSessionId) || descriptor.callbackSessionId < 0)) {
+    throw new TypeError("semantic callback session ID must be a non-negative safe integer");
+  }
+  return {
+    contextId: descriptor.contextId,
+    callbackSessionId: descriptor.callbackSessionId ?? null,
+  };
 }
 
 function validateSemanticAuthoringClient(authoringClient) {

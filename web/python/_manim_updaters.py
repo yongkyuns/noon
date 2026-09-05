@@ -1,8 +1,9 @@
-"""Manim-style arbitrary updater adapter over Noon's host callback protocol.
+"""Manim-style callback ergonomics over the canonical callback-phase contract.
 
-The Python callable stays in Pyodide. During playback the main thread sends one
-coherent runtime snapshot for the callback phase; all getter/setter traffic stays
-inside this module and only one PatchBatch crosses back to WASM.
+Python owns callable identity and invocation. Rust owns semantic registration,
+activation ordering, the staged effective snapshot, and publication. The legacy
+patch codec below remains only for its explicit migration consumer; canonical
+callbacks return one property-only effective batch to their existing session.
 """
 
 from __future__ import annotations
@@ -21,10 +22,14 @@ _INSTALLED = False
 _NEXT_SESSION_ID = 0
 _TRACKED_MOBJECTS: list[_base.Mobject] = []
 _SESSIONS: dict[int, "_UpdaterSession"] = {}
-_ACTIVE_CONTEXTS: dict[int, "_CallbackContext"] = {}
+_CANONICAL_SESSIONS: dict[int, "_CanonicalCallbackSession"] = {}
+_ACTIVE_CONTEXTS: dict[int, Any] = {}
 
 _ORIGINAL_CURRENT_RAW = _base.Mobject._current_raw
 _ORIGINAL_APPLY = _base.Mobject._apply
+_ORIGINAL_BOUNDS = _base._bounds
+_CALLBACK_BOUNDS = "__noon_callback_bounds__"
+_CALLBACK_BOUNDS_UNAVAILABLE = "__noon_callback_bounds_unavailable__"
 
 
 def _track(mobject: _base.Mobject) -> None:
@@ -37,7 +42,10 @@ class _UpdaterRegistration:
     mobject: _base.Mobject
     callback: Callable[..., Any]
     active_after: float | None
+    position: int | None = None
     active_through: float | None = None
+    callback_id: int | None = None
+    canonical_registered: bool = False
 
 
 def _updaters(mobject: _base.Mobject) -> list[Callable[..., Any]]:
@@ -84,6 +92,165 @@ def _registration_end_time(
     return 0.0
 
 
+def _canonical_context(mobject: _base.Mobject) -> object | None:
+    scene = getattr(mobject, "_scene", None)
+    if scene is None or getattr(scene, "_legacy_geometry_materialized", False):
+        return None
+    return getattr(scene, "_canonical_authoring_context", None)
+
+
+def _semantic_key(mobject: _base.Mobject) -> tuple[int, int]:
+    if getattr(mobject, "_semantic_family_handle", None) is not None:
+        raise NotImplementedError(
+            "canonical callbacks on Group/VGroup families are not supported yet; "
+            "#70 owns shared family property operations"
+        )
+    handle = getattr(mobject, "_semantic_handle", None)
+    if handle is None:
+        raise RuntimeError("canonical callback target requires a typed semantic Mobject")
+    try:
+        return (int(handle.semanticSlot), int(handle.semanticGeneration))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            "canonical callback target has no generational semantic identity"
+        ) from error
+
+
+@dataclass(slots=True)
+class _CanonicalCallbackSession:
+    """Host-only callable table for one canonical authoring context.
+
+    IDs are scoped to this table and never stand in for semantic identity. Rust
+    receives each ID only as an opaque callable lookup key; target identity and
+    occurrence order remain part of the compiler-owned callback plan.
+    """
+
+    scene: _base.Scene
+    context: object
+    session_id: int
+    callbacks: dict[int, Callable[..., Any]]
+    callback_ids: list[tuple[Callable[..., Any], int]]
+    targets: dict[tuple[int, int], _base.Mobject]
+    next_callback_id: int = 0
+
+    def callback_id(self, callback: Callable[..., Any]) -> tuple[int, bool]:
+        for existing, callback_id in self.callback_ids:
+            if existing is callback:
+                return callback_id, False
+        return self.next_callback_id, True
+
+    def commit_callback_id(self, callback: Callable[..., Any], callback_id: int) -> None:
+        if callback_id != self.next_callback_id:
+            raise RuntimeError("canonical callback ID reservation was not current")
+        self.callback_ids.append((callback, callback_id))
+        self.callbacks[callback_id] = callback
+        self.next_callback_id += 1
+
+    def bind_target(self, mobject: _base.Mobject) -> tuple[int, int]:
+        key = _semantic_key(mobject)
+        self.targets[key] = mobject
+        return key
+
+
+def _canonical_session(scene: _base.Scene, context: object) -> _CanonicalCallbackSession:
+    global _NEXT_SESSION_ID
+
+    existing = getattr(scene, "_noon_canonical_callback_session", None)
+    if existing is not None:
+        if existing.context is not context:
+            raise RuntimeError("canonical callback session context changed during authoring")
+        return existing
+    session = _CanonicalCallbackSession(
+        scene=scene,
+        context=context,
+        session_id=_NEXT_SESSION_ID,
+        callbacks={},
+        callback_ids=[],
+        targets={},
+    )
+    _NEXT_SESSION_ID += 1
+    _CANONICAL_SESSIONS[session.session_id] = session
+    scene._noon_canonical_callback_session = session
+    return session
+
+
+def _register_canonical_occurrence(
+    session: _CanonicalCallbackSession,
+    registration: _UpdaterRegistration,
+    *,
+    position: int | None,
+) -> None:
+    """Publish a prevalidated host callable occurrence before Python bookkeeping.
+
+    The context operation is a shared semantic transaction. Keeping the Python
+    list update after it succeeds leaves failed registration invisible to the
+    wrapper and avoids a partial callback table.
+    """
+
+    target = registration.mobject
+    # Family traversal and group-layout mutation must be one shared semantic
+    # operation. The property overlay currently addresses ordinary Mobjects only,
+    # so reject this before it can publish a partial occurrence.
+    _semantic_key(target)
+    handle = getattr(target, "_semantic_handle", None)
+    if handle is None:
+        raise RuntimeError("canonical callback target requires a typed semantic Mobject")
+    callback_id, newly_reserved = session.callback_id(registration.callback)
+    active_from = 0.0 if registration.active_after is None else registration.active_after
+    session.context.addUpdater(handle, str(callback_id), active_from, position)
+    if newly_reserved:
+        session.commit_callback_id(registration.callback, callback_id)
+    registration.callback_id = callback_id
+    registration.canonical_registered = True
+    session.bind_target(target)
+
+
+def _register_canonical_removal(
+    session: _CanonicalCallbackSession,
+    registration: _UpdaterRegistration,
+    inactive_from: float,
+) -> None:
+    if registration.callback_id is None:
+        raise RuntimeError("canonical updater removal has no callback ID")
+    handle = getattr(registration.mobject, "_semantic_handle", None)
+    if handle is None:
+        raise RuntimeError("canonical callback target requires a typed semantic Mobject")
+    session.context.removeUpdater(handle, str(registration.callback_id), inactive_from)
+
+
+def prepare_canonical_callbacks(scene: _base.Scene, context: object) -> int | None:
+    """Replay Python-authored callback occurrences into the one semantic store.
+
+    Detached registrations are authored at time zero and become semantic only
+    once their Mobject is bound. Replaying the historical intervals here is a
+    bootstrap operation before the session is created; it never creates a second
+    scheduler or callback-plan representation.
+    """
+
+    history: list[_UpdaterRegistration] = []
+    for mobject in _TRACKED_MOBJECTS:
+        if mobject._scene is scene:
+            history.extend(_registration_history(mobject))
+    if not history:
+        return None
+
+    session = _canonical_session(scene, context)
+    for registration in history:
+        if registration.canonical_registered:
+            continue
+        _register_canonical_occurrence(session, registration, position=registration.position)
+        if registration.active_through is not None:
+            _register_canonical_removal(
+                session, registration, registration.active_through
+            )
+    return session.session_id
+
+
+def canonical_callback_session_id(scene: _base.Scene) -> int | None:
+    session = getattr(scene, "_noon_canonical_callback_session", None)
+    return None if session is None else session.session_id
+
+
 def add_updater(
     self: _base.Mobject,
     update_function: Callable[..., Any],
@@ -92,6 +259,11 @@ def add_updater(
 ) -> _base.Mobject:
     if not callable(update_function):
         raise TypeError("updater must be callable")
+    if call_updater and getattr(self, "_semantic_handle", None) is not None:
+        raise NotImplementedError(
+            "call_updater=True is not supported for canonical callbacks until "
+            "immediate invocation has one atomic shared-semantic operation"
+        )
     callbacks = _updaters(self)
     registrations = _registrations(self)
     registration = _UpdaterRegistration(
@@ -99,14 +271,32 @@ def add_updater(
         callback=update_function,
         active_after=_scene_time(self),
     )
+    position: int | None
     if index is None:
-        callbacks.append(update_function)
-        registrations.append(registration)
+        position = None
     else:
         if isinstance(index, bool) or not isinstance(index, int):
             raise TypeError("updater index must be an integer")
-        callbacks.insert(index, update_function)
-        registrations.insert(index, registration)
+        # Match Python list.insert's observable active-list position before Rust
+        # validates the equivalent compiler-owned occurrence insertion.
+        position = min(max(index, 0), len(callbacks))
+    registration.position = position
+
+    context = _canonical_context(self)
+    if context is not None:
+        # A detached updater may have become scene-bound before this operation.
+        # Flush every earlier authored occurrence first so the active-list index
+        # is interpreted against the same semantic order Python exposes.
+        prepare_canonical_callbacks(self._scene, context)
+        session = _canonical_session(self._scene, context)
+        _register_canonical_occurrence(session, registration, position=position)
+
+    if position is None:
+        callbacks.append(update_function)
+        registrations.append(registration)
+    else:
+        callbacks.insert(position, update_function)
+        registrations.insert(position, registration)
     _registration_history(self).append(registration)
     _track(self)
     if call_updater:
@@ -121,9 +311,16 @@ def remove_updater(
     registrations = _registrations(self)
     for index, callback in enumerate(callbacks):
         if callback is update_function:
+            registration = registrations[index]
+            inactive_from = _registration_end_time(self, registration)
+            context = _canonical_context(self)
+            if context is not None:
+                prepare_canonical_callbacks(self._scene, context)
+                session = _canonical_session(self._scene, context)
+                _register_canonical_removal(session, registration, inactive_from)
             del callbacks[index]
-            registration = registrations.pop(index)
-            registration.active_through = _registration_end_time(self, registration)
+            registrations.pop(index)
+            registration.active_through = inactive_from
             break
     return self
 
@@ -132,10 +329,25 @@ def clear_updaters(self: _base.Mobject, recursive: bool = True) -> _base.Mobject
     # Noon has no persisted runtime hierarchy, but Group/VGroup recurse in their own
     # Python wrappers. The flag is accepted for Manim source compatibility.
     del recursive
-    for registration in _registrations(self):
-        registration.active_through = _registration_end_time(self, registration)
+    registrations = _registrations(self)
+    inactive_from = [_registration_end_time(self, registration) for registration in registrations]
+    context = _canonical_context(self)
+    if context is not None and registrations:
+        prepare_canonical_callbacks(self._scene, context)
+        session = _canonical_session(self._scene, context)
+        _semantic_key(self)
+        handle = getattr(self, "_semantic_handle", None)
+        if handle is None:
+            raise RuntimeError("canonical callback target requires a typed semantic Mobject")
+        # The shared transaction validates all open occurrences before commit.
+        # Every active Python registration has the same scene authored time.
+        if any(time != inactive_from[0] for time in inactive_from):
+            raise RuntimeError("canonical updater clear has inconsistent authored times")
+        session.context.clearUpdaters(handle, inactive_from[0])
+    for registration, end_time in zip(registrations, inactive_from, strict=True):
+        registration.active_through = end_time
     _updaters(self).clear()
-    _registrations(self).clear()
+    registrations.clear()
     return self
 
 
@@ -149,21 +361,19 @@ def has_updaters(self: _base.Mobject) -> bool:
 
 def _current_raw(self: _base.Mobject) -> _ir.Mobject:
     scene = self._scene
-    obj = self._object
-    if scene is not None and obj is not None:
+    if scene is not None and self._object is not None:
         context = _ACTIVE_CONTEXTS.get(id(scene))
         if context is not None:
-            return context.current_raw(obj.id)
+            return context.current_raw(self)
     return _ORIGINAL_CURRENT_RAW(self)
 
 
 def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
     scene = self._scene
-    obj = self._object
-    if scene is not None and obj is not None:
+    if scene is not None and self._object is not None:
         context = _ACTIVE_CONTEXTS.get(id(scene))
         if context is not None:
-            context.replace_raw(obj.id, raw)
+            context.replace_raw(self, raw)
             return self
     return _ORIGINAL_APPLY(self, raw)
 
@@ -229,10 +439,17 @@ class _CallbackContext:
         self._current[object_id] = current
         return current
 
-    def current_raw(self, object_id: int) -> _ir.Mobject:
-        return self._materialize(object_id)
+    def current_raw(self, mobject: _base.Mobject) -> _ir.Mobject:
+        obj = mobject._object
+        if obj is None:
+            raise RuntimeError("legacy callback target has no object identity")
+        return self._materialize(obj.id)
 
-    def replace_raw(self, object_id: int, raw: _ir.Mobject) -> None:
+    def replace_raw(self, mobject: _base.Mobject, raw: _ir.Mobject) -> None:
+        obj = mobject._object
+        if obj is None:
+            raise RuntimeError("legacy callback target has no object identity")
+        object_id = obj.id
         self._materialize(object_id)
         self._current[object_id] = _ir.Mobject(
             geometry=copy.deepcopy(raw.geometry),
@@ -268,6 +485,175 @@ class _CallbackContext:
                     opacity=after.style["opacity"],
                 )
         return batch
+
+
+class _CanonicalCallbackContext:
+    """Property-only Python overlay over a Rust-prepared phase view.
+
+    It is keyed exclusively by the generational semantic identity supplied by
+    Rust. Geometry/content/membership mutation cannot be encoded here, so an
+    updater either produces ordered effective transform/style writes or fails
+    before the pinned session publication changes.
+    """
+
+    def __init__(self, frame: dict[str, Any]) -> None:
+        self.delta_time = float(frame["delta_time"])
+        self.token = frame["token"]
+        self._frame_items = {
+            _phase_node_key(item["node"]): item for item in frame["objects"]
+        }
+        self._baseline: dict[tuple[int, int], _ir.Mobject] = {}
+        self._current: dict[tuple[int, int], _ir.Mobject] = {}
+        self._writes: list[dict[str, Any]] = []
+
+    def _materialize(self, mobject: _base.Mobject) -> tuple[tuple[int, int], _ir.Mobject]:
+        key = _semantic_key(mobject)
+        existing = self._current.get(key)
+        if existing is not None:
+            return key, existing
+        try:
+            item = self._frame_items[key]
+        except KeyError as error:
+            raise RuntimeError(
+                "canonical callback phase exposes only active callback targets; "
+                "reading undeclared semantic node "
+                f"{key[0]}:{key[1]} is not supported"
+            ) from error
+        # The phase never transfers immutable geometry/text payloads. Cached
+        # effective bounds are sufficient for center/size scalar access; missing
+        # bounds remain an explicit unsupported geometry query rather than a
+        # fabricated zero-size shape.
+        bounds = item.get("bounds")
+        geometry = (
+            {_CALLBACK_BOUNDS: copy.deepcopy(bounds), "transform": copy.deepcopy(item["transform"])}
+            if bounds is not None
+            else {_CALLBACK_BOUNDS_UNAVAILABLE: True}
+        )
+        raw = _ir.Mobject(
+            geometry=geometry,
+            transform=copy.deepcopy(item["transform"]),
+            style=copy.deepcopy(item["style"]),
+        )
+        self._baseline[key] = raw
+        current = copy.deepcopy(raw)
+        self._current[key] = current
+        return key, current
+
+    def current_raw(self, mobject: _base.Mobject) -> _ir.Mobject:
+        return self._materialize(mobject)[1]
+
+    def replace_raw(self, mobject: _base.Mobject, raw: _ir.Mobject) -> None:
+        key, before = self._materialize(mobject)
+        if before.geometry != raw.geometry:
+            raise NotImplementedError(
+                "canonical callbacks support transform/style properties only; "
+                "geometry/content/membership mutation is not supported"
+            )
+        current = _ir.Mobject(
+            geometry=copy.deepcopy(before.geometry),
+            transform=copy.deepcopy(raw.transform),
+            style=copy.deepcopy(raw.style),
+        )
+        previous = self._current[key]
+        self._current[key] = current
+        if previous.transform != current.transform:
+            self._writes.append(
+                {
+                    "kind": "transform",
+                    "object": _phase_node_json(key),
+                    "transform": copy.deepcopy(current.transform),
+                }
+            )
+        if previous.style != current.style:
+            self._writes.append(
+                {
+                    "kind": "style",
+                    "object": _phase_node_json(key),
+                    "style": copy.deepcopy(current.style),
+                }
+            )
+
+    def effective_batch(self) -> dict[str, Any]:
+        return {"token": self.token, "writes": self._writes}
+
+
+def _phase_node_key(value: object) -> tuple[int, int]:
+    if not isinstance(value, dict):
+        raise TypeError("callback phase semantic node must be an object")
+    slot = value.get("slot")
+    generation = value.get("generation")
+    if (isinstance(slot, bool) or not isinstance(slot, int) or slot < 0 or
+            isinstance(generation, bool) or not isinstance(generation, int) or generation < 0):
+        raise TypeError("callback phase semantic node must contain u32 slot/generation")
+    return slot, generation
+
+
+def _phase_node_json(key: tuple[int, int]) -> dict[str, int]:
+    return {"slot": key[0], "generation": key[1]}
+
+
+def _callback_bounds(raw: _ir.Mobject):
+    """Resolve callback-only cached bounds without reading copied geometry.
+
+    The Rust phase view supplies a current effective axis-aligned bound. This
+    adapter keeps that bound coherent through subsequent Python affine writes by
+    mapping its four corners through the relative transform. Degenerate source
+    scales cannot be inverted, so those geometry-derived queries fail instead of
+    producing invented values.
+    """
+
+    geometry = raw.geometry
+    if _CALLBACK_BOUNDS_UNAVAILABLE in geometry:
+        raise NotImplementedError(
+            "canonical callback geometry/bounds reads require Rust-published derived bounds"
+        )
+    payload = geometry.get(_CALLBACK_BOUNDS)
+    if payload is None:
+        return _ORIGINAL_BOUNDS(raw)
+    if not isinstance(payload, dict) or not isinstance(payload.get("min"), dict) or not isinstance(payload.get("max"), dict):
+        raise RuntimeError("canonical callback bounds payload is malformed")
+    original = geometry.get("transform")
+    if not isinstance(original, dict):
+        raise RuntimeError("canonical callback bounds have no source transform")
+    original_scale = original["scale"]
+    if float(original_scale["x"]) == 0.0 or float(original_scale["y"]) == 0.0:
+        raise NotImplementedError("canonical callback bounds are unavailable for zero-scale objects")
+
+    def inverse(point: dict[str, Any]) -> _base.Vec2:
+        x = float(point["x"]) - float(original["translation"]["x"])
+        y = float(point["y"]) - float(original["translation"]["y"])
+        angle = float(original["rotation"])
+        cosine, sine = math.cos(angle), math.sin(angle)
+        return _base.Vec2(
+            (x * cosine + y * sine) / float(original_scale["x"]),
+            (-x * sine + y * cosine) / float(original_scale["y"]),
+        )
+
+    local_min, local_max = inverse(payload["min"]), inverse(payload["max"])
+    corners = (
+        _base.Vec2(local_min.x, local_min.y),
+        _base.Vec2(local_min.x, local_max.y),
+        _base.Vec2(local_max.x, local_min.y),
+        _base.Vec2(local_max.x, local_max.y),
+    )
+    transform = raw.transform
+    scale = transform["scale"]
+    angle = float(transform["rotation"])
+    cosine, sine = math.cos(angle), math.sin(angle)
+    translation = transform["translation"]
+    world = [
+        _base.Vec2(
+            (corner.x * float(scale["x"])) * cosine -
+            (corner.y * float(scale["y"])) * sine + float(translation["x"]),
+            (corner.x * float(scale["x"])) * sine +
+            (corner.y * float(scale["y"])) * cosine + float(translation["y"]),
+        )
+        for corner in corners
+    ]
+    return (
+        _base.Vec2(min(point.x for point in world), min(point.y for point in world)),
+        _base.Vec2(max(point.x for point in world), max(point.y for point in world)),
+    )
 
 
 def _color(value: dict[str, float] | None) -> _ir.Color | None:
@@ -368,8 +754,79 @@ def run_callback_phase(
     return context.patch_batch(int(sequence)).to_json()
 
 
+def run_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> str:
+    """Invoke one Rust-selected callback phase and return only effective writes.
+
+    The compiler supplies invocation order and semantic targets. Python neither
+    chooses active callbacks nor maps semantic targets through export ObjectIds.
+    The caller commits this one batch to the exact phase token in the existing
+    canonical execution session.
+    """
+
+    try:
+        session = _CANONICAL_SESSIONS[int(session_id)]
+    except KeyError as error:
+        raise ValueError(f"unknown canonical Noon updater session {session_id}") from error
+
+    context = _CanonicalCallbackContext(frame)
+    scene_key = id(session.scene)
+    if scene_key in _ACTIVE_CONTEXTS:
+        raise RuntimeError("nested Noon callback phases are not supported")
+    _ACTIVE_CONTEXTS[scene_key] = context
+    # A canonical phase currently has no typed signal read-set. Enter an empty
+    # signal scope so ValueTracker reads fail explicitly instead of falling back
+    # to the wrapper's authored scalar value.
+    import _manim_reactive as reactive
+
+    reactive._enter_callback_signal_values({"signals": []})
+    try:
+        for invocation in frame.get("invocations", []):
+            if not isinstance(invocation, dict):
+                raise TypeError("canonical callback invocation must be an object")
+            callback_id = invocation.get("callback_id")
+            if isinstance(callback_id, bool) or not isinstance(callback_id, (int, str)):
+                raise TypeError("canonical callback ID must be an integer string")
+            try:
+                callback = session.callbacks[int(callback_id)]
+            except (KeyError, ValueError) as error:
+                raise RuntimeError(
+                    f"canonical callback phase received unknown callback {callback_id}"
+                ) from error
+            target = _phase_node_key(invocation.get("target"))
+            occurrence_index = invocation.get("occurrence_index")
+            if (
+                isinstance(occurrence_index, bool)
+                or not isinstance(occurrence_index, int)
+                or occurrence_index < 0
+            ):
+                raise TypeError("canonical callback occurrence index must be a u32")
+            try:
+                mobject = session.targets[target]
+            except KeyError as error:
+                raise RuntimeError(
+                    "canonical callback phase received an unbound semantic target "
+                    f"{target[0]}:{target[1]}"
+                ) from error
+            _invoke(callback, mobject, context.delta_time)
+    finally:
+        reactive._leave_callback_signal_values()
+        _ACTIVE_CONTEXTS.pop(scene_key, None)
+
+    return _json_phase(context.effective_batch())
+
+
+def _json_phase(value: object) -> str:
+    # This is the explicit Pyodide callback boundary. It is never an in-process
+    # Rust engine boundary: the semantic store, compiler plan, session and
+    # renderer delta encoder remain in the same WASM runtime.
+    import json
+
+    return json.dumps(value, separators=(",", ":"), allow_nan=False)
+
+
 def release_session(session_id: int) -> None:
     _SESSIONS.pop(int(session_id), None)
+    _CANONICAL_SESSIONS.pop(int(session_id), None)
 
 
 def _install_rotating_breadth() -> None:
@@ -747,5 +1204,6 @@ def install() -> None:
     _base.Mobject.has_updaters = has_updaters
     _base.Mobject._current_raw = _current_raw
     _base.Mobject._apply = _apply
+    _base._bounds = _callback_bounds
     _install_rotating_breadth()
     _INSTALLED = True

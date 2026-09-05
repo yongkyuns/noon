@@ -1,5 +1,13 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
-use noon::ExecutionSession;
+use noon::{
+    CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch,
+    EffectiveSemanticPropertyWrite, ExecutionSession, RuntimeIdentity,
+};
+use noon_core::{
+    ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
+    Transform2D,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     PlaybackClock, RetainedExecutionDeltaEncoder, RetainedExecutionDeltaEnvelope,
@@ -15,6 +23,10 @@ pub struct SemanticExecutionPlayer {
     /// authoring-worker to render-worker boundary.
     resource_bundle: Vec<u8>,
     snapshot_sent: bool,
+    /// Exact phase metadata needed only to re-anchor presentation after the
+    /// session atomically commits its own pending callback phase. The session
+    /// remains the sole owner of callback progression and termination.
+    pending_callback_phase: Option<(CallbackPhaseToken, f64)>,
     /// Present when the player came from canonical authoring. This is the one
     /// semantic store that produced `session`, not an execution mirror.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -28,18 +40,28 @@ pub struct SemanticExecutionPlayer {
 }
 
 impl SemanticExecutionPlayer {
+    fn playback_clock(session: &ExecutionSession, duration: f64) -> Result<PlaybackClock, String> {
+        if session.has_required_callbacks() {
+            Ok(PlaybackClock::once())
+        } else {
+            PlaybackClock::looping(duration).map_err(|error| error.to_string())
+        }
+    }
+
     pub fn from_session(
         session: ExecutionSession,
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
+        let clock = Self::playback_clock(&session, duration)?;
         let resource_bundle = Self::resource_bundle_for(&session)?;
         Ok(Self {
             session,
-            clock: PlaybackClock::looping(duration).map_err(|e| e.to_string())?,
+            clock,
             encoder: RetainedExecutionDeltaEncoder::new(transport_session),
             resource_bundle,
             snapshot_sent: false,
+            pending_callback_phase: None,
             #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
             #[cfg(any(target_arch = "wasm32", test))]
@@ -57,13 +79,15 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
+        let clock = Self::playback_clock(&session, duration)?;
         let resource_bundle = Self::resource_bundle_for(&session)?;
         Ok(Self {
             session,
-            clock: PlaybackClock::looping(duration).map_err(|e| e.to_string())?,
+            clock,
             encoder: RetainedExecutionDeltaEncoder::new(transport_session),
             resource_bundle,
             snapshot_sent: false,
+            pending_callback_phase: None,
             semantics: Some(semantics),
             semantic_root: Some(semantic_root),
             live_segment: None,
@@ -77,9 +101,14 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<(), String> {
-        self.clock
-            .set_loop_duration(duration)
-            .map_err(|error| error.to_string())?;
+        if self.pending_callback_phase.is_some() {
+            return Err("cannot rebind transport while a required callback phase is pending".into());
+        }
+        if !self.session.has_required_callbacks() {
+            self.clock
+                .set_loop_duration(duration)
+                .map_err(|error| error.to_string())?;
+        }
         // Live publication may have installed sparse text/font dependencies after
         // this player was bootstrapped. Refresh only at the explicit cross-worker
         // handoff boundary so ordinary typed in-process property edits stay local.
@@ -398,8 +427,347 @@ impl SemanticExecutionPlayer {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct CallbackNodeWire {
+    slot: u32,
+    generation: u32,
+}
+
+impl From<SemanticNodeId> for CallbackNodeWire {
+    fn from(node: SemanticNodeId) -> Self {
+        Self {
+            slot: node.slot(),
+            generation: node.generation(),
+        }
+    }
+}
+
+impl From<CallbackNodeWire> for SemanticNodeId {
+    fn from(node: CallbackNodeWire) -> Self {
+        Self::new(node.slot, node.generation)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct CallbackPublicationWire {
+    scene_revision: String,
+    execution_revision: String,
+    frame_epoch: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct CallbackTokenWire {
+    runtime: String,
+    publication: CallbackPublicationWire,
+    sequence: String,
+}
+
+impl From<CallbackPhaseToken> for CallbackTokenWire {
+    fn from(token: CallbackPhaseToken) -> Self {
+        let publication = token.publication();
+        Self {
+            runtime: token.runtime().get().to_string(),
+            publication: CallbackPublicationWire {
+                scene_revision: publication.scene_revision().get().to_string(),
+                execution_revision: publication.execution_revision().get().to_string(),
+                frame_epoch: publication.frame_epoch().get().to_string(),
+            },
+            sequence: token.sequence().get().to_string(),
+        }
+    }
+}
+
+impl TryFrom<CallbackTokenWire> for CallbackPhaseToken {
+    type Error = String;
+
+    fn try_from(token: CallbackTokenWire) -> Result<Self, Self::Error> {
+        let parse = |label: &str, value: String| {
+            value
+                .parse::<u64>()
+                .map_err(|error| format!("invalid callback {label} {value:?}: {error}"))
+        };
+        Ok(CallbackPhaseToken::new(
+            RuntimeIdentity::new(parse("runtime identity", token.runtime)?),
+            PublicationContext::new(
+                SceneRevision::new(parse("scene revision", token.publication.scene_revision)?),
+                ExecutionRevision::new(parse(
+                    "execution revision",
+                    token.publication.execution_revision,
+                )?),
+                FrameEpoch::new(parse("frame epoch", token.publication.frame_epoch)?),
+            ),
+            noon::CallbackSequence::new(parse("sequence", token.sequence)?),
+        ))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct CallbackPhaseObjectWire {
+    node: CallbackNodeWire,
+    transform: Transform2D,
+    style: Style,
+    appearance: f32,
+    presence: bool,
+    reveal: f32,
+    morph: f32,
+    bounds: Option<Rect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct CallbackInvocationWire {
+    callback_id: String,
+    target: CallbackNodeWire,
+    occurrence_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct CallbackPhaseWire {
+    token: CallbackTokenWire,
+    time: f64,
+    delta_time: f64,
+    objects: Vec<CallbackPhaseObjectWire>,
+    invocations: Vec<CallbackInvocationWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct CallbackPhaseTokenEnvelope {
+    token: CallbackTokenWire,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct CallbackTerminationWire {
+    token: CallbackTokenWire,
+    kind: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CallbackWriteWire {
+    Transform {
+        object: CallbackNodeWire,
+        transform: Transform2D,
+    },
+    Style {
+        object: CallbackNodeWire,
+        style: Style,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct CallbackBatchWire {
+    token: CallbackTokenWire,
+    writes: Vec<CallbackWriteWire>,
+}
+
+fn validate_callback_transform(transform: Transform2D) -> Result<(), String> {
+    if [
+        transform.translation.x,
+        transform.translation.y,
+        transform.rotation,
+        transform.scale.x,
+        transform.scale.y,
+    ]
+    .into_iter()
+    .all(f32::is_finite)
+    {
+        Ok(())
+    } else {
+        Err("callback transform values must be finite".into())
+    }
+}
+
+fn validate_callback_style(style: Style) -> Result<(), String> {
+    let finite_color = |color: noon_core::Color| {
+        [color.red, color.green, color.blue, color.alpha]
+            .into_iter()
+            .all(f32::is_finite)
+    };
+    if !style.stroke_width.is_finite() || !style.opacity.is_finite()
+        || style.fill.is_some_and(|color| !finite_color(color))
+        || style.stroke.is_some_and(|color| !finite_color(color))
+    {
+        return Err("callback style values must be finite".into());
+    }
+    Ok(())
+}
+
+fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
+    let wire: CallbackBatchWire =
+        serde_json::from_str(json).map_err(|error| format!("invalid callback batch JSON: {error}"))?;
+    let token = CallbackPhaseToken::try_from(wire.token)?;
+    let writes = wire
+        .writes
+        .into_iter()
+        .map(|write| match write {
+            CallbackWriteWire::Transform { object, transform } => {
+                validate_callback_transform(transform)?;
+                Ok(EffectiveSemanticPropertyWrite::Transform {
+                    object: object.into(),
+                    transform,
+                })
+            }
+            CallbackWriteWire::Style { object, style } => {
+                validate_callback_style(style)?;
+                Ok(EffectiveSemanticPropertyWrite::Style {
+                    object: object.into(),
+                    style,
+                })
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(EffectivePropertyBatch::new(token, writes))
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl SemanticExecutionPlayer {
+    fn callback_phase_json(
+        overlay: &noon::CallbackPhaseOverlay,
+        invocations: &[noon::RequiredCallbackInvocation],
+    ) -> Result<String, String> {
+        let phase = CallbackPhaseWire {
+            token: overlay.token().into(),
+            time: overlay.time(),
+            delta_time: overlay.delta_time(),
+            objects: overlay
+                .objects()
+                .map(|(node, properties)| CallbackPhaseObjectWire {
+                    node: node.into(),
+                    transform: properties.transform,
+                    style: properties.style,
+                    appearance: properties.appearance,
+                    presence: properties.presence,
+                    reveal: properties.reveal,
+                    morph: properties.morph,
+                    bounds: properties.bounds,
+                })
+                .collect(),
+            invocations: invocations
+                .iter()
+                .copied()
+                .map(|invocation| CallbackInvocationWire {
+                    callback_id: invocation.callback_id().get().to_string(),
+                    target: invocation.target().into(),
+                    occurrence_index: invocation.occurrence_index(),
+                })
+                .collect(),
+        };
+        serde_json::to_string(&phase).map_err(|error| error.to_string())
+    }
+
+    fn advance_to_callback_phase(&mut self, time: f64) -> Result<Option<String>, String> {
+        if self.pending_callback_phase.is_some() {
+            return Err("a required callback phase is already pending".into());
+        }
+        match self
+            .session
+            .advance_to_callback_barrier(time)
+            .map_err(|error| error.to_string())?
+        {
+            CallbackAdvance::Ready(_) => Ok(None),
+            CallbackAdvance::HostRequired {
+                invocations,
+                overlay,
+            } => {
+                let token = overlay.token();
+                let phase_time = overlay.time();
+                let json = match Self::callback_phase_json(&overlay, &invocations) {
+                    Ok(json) => json,
+                    Err(error) => {
+                        self.session
+                            .fail_required_callback_phase(token)
+                            .map_err(|termination| termination.to_string())?;
+                        return Err(error);
+                    }
+                };
+                self.pending_callback_phase = Some((token, phase_time));
+                Ok(Some(json))
+            }
+        }
+    }
+
+    fn phase_token_from_json(phase_json: &str) -> Result<CallbackPhaseToken, String> {
+        let phase: CallbackPhaseTokenEnvelope = serde_json::from_str(phase_json)
+            .map_err(|error| format!("invalid callback phase JSON: {error}"))?;
+        phase.token.try_into()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = initialCallbackPhaseJson))]
+    pub fn initial_callback_phase_json(&mut self) -> Result<Option<String>, String> {
+        self.advance_to_callback_phase(self.session.frame().time)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = tickCallbackPhaseJson))]
+    pub fn tick_callback_phase_json(&mut self, timestamp_ms: f64) -> Result<Option<String>, String> {
+        let mut clock = self.clock.clone();
+        let requested = clock.scene_time(timestamp_ms).map_err(|error| error.to_string())?;
+        let phase = self.advance_to_callback_phase(requested)?;
+        if phase.is_none() {
+            self.clock = clock;
+        }
+        Ok(phase)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]
+    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), String> {
+        let batch = decode_callback_batch(batch_json)?;
+        let token = batch.token();
+        let (_, time) = self
+            .pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback batch does not match the player pending phase")?;
+        self.session
+            .commit_required_callback_phase(batch)
+            .map_err(|error| error.to_string())?;
+        // The callback phase time is session-owned. Re-anchoring presentation
+        // only after its commit avoids a host-side progression cursor.
+        self.clock.seek(time).map_err(|error| error.to_string())?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = failCallbackPhaseJson))]
+    pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), String> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        self.session
+            .fail_required_callback_phase(token)
+            .map_err(|error| error.to_string())?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = interruptCallbackPhaseJson))]
+    pub fn interrupt_callback_phase_json(&mut self, phase_json: &str) -> Result<(), String> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        self.session
+            .interrupt_required_callback_phase(token)
+            .map_err(|error| error.to_string())?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = callbackTerminationJson))]
+    pub fn callback_termination_json(&self) -> Result<Option<String>, String> {
+        self.session
+            .callback_termination()
+            .map(|termination| {
+                let kind = match termination.kind() {
+                    noon::CallbackTerminationKind::Failed => "failed",
+                    noon::CallbackTerminationKind::Interrupted => "interrupted",
+                };
+                serde_json::to_string(&CallbackTerminationWire {
+                    token: termination.token().into(),
+                    kind,
+                })
+                .map_err(|error| error.to_string())
+            })
+            .transpose()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaJson))]
+    pub fn drain_delta_json(&mut self) -> Result<Option<String>, String> {
+        self.encoded_delta(false)
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = initialDeltaJson))]
     pub fn initial_delta_json(&mut self) -> Result<String, String> {
         self.encoded_delta(true)?
@@ -422,6 +790,11 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
+        if self.session.has_required_callbacks() {
+            return Err(
+                "direct seek is unsupported for required callbacks; begin a new authoring run".into(),
+            );
+        }
         let mut clock = self.clock.clone();
         clock.seek(time).map_err(|e| e.to_string())?;
         self.session.seek(time).map_err(|e| e.to_string())?;
@@ -431,9 +804,15 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setLoopDuration))]
     pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), String> {
+        if self.session.has_required_callbacks() {
+            return Err(
+                "looping playback is unsupported for opaque required callbacks; begin a new authoring run"
+                    .into(),
+            );
+        }
         self.clock
             .set_loop_duration(duration)
-            .map_err(|e| e.to_string())
+            .map_err(|error| error.to_string())
     }
     pub fn pause(&mut self) {
         self.clock.pause();
@@ -454,7 +833,7 @@ impl SemanticExecutionPlayer {
 mod tests {
     use super::*;
     use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
-    use noon_core::{AnimationOptions, RateFunction};
+    use noon_core::{AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction};
 
     #[test]
     fn membership_snapshot_omits_retired_rows_and_preserves_incremental_order() {
@@ -569,6 +948,112 @@ mod tests {
         let end: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.tick_delta_json(1000.0).unwrap().unwrap()).unwrap();
         assert_eq!(end.objects[0].transform.translation.x, 6.0);
+    }
+
+    #[test]
+    fn callback_phase_wire_pins_runtime_publication_and_orders_effective_writes() {
+        let mut scene = noon::Scene::new();
+        let source = scene.circle(1.0).unwrap();
+        let drift = scene.circle(0.25).unwrap();
+        scene.add(&source).unwrap();
+        scene.add(&drift).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
+        transaction.add_updater(source.node_id(), HostCallbackId::new(4), 0.0, None);
+        transaction.add_updater(drift.node_id(), HostCallbackId::new(2), 0.0, None);
+        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            2.0,
+            12,
+        )
+        .unwrap();
+
+        let phase: serde_json::Value = serde_json::from_str(
+            &player
+                .initial_callback_phase_json()
+                .unwrap()
+                .expect("time-zero callbacks require one phase"),
+        )
+        .unwrap();
+        assert_eq!(phase["objects"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            phase["invocations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["callback_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["9", "4", "2"]
+        );
+        for field in ["runtime", "sequence"] {
+            assert!(phase["token"][field].is_string());
+        }
+        for field in ["scene_revision", "execution_revision", "frame_epoch"] {
+            assert!(phase["token"]["publication"][field].is_string());
+        }
+
+        let source_row = phase["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| {
+                entry["node"]["slot"].as_u64() == Some(u64::from(source.node_id().slot()))
+            })
+            .unwrap();
+        let mut source_transform = source_row["transform"].clone();
+        source_transform["translation"]["y"] = serde_json::json!(1.0);
+        let mut source_style = source_row["style"].clone();
+        source_style["opacity"] = serde_json::json!(0.5);
+        let batch = serde_json::json!({
+            "token": phase["token"].clone(),
+            "writes": [
+                {
+                    "kind": "transform",
+                    "object": source_row["node"].clone(),
+                    "transform": source_transform,
+                },
+                {
+                    "kind": "style",
+                    "object": source_row["node"].clone(),
+                    "style": source_style,
+                },
+            ],
+        });
+        player.commit_callback_phase_json(&batch.to_string()).unwrap();
+        assert_eq!(player.session.frame().objects[0].transform.translation.y, 1.0);
+        assert_eq!(player.session.frame().objects[0].style.opacity, 0.5);
+        assert!(player.drain_delta_json().unwrap().is_some());
+    }
+
+    #[test]
+    fn interrupted_callback_phase_stays_terminal_after_player_recovery() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
+        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            2.0,
+            13,
+        )
+        .unwrap();
+        let phase = player.initial_callback_phase_json().unwrap().unwrap();
+        player.interrupt_callback_phase_json(&phase).unwrap();
+        let termination: serde_json::Value = serde_json::from_str(
+            &player.callback_termination_json().unwrap().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(termination["kind"], "interrupted");
+        assert!(player.tick_callback_phase_json(16.0).is_err());
     }
 
     #[test]
