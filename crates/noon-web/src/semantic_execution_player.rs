@@ -10,6 +10,7 @@ pub struct SemanticExecutionPlayer {
     encoder: ExecutionDeltaEncoder,
     /// Present when the player came from canonical authoring. This is the one
     /// semantic store that produced `session`, not an execution mirror.
+    #[cfg(any(target_arch = "wasm32", test))]
     semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
 }
 
@@ -23,10 +24,12 @@ impl SemanticExecutionPlayer {
             session,
             clock: PlaybackClock::looping(duration).map_err(|e| e.to_string())?,
             encoder: ExecutionDeltaEncoder::new(transport_session),
+            #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
         })
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn from_live_session(
         session: ExecutionSession,
         semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -42,6 +45,7 @@ impl SemanticExecutionPlayer {
     }
 
     /// Change only derived transport framing while retaining the same runtime.
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn rebind_transport(
         &mut self,
         duration: f64,
@@ -54,6 +58,7 @@ impl SemanticExecutionPlayer {
         Ok(())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_translation(
         &mut self,
         mobject: &noon::Mobject,
@@ -70,6 +75,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_shift(
         &mut self,
         mobject: &noon::Mobject,
@@ -86,6 +92,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_scale(
         &mut self,
         mobject: &noon::Mobject,
@@ -102,6 +109,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_rotation(
         &mut self,
         mobject: &noon::Mobject,
@@ -117,6 +125,7 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective(
         &mut self,
         mobject: &noon::Mobject,

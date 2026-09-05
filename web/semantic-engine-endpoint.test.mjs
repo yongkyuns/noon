@@ -14,17 +14,21 @@ const request = (port, type, requestId, fields = {}) => {
 function fixture() {
   const control = new MessageChannel();
   const render = new MessageChannel();
-  let time = 0, playing = true, sequence = 0, freed = 0, stopped = 0;
+  let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
   const json = () => JSON.stringify({ channel: "noon.execution", protocol_version: 1, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: json,
     tickDeltaJson: () => null,
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
-    time: () => time, isPlaying: () => playing, free: () => { freed += 1; },
+    time: () => time, isPlaying: () => playing,
   };
-  return { control, render, player, stats: () => ({ freed, stopped }),
-    attach: () => attachSemanticEngine({ createExecutionPlayer: () => player }, {
+  const context = {
+    createExecutionPlayer: () => player,
+    returnExecutionPlayer: (value) => { returned += 1; returnedPlayer = value; },
+  };
+  return { control, render, player, stats: () => ({ returned, returnedPlayer, stopped }),
+    attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode: "transferable",
     }, () => { stopped += 1; }),
@@ -48,16 +52,20 @@ test("semantic producer starts with ordinary seq0 transport and supports control
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(await changed).json).time, 0.5);
     assert.equal((await request(f.control.port2, "apply_patch", 4)).type, "error");
     endpoint.stop(); endpoint.stop();
-    assert.deepEqual(f.stats(), { freed: 1, stopped: 1 });
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().returnedPlayer, f.player);
+    assert.equal(f.stats().stopped, 1);
   } finally { f.close(); }
 });
 
-test("initial snapshot failure releases the player and endpoint once", () => {
+test("initial snapshot failure returns the exact player for retry", () => {
   const f = fixture();
   f.player.initialDeltaJson = () => { throw new Error("snapshot failed"); };
   try {
     assert.throws(f.attach, /snapshot failed/);
-    assert.deepEqual(f.stats(), { freed: 1, stopped: 1 });
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().returnedPlayer, f.player);
+    assert.equal(f.stats().stopped, 1);
   } finally { f.close(); }
 });
 
@@ -72,6 +80,7 @@ test("player construction failure closes both transferred ports", () => {
   let stopped = 0;
   assert.throws(() => attachSemanticEngine({
     createExecutionPlayer: () => { throw new Error("lowering failed"); },
+    returnExecutionPlayer: () => { throw new Error("must not return an uncreated player"); },
   }, {
     controlPort: control.port1, renderPort: render.port1, session: 7,
     loopDurationSeconds: 2, transportMode: "transferable",

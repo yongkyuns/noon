@@ -11,14 +11,15 @@ use crate::{
 /// One scene family in the worker's shared semantic store.
 /// Geometry bindings retain identity only. Source-level text remains a deletion-owned
 /// export adapter (#959); it cannot enter geometry-only typed execution silently.
-#[derive(Debug)]
 pub struct CanonicalAuthoringScene {
     scene: noon::Scene,
     bindings: BTreeMap<ObjectId, noon_core::SemanticNodeId>,
     identities: BTreeMap<noon_core::SemanticNodeId, ObjectId>,
     text_adapters: BTreeMap<noon_core::SemanticNodeId, ObjectSpec>,
     retained_scale_factors: BTreeMap<ObjectId, Vec2>,
+    #[cfg(any(target_arch = "wasm32", test))]
     live_player: Option<crate::SemanticExecutionPlayer>,
+    #[cfg(any(target_arch = "wasm32", test))]
     live_player_transferred: bool,
 }
 
@@ -41,7 +42,9 @@ impl CanonicalAuthoringScene {
             identities: BTreeMap::new(),
             text_adapters: BTreeMap::new(),
             retained_scale_factors: BTreeMap::new(),
+            #[cfg(any(target_arch = "wasm32", test))]
             live_player: None,
+            #[cfg(any(target_arch = "wasm32", test))]
             live_player_transferred: false,
         }
     }
@@ -201,6 +204,7 @@ impl CanonicalAuthoringScene {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     fn live_player(
         &mut self,
         duration: f64,
@@ -226,6 +230,7 @@ impl CanonicalAuthoringScene {
         Ok(self.live_player.as_mut().expect("live player initialized"))
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     fn active_live_player(&mut self) -> Result<&mut crate::SemanticExecutionPlayer, String> {
         if self.live_player_transferred {
             return Err("live execution session is running in the semantic engine".into());
@@ -235,6 +240,7 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     fn take_execution_player(
         &mut self,
         duration: f64,
@@ -261,9 +267,10 @@ impl CanonicalAuthoringScene {
         Ok(player)
     }
 
-    /// Return a player after endpoint setup failed. This preserves the one
-    /// runtime so a retry does not lower a second session for this scene.
-    fn restore_execution_player(
+    /// Return a player after endpoint setup or renderer recovery. This preserves
+    /// the one runtime so reattachment never lowers a parallel session.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn return_execution_player(
         &mut self,
         player: crate::SemanticExecutionPlayer,
     ) -> Result<(), String> {
@@ -271,16 +278,6 @@ impl CanonicalAuthoringScene {
             return Err("semantic execution player is not leased by this context".into());
         }
         self.live_player = Some(player);
-        self.live_player_transferred = false;
-        Ok(())
-    }
-
-    /// Mark a completed engine lease as gone. A later execution is a new,
-    /// sequential run and may lower a fresh runtime; no active runtime remains.
-    fn release_execution_player(&mut self) -> Result<(), String> {
-        if !self.live_player_transferred || self.live_player.is_some() {
-            return Err("semantic execution player is not leased by this context".into());
-        }
         self.live_player_transferred = false;
         Ok(())
     }
@@ -536,19 +533,12 @@ mod wasm {
             })
         }
 
-        #[wasm_bindgen(js_name = restoreExecutionPlayer)]
-        pub fn restore_execution_player(
+        #[wasm_bindgen(js_name = returnExecutionPlayer)]
+        pub fn return_execution_player(
             &mut self,
             player: crate::SemanticExecutionPlayer,
         ) -> Result<(), JsValue> {
-            self.inner
-                .restore_execution_player(player)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = releaseExecutionPlayer)]
-        pub fn release_execution_player(&mut self) -> Result<(), JsValue> {
-            self.inner.release_execution_player().map_err(js_error)
+            self.inner.return_execution_player(player).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = bindGeometry)]
@@ -795,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn live_runtime_is_transferred_to_normal_execution_without_losing_active_driver() {
+    fn live_runtime_survives_normal_execution_handoff_and_renderer_recovery() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(1.0).unwrap();
         let mut target = circle.target_editor().unwrap();
@@ -864,6 +854,22 @@ mod tests {
             serde_json::from_str(&handed_off.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 17);
         assert_eq!(snapshot.objects[0].transform.translation.x, 2.0);
+
+        context.return_execution_player(handed_off).unwrap();
+        let mut recovered = context.take_execution_player(2.0, 18).unwrap();
+        assert_eq!(
+            recovered
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            2.0
+        );
+        let recovery_snapshot: crate::ExecutionDeltaEnvelope =
+            serde_json::from_str(&recovered.initial_delta_json().unwrap()).unwrap();
+        assert_eq!(recovery_snapshot.session, 18);
+        assert_eq!(recovery_snapshot.objects[0].transform.translation.x, 2.0);
         assert!(context.live_player(2.0).is_err());
     }
 }
