@@ -185,6 +185,7 @@ class _RetainedTextMobject(_base.Mobject):
         self._font_size = float(font_size)
         self._retained_handle = handle
         self._semantic_handle = semantic_handle
+        self._semantic_handle_fresh = semantic_handle is not None
         # Canonical native Text already has a normal semantic Mobject identity.
         # Retained-source Text still needs its temporary family member identity;
         # allocating one for the canonical path would create an orphan semantic node.
@@ -357,7 +358,13 @@ class _RetainedTextMobject(_base.Mobject):
         value = float(factor)
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError("scale factor must be finite and positive")
-        self._retained_handle.scale(value)
+        # Native Text aliases the ordinary shared Mobject handle, whose affine
+        # scale takes independent x/y values. Typst's retained handle remains
+        # uniform until that backend reaches the same resource path.
+        if getattr(self, "_semantic_handle", None) is not None:
+            self._retained_handle.scale(value, value)
+        else:
+            self._retained_handle.scale(value)
         return self
 
     def rotate(self, angle: float, *args: Any, **kwargs: Any) -> _RetainedTextMobject:
@@ -385,7 +392,10 @@ class _RetainedTextMobject(_base.Mobject):
         value = float(opacity)
         if not math.isfinite(value) or not 0.0 <= value <= 1.0:
             raise ValueError("opacity must be finite and between 0 and 1")
-        self._retained_handle.setOpacity(value)
+        if getattr(self, "_semantic_handle", None) is not None:
+            self._retained_handle.setObjectOpacity(value)
+        else:
+            self._retained_handle.setOpacity(value)
         return self
 
     def _copy_constructor(self) -> _RetainedTextMobject:
@@ -408,7 +418,7 @@ class _RetainedTextMobject(_base.Mobject):
                 float(source.wireFillBlue),
                 float(source.wireFillAlpha),
             )
-            clone._retained_handle.setOpacity(float(source.wireObjectOpacity))
+            clone._retained_handle.setObjectOpacity(float(source.wireObjectOpacity))
             return clone
         spec = self._spec()
         clone = self._copy_constructor()

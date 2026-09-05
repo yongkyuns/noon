@@ -19,6 +19,13 @@ const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 const LIFECYCLE_CANCELLED_MESSAGE =
   "execution worker client was terminated during an asynchronous operation";
 
+function workerCrashError(event, fallback) {
+  const location =
+    event.filename && `${event.filename}:${event.lineno ?? 0}:${event.colno ?? 0}`;
+  const details = [event.message, event.error?.stack, location].filter(Boolean);
+  return new Error(details.join("\n") || fallback);
+}
+
 export class ExecutionWorkerClient {
   #canvas;
   #engineWorker = null;
@@ -1299,7 +1306,7 @@ export class ExecutionWorkerClient {
         this.#recordStaleWorkerEvent(owner);
         return;
       }
-      const error = new Error(event.message || `${owner} worker crashed`);
+      const error = workerCrashError(event, `${owner} worker crashed`);
       rejectInitial(error);
       this.#rejectOwner(owner, error);
       this.#notifyError(error, owner);
@@ -1356,7 +1363,7 @@ export class ExecutionWorkerClient {
       });
       worker.addEventListener("error", (event) => {
         if (this.#candidateEngineWorker === worker) {
-          settle(reject, new Error(event.message || "candidate engine worker crashed"));
+          settle(reject, workerCrashError(event, "candidate engine worker crashed"));
         }
       });
       worker.addEventListener("messageerror", () => {

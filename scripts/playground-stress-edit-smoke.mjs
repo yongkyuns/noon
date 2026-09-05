@@ -8,6 +8,7 @@ import playwright from "playwright";
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_STRESS_EDIT_PORT ?? "4191");
 const baseUrl = `http://127.0.0.1:${port}`;
+const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
 const artifactDir = path.resolve(
   process.env.NOON_PLAYGROUND_STRESS_EDIT_ARTIFACTS ??
     "browser-smoke-artifacts/playground-stress-edit",
@@ -207,7 +208,7 @@ try {
     // Use the real CodeMirror input path on every edit so identity stabilization and the
     // latest-source debounce are exercised across consecutive automatic authoring results.
     await editor.click();
-    await page.keyboard.press("Control+A");
+    await page.keyboard.press(selectAllShortcut);
     await page.keyboard.insertText(nextSource);
     await page.waitForFunction(
       (expected) => document.querySelector("#python-scene-source")?.value === expected,

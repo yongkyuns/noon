@@ -30,8 +30,8 @@ _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
 _ORIGINAL_REPLACE_STATIC_SNAPSHOT = _base.Scene._replace_static_snapshot
 _ORIGINAL_BIND = _base.Mobject._bind_to_scene
 _ORIGINAL_PLAY = _base.Scene.play
-_ORIGINAL_TO_SCENE_SPEC = _base.Scene.to_scene_spec
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
+_ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 
 
 def _json(value: object) -> str:
@@ -91,7 +91,9 @@ def _record_mobject_binding(
         if handles is None:
             handles = scene._semantic_geometry_handles = {}
     handles[obj.id] = handle
-    if getattr(scene, "_legacy_geometry_materialized", False):
+    if getattr(scene, "_legacy_geometry_materialized", False) and not isinstance(
+        self, _typst._RetainedTextMobject
+    ):
         snapshot = json.loads(str(handle.snapshotJson()))
         snapshot["id"] = obj.id
         scene._objects[-1] = snapshot
@@ -113,8 +115,7 @@ def _play(self, *args, **kwargs):
     # Native Text timeline export stays in the canonical context. Its #959
     # codec is store-derived at finalization, so geometry materialization must
     # not force it through a geometry-only legacy document.
-    if not getattr(self, "_semantic_text_handles", {}):
-        materialize_legacy_geometry(self)
+    materialize_legacy_geometry(self)
     return _ORIGINAL_PLAY(self, *args, **kwargs)
 
 
@@ -128,6 +129,35 @@ def _to_document(self):
             snapshot = json.loads(str(handle.snapshotJson()))
             snapshot["id"] = object_id
             objects[self._object_positions[object_id]] = snapshot
+    # Native/Typst Text has no geometry projection. The legacy document remains
+    # an explicit geometry-only export while canonical SceneSpec carries mixed
+    # content, so omit identity-only text rows and their legacy tracks here.
+    text_ids = set(getattr(self, "_semantic_text_handles", {}))
+    if text_ids:
+        document["objects"] = [
+            object for object in objects if object.get("id") not in text_ids
+        ]
+        document["tracks"] = [
+            track for track in document["tracks"] if track.get("object") not in text_ids
+        ]
+    return document
+
+
+def _identity_document(self: _ir.Scene) -> dict[str, list[dict[str, Any]]]:
+    """Project identities for the geometry-only legacy document."""
+    document = _ORIGINAL_IDENTITY_DOCUMENT(self)
+    text_ids = set(getattr(self, "_semantic_text_handles", {}))
+    if text_ids:
+        document["objects"] = [
+            identity
+            for identity in document["objects"]
+            if identity["id"] not in text_ids
+        ]
+        document["tracks"] = [
+            identity
+            for identity in document["tracks"]
+            if self._tracks[identity["id"]].get("object") not in text_ids
+        ]
     return document
 
 
@@ -420,9 +450,6 @@ def _to_scene_spec(self: _base.Scene) -> dict[str, Any]:
     _retained_state._sync_all(self)
     _retained_state._freeze_bound_sources(self)
 
-    if getattr(self, "_legacy_geometry_materialized", False):
-        return _ORIGINAL_TO_SCENE_SPEC(self)
-
     context = _context(self)
     for source in _retained_state._bound_sources(self):
         context.updateText(
@@ -458,3 +485,4 @@ def install() -> None:
     _base.Scene.live_execution = _live_execution
     _base.Scene.declare_live_transform_to = _declare_live_transform_to
     _ir.Scene.to_document = _to_document
+    _ir.Scene.identity_document = _identity_document
