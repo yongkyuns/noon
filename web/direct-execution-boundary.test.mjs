@@ -25,6 +25,10 @@ const browserSmokeHtml = await readFile(
   new URL("./browser-smoke.html", import.meta.url),
   "utf8",
 );
+const browserSmokeRunner = await readFile(
+  new URL("../scripts/browser-smoke.mjs", import.meta.url),
+  "utf8",
+);
 
 for (const required of [
   "SemanticStore::new()",
@@ -131,3 +135,15 @@ assert.ok(
   browserSmokeHtml.includes('src="./direct-execution-smoke-probe.js"'),
   "primary browser rendering smoke must execute the direct Rust/WASM proof",
 );
+
+for (const required of [
+  "window.noonDirectExecutionSmoke?.ready === true",
+  "direct Rust/WASM execution proof failed",
+  "direct.metrics.backend",
+  "direct Rust/WASM execution did not present",
+]) {
+  assert.ok(
+    browserSmokeRunner.includes(required),
+    `browser smoke must gate the direct Rust/WASM proof through ${required}`,
+  );
+}
