@@ -1057,7 +1057,8 @@ impl SemanticStore {
     ///
     /// Direct storage-building helpers intentionally do not advance this clock;
     /// `SemanticMutationTransaction::apply` is the publication boundary and calls
-    /// `set_last_mutation_writes` once after complete preflight/commit.
+    /// publishes once after complete preflight/commit. Mutation work counters are
+    /// independent of publication and may be updated by nested storage helpers.
     pub const fn scene_revision(&self) -> crate::SceneRevision {
         self.scene_revision
     }
@@ -1071,12 +1072,10 @@ impl SemanticStore {
             slots_written,
             cycle_nodes_visited: 0,
         };
-        if slots_written > 0 {
-            self.scene_revision = self
-                .scene_revision
-                .checked_next()
-                .expect("Noon scene revision space exhausted");
-        }
+    }
+
+    pub(crate) fn publish_scene_revision(&mut self, revision: crate::SceneRevision) {
+        self.scene_revision = revision;
     }
 }
 

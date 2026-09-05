@@ -84,6 +84,10 @@ impl std::error::Error for ExecutionSessionCameraError {}
 /// Error produced while activating one authoritative semantic animation declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionAnimationError {
+    StaleSceneRevision {
+        expected: noon_core::SceneRevision,
+        actual: noon_core::SceneRevision,
+    },
     Schedule(SemanticAnimationScheduleError),
     Segment(ExecutionSegmentError),
     Payload(SemanticAffineAnimationTrackError),
@@ -94,6 +98,12 @@ pub enum ExecutionSessionAnimationError {
 impl std::fmt::Display for ExecutionSessionAnimationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::StaleSceneRevision { expected, actual } => write!(
+                formatter,
+                "semantic scene revision {} does not match execution scene revision {}",
+                actual.get(),
+                expected.get()
+            ),
             Self::Schedule(error) => {
                 write!(formatter, "semantic animation scheduling failed: {error}")
             }
@@ -212,15 +222,12 @@ impl ExecutionSession {
         let Some(camera_object) = self.camera_object else {
             return Ok(Camera2DState::default());
         };
-        let object = self
-            .runtime
-            .frame()
-            .objects
-            .iter()
-            .find(|object| object.id == camera_object)
-            .ok_or(ExecutionSessionCameraError {
-                object: camera_object,
-            })?;
+        let object =
+            self.runtime
+                .effective_object(camera_object)
+                .ok_or(ExecutionSessionCameraError {
+                    object: camera_object,
+                })?;
         Camera2DState::from_frame_object(&object.geometry, object.transform).ok_or(
             ExecutionSessionCameraError {
                 object: camera_object,
@@ -284,6 +291,11 @@ impl ExecutionSession {
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        let expected = self.publication_context().scene_revision();
+        let actual = store.scene_revision();
+        if actual != expected {
+            return Err(ExecutionSessionAnimationError::StaleSceneRevision { expected, actual });
+        }
         let schedule = lower_semantic_animation_schedule(
             store,
             &self.execution_index,
@@ -793,6 +805,41 @@ mod tests {
                 height: 6.0,
             }
         );
+    }
+
+    #[test]
+    fn animation_activation_rejects_an_unpublished_semantic_revision() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let target =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.take_frame_changes();
+        let context = session.publication_context();
+        let frame = session.frame().clone();
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        transaction.set_property(object, SemanticObjectProperty::ObjectOpacity, 0.5_f64);
+        transaction.apply(&mut store).unwrap();
+
+        assert_eq!(
+            session.activate_animation_segment(&store, animation, linear_second()),
+            Err(ExecutionSessionAnimationError::StaleSceneRevision {
+                expected: context.scene_revision(),
+                actual: store.scene_revision(),
+            })
+        );
+        assert_eq!(session.publication_context(), context);
+        assert_eq!(session.frame(), &frame);
+        assert!(session.take_frame_changes().is_empty());
     }
 
     #[test]

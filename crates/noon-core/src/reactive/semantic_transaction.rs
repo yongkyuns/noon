@@ -365,6 +365,14 @@ impl SemanticMutationTransaction {
     ) -> Result<SemanticMutationTransactionResult, SemanticMutationTransactionError> {
         store.set_last_mutation_writes(0);
         let preflight = self.preflight(store)?;
+        // Reserve the publication clock before committing any authored state.
+        // Nested storage helpers update work counters, never the revision clock.
+        let next_revision = preflight.iter().any(|changed| *changed).then(|| {
+            store
+                .scene_revision()
+                .checked_next()
+                .expect("Noon scene revision space exhausted")
+        });
 
         let mut impacts = Vec::with_capacity(self.mutations.len());
         let mut written_slots = HashSet::with_capacity(self.mutations.len());
@@ -491,6 +499,9 @@ impl SemanticMutationTransaction {
                 .expect("preflighted source identity must be available after terminal removals");
         }
         store.set_last_mutation_writes(written_slots.len());
+        if !written_slots.is_empty() {
+            store.publish_scene_revision(next_revision.expect("changed transaction preflighted"));
+        }
 
         Ok(SemanticMutationTransactionResult { impacts })
     }

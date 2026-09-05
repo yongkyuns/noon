@@ -736,6 +736,8 @@ impl SlottedSceneInstance {
         replacement
             .seek(time)
             .expect("existing scene playhead must remain finite during compaction");
+        replacement.publication = self.inner.publication_context();
+        replacement.publish_execution_change();
         self.inner = replacement;
         self.layout_generation = next_generation;
         self.last_delta = ExecutionDelta::default();
@@ -775,18 +777,39 @@ impl SlottedSceneInstance {
     ) -> Result<&FrameState, ExecutionTransactionError> {
         self.preflight_transaction(transaction)?;
         let mut aggregate = ExecutionDelta::default();
-        for patch in transaction.mutations() {
-            self.apply_patch(patch)
+        let mut changed = false;
+        for patch in super::runtime_transaction::final_value_writes(transaction) {
+            if !self.inner.compiled.patch_changes_execution(patch) {
+                continue;
+            }
+            self.apply_patch_unpublished(patch)
                 .expect("execution transaction was fully preflighted");
+            changed = true;
             aggregate.merge_from(&self.last_delta);
         }
         self.last_delta = aggregate;
+        if changed {
+            self.inner.publish_execution_change();
+        }
         Ok(self.inner.frame())
     }
 
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
+        if !self.inner.compiled.patch_changes_execution(patch) {
+            self.last_delta = ExecutionDelta::default();
+            return Ok(self.inner.frame());
+        }
+        self.apply_patch_unpublished(patch)?;
+        self.inner.publish_execution_change();
+        Ok(self.inner.frame())
+    }
+
+    fn apply_patch_unpublished(
+        &mut self,
+        patch: &ScenePatch,
+    ) -> Result<&FrameState, CompilePatchError> {
         let context = self.capture_context(patch);
-        self.inner.apply_patch(patch)?;
+        self.inner.apply_patch_unpublished(patch)?;
         let mut delta = ExecutionDelta::default();
 
         match patch {
@@ -1223,8 +1246,25 @@ mod tests {
         assert_eq!(live.frame_slot_capacity(), 3);
         assert_eq!(live.retired_frame_slot_count(), 1);
 
+        let before_publication = live.inner.publication_context();
         let compact = CompiledScene::compile(&definition).unwrap();
         let stats = live.compact_with_compiled(compact).unwrap();
+        let after_publication = live.inner.publication_context();
+        assert_eq!(
+            after_publication.scene_revision(),
+            before_publication.scene_revision()
+        );
+        assert_eq!(
+            after_publication.execution_revision(),
+            before_publication
+                .execution_revision()
+                .checked_next()
+                .unwrap()
+        );
+        assert_eq!(
+            after_publication.frame_epoch(),
+            before_publication.frame_epoch().checked_next().unwrap()
+        );
         assert_eq!(stats.frame_slots_before, 3);
         assert_eq!(stats.frame_slots_after, 2);
         assert_eq!(stats.frame_slots_reclaimed, 1);
@@ -1250,6 +1290,51 @@ mod tests {
             Some(second_execution)
         );
         assert!(live.take_frame_changes().is_all());
+        live.compact_with_compiled(CompiledScene::compile(&definition).unwrap())
+            .unwrap();
+        assert_eq!(live.inner.publication_context(), after_publication);
+    }
+
+    #[test]
+    fn slotted_transaction_publishes_once_for_multiple_changed_objects() {
+        let mut store = noon_core::SemanticStore::new();
+        let nodes = [1.0, 2.0].map(|radius| {
+            let object = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+                noon_core::StoredGeometry::Circle { radius },
+            ));
+            store.attach_to_scene(object).unwrap();
+            object
+        });
+        let mut index = noon_compile::SemanticExecutionIndex::new();
+        let lowered = noon_compile::lower_semantic_execution(&store, &mut index).unwrap();
+        let [first, second] = nodes.map(|object| index.execution_object_id(object).unwrap());
+        let mut live = SlottedSceneInstance::new(lowered.into_parts().0);
+        let before = live.inner.publication_context();
+        let transaction = MutationTransaction::from_mutations([first, second].map(|object| {
+            ScenePatch::SetTransform {
+                object,
+                transform: noon_core::Transform2D {
+                    translation: Vec2::ONE,
+                    ..noon_core::Transform2D::IDENTITY
+                },
+            }
+        }));
+        live.apply_transaction(&transaction).unwrap();
+        let after = live.inner.publication_context();
+        assert_eq!(
+            after.execution_revision(),
+            before.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        assert_eq!(live.last_execution_delta().slots().len(), 2);
+        live.take_frame_changes();
+        live.apply_transaction(&transaction).unwrap();
+        assert_eq!(live.inner.publication_context(), after);
+        assert!(live.last_execution_delta().slots().is_empty());
+        assert!(live.take_frame_changes().is_empty());
     }
 
     #[test]

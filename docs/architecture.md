@@ -1128,6 +1128,8 @@ Detailed execution-host/session work is tracked by #969, including logical segme
 - keep only explicit debug/export/transport codecs that serialize authoritative data without becoming authority themselves;
 - ensure a worker transport needed by a genuine cross-context browser topology is optional and does not sit in the direct Rust/WASM in-process path.
 
+During deletion, the compiler transaction-preflight regression fixtures may construct the existing `ScenePatch::CreateObject` payload (`ObjectDefinition`) only in `crates/noon-compile/src/transaction_preflight/tests.rs`, which is compiled exclusively under `cfg(test)`. Fixture scenes and execution identities must originate in canonical semantic lowering. This exception tests the remaining patch boundary; it does not authorize a scene builder, production adapter, or new authoring authority. #959 owns deleting the exception with that mutation vocabulary. The architecture ratchet permits only that payload name in that test file and continues rejecting other migration names and production uses.
+
 **Done when:** repository-wide search finds no migration scene model or production legacy wire path, and normal Rust authoring/execution performs no serialization between in-process engine layers on either native or direct Rust/WASM web targets.
 
 ### A5. Normalize modules and crates

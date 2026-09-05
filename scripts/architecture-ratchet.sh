@@ -20,21 +20,39 @@ if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
 fi
 
 range="${base}...HEAD"
+fixture_path='crates/noon-compile/src/transaction_preflight/tests.rs'
+if [[ -f "$fixture_path" ]] && [[ "$(sed -n '1p' "$fixture_path")" != '#![cfg(test)]' ]]; then
+  echo "architecture ratchet: transaction preflight fixtures must remain test-only" >&2
+  exit 1
+fi
 forbidden='SceneDefinition|SceneSpec|SceneDocument|ObjectDefinition|ObjectSnapshot|from_legacy|noon::legacy|_manim_canonical_scene|scene_document|noon-ir'
 
 migration_found=0
 module_indirection_found=0
 current_file=""
+fixture_payload_allowed=0
 while IFS= read -r line; do
   case "$line" in
     "+++ b/"*)
       current_file="${line#+++ b/}"
+      fixture_payload_allowed=0
+      if [[ "$current_file" == 'crates/noon-compile/src/transaction_preflight/tests.rs' ]] &&
+         [[ "$(git show "HEAD:$current_file" | sed -n '1p')" == '#![cfg(test)]' ]]; then
+        fixture_payload_allowed=1
+      fi
       ;;
     +*)
       [[ "$line" == "+++ "* ]] && continue
       added="${line:1}"
 
-      if printf '%s\n' "$added" | grep -Eq "$forbidden"; then
+      # A4/#959 permits only the existing CreateObject payload in this
+      # explicitly test-only regression fixture. All other migration tokens
+      # and all other files remain covered by the normal growth check.
+      migration_checked="$added"
+      if (( fixture_payload_allowed != 0 )); then
+        migration_checked="$(printf '%s\n' "$migration_checked" | sed -E 's/(^|[^[:alnum:]_])ObjectDefinition([^[:alnum:]_]|$)/\1\2/g')"
+      fi
+      if printf '%s\n' "$migration_checked" | grep -Eq "$forbidden"; then
         printf 'architecture ratchet: %s: +%s\n' "${current_file:-unknown}" "$added" >&2
         migration_found=1
       fi

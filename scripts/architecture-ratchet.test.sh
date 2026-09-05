@@ -88,6 +88,37 @@ reset_to_base() {
   rmdir crates/noon-web/src/legacy 2>/dev/null || true
 }
 
+# The one deletion-owned payload fixture is permitted only under cfg(test).
+reset_to_base
+mkdir -p crates/noon-compile/src/transaction_preflight
+cat > crates/noon-compile/src/transaction_preflight/tests.rs <<'EOF'
+#![cfg(test)]
+use noon_core::ObjectDefinition;
+EOF
+git add crates/noon-compile
+git commit -qm "test-only patch payload fixture"
+bash scripts/architecture-ratchet.sh "$BASE" >/dev/null
+
+printf 'use noon_core::SceneDefinition;\n' >> crates/noon-compile/src/transaction_preflight/tests.rs
+git add crates/noon-compile
+git commit -qm "forbidden scene builder in fixture"
+expect_rejected 'scene builder in payload fixture'
+
+reset_to_base
+mkdir -p crates/noon-compile/src/transaction_preflight
+cat > crates/noon-compile/src/transaction_preflight/tests.rs <<'EOF'
+use noon_core::ObjectDefinition;
+EOF
+git add crates/noon-compile
+git commit -qm "patch payload without test-only gate"
+expect_rejected 'payload fixture without cfg(test)'
+
+reset_to_base
+printf 'use noon_core::ObjectDefinition;\n' > src/payload.rs
+git add src/payload.rs
+git commit -qm "production patch payload growth"
+expect_rejected 'production patch payload growth'
+
 reset_to_base
 cat > src/new_hidden.rs <<'EOF'
 #[path = "another_hidden.rs"]
