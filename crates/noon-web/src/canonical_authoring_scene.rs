@@ -593,10 +593,13 @@ impl CanonicalAuthoringScene {
             return self.authored_wait(duration);
         }
         let player = self.active_live_player()?;
-        let end_time = player.live_wait(duration)?;
-        if !player.live_advance_segment_to(end_time)? {
-            return Err("required callback work prevents completing an ordinary wait".into());
+        if player.has_required_callbacks() {
+            return Err(
+                "ordinary wait with required callbacks needs an asynchronous continuation".into(),
+            );
         }
+        let end_time = player.live_wait(duration)?;
+        player.live_advance_segment_to(end_time)?;
         player.live_complete_segment()?;
         player
             .live_handoff_duration()
@@ -676,11 +679,9 @@ impl CanonicalAuthoringScene {
             );
         }
         let end_time = player.live_declare_and_activate_transform_to(source, target, options)?;
-        if !player.live_advance_segment_to(end_time)? {
-            return Err(
-                "required callback work prevents completing an ordinary affine animation".into(),
-            );
-        }
+        // Reaching the endpoint still has completion reconciliation pending.
+        // The shared completion operation validates time and callback coherence.
+        player.live_advance_segment_to(end_time)?;
         player.live_complete_segment()?;
         player
             .live_handoff_duration()
