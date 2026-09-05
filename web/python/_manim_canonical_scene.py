@@ -92,7 +92,7 @@ def _record_mobject_binding(
             handles = scene._semantic_geometry_handles = {}
     handles[obj.id] = handle
     if getattr(scene, "_legacy_geometry_materialized", False) and not isinstance(
-        self, _typst._RetainedTextMobject
+        mobject, _typst._RetainedTextMobject
     ):
         snapshot = json.loads(str(handle.snapshotJson()))
         snapshot["id"] = obj.id
