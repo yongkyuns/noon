@@ -1,9 +1,20 @@
 use std::{
     mem::{size_of, size_of_val},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use crate::{GeometryId, GeometryRef, Vec2, VectorPath};
+
+static NEXT_GEOMETRY_ARENA: AtomicU64 = AtomicU64::new(1);
+
+fn next_geometry_arena() -> u64 {
+    NEXT_GEOMETRY_ARENA
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("geometry arena identity exhausted")
+}
 
 const GEOMETRY_RESOURCE_SLOT_BITS: u32 = 32;
 const GEOMETRY_RESOURCE_SLOT_MASK: u64 = u32::MAX as u64;
@@ -14,6 +25,8 @@ const GEOMETRY_RESOURCE_SLOT_MASK: u64 = u32::MAX as u64;
 /// the version so caches and old snapshots cannot silently observe new payloads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GeometryResourceHandle {
+    /// Owning resource namespace; equal slot/version values from another arena are unrelated.
+    pub arena: u64,
     pub id: GeometryId,
     pub version: u64,
 }
@@ -71,15 +84,33 @@ pub struct GeometryResourceStats {
 /// `GeometryId` encodes a physical slot plus its generation. This lets the arena
 /// reuse storage at the live-working-set high-water mark without allowing a stale
 /// bare ID to alias a later occupant of the same slot.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct GeometryResourceArena {
+    namespace: u64,
     entries: Vec<ResourceEntry>,
     free_slots: Vec<u32>,
     live_resources: usize,
     retained_bytes: usize,
 }
 
+impl Default for GeometryResourceArena {
+    fn default() -> Self {
+        Self {
+            namespace: next_geometry_arena(),
+            entries: Vec::new(),
+            free_slots: Vec::new(),
+            live_resources: 0,
+            retained_bytes: 0,
+        }
+    }
+}
+
 impl GeometryResourceArena {
+    pub(crate) fn fork_namespace(&mut self) -> u64 {
+        self.namespace = next_geometry_arena();
+        self.namespace
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -97,6 +128,7 @@ impl GeometryResourceArena {
             entry.version = 0;
             entry.value = Some(resource);
             GeometryResourceHandle {
+                arena: self.namespace,
                 id: geometry_resource_id(index, entry.generation),
                 version: 0,
             }
@@ -108,7 +140,11 @@ impl GeometryResourceArena {
                 version: 0,
                 value: Some(resource),
             });
-            GeometryResourceHandle { id, version: 0 }
+            GeometryResourceHandle {
+                arena: self.namespace,
+                id,
+                version: 0,
+            }
         };
 
         self.retained_bytes = self.retained_bytes.saturating_add(resource_bytes);
@@ -144,6 +180,9 @@ impl GeometryResourceArena {
     }
 
     pub fn get(&self, handle: GeometryResourceHandle) -> Option<&GeometryResource> {
+        if handle.arena != self.namespace {
+            return None;
+        }
         let index = geometry_resource_slot(handle.id);
         let entry = self.entries.get(index)?;
         if geometry_resource_id(index, entry.generation) != handle.id
@@ -162,6 +201,7 @@ impl GeometryResourceArena {
         }
         entry.value.as_ref()?;
         Some(GeometryResourceHandle {
+            arena: self.namespace,
             id,
             version: entry.version,
         })
@@ -196,6 +236,7 @@ impl GeometryResourceArena {
         entry.version = next_version;
         entry.value = Some(resource);
         Ok(GeometryResourceHandle {
+            arena: self.namespace,
             id,
             version: entry.version,
         })
@@ -428,6 +469,7 @@ mod tests {
         arena.entries[slot].generation = u32::MAX;
         let exhausted_id = geometry_resource_id(slot, u32::MAX);
         let exhausted = GeometryResourceHandle {
+            arena: first.arena,
             id: exhausted_id,
             version: first.version,
         };
@@ -448,6 +490,7 @@ mod tests {
         let entry = &mut arena.entries[geometry_resource_slot(first.id)];
         entry.version = u64::MAX;
         let exhausted = GeometryResourceHandle {
+            arena: first.arena,
             id: first.id,
             version: u64::MAX,
         };
@@ -476,6 +519,7 @@ mod tests {
         let entry = &mut arena.entries[geometry_resource_slot(first.id)];
         entry.version = u64::MAX;
         let exhausted = GeometryResourceHandle {
+            arena: first.arena,
             id: first.id,
             version: u64::MAX,
         };

@@ -1,7 +1,7 @@
 use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
 use noon_core::{
     Color, GeometryRef, SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticScene,
-    SemanticStore, SemanticVec3, StoredGeometry, Style, Transform2D, Vec2,
+    SemanticStore, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, Style, Transform2D, Vec2,
 };
 use noon_runtime::SceneInstance;
 
@@ -56,6 +56,8 @@ fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_obse
             fill: Some(Color::rgba(0.2, 0.4, 0.6, 0.25)),
             stroke: Some(Color::rgba(0.8, 0.1, 0.3, 0.5)),
             stroke_width: 3.5,
+            stroke_join: StrokeJoin::Bevel,
+            stroke_cap: StrokeCap::Square,
             opacity: 0.6,
             ..Style::default()
         };
@@ -81,6 +83,8 @@ fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_obse
     semantic_circle.style.stroke = Some(SemanticPaint::Solid(Color::rgba(0.8, 0.1, 0.3, 1.0)));
     semantic_circle.style.stroke_opacity = 0.5;
     semantic_circle.style.stroke_width = 3.5;
+    semantic_circle.style.stroke_join = StrokeJoin::Bevel;
+    semantic_circle.style.stroke_cap = StrokeCap::Square;
     semantic_circle.style.object_opacity = 0.6;
     let semantic_circle = semantic_store.insert_semantic_object(semantic_circle);
     semantic_store.attach_to_scene(semantic_circle).unwrap();

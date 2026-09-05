@@ -948,6 +948,7 @@ mod tests {
     #[test]
     fn vector_math_items_share_geometry_resource_handles() {
         let geometry = GeometryResourceHandle {
+            arena: 0,
             id: GeometryId::new(7),
             version: 2,
         };
@@ -966,6 +967,7 @@ mod tests {
         let mut resource = sample_text("x");
         resource.vector_items = Arc::from([TextVectorItem {
             geometry: GeometryResourceHandle {
+                arena: 0,
                 id: GeometryId::new(8),
                 version: 0,
             },
@@ -1075,6 +1077,7 @@ mod tests {
             version: 1,
         };
         let geometry = GeometryResourceHandle {
+            arena: 0,
             id: GeometryId::new(12),
             version: 4,
         };

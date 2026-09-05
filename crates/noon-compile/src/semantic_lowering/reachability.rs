@@ -191,6 +191,7 @@ impl SemanticExecutionReachability {
                 SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
+                | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }
                 | SemanticMutationImpact::NodeAdded { .. }

@@ -4,7 +4,7 @@ use crate::{
     SemanticNodeId, SemanticObjectState, SemanticStore, SemanticStoreError, SourceIdentity,
 };
 
-use super::SemanticMutationTransactionError;
+use super::{validate_object_content_resource, SemanticMutationTransactionError};
 
 /// Authored payload for allocating one new scene node through the semantic
 /// mutation transaction.
@@ -98,6 +98,7 @@ pub(super) fn preflight_add_node(
     {
         return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
     }
+    validate_object_content_resource(store, state.content, index)?;
 
     for binding in state.signal_bindings() {
         let signal = binding.signal();

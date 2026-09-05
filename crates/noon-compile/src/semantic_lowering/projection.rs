@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use noon_core::{
     Color, ObjectId, SemanticMutationImpact, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticPresentation,
-    SemanticSignalBinding, SemanticStore, SemanticStoreError, Style, Transform2D,
+    SemanticNodeKind, SemanticObjectContent, SemanticObjectState, SemanticPaint,
+    SemanticPresentation, SemanticSignalBinding, SemanticStore, SemanticStoreError, Style,
+    Transform2D,
 };
 
 /// Compiler-owned identity bridge from authoritative semantic nodes to the existing
@@ -77,6 +78,7 @@ impl SemanticExecutionIndex {
                 SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
+                | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::FamilyMemberAdded { .. }
                 | SemanticMutationImpact::FamilyMemberRemoved { .. }
@@ -104,10 +106,38 @@ impl SemanticExecutionIndex {
         &mut self,
         store: &SemanticStore,
     ) -> Result<SemanticExecutionProjection, SemanticLoweringError> {
+        self.lower_roots(store, store.scene_roots())
+    }
+
+    /// Lower one semantic family as an isolated initial scene root.
+    ///
+    /// The family may be detached. Membership and ordering are read from the same
+    /// store without attaching/detaching roots, cloning the store, or visiting other
+    /// scene families. The caller must retain the originating store with `root`:
+    /// a bare semantic ID is store-local, not a cross-store identity token.
+    pub fn lower_root(
+        &mut self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+    ) -> Result<SemanticExecutionProjection, SemanticLoweringError> {
+        let node = store
+            .node(root)
+            .ok_or(SemanticStoreError::UnknownNode(root))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family) {
+            return Err(SemanticStoreError::NotFamily(root).into());
+        }
+        self.lower_roots(store, std::iter::once(root))
+    }
+
+    fn lower_roots(
+        &mut self,
+        store: &SemanticStore,
+        roots: impl IntoIterator<Item = SemanticNodeId>,
+    ) -> Result<SemanticExecutionProjection, SemanticLoweringError> {
         let mut pending = Vec::new();
         let mut seen = HashSet::new();
 
-        for root in store.scene_roots() {
+        for root in roots {
             for semantic_id in store.ordered_leaf_nodes(root)? {
                 if !seen.insert(semantic_id) {
                     continue;
@@ -390,8 +420,9 @@ fn lower_style(
         stroke,
         stroke_width,
         stroke_width_mode: state.style.stroke_width_mode,
+        stroke_join: state.style.stroke_join,
+        stroke_cap: state.style.stroke_cap,
         opacity,
-        ..Style::default()
     })
 }
 
@@ -512,6 +543,8 @@ mod tests {
         state.style.fill = Some(SemanticPaint::Solid(Color::rgba(0.2, 0.4, 0.6, 0.8)));
         state.style.fill_opacity = 0.25;
         state.style.stroke_width = 3.5;
+        state.style.stroke_join = noon_core::StrokeJoin::Bevel;
+        state.style.stroke_cap = noon_core::StrokeCap::Square;
         state.style.object_opacity = 0.6;
         state.set_z_index(9);
         let object = attach(&mut store, state);
@@ -531,6 +564,14 @@ mod tests {
         assert_eq!((fill.red, fill.green, fill.blue), (0.2, 0.4, 0.6));
         assert!((fill.alpha - 0.2).abs() < 1e-6);
         assert_eq!(object_state.base_style.stroke_width, 3.5);
+        assert_eq!(
+            object_state.base_style.stroke_join,
+            noon_core::StrokeJoin::Bevel
+        );
+        assert_eq!(
+            object_state.base_style.stroke_cap,
+            noon_core::StrokeCap::Square
+        );
         assert_eq!(object_state.base_style.opacity, 0.6);
         assert_eq!(object_state.presentation.z_index, 9);
         assert_eq!(object_state.presentation.insertion_order, 0);
