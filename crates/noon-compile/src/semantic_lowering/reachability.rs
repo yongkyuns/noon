@@ -215,6 +215,7 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::Subscription { .. }
+                | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }
                 | SemanticMutationImpact::NodeAdded { .. }
                 | SemanticMutationImpact::AnimationAdded { .. } => {}

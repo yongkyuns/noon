@@ -20,8 +20,10 @@ impl std::hash::Hash for SemanticStoreIdentity {
     }
 }
 
-use crate::{HostCallbackId, SemanticAnimationState, SemanticObjectState, SemanticSignalState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
+use crate::{
+    SemanticAnimationState, SemanticObjectState, SemanticSignalState, SemanticUpdaterRegistration,
+};
 
 mod semantic_references;
 mod semantic_text_resources;
@@ -292,7 +294,7 @@ pub struct SemanticNode {
     /// belongs to the Semantic Scene and therefore follows this node across
     /// detach/re-attach. Lowering decides how these declarations become runtime
     /// callback slots.
-    host_updaters: Vec<HostCallbackId>,
+    host_updaters: Vec<SemanticUpdaterRegistration>,
 }
 
 impl SemanticNode {
@@ -379,11 +381,11 @@ impl SemanticNode {
         self.members.len()
     }
 
-    pub fn host_updaters(&self) -> &[HostCallbackId] {
+    pub fn host_updaters(&self) -> &[SemanticUpdaterRegistration] {
         &self.host_updaters
     }
 
-    pub(crate) fn host_updaters_mut(&mut self) -> &mut Vec<HostCallbackId> {
+    pub(crate) fn host_updaters_mut(&mut self) -> &mut Vec<SemanticUpdaterRegistration> {
         &mut self.host_updaters
     }
 }

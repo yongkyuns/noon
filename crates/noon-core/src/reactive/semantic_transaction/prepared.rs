@@ -357,6 +357,47 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::Subscription { object, property });
                 }
+                SemanticMutation::AddUpdater {
+                    target,
+                    callback,
+                    active_from,
+                    position,
+                } => {
+                    let target = resolve_node_ref(target, &committed_nodes);
+                    let registration =
+                        SemanticUpdaterRegistration::new(callback, active_from, None)
+                            .expect("preflighted updater activation interval remains valid");
+                    store
+                        .insert_semantic_updater_registration(target, registration, position)
+                        .expect("preflighted updater insertion remains valid");
+                    written_slots.insert(target);
+                    impacts.push(SemanticMutationImpact::UpdaterRegistrations { target });
+                }
+                SemanticMutation::RemoveUpdater {
+                    target,
+                    callback,
+                    inactive_from,
+                } => {
+                    let target = resolve_node_ref(target, &committed_nodes);
+                    let closed = store
+                        .close_first_semantic_updater_registration(target, callback, inactive_from)
+                        .expect("preflighted updater removal remains valid");
+                    debug_assert!(closed);
+                    written_slots.insert(target);
+                    impacts.push(SemanticMutationImpact::UpdaterRegistrations { target });
+                }
+                SemanticMutation::ClearUpdaters {
+                    target,
+                    inactive_from,
+                } => {
+                    let target = resolve_node_ref(target, &committed_nodes);
+                    let closed = store
+                        .close_all_semantic_updater_registrations(target, inactive_from)
+                        .expect("preflighted updater clear remains valid");
+                    debug_assert!(closed);
+                    written_slots.insert(target);
+                    impacts.push(SemanticMutationImpact::UpdaterRegistrations { target });
+                }
                 SemanticMutation::AddMember { family, member } => {
                     let family = resolve_node_ref(family, &committed_nodes);
                     let member = resolve_node_ref(member, &committed_nodes);

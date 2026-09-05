@@ -90,6 +90,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::Subscription { .. }
+                | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::FamilyMemberAdded { .. }
                 | SemanticMutationImpact::FamilyMemberRemoved { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }

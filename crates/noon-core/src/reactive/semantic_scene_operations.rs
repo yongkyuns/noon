@@ -208,8 +208,8 @@ impl SemanticStore {
 mod tests {
     use super::*;
     use crate::{
-        HostCallbackId, SemanticMutationStats, SemanticNodeResidency, SourceIdentity,
-        StoredGeometry,
+        HostCallbackId, SemanticMutationStats, SemanticMutationTransaction, SemanticNodeResidency,
+        SourceIdentity, StoredGeometry,
     };
 
     fn state(radius: f32) -> SemanticObjectState {
@@ -298,7 +298,9 @@ mod tests {
         authored.set_z_index(7);
         let source = store.insert_semantic_object(authored);
         let callback = HostCallbackId::new(42);
-        store.add_semantic_updater(source, callback).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(source, callback, 0.0, None);
+        transaction.apply(&mut store).unwrap();
         let family = store.insert_family();
         store.add_member(family, source).unwrap();
         let source_identity = SourceIdentity::ExplicitKey("hero".into());
@@ -320,7 +322,10 @@ mod tests {
             copied_state.insertion_order(),
             source_state.insertion_order()
         );
-        assert_eq!(store.semantic_updater_callbacks(copy).unwrap(), &[callback]);
+        assert_eq!(
+            store.semantic_updater_registrations(copy).unwrap(),
+            store.semantic_updater_registrations(source).unwrap()
+        );
         assert_eq!(
             store.node(copy).unwrap().residency(),
             SemanticNodeResidency::Detached

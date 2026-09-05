@@ -1166,9 +1166,14 @@ mod tests {
             store.add_semantic_family_member(family, signal),
             Err(super::super::SemanticSceneOperationError::NotSemanticAuthoringNode(id)) if id == signal
         ));
+        let mut transaction = super::super::SemanticMutationTransaction::new();
+        transaction.add_updater(signal, super::super::HostCallbackId::new(1), 0.0, None);
         assert!(matches!(
-            store.add_semantic_updater(signal, super::super::HostCallbackId::new(1)),
-            Err(super::super::SemanticSceneOperationError::NotSemanticAuthoringNode(id)) if id == signal
+            transaction.apply(&mut store),
+            Err(super::super::SemanticMutationTransactionError::Family {
+                error: super::super::SemanticSceneOperationError::NotSemanticAuthoringNode(id),
+                ..
+            }) if id == signal
         ));
     }
 }

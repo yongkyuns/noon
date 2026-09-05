@@ -1,12 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
+use super::semantic_declarations::{
+    close_all_updater_registrations, close_first_updater_registration, insert_updater_registration,
+    UpdaterRegistrationEditError,
+};
 use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
-    AnimationOptions, SemanticAnimationIntent, SemanticAnimationState, SemanticNodeId,
-    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
-    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
-    StoredGeometry,
+    AnimationOptions, HostCallbackId, SemanticAnimationIntent, SemanticAnimationState,
+    SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
+    SemanticObjectState, SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError,
+    SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind, SemanticStore,
+    SemanticStoreError, SemanticStyle, SemanticUpdaterRegistration, StoredGeometry,
 };
 
 mod prepared;
@@ -38,11 +42,11 @@ pub use provisional::{
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
 ///
 /// Signal values, object properties, authored content, scene-node allocation,
-/// family membership/order, reactive subscriptions, animation declarations, and
-/// structural deletion share the same transaction so frontends, editors, and host
-/// integrations cannot invent subsystem-specific patch paths. Dependency-expression
-/// rewiring remains authored declaration topology rather than being conflated with a
-/// value update.
+/// family membership/order, reactive subscriptions, ordered updater registrations,
+/// animation declarations, and structural deletion share the same transaction so
+/// frontends, editors, and host integrations cannot invent subsystem-specific patch
+/// paths. Dependency-expression rewiring remains authored declaration topology
+/// rather than being conflated with a value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
     SetSignal {
@@ -66,6 +70,21 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
         signal: Option<SemanticNodeId>,
+    },
+    AddUpdater {
+        target: SemanticTransactionNodeRef,
+        callback: HostCallbackId,
+        active_from: f64,
+        position: Option<usize>,
+    },
+    RemoveUpdater {
+        target: SemanticTransactionNodeRef,
+        callback: HostCallbackId,
+        inactive_from: f64,
+    },
+    ClearUpdaters {
+        target: SemanticTransactionNodeRef,
+        inactive_from: f64,
     },
     AddMember {
         family: SemanticTransactionNodeRef,
@@ -107,6 +126,9 @@ impl SemanticMutation {
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
+            Self::AddUpdater { target, .. }
+            | Self::RemoveUpdater { target, .. }
+            | Self::ClearUpdaters { target, .. } => vec![*target],
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
             }
@@ -150,6 +172,9 @@ impl SemanticMutation {
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
+            Self::AddUpdater { target, .. }
+            | Self::RemoveUpdater { target, .. }
+            | Self::ClearUpdaters { target, .. } => target.existing(),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => family.existing(),
@@ -180,6 +205,9 @@ impl SemanticMutation {
                 object: *object,
                 property: *property,
             }),
+            Self::AddUpdater { .. } | Self::RemoveUpdater { .. } | Self::ClearUpdaters { .. } => {
+                None
+            }
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 Some(SemanticMutationKey::FamilyEdge {
                     family: *family,
@@ -249,6 +277,9 @@ pub enum SemanticMutationImpact {
     Subscription {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
+    },
+    UpdaterRegistrations {
+        target: SemanticNodeId,
     },
     FamilyMemberAdded {
         family: SemanticNodeId,
@@ -376,6 +407,54 @@ impl SemanticMutationTransaction {
             object: object.into(),
             property,
             signal,
+        });
+        self
+    }
+
+    /// Register one ordered host-updater occurrence on an object or family.
+    ///
+    /// `active_from` is inclusive authored time. `position` indexes the occurrences
+    /// active at that time; `None` appends after the last active occurrence.
+    pub fn add_updater(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        callback: HostCallbackId,
+        active_from: f64,
+        position: Option<usize>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::AddUpdater {
+            target: target.into(),
+            callback,
+            active_from,
+            position,
+        });
+        self
+    }
+
+    /// Close the first occurrence of `callback` active at exclusive authored time.
+    pub fn remove_updater(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        callback: HostCallbackId,
+        inactive_from: f64,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::RemoveUpdater {
+            target: target.into(),
+            callback,
+            inactive_from,
+        });
+        self
+    }
+
+    /// Close every updater occurrence active on a target at exclusive authored time.
+    pub fn clear_updaters(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        inactive_from: f64,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::ClearUpdaters {
+            target: target.into(),
+            inactive_from,
         });
         self
     }
@@ -617,6 +696,8 @@ impl SemanticMutationTransaction {
         let mut pending_sources = HashSet::new();
         let mut staged_objects = HashMap::new();
         let mut staged_object_order = Vec::new();
+        let mut staged_updaters =
+            HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
             for node in mutation.node_references() {
@@ -898,6 +979,51 @@ impl SemanticMutationTransaction {
                         changed.push(did_change);
                     }
                 }
+                SemanticMutation::AddUpdater {
+                    target,
+                    callback,
+                    active_from,
+                    position,
+                } => {
+                    catalog.ensure_authoring_node(*target, index)?;
+                    let registration =
+                        SemanticUpdaterRegistration::new(*callback, *active_from, None)
+                            .map_err(|_| invalid_updater_interval(index, *target))?;
+                    let registrations = staged_updaters
+                        .entry(*target)
+                        .or_insert_with(|| catalog.updater_registrations(*target));
+                    insert_updater_registration(registrations, registration, *position)
+                        .map_err(|error| updater_edit_error(index, *target, error))?;
+                    changed.push(true);
+                }
+                SemanticMutation::RemoveUpdater {
+                    target,
+                    callback,
+                    inactive_from,
+                } => {
+                    catalog.ensure_authoring_node(*target, index)?;
+                    validate_updater_boundary(index, *target, *inactive_from)?;
+                    let registrations = staged_updaters
+                        .entry(*target)
+                        .or_insert_with(|| catalog.updater_registrations(*target));
+                    let did_change =
+                        close_first_updater_registration(registrations, *callback, *inactive_from)
+                            .map_err(|error| updater_edit_error(index, *target, error))?;
+                    changed.push(did_change);
+                }
+                SemanticMutation::ClearUpdaters {
+                    target,
+                    inactive_from,
+                } => {
+                    catalog.ensure_authoring_node(*target, index)?;
+                    validate_updater_boundary(index, *target, *inactive_from)?;
+                    let registrations = staged_updaters
+                        .entry(*target)
+                        .or_insert_with(|| catalog.updater_registrations(*target));
+                    let did_change = close_all_updater_registrations(registrations, *inactive_from)
+                        .map_err(|error| updater_edit_error(index, *target, error))?;
+                    changed.push(did_change);
+                }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);
                 }
@@ -1028,6 +1154,44 @@ fn object_property_value(
         }
         SemanticObjectProperty::ObjectOpacity => {
             SemanticSignalValue::Scalar(state.style.object_opacity)
+        }
+    }
+}
+
+fn validate_updater_boundary(
+    index: usize,
+    target: SemanticTransactionNodeRef,
+    time: f64,
+) -> Result<(), SemanticMutationTransactionError> {
+    if !time.is_finite() || time < 0.0 {
+        return Err(invalid_updater_interval(index, target));
+    }
+    Ok(())
+}
+
+fn invalid_updater_interval(
+    index: usize,
+    target: SemanticTransactionNodeRef,
+) -> SemanticMutationTransactionError {
+    SemanticMutationTransactionError::InvalidUpdaterActivation { index, target }
+}
+
+fn updater_edit_error(
+    index: usize,
+    target: SemanticTransactionNodeRef,
+    error: UpdaterRegistrationEditError,
+) -> SemanticMutationTransactionError {
+    match error {
+        UpdaterRegistrationEditError::InvalidActivationInterval => {
+            invalid_updater_interval(index, target)
+        }
+        UpdaterRegistrationEditError::PositionOutOfBounds { position, active } => {
+            SemanticMutationTransactionError::UpdaterPositionOutOfBounds {
+                index,
+                target,
+                position,
+                active,
+            }
         }
     }
 }
@@ -1418,6 +1582,16 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         resource: crate::TextResourceHandle,
     },
+    InvalidUpdaterActivation {
+        index: usize,
+        target: SemanticTransactionNodeRef,
+    },
+    UpdaterPositionOutOfBounds {
+        index: usize,
+        target: SemanticTransactionNodeRef,
+        position: usize,
+        active: usize,
+    },
     PropertyTypeMismatch {
         index: usize,
         object: SemanticNodeId,
@@ -1646,6 +1820,19 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidNodeObjectState { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add an object with non-finite authored transform/style values"
+            ),
+            Self::InvalidUpdaterActivation { index, target } => write!(
+                formatter,
+                "semantic transaction mutation {index} has an invalid updater activation interval for {target:?}"
+            ),
+            Self::UpdaterPositionOutOfBounds {
+                index,
+                target,
+                position,
+                active,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} inserts updater at position {position} on {target:?}, but only {active} registrations are active"
             ),
             Self::NodeCreationBindingTypeMismatch {
                 index,

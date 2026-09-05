@@ -217,6 +217,20 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn updater_registrations(
+        &self,
+        target: SemanticTransactionNodeRef,
+    ) -> Vec<SemanticUpdaterRegistration> {
+        match target {
+            SemanticTransactionNodeRef::Existing(target) => self
+                .store
+                .node(target)
+                .map(|node| node.host_updaters().to_vec())
+                .unwrap_or_default(),
+            SemanticTransactionNodeRef::Pending(_) => Vec::new(),
+        }
+    }
+
     pub(super) fn staged_object_state<'b>(
         &self,
         staged: &'b mut HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
