@@ -1544,7 +1544,7 @@ mod tests {
             assert!(player.live_wait(0.5).is_err());
             assert!(!player.live_advance_segment_to(1.0).unwrap());
 
-            player.live_set_translation(&circle, 100.0, 0.0).unwrap();
+            assert!(player.live_set_translation(&circle, 100.0, 0.0).is_err());
             assert_eq!(
                 store
                     .borrow()
@@ -1552,7 +1552,7 @@ mod tests {
                     .unwrap()
                     .transform
                     .translation,
-                SemanticVec3::new(100.0, 0.0, 0.0)
+                SemanticVec3::new(0.0, 0.0, 0.0)
             );
             assert_eq!(
                 player
@@ -1597,6 +1597,19 @@ mod tests {
         assert_eq!(recovery_snapshot.session, 18);
         assert_eq!(recovery_snapshot.objects[0].transform.translation.x, 2.0);
         assert!(context.live_player(2.0).is_err());
+
+        assert!(!recovered.live_advance_segment_to(2.0).unwrap());
+        recovered.live_complete_segment().unwrap();
+        recovered.live_set_translation(&circle, 100.0, 0.0).unwrap();
+        assert_eq!(
+            recovered
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            100.0,
+        );
     }
 
     #[test]
