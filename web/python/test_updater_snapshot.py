@@ -1,6 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
+import _manim_compat as compat
 import _manim_updaters as updaters
 
 
@@ -82,9 +83,16 @@ class CallbackContextTests(unittest.TestCase):
 class CanonicalCallbackPropertyRowTests(unittest.TestCase):
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
-        updaters.install()
+        compat.install()
+        if not updaters._INSTALLED:
+            # Mirror the production final method that otherwise bypasses the
+            # base Mobject patch. Updater installation must reclaim it.
+            import _manim_semantic_handles as semantic_handles
+
+            compat.VMobject.set_opacity = semantic_handles._set_opacity
+            updaters.install()
         scene = updaters._base.Scene()
-        mobject = updaters._base.Circle(1.0)
+        mobject = compat.Circle(1.0)
         scene.add(mobject)
         mobject._semantic_handle = type(
             "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
@@ -130,13 +138,19 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             self.assertEqual(mobject.get_center(), updaters._base.Vec2(2.0, -1.0))
             mobject.move_to((4.0, 3.0))
             mobject.set_opacity(0.5)
+            mobject.set_color(updaters._base.BLUE)
+            self.assertEqual(mobject.get_center(), updaters._base.Vec2(4.0, 3.0))
             mobject.shift((1.0, 0.0))
             self.assertEqual(mobject.get_center(), updaters._base.Vec2(5.0, 3.0))
             writes = context.effective_batch()["writes"]
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
-        self.assertEqual([write["kind"] for write in writes], ["transform", "style", "transform"])
+        self.assertIs(compat.VMobject.set_opacity, updaters._canonical_vmobject_set_opacity)
+        self.assertEqual(
+            [write["kind"] for write in writes],
+            ["transform", "style", "style", "transform"],
+        )
         self.assertEqual(
             writes[-1]["transform"]["translation"], {"x": 5.0, "y": 3.0}
         )
