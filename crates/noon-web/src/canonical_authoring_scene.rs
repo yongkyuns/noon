@@ -2032,6 +2032,7 @@ mod tests {
         // Before bootstrap, the Rust-authored cursor selects the shared track
         // endpoint; the language wrapper owns no scalar value or cursor.
         assert_eq!(context.tracker_value(&tracker).unwrap(), 4.0);
+        assert!(context.set_tracker_value(&tracker, 3.0).is_err());
 
         let player = context.live_player(2.0).unwrap();
         assert!(player.live_evaluate(2.25).is_err());
