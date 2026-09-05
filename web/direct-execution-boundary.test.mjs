@@ -123,6 +123,7 @@ for (const forbidden of [
   "initialDeltaJson",
   "applyDeltaJson",
   "setCamera",
+  "throw error;",
 ]) {
   assert.equal(
     browserProbe.includes(forbidden),
