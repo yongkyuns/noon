@@ -28,9 +28,10 @@ impl InstalledRetainedExecutionMirror {
     pub fn from_bundle_bytes(bytes: &[u8]) -> Result<Self, InstalledExecutionError> {
         let resources = RetainedResourceBundle::decode_binary(bytes)?.install()?;
         Ok(Self {
-            wire: RetainedExecutionFrameMirror::with_render_geometries(
+            wire: RetainedExecutionFrameMirror::with_installed_resources(
                 resources.render_geometry_session(),
                 resources.render_geometries(),
+                resources.text_handle_remap(),
             ),
             resources,
             resolved: None,
@@ -185,7 +186,7 @@ impl InstalledRetainedExecutionMirror {
         let frame = wire
             .frame()
             .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        self.resolve_wire_frame(frame)
+        Ok(self.resolve_wire_frame(frame))
     }
 
     fn rebuild_resolved_snapshot(&mut self) -> Result<(), InstalledExecutionError> {
@@ -193,25 +194,15 @@ impl InstalledRetainedExecutionMirror {
             .wire
             .frame()
             .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        self.resolved = Some(self.resolve_wire_frame(wire)?);
+        self.resolved = Some(self.resolve_wire_frame(wire));
         Ok(())
     }
 
-    fn resolve_wire_frame(&self, wire: &FrameState) -> Result<FrameState, InstalledExecutionError> {
-        let mut resolved = wire.clone();
-        for object in &mut resolved.objects {
-            if let ObjectContentRef::Text(wire_handle) = object.content {
-                let transport = wire_handle.into();
-                let local = self.resources.resolve_text_handle(transport).ok_or(
-                    InstalledExecutionError::UnknownTextResource {
-                        id: transport.id,
-                        version: transport.version,
-                    },
-                )?;
-                object.content = ObjectContentRef::Text(local);
-            }
-        }
-        Ok(resolved)
+    fn resolve_wire_frame(&self, wire: &FrameState) -> FrameState {
+        // The wire mirror resolves every transport key through this installed bundle
+        // before it constructs a `FrameState`; cloned snapshots therefore retain only
+        // checked renderer-local handles.
+        wire.clone()
     }
 
     fn apply_resolved_incremental(

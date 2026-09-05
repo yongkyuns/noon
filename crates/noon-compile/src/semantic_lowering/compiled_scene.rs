@@ -372,6 +372,7 @@ mod tests {
     fn standalone_projection_rejects_text_without_its_owning_resource_scope() {
         let mut store = SemanticStore::new();
         let text = TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(11),
             version: 4,
         };

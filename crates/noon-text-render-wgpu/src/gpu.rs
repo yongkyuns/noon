@@ -744,6 +744,7 @@ mod tests {
     fn raster_key(glyph_id: u16) -> GlyphRasterKey {
         GlyphRasterKey {
             font: FontResourceHandle {
+                arena: 0,
                 id: FontResourceId::new(0),
                 version: 0,
             },
@@ -792,6 +793,7 @@ mod tests {
 
     fn text_handle() -> TextResourceHandle {
         TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(0),
             version: 0,
         }

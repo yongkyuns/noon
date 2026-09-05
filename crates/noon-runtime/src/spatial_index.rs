@@ -515,6 +515,7 @@ mod tests {
             objects: vec![crate::FrameObjectState {
                 id: ObjectId::new(0),
                 content: ObjectContentRef::Text(TextResourceHandle {
+                    arena: 0,
                     id: TextResourceId::new(3),
                     version: 0,
                 }),

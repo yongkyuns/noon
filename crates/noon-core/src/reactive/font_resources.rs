@@ -1,6 +1,21 @@
-use std::{collections::BTreeMap, mem::size_of, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    mem::size_of,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use crate::FontFaceIdentity;
+
+static NEXT_FONT_RESOURCE_ARENA: AtomicU64 = AtomicU64::new(1);
+
+fn next_font_resource_arena() -> u64 {
+    NEXT_FONT_RESOURCE_ARENA
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("font resource arena identity exhausted")
+}
 
 /// Stable identity for one immutable OpenType font buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -19,11 +34,12 @@ impl FontResourceId {
 /// Versioned reference to one immutable font buffer.
 ///
 /// Font resources are append-only for the lifetime of an arena, so version zero
-/// remains stable for every live handle. The version field keeps the handle shape
-/// compatible with Noon's other retained-resource boundaries and leaves room for a
-/// future explicit arena-generation model without changing renderer records.
+/// remains stable for every live handle. The owning arena still participates in the
+/// handle because same-slot values from another store must never alias this buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FontResourceHandle {
+    /// Owning resource namespace; equal slot/version values from another arena are unrelated.
+    pub arena: u64,
     pub id: FontResourceId,
     pub version: u64,
 }
@@ -87,15 +103,38 @@ pub struct FontResourceStats {
 /// for the arena lifetime. A shaped glyph ID is meaningful only relative to the
 /// exact font bytes that produced it, so a face key is never rebound to new bytes.
 /// Dropping the whole arena is the font-resource invalidation barrier.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct FontResourceArena {
+    namespace: u64,
     entries: Vec<FontResourceEntry>,
     handles_by_key: BTreeMap<FontResourceKey, FontResourceHandle>,
     retained_bytes: usize,
     font_bytes: usize,
 }
 
+impl Default for FontResourceArena {
+    fn default() -> Self {
+        Self {
+            namespace: next_font_resource_arena(),
+            entries: Vec::new(),
+            handles_by_key: BTreeMap::new(),
+            retained_bytes: 0,
+            font_bytes: 0,
+        }
+    }
+}
+
 impl FontResourceArena {
+    /// Assign a cloned independent store a distinct namespace and rebuild its derived
+    /// face index with local handles.
+    pub(crate) fn fork_namespace(&mut self) -> u64 {
+        self.namespace = next_font_resource_arena();
+        for handle in self.handles_by_key.values_mut() {
+            handle.arena = self.namespace;
+        }
+        self.namespace
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -125,7 +164,11 @@ impl FontResourceArena {
         let id = FontResourceId::new(
             u64::try_from(self.entries.len()).expect("Noon font resource ID space exhausted"),
         );
-        let handle = FontResourceHandle { id, version: 0 };
+        let handle = FontResourceHandle {
+            arena: self.namespace,
+            id,
+            version: 0,
+        };
         let resource = Arc::new(FontResource {
             key: key.clone(),
             data,
@@ -143,6 +186,9 @@ impl FontResourceArena {
     }
 
     pub fn get(&self, handle: FontResourceHandle) -> Option<&FontResource> {
+        if handle.arena != self.namespace {
+            return None;
+        }
         let entry = self.entries.get(handle.id.get() as usize)?;
         if entry.version != handle.version {
             return None;
@@ -152,6 +198,9 @@ impl FontResourceArena {
 
     /// Share one immutable font payload with a derived compiled resource snapshot.
     pub fn get_shared(&self, handle: FontResourceHandle) -> Option<Arc<FontResource>> {
+        if handle.arena != self.namespace {
+            return None;
+        }
         let entry = self.entries.get(handle.id.get() as usize)?;
         (entry.version == handle.version).then(|| entry.value.clone())
     }
@@ -235,6 +284,42 @@ mod tests {
     }
 
     #[test]
+    fn same_slot_handle_from_another_arena_is_rejected() {
+        let mut first = FontResourceArena::new();
+        let mut second = FontResourceArena::new();
+        let a = first
+            .intern_face(&face(""), Arc::<[u8]>::from([1, 2, 3]))
+            .unwrap();
+        let b = second
+            .intern_face(&face(""), Arc::<[u8]>::from([1, 2, 3]))
+            .unwrap();
+
+        assert_eq!((a.id, a.version), (b.id, b.version));
+        assert_ne!(a.arena, b.arena);
+        assert!(first.get(b).is_none());
+        assert!(second.get(a).is_none());
+    }
+
+    #[test]
+    fn cloned_arena_requires_local_remap_but_shares_immutable_payloads() {
+        let mut source = FontResourceArena::new();
+        let source_handle = source
+            .intern_face(&face(""), Arc::<[u8]>::from([1, 2, 3]))
+            .unwrap();
+        let source_payload = source.get_shared(source_handle).unwrap();
+
+        let mut cloned = source.clone();
+        cloned.fork_namespace();
+        let local_handle = cloned.handle_for_face(&face("")).unwrap();
+        let local_payload = cloned.get_shared(local_handle).unwrap();
+
+        assert_ne!(source_handle.arena, local_handle.arena);
+        assert!(cloned.get(source_handle).is_none());
+        assert!(source.get(local_handle).is_none());
+        assert!(Arc::ptr_eq(&source_payload, &local_payload));
+    }
+
+    #[test]
     fn variable_font_runs_share_the_same_backing_resource() {
         let mut arena = FontResourceArena::new();
         let regular = arena
@@ -275,6 +360,12 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.version, 0);
+        assert!(arena
+            .get(FontResourceHandle {
+                version: 1,
+                ..first
+            })
+            .is_none());
         assert_eq!(arena.get(first).unwrap().data.as_ref(), &[1, 2, 3]);
         assert_eq!(arena.stats().live_resources, 1);
     }
