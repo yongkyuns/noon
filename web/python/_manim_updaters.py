@@ -817,20 +817,20 @@ def _canonical_set_y(self: _base.Mobject, y: float) -> _base.Mobject:
     return _canonical_shift(self, _base.Vec2(0.0, float(y) - row.center().y))
 
 
-def _canonical_scale(self: _base.Mobject, factor: object) -> _base.Mobject:
+def _canonical_scale(self: _base.Mobject, *args: object, **kwargs: object) -> _base.Mobject:
     if _canonical_phase_context(self) is not None:
         raise NotImplementedError(
             "canonical callback scale is not supported; use shared semantic operations"
         )
-    return _ORIGINAL_SCALE(self, factor)
+    return _ORIGINAL_SCALE(self, *args, **kwargs)
 
 
-def _canonical_rotate(self: _base.Mobject, angle: float) -> _base.Mobject:
+def _canonical_rotate(self: _base.Mobject, *args: object, **kwargs: object) -> _base.Mobject:
     if _canonical_phase_context(self) is not None:
         raise NotImplementedError(
             "canonical callback rotation is not supported; use shared semantic operations"
         )
-    return _ORIGINAL_ROTATE(self, angle)
+    return _ORIGINAL_ROTATE(self, *args, **kwargs)
 
 def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
     value = _canonical_row(self)

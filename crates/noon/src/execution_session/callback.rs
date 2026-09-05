@@ -508,16 +508,16 @@ impl ExecutionSession {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time).into());
         }
+        if self.callback_schedule.is_empty() {
+            self.runtime.advance_to(time)?;
+            return Ok(CallbackAdvance::Ready(self.runtime.frame()));
+        }
         let current = self.frame().time;
         if time < current {
             return Err(ExecutionSessionCallbackError::NonMonotonicAdvance {
                 current,
                 requested: time,
             });
-        }
-        if self.callback_schedule.is_empty() {
-            self.runtime.advance_to(time)?;
-            return Ok(CallbackAdvance::Ready(self.runtime.frame()));
         }
         if self.callback_schedule.completed_time == Some(time)
             && self.callback_schedule.completed_publication == Some(self.publication_context())
@@ -755,6 +755,17 @@ mod tests {
     use noon_runtime::TimelineWakeState;
 
     use super::*;
+
+    #[test]
+    fn callback_entrypoint_preserves_deterministic_seek_without_callbacks() {
+        let store = SemanticStore::new();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.advance_to(2.25).unwrap();
+        assert!(matches!(
+            session.advance_to_callback_barrier(0.0).unwrap(),
+            CallbackAdvance::Ready(frame) if frame.time == 0.0
+        ));
+    }
 
     #[test]
     fn required_callback_phase_preserves_coherent_frame_and_orders_overlay_writes() {

@@ -365,7 +365,7 @@ export function validateSemanticExecutionDescriptor(descriptor) {
   }
   return Object.freeze({
     contextId: descriptor.context_id,
-    callbackSessionId: callbackSessionId ?? null,
+    ...(callbackSessionId == null ? {} : { callbackSessionId }),
   });
 }
 
