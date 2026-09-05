@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Generate inventory
         run: |
           python3 scripts/test-inventory.py \
@@ -35,7 +35,7 @@ jobs:
       - name: Validate semantic ownership inventory
         run: python3 scripts/semantic_ownership_check.py
       - name: Upload inventory
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-inventory
           path: test-artifacts/test-inventory.*
@@ -47,11 +47,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Use stable Rust
         run: rustup default stable
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
           tool: cargo-llvm-cov
           fallback: none
@@ -61,7 +61,7 @@ jobs:
           cargo llvm-cov --workspace --all-features \
             --lcov --output-path test-artifacts/rust.lcov
       - name: Upload Rust coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rust-coverage
           path: test-artifacts/rust.lcov
@@ -73,9 +73,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Python coverage
@@ -96,7 +96,7 @@ jobs:
             --report-dir=test-artifacts/js \
             node --test web/*.test.mjs
       - name: Upload scripting coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scripting-coverage
           path: |

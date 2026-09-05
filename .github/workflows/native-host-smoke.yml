@@ -39,7 +39,7 @@ jobs:
       WGPU_BACKEND: vulkan
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Use stable Rust
         run: |

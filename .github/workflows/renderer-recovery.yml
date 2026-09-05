@@ -44,13 +44,13 @@ jobs:
       SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -63,7 +63,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -73,7 +73,7 @@ jobs:
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -107,7 +107,7 @@ jobs:
         run: node scripts/renderer-worker-webgpu-validation-error-smoke.mjs
       - name: Upload renderer initialization diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: renderer-init-failure
           path: browser-smoke-artifacts/renderer-init-failure
@@ -115,7 +115,7 @@ jobs:
           retention-days: 7
       - name: Upload WebGL recovery diagnostics
         if: always() && steps.webgl_context_loss.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: renderer-webgl-context-loss
           path: browser-smoke-artifacts/renderer-context-loss
@@ -123,7 +123,7 @@ jobs:
           retention-days: 7
       - name: Upload WebGPU recovery diagnostics
         if: always() && steps.webgpu_device_loss.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: renderer-webgpu-device-loss
           path: browser-smoke-artifacts/renderer-device-loss
@@ -131,7 +131,7 @@ jobs:
           retention-days: 7
       - name: Upload WebGPU validation-error diagnostics
         if: always() && steps.webgpu_validation_error.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: renderer-webgpu-validation-error
           path: browser-smoke-artifacts/renderer-validation-error
@@ -139,7 +139,7 @@ jobs:
           retention-days: 7
       - name: Upload render-worker WebGPU validation diagnostics
         if: always() && steps.worker_webgpu_validation_error.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: render-worker-webgpu-validation-error
           path: browser-smoke-artifacts/render-worker-validation-error

@@ -53,14 +53,14 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -83,7 +83,7 @@ jobs:
           NOON_PERF_RUN_DIR: perf-artifacts/physical-dispatch
         run: node scripts/perf-device-run.mjs
       - name: Upload performance bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: noon-perf-${{ inputs.device_id }}-${{ github.run_id }}
           path: perf-artifacts/physical-dispatch

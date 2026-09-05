@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 
 const workflowDir = new URL("../.github/workflows/", import.meta.url);
 const workflowFiles = (await readdir(workflowDir))
@@ -59,6 +59,18 @@ const presentFamilies = new Set(classified.map(({ family }) => family));
 for (const family of requiredFamilies) {
   assert.ok(presentFamilies.has(family), `required CI family ${family} must remain represented`);
 }
+
+const pagesWorkflow = await readFile(new URL("pages.yml", workflowDir), "utf8");
+await readFile(new URL(".nojekyll", import.meta.url));
+const uploadPagesStep = pagesWorkflow
+  .split("\n      - name: Upload Pages artifact\n")[1]
+  ?.split("\n      - ")[0];
+assert.ok(uploadPagesStep, "Pages workflow must retain its artifact upload step");
+assert.match(
+  uploadPagesStep,
+  /^\s*include-hidden-files:\s*true$/m,
+  "Pages upload must include web/.nojekyll so GitHub Pages serves built assets directly",
+);
 
 const counts = Object.fromEntries(
   [...presentFamilies].sort().map((family) => [
