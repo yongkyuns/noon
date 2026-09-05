@@ -5,12 +5,15 @@ property bindings, and effective state remain in the SemanticStore and its singl
 ExecutionSession.
 """
 
-from noon import BLUE, Scene, Square
+from noon import Color, Scene, Square
 
 
 class LiveNativeSignals(Scene):
     def construct(self):
-        square = Square(side_length=0.9, color=BLUE, fill_opacity=1.0)
+        # Keep Rust's canonical square defaults (white screen-space miter/butt
+        # stroke) and make only the same opaque blue fill edit as its example.
+        square = Square(side_length=0.9)
+        square.set_fill(Color(0.0, 0.4, 1.0), opacity=1.0)
         self.add(square)
 
         pointer = self.pointer_position_signal()
