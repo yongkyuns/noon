@@ -224,7 +224,7 @@ impl<'a> TransactionNodeCatalog<'a> {
         object: SemanticTransactionNodeRef,
         index: usize,
     ) -> Result<&'b mut SemanticObjectState, SemanticMutationTransactionError> {
-        if !staged.contains_key(&object) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = staged.entry(object) {
             let state = match object {
                 SemanticTransactionNodeRef::Existing(object) => self
                     .store
@@ -242,7 +242,7 @@ impl<'a> TransactionNodeCatalog<'a> {
                     }
                 },
             };
-            staged.insert(object, state);
+            entry.insert(state);
             order.push(object);
         }
         Ok(staged
