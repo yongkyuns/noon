@@ -16,16 +16,18 @@ use crate::execution_segment::{
     PendingSegmentCompletion, SegmentCompletionEntry,
 };
 use noon_compile::{
-    lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
-    lower_semantic_execution, lower_semantic_execution_root, CompilePatchError,
-    ExecutionMutationTransaction, ExecutionPatch, SemanticAffineAnimationTrackError,
+    lower_prepared_semantic_transform_to, lower_semantic_affine_animation_tracks,
+    lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
+    CompilePatchError, ExecutionMutationTransaction, ExecutionPatch,
+    PreparedSemanticTransformToError, SemanticAffineAnimationTrackError,
     SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
     SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
     NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, ReactiveError, ReactiveValue,
-    Rect, SemanticNodeId, SemanticStore, TrackId,
+    Rect, SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeId, SemanticStore,
+    TrackId,
 };
 use noon_runtime::{
     EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, RendererPublication,
@@ -170,7 +172,9 @@ pub enum ExecutionSessionAnimationError {
     Schedule(SemanticAnimationScheduleError),
     Segment(ExecutionSegmentError),
     Payload(SemanticAffineAnimationTrackError),
+    PreparedPayload(PreparedSemanticTransformToError),
     Publication(CompilePatchError),
+    AuthoredPublication(ExecutionSessionPublicationError),
     TrackIdExhausted,
     SegmentSequenceExhausted,
 }
@@ -204,8 +208,12 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
                 formatter,
                 "semantic animation payload lowering failed: {error}"
             ),
+            Self::PreparedPayload(error) => error.fmt(formatter),
             Self::Publication(error) => {
                 write!(formatter, "semantic animation publication failed: {error}")
+            }
+            Self::AuthoredPublication(error) => {
+                write!(formatter, "semantic animation declaration failed: {error}")
             }
             Self::TrackIdExhausted => {
                 formatter.write_str("execution animation track ID space exhausted")
@@ -234,6 +242,12 @@ impl From<ExecutionSegmentError> for ExecutionSessionAnimationError {
 impl From<SemanticAffineAnimationTrackError> for ExecutionSessionAnimationError {
     fn from(value: SemanticAffineAnimationTrackError) -> Self {
         Self::Payload(value)
+    }
+}
+
+impl From<PreparedSemanticTransformToError> for ExecutionSessionAnimationError {
+    fn from(value: PreparedSemanticTransformToError) -> Self {
+        Self::PreparedPayload(value)
     }
 }
 
@@ -754,6 +768,105 @@ impl ExecutionSession {
             entries: completions,
         });
         self.next_activation_track_id = next_track_id;
+        Ok(segment)
+    }
+
+    /// Declare and activate one affine animation against this already-published session.
+    ///
+    /// Compiler projection, execution track allocation, semantic transaction preparation, and
+    /// runtime publication all complete before semantic identity is committed. The final
+    /// semantic/runtime commit is one synchronous publication, so every returned error leaves
+    /// the store revision, runtime frame, activation counters, and segment state unchanged.
+    pub fn declare_and_activate_transform_to(
+        &mut self,
+        store: &mut SemanticStore,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionAnimationError::RequiredCallbackPending);
+        }
+        if self.pending_segment_completion.is_some() {
+            return Err(ExecutionSessionAnimationError::SegmentCompletionPending);
+        }
+        if store.identity() != self.store_identity {
+            return Err(ExecutionSessionAnimationError::ForeignSemanticStore);
+        }
+        let expected = self.publication_context().scene_revision();
+        let actual = store.scene_revision();
+        if actual != expected {
+            return Err(ExecutionSessionAnimationError::StaleSceneRevision { expected, actual });
+        }
+
+        let projection = lower_prepared_semantic_transform_to(
+            store,
+            &self.execution_index,
+            source,
+            target_state,
+            options,
+            options,
+            self.runtime.frame().time,
+            |object| self.runtime.effective_transform(object),
+        )?;
+        let mut segment =
+            ExecutionSegment::from_duration(self.runtime.frame().time, projection.run_time())?;
+        let mut next_track_id = self.next_activation_track_id;
+        let mut definitions = Vec::with_capacity(projection.tracks().len());
+        let mut completions = Vec::with_capacity(projection.tracks().len());
+        for track in projection.tracks() {
+            let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
+            let track_id = TrackId::new(raw_id);
+            let definition = track.with_track_id(track_id)?;
+            completions.push(SegmentCompletionEntry {
+                semantic_object: track.target,
+                semantic_property: track.semantic_property,
+                completion_value: track.completion_value.clone(),
+                execution_object: track.execution_object_id,
+                property: track.property,
+                track: track_id,
+                end_time: track.timing.start_time + track.timing.duration,
+            });
+            definitions.push(definition);
+            next_track_id = raw_id.checked_add(1);
+        }
+
+        let (token, next_segment_sequence) = if definitions.is_empty() {
+            (None, self.next_segment_sequence)
+        } else {
+            let raw_sequence = self
+                .next_segment_sequence
+                .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
+            let token = ExecutionSegmentToken::new(
+                self.runtime.runtime_identity(),
+                ExecutionSegmentSequence::new(raw_sequence),
+            );
+            (Some(token), raw_sequence.checked_add(1))
+        };
+
+        let mut declaration = SemanticMutationTransaction::new();
+        declaration.add_transform_animation(source, target_state, options);
+        let execution_prefix = definitions
+            .into_iter()
+            .map(ExecutionPatch::AddTrack)
+            .collect();
+        let result = self
+            .apply_semantic_transaction_with_execution(store, declaration, execution_prefix, None)
+            .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
+        let [SemanticMutationImpact::AnimationAdded { .. }] = result.impacts() else {
+            unreachable!("one prepared TransformTo declaration has one exact semantic impact")
+        };
+
+        self.next_activation_track_id = next_track_id;
+        if let Some(token) = token {
+            segment = segment.with_completion_token(token);
+            self.next_segment_sequence = next_segment_sequence;
+            self.pending_segment_completion = Some(PendingSegmentCompletion {
+                token,
+                activation_scene_revision: store.scene_revision(),
+                entries: completions,
+            });
+        }
         Ok(segment)
     }
 

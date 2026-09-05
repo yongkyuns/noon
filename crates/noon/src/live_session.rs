@@ -179,6 +179,23 @@ impl<'a> LiveSession<'a> {
         mobject.state().map_err(LiveSessionError::Mobject)
     }
 
+    /// Create a detached, session-coherent target copy for subsequent live authoring.
+    ///
+    /// Detached target edits advance the same semantic/runtime publication context but produce
+    /// no execution object or frame work. This keeps later atomic animation declaration valid
+    /// without resetting or relowering the active runtime.
+    pub fn target_editor(&mut self, source: &Mobject) -> Result<Mobject, LiveSessionError> {
+        self.require_mobject(source)?;
+        let state = source.state().map_err(LiveSessionError::Mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        let result = self.apply(transaction)?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one prepared target copy has one exact semantic impact")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+    }
+
     /// Read the current effective runtime value at the session's publication.
     pub fn effective(&self, mobject: &Mobject) -> Result<EffectiveMobjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
@@ -272,6 +289,30 @@ impl<'a> LiveSession<'a> {
             .options();
         self.session
             .activate_animation_segment(&store, animation.node_id(), options)
+            .map_err(Into::into)
+    }
+
+    /// Atomically author and activate one affine transform after session bootstrap.
+    ///
+    /// The declaration and execution tracks publish together through the canonical semantic
+    /// transaction and runtime. The returned segment uses the existing advance/completion
+    /// lifecycle and this facade retains no animation target or scheduler state.
+    pub fn declare_and_activate_transform_to(
+        &mut self,
+        source: &Mobject,
+        target: &Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(source)?;
+        self.require_mobject(target)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_transform_to(
+                &mut store,
+                source.node_id(),
+                target.node_id(),
+                options,
+            )
             .map_err(Into::into)
     }
 
@@ -559,6 +600,138 @@ mod tests {
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation.x,
             5.0
+        );
+    }
+
+    #[test]
+    fn post_bootstrap_transform_declaration_and_activation_publish_atomically() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(8.0, -2.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(segment.start_time(), 0.0);
+        assert_eq!(segment.end_time(), 2.0);
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+
+        live.advance_segment_to(segment, 1.0).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            4.0
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.authored(&circle).unwrap().transform.translation,
+            SemanticVec3::new(8.0, -2.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn invalid_or_conflicting_post_bootstrap_activation_does_not_publish() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(3.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+
+        let before = session.publication_context();
+        let before_frame = session.frame().clone();
+        let invalid = scene.live(&mut session).declare_and_activate_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new().run_time(f64::NAN),
+        );
+        assert!(matches!(
+            invalid,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::PreparedPayload(_)
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &before_frame);
+        assert!(session.take_frame_changes().is_empty());
+
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let published = session.publication_context();
+        let frame = session.frame().clone();
+        let rejected = scene.live(&mut session).declare_and_activate_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new().run_time(1.0),
+        );
+        assert!(matches!(
+            rejected,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::SegmentCompletionPending
+            ))
+        ));
+        assert_eq!(session.publication_context(), published);
+        assert_eq!(session.frame(), &frame);
+        assert!(!session.segment_state(segment).is_complete());
+    }
+
+    #[test]
+    fn live_target_created_after_wait_stays_in_the_same_publication_chain() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+
+        let wait = live.wait_segment(3.0).unwrap();
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        assert_eq!(live.session.frame().time, 3.0);
+        let target = live.target_editor(&circle).unwrap();
+        live.set_translation(&target, 6.0, 1.0).unwrap();
+        assert!(live.session.take_frame_changes().is_empty());
+        let segment = live
+            .declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        assert_eq!(segment.start_time(), 3.0);
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            6.0
         );
     }
 

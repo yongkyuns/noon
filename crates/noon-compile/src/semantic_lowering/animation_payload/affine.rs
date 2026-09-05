@@ -656,7 +656,7 @@ fn driver_key(object: ObjectId, property: SemanticObjectProperty) -> (u64, u8) {
     (object.get(), slot)
 }
 
-fn transform_is_finite(transform: Transform2D) -> bool {
+pub(super) fn transform_is_finite(transform: Transform2D) -> bool {
     transform.translation.x.is_finite()
         && transform.translation.y.is_finite()
         && transform.rotation.is_finite()
