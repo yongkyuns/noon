@@ -2,7 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use noon_core::{Property, ReactiveExpr, ReactiveGraphDefinition, SemanticScene, SignalId, Vec2};
 
-use crate::{Mobject, Scene};
+use crate::legacy::{Mobject, Scene};
 
 /// Stable scalar signal handle with Manim-compatible `ValueTracker` vocabulary.
 ///
@@ -197,7 +197,7 @@ mod tests {
     use noon_core::{ObjectExecutionClass, Property, ReactiveValue, RIGHT, UP};
 
     use super::*;
-    use crate::{Circle, Square};
+    use crate::legacy::{Circle, Square};
 
     #[test]
     fn reactive_scene_preserves_existing_scene_authoring_ergonomics() {

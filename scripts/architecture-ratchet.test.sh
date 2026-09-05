@@ -8,6 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/scripts" "$TMP/src" "$TMP/web" "$TMP/crates/noon-core/src" "$TMP/crates/noon-runtime/src" "$TMP/crates/noon-web/src"
 cp "$RATCHET" "$TMP/scripts/architecture-ratchet.sh"
+cp "$ROOT/scripts/architecture_migration_relocations.py" "$ROOT/scripts/architecture_migration_relocations.json" "$TMP/scripts/"
 
 cd "$TMP"
 git init -q
@@ -64,7 +65,7 @@ done
 # Model the canonical playback clock left after #1005 removed its legacy duplicate.
 printf 'pub struct PlaybackClock;\n' > crates/noon-web/src/clock.rs
 
-git add scripts/architecture-ratchet.sh src crates/noon-core/src/semantic_store.rs crates/noon-runtime/src crates/noon-web/src web
+git add scripts src crates/noon-core/src/semantic_store.rs crates/noon-runtime/src crates/noon-web/src web
 git commit -qm "baseline with semantic authority, known A5 debt, and normalized islands"
 BASE="$(git rev-parse HEAD)"
 
@@ -285,6 +286,148 @@ git add src/legacy_clock_probe.rs
 git commit -qm "unrelated change after legacy clock regression"
 if bash scripts/architecture-ratchet.sh "$LEGACY_CLOCK_REGRESSION_BASE" >/dev/null 2>&1; then
   echo "architecture ratchet test failed: accepted deleted legacy clock module path" >&2
+  exit 1
+fi
+
+# #959 namespace relocation is explicit and symbol-preserving, including grouped
+# imports. It grants no new file, alias, glob, or non-import namespace access.
+reset_to_base
+mkdir -p crates/noon-web/src crates/noon/src/legacy
+cat > crates/noon-web/src/reactive_authoring_facade.rs <<'EOF'
+use noon::{Circle, Mobject, ReactiveTimelineScene};
+EOF
+git add crates/noon-web/src/reactive_authoring_facade.rs
+git commit -qm "existing unqualified import consumer"
+IMPORT_BASE="$(git rev-parse HEAD)"
+cat > crates/noon-web/src/reactive_authoring_facade.rs <<'EOF'
+use noon::legacy::{
+    Circle,
+    Mobject,
+};
+use noon::ReactiveTimelineScene;
+EOF
+bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null
+for import in 'use noon::legacy::{Circle as Hidden, Mobject};' 'use noon::legacy::*;' 'use noon::legacy::{Circle, Unknown};' 'use noon::{legacy::{Circle as Hidden, Mobject}};' 'use noon::legacy;' 'use noon::{legacy};' 'use noon::legacy as old;' 'use noon::r#legacy::Circle;' 'use noon::legacy::Circle @ unsupported;'; do
+  printf '%s\n' "$import" > crates/noon-web/src/reactive_authoring_facade.rs
+  if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted unreviewed import $import" >&2
+    exit 1
+  fi
+done
+git reset -q --hard "$IMPORT_BASE"
+printf 'use noon::legacy::Circle;\n' > crates/noon-web/src/new_legacy_consumer.rs
+if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted an untracked new legacy consumer" >&2
+  exit 1
+fi
+rm crates/noon-web/src/new_legacy_consumer.rs
+
+# The initial codec allowance requires deleting the old snapshot authority.
+reset_to_base
+mkdir -p crates/noon/src/legacy
+cat > crates/noon-web/src/authoring_mobject.rs <<'EOF'
+pub struct FrontendMobjectHandle { snapshot: ObjectSnapshot }
+EOF
+git add crates/noon-web/src/authoring_mobject.rs
+git commit -qm "old snapshot handle before relocation"
+RELOCATION_BASE="$(git rev-parse HEAD)"
+cat > crates/noon/src/legacy/semantic_snapshot.rs <<'EOF'
+use noon_core::ObjectSnapshot;
+pub fn export_mobject_snapshot() -> ObjectSnapshot { todo!() }
+EOF
+if bash scripts/architecture-ratchet.sh "$RELOCATION_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted relocation retaining old authority" >&2
+  exit 1
+fi
+printf 'pub struct WasmAuthoringMobjectHandle { handle: noon::Mobject }\n' > crates/noon-web/src/authoring_mobject.rs
+bash scripts/architecture-ratchet.sh "$RELOCATION_BASE" >/dev/null
+printf 'impl noon::Mobject { pub fn snapshot() {} }\n' >> crates/noon/src/legacy/semantic_snapshot.rs
+if bash scripts/architecture-ratchet.sh "$RELOCATION_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted inherent snapshot API in codec" >&2
+  exit 1
+fi
+sed -i.bak '$d' crates/noon/src/legacy/semantic_snapshot.rs
+rm crates/noon/src/legacy/semantic_snapshot.rs.bak
+# Direct calls must obey the same API/count inventory despite whitespace or
+# raw-identifier spellings of a Rust namespace.
+for call in 'noon :: legacy :: NewApi();' 'noon::r#legacy::NewApi();'; do
+  printf 'pub fn probe() { %s }\n' "$call" >> crates/noon-web/src/authoring_mobject.rs
+  if bash scripts/architecture-ratchet.sh "$RELOCATION_BASE" >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted unreviewed spaced/raw adapter call" >&2
+    exit 1
+  fi
+  sed -i.bak '$d' crates/noon-web/src/authoring_mobject.rs
+  rm crates/noon-web/src/authoring_mobject.rs.bak
+done
+git add crates/noon/src/legacy/semantic_snapshot.rs crates/noon-web/src/authoring_mobject.rs
+git commit -qm "bounded codec relocation"
+MOVED_BASE="$(git rev-parse HEAD)"
+printf 'pub fn probe() { noon :: legacy :: export_mobject_snapshot(); }\n' >> crates/noon-web/src/authoring_mobject.rs
+if bash scripts/architecture-ratchet.sh "$MOVED_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: spaced approved call bypassed zero baseline budget" >&2
+  exit 1
+fi
+sed -i.bak '$d' crates/noon-web/src/authoring_mobject.rs
+rm crates/noon-web/src/authoring_mobject.rs.bak
+printf 'pub fn export_mobject_snapshot() {}\n' > crates/noon/src/legacy/semantic_snapshot.rs
+git add crates/noon/src/legacy/semantic_snapshot.rs
+git commit -qm "shrink codec debt"
+SHRUNK_BASE="$(git rev-parse HEAD)"
+printf 'use noon_core::ObjectSnapshot;\n' >> crates/noon/src/legacy/semantic_snapshot.rs
+if bash scripts/architecture-ratchet.sh "$SHRUNK_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted regrowth under initial codec cap" >&2
+  exit 1
+fi
+
+# Canonical authoring remains an absolute-zero island, even for tests and even
+# when the regression was committed before the comparison base.
+reset_to_base
+mkdir -p crates/noon/src/semantic_mobject crates/noon/src/scene
+for canonical in crates/noon/src/semantic_mobject.rs crates/noon/src/scene.rs crates/noon/src/semantic_mobject/tests.rs crates/noon/src/scene/tests.rs; do
+  printf 'use noon_core::ObjectSnapshot;\n' > "$canonical"
+  git add "$canonical"
+  git commit -qm "poison canonical authoring island"
+  POISONED_BASE="$(git rev-parse HEAD)"
+  if bash scripts/architecture-ratchet.sh "$POISONED_BASE" >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted canonical snapshot state in $canonical" >&2
+    exit 1
+  fi
+  git rm -q "$canonical"
+  git commit -qm "remove canonical poison"
+done
+mkdir -p crates/noon/src
+for export in 'pub use legacy::*;' 'pub use crate::legacy::{Scene as Mobject};' 'pub use legacy::{*};' 'pub use crate::legacy as old;' 'pub use crate::{legacy};' 'pub use self::legacy::*;' 'pub type Scene = crate::legacy::Scene;' 'use crate::legacy as old; pub type Mobject = old::Mobject;'; do
+  printf '%s\n' "$export" > crates/noon/src/lib.rs
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted legacy root reexport $export" >&2
+    exit 1
+  fi
+done
+rm crates/noon/src/lib.rs
+
+# Namespace-root aliases must not bypass the canonical full-tree check.
+mkdir -p crates/noon/src
+printf 'pub fn probe() { super :: super :: legacy :: call(); }\n' > crates/noon/src/scene.rs
+if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted canonical legacy namespace alias" >&2
+  exit 1
+fi
+rm crates/noon/src/scene.rs
+printf 'type Restored = FrontendMobjectHandle;\n' > src/restored_handle.rs
+if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted old handle through a type alias" >&2
+  exit 1
+fi
+rm src/restored_handle.rs
+
+# Tool vocabulary is exempt at exactly its enforcement path, never when copied
+# into product code. Missing comparison commits also fail closed.
+reset_to_base
+cp scripts/architecture_migration_relocations.py src/copied_checker.py
+expect_rejected 'checker vocabulary copied into product code'
+rm src/copied_checker.py
+if bash scripts/architecture-ratchet.sh unavailable-base-959 >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted missing comparison base" >&2
   exit 1
 fi
 

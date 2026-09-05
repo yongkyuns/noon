@@ -36,7 +36,7 @@
       "id": "mobject.circle",
       "surface": "Circle",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_circle/WasmAuthoringStore::create_manim_circle"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::manim_circle"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_circle_init"}],
       "reason": "Rust constructs the geometry and Manim Cairo VMobject defaults directly in the shared semantic store; Python only coerces explicit host constructor arguments."
     },
@@ -44,7 +44,7 @@
       "id": "mobject.square",
       "surface": "Square",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_square/WasmAuthoringStore::create_manim_square"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::manim_square"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_square_init"}],
       "reason": "Rust constructs square geometry and exact Manim VMobject defaults; Python retains only call-shape and explicit-argument coercion."
     },
@@ -52,7 +52,7 @@
       "id": "mobject.rectangle",
       "surface": "Rectangle",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_rectangle/WasmAuthoringStore::create_manim_rectangle"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::manim_rectangle"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_rectangle_init"}],
       "reason": "Rust constructs rectangle geometry and exact Manim VMobject defaults; Python retains only call-shape and explicit-argument coercion."
     },
@@ -60,7 +60,7 @@
       "id": "mobject.line",
       "surface": "Line",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_line/WasmAuthoringStore::create_manim_line"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::manim_line"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_line_init"}],
       "reason": "Rust constructs line geometry and exact Manim VMobject defaults; Python only coerces endpoint vectors and explicit constructor options."
     },
@@ -68,14 +68,14 @@
       "id": "mobject.shift",
       "surface": "Detached and animate-target Mobject.shift",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::shift"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::shift"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_shift"}]
     },
     {
       "id": "mobject.move-to",
       "surface": "Leaf Mobject.move_to for point or leaf-Mobject targets",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_move_to_handle/manim_move_to_point"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject/layout.rs", "symbol": "Mobject::manim_move_to_handle/manim_move_to_point"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_move_to"}],
       "reason": "Python coerces Manim vector arguments; Rust chooses aligned critical points, applies coordinate masks, and performs the translation."
     },
@@ -83,28 +83,28 @@
       "id": "mobject.scale",
       "surface": "Detached and animate-target Mobject.scale",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::scale"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::scale"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_scale"}]
     },
     {
       "id": "mobject.rotate",
       "surface": "Detached and animate-target Mobject.rotate",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::rotate_about_point"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::rotate_about_point"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_rotate"}]
     },
     {
       "id": "mobject.style",
       "surface": "Detached and animate-target Mobject.set_color/set_fill/set_stroke/set_opacity",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::set_*"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject/style.rs", "symbol": "Mobject::set_color/set_fill/set_stroke_width/set_opacity"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_set_color/_set_fill/_set_stroke/_set_opacity"}]
     },
     {
       "id": "mobject.layout-query",
       "surface": "Detached and animate-target Mobject.center/width/height/critical_point",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::center/width/height/critical_point"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::center/width/height/critical_point"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_layout_center/_width/_height/_critical"}]
     },
     {
@@ -112,9 +112,9 @@
       "surface": "Scene-bound Mobject.center/width/height/critical_point",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_layout_center/_width/_height/_critical fallbacks"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::center/width/height/critical_point"},
-      "reason": "Scene-bound wrappers do not yet retain a stable shared semantic handle, so layout queries still evaluate their scene snapshot in Python.",
-      "replacement": "Bind scene-owned wrappers to stable shared handles and reuse the same Rust layout query path.",
+      "shared_owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::center/width/height/critical_point"},
+      "reason": "Legacy or dynamically evaluated wrappers without a current shared handle still evaluate layout from a Python snapshot; ordinary canonical scene-bound handles query the Rust node directly.",
+      "replacement": "Remove the remaining legacy/dynamic fallback after those evaluated values are exposed through shared semantic handles.",
       "migration_issue": "#61"
     },
     {
@@ -123,7 +123,7 @@
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_phase_b.py", "symbol": "_vector_path_world_bounds/_manim_layout_bounds"},
       "shared_owner": {"language": "rust", "path": "crates/noon-core/src/reactive/semantic_model.rs", "symbol": "semantic_path_bounds"},
-      "reason": "Python still evaluates vector-path extrema and Manim-specific control-hull bounds instead of querying one shared geometry model.",
+      "reason": "Canonical geometry handles query arena-owned paths in Rust. Legacy specialized-geometry fallback code still evaluates vector-path extrema and Manim-specific control-hull bounds in Python.",
       "replacement": "Represent compatibility bounds policy in Rust and expose the resulting layout bounds through semantic handles.",
       "migration_issue": "#61"
     },
@@ -131,7 +131,7 @@
       "id": "mobject.next-to",
       "surface": "Leaf Mobject.next_to without explicit submobject aligner selection",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_next_to_handle/manim_next_to_point"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject/layout.rs", "symbol": "Mobject::manim_next_to_handle/manim_next_to_point"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_next_to"}],
       "reason": "Rust owns Manim's unnormalized direction/buffer formula, aligned critical points, coordinate mask, and translation; Python only coerces host values."
     },
@@ -149,7 +149,7 @@
       "id": "mobject.align",
       "surface": "Leaf Mobject.align_to/align_on_border",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::align_to_handle/align_to_point/align_on_frame"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject/layout.rs", "symbol": "Mobject::align_to_handle/align_to_point/align_on_frame"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_align_to/_align_on_frame"}],
       "reason": "Python coerces vectors/points while Rust chooses critical points and applies axis/frame-edge translations."
     },
@@ -191,7 +191,7 @@
       "id": "mobject.become-replace",
       "surface": "Detached Mobject.become/replace",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::become_handle/replace_handle"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::become_handle/replace_handle"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_become/_replace"}]
     },
     {
@@ -235,7 +235,7 @@
       "id": "animate.target-state",
       "surface": "Mobject.animate shift/set_fill/scale/rotate target edits",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::target_editor/shift/set_fill/scale/rotate"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::target_editor/commit_state"},
       "adapters": [{"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_AnimateBuilderMixin._initialize_builder"}, {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_target_mobject"}]
     },
     {
@@ -250,9 +250,9 @@
       "id": "scene-bound-deterministic-state",
       "surface": "Deterministic scene-bound Mobject transform/style/layout state and animate source seed",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_mutation_handle_for/_sync_bound_transform/_sync_bound_style/commit_transform_target"}, {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"}],
-      "reason": "A fresh semantic handle survives scene binding, owns deterministic transform/style/layout math, seeds animate targets through targetEditor, and is committed only after successful Transform authoring. Python's existing scene table is a typed lowered transport mirror, not the semantic evaluator."
+      "reason": "The same store-owned semantic node survives initial scene binding and owns deterministic transform/style/layout state. Target editors allocate independent nodes in that store. The canonical path lowers directly to ExecutionSession; legacy animation synchronization remains a separate migration concern."
     },
     {
       "id": "scene-bound-dynamic-state",
@@ -268,7 +268,7 @@
       "id": "authoring-copy-snapshot",
       "surface": "Detached and fresh deterministic scene-bound Mobject.copy / animate target seed",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::clone_handle/target_editor"},
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::copy_handle/target_editor"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_clone_mobject/_target_mobject"}],
       "reason": "Fresh detached and deterministic bound wrappers clone the shared handle directly; source state does not cross the bridge as JSON during copy or animate target construction."
     },
@@ -277,7 +277,7 @@
       "surface": "Mobject.copy / animate target seed after dynamic or raw scene-owned state",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_clone_mobject fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::target_editor"},
+      "shared_owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::target_editor"},
       "reason": "When the persistent authoring handle is deliberately stale because runtime/raw state was not mirrored, Python still materializes the evaluated scene snapshot to seed a new detached shared handle.",
       "replacement": "Expose shared evaluated scene handles so dynamic state can clone directly without snapshot materialization.",
       "migration_issue": "#61"

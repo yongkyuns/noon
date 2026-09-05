@@ -1,10 +1,8 @@
-"""Bind Python scene authoring directly into one Rust-owned canonical SceneSpec stream.
+"""Bind geometry handles directly into the shared Rust Scene.
 
-Legacy geometry documents and retained Text sidecars remain available as compatibility
-views during #367 migration, but canonical production no longer reads either view.
-Geometry/Text bind events populate a per-scene Rust/WASM context directly; finalization
-adds timeline, family-animation, and camera state from their authoritative authoring
-stores.
+Static geometry lowers to one ExecutionSession in the authoring worker. Python
+keeps identity metadata; geometry values are projected only for explicit exports
+or the legacy animation/retained-text adapter still owned for deletion by #959.
 """
 
 from __future__ import annotations
@@ -30,6 +28,10 @@ _ORIGINAL_APPEND_SNAPSHOT = _ir.Scene._append_snapshot
 _ORIGINAL_AUTHORING_CHECKPOINT = _ir.Scene._authoring_checkpoint
 _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
 _ORIGINAL_REPLACE_STATIC_SNAPSHOT = _base.Scene._replace_static_snapshot
+_ORIGINAL_BIND = _base.Mobject._bind_to_scene
+_ORIGINAL_PLAY = _base.Scene.play
+_ORIGINAL_TO_SCENE_SPEC = _base.Scene.to_scene_spec
+_ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
 
 
 def _json(value: object) -> str:
@@ -53,6 +55,78 @@ def _context(scene: _ir.Scene):
     context = _create_context()
     scene._canonical_authoring_context = context
     return context
+
+
+def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
+    handle = getattr(self, "_semantic_handle", None)
+    if handle is None:
+        materialize_legacy_geometry(scene)
+        return _ORIGINAL_BIND(self, scene, key=key)
+    checkpoint = scene._authoring_checkpoint()
+    obj, _ = scene._allocate_object(key)
+    try:
+        _context(scene).bindMobject(str(obj.id), handle)
+    except Exception:
+        scene._restore_authoring_checkpoint(checkpoint)
+        raise
+    scene._object_positions[obj.id] = len(scene._objects)
+    # The compatibility table retains identity only on the shared path.
+    scene._objects.append({"id": obj.id})
+    handles = getattr(scene, "_semantic_geometry_handles", None)
+    if handles is None:
+        handles = scene._semantic_geometry_handles = {}
+    handles[obj.id] = handle
+    if getattr(scene, "_legacy_geometry_materialized", False):
+        snapshot = json.loads(str(handle.snapshotJson()))
+        snapshot["id"] = obj.id
+        scene._objects[-1] = snapshot
+    self._bind(scene, obj)
+    return obj
+
+
+def materialize_legacy_geometry(scene):
+    """Enter the explicit legacy animation/export adapter once (#959)."""
+    if getattr(scene, "_legacy_geometry_materialized", False):
+        return
+    for object_id, handle in getattr(scene, "_semantic_geometry_handles", {}).items():
+        snapshot = json.loads(str(handle.snapshotJson()))
+        snapshot["id"] = object_id
+        scene._objects[scene._object_positions[object_id]] = snapshot
+    scene._legacy_geometry_materialized = True
+
+
+def _play(self, *args, **kwargs):
+    materialize_legacy_geometry(self)
+    return _ORIGINAL_PLAY(self, *args, **kwargs)
+
+
+def _to_document(self):
+    # Explicit export may project values; it does not provide execution input on
+    # the shared path. Legacy animation retains this adapter until #959.
+    objects = list(self._objects)
+    if not getattr(self, "_legacy_geometry_materialized", False):
+        for object_id, handle in getattr(self, "_semantic_geometry_handles", {}).items():
+            snapshot = json.loads(str(handle.snapshotJson()))
+            snapshot["id"] = object_id
+            objects[self._object_positions[object_id]] = snapshot
+    return {"version": _ir.FORMAT_VERSION, "objects": objects, "tracks": list(self._tracks)}
+
+
+def execution_context(scene, callbacks=None):
+    """Select the complete typed geometry path; unsupported contracts stay explicit."""
+    if callbacks or getattr(scene, "_legacy_geometry_materialized", False):
+        return None
+    if getattr(scene, "_retained_text_objects", []):
+        return None
+    handles = getattr(scene, "_semantic_geometry_handles", {})
+    if len(handles) != len(scene._object_positions):
+        return None
+    for track in scene._tracks:
+        if (track.get("property") != "presence" or
+                float(track["timing"]["start_time"]) != 0.0 or
+                track.get("values", {}).get("bool", {}).get("to") is not True):
+            return None
+    return _context(scene)
 
 
 def _append_snapshot(
@@ -88,6 +162,10 @@ def _restore_authoring_checkpoint(
         canonical = int(checkpoint[2])
         _context(self).restore(canonical)
         _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT(self, checkpoint[1])
+        handles = getattr(self, "_semantic_geometry_handles", {})
+        for object_id in list(handles):
+            if object_id not in self._object_positions:
+                del handles[object_id]
         return
     # Compatibility with an opaque checkpoint captured before this adapter was
     # installed. Browser authoring installs adapters before user scenes are built,
@@ -156,6 +234,9 @@ def _to_scene_spec(self: _base.Scene) -> dict[str, Any]:
     _retained_state._sync_all(self)
     _retained_state._freeze_bound_sources(self)
 
+    if getattr(self, "_legacy_geometry_materialized", False):
+        return _ORIGINAL_TO_SCENE_SPEC(self)
+
     context = _context(self)
     for source in _retained_state._bound_sources(self):
         context.updateText(
@@ -186,3 +267,6 @@ def install() -> None:
     _base.Scene._replace_static_snapshot = _replace_static_snapshot
     _typst._RetainedTextMobject._bind_to_scene = _bind_retained_text
     _base.Scene.to_scene_spec = _to_scene_spec
+    _base.Mobject._bind_to_scene = _bind_mobject
+    _base.Scene.play = _play
+    _ir.Scene.to_document = _to_document

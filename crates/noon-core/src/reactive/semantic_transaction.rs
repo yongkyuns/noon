@@ -795,7 +795,7 @@ impl SemanticMutationTransaction {
                             index,
                             error,
                         })?;
-                    if !semantic_style_is_finite(style) {
+                    if !style.is_finite() {
                         return Err(SemanticMutationTransactionError::InvalidStyle {
                             index,
                             object: *object,
@@ -983,6 +983,11 @@ pub(super) fn validate_object_content_resource(
     content: SemanticObjectContent,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
+    if let SemanticObjectContent::Geometry(geometry) = content {
+        if !geometry.is_finite() {
+            return Err(SemanticMutationTransactionError::InvalidObjectContent { index });
+        }
+    }
     let SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) = content else {
         return Ok(());
     };
@@ -1008,27 +1013,6 @@ const fn is_style_property(property: SemanticObjectProperty) -> bool {
             | SemanticObjectProperty::StrokeWidth
             | SemanticObjectProperty::ObjectOpacity
     )
-}
-
-fn semantic_style_is_finite(style: &SemanticStyle) -> bool {
-    semantic_paint_is_finite(style.fill.as_ref())
-        && semantic_paint_is_finite(style.stroke.as_ref())
-        && style.fill_opacity.is_finite()
-        && style.stroke_opacity.is_finite()
-        && style.stroke_width.is_finite()
-        && style.object_opacity.is_finite()
-}
-
-fn semantic_paint_is_finite(paint: Option<&super::SemanticPaint>) -> bool {
-    match paint {
-        Some(super::SemanticPaint::Solid(color)) => {
-            color.red.is_finite()
-                && color.green.is_finite()
-                && color.blue.is_finite()
-                && color.alpha.is_finite()
-        }
-        Some(super::SemanticPaint::Resource(_)) | None => true,
-    }
 }
 
 fn set_object_subscription(
@@ -1147,6 +1131,9 @@ pub enum SemanticMutationTransactionError {
         node: SemanticNodeId,
     },
     InvalidNodeObjectState {
+        index: usize,
+    },
+    InvalidObjectContent {
         index: usize,
     },
     NodeCreationBindingTypeMismatch {
@@ -1378,6 +1365,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 node.slot(),
                 node.generation()
             ),
+            Self::InvalidObjectContent { index } => write!(formatter, "semantic transaction mutation {index}: object geometry contains non-finite values"),
             Self::InvalidNodeObjectState { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add an object with non-finite authored transform/style values"

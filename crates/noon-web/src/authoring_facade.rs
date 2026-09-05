@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
-use noon::{
+use noon::legacy::{
     Animate, Animation, Circle, Create, FadeIn, FadeOut, IntoSnapshot, Line, Mobject, Rectangle,
     Rotate, Scene, Square, Transform,
 };
 use noon_core::{Color, RateFunction, Vec2};
 
-use crate::FrontendMobjectHandle;
+use noon_core::ObjectSnapshot;
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
     if !value.is_finite() {
@@ -55,18 +55,16 @@ fn optional_rate_function(value: &str) -> Result<Option<RateFunction>, String> {
 /// Detached object used by thin browser-language adapters before scene insertion.
 ///
 /// Geometry defaults come from the public `noon` Rust facade while mutations and
-/// layout queries delegate to `FrontendMobjectHandle`, so JavaScript does not own
+/// layout queries delegate to the explicit legacy value API, so JavaScript does not own
 /// a second bounds/style/transform implementation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrontendDetachedMobject {
-    handle: FrontendMobjectHandle,
+    handle: ObjectSnapshot,
 }
 
 impl FrontendDetachedMobject {
     fn from_snapshot(snapshot: noon_core::ObjectSnapshot) -> Self {
-        Self {
-            handle: FrontendMobjectHandle::from_snapshot(snapshot),
-        }
+        Self { handle: snapshot }
     }
 
     pub fn circle(radius: f64) -> Result<Self, String> {
@@ -95,22 +93,25 @@ impl FrontendDetachedMobject {
     }
 
     pub fn shift(&mut self, x: f64, y: f64) -> Result<&mut Self, String> {
-        self.handle.shift(x, y)?;
+        self.handle = self.handle.clone().shift(vec2("shift", x, y)?);
         Ok(self)
     }
 
     pub fn move_to(&mut self, x: f64, y: f64) -> Result<&mut Self, String> {
-        self.handle.move_to(x, y)?;
+        self.handle = self.handle.clone().move_to(vec2("point", x, y)?);
         Ok(self)
     }
 
     pub fn scale(&mut self, factor: f64) -> Result<&mut Self, String> {
-        self.handle.scale(factor, factor)?;
+        self.handle = self.handle.clone().scale_by(finite_f32("scale", factor)?);
         Ok(self)
     }
 
     pub fn rotate(&mut self, angle: f64) -> Result<&mut Self, String> {
-        self.handle.rotate(angle)?;
+        self.handle = self
+            .handle
+            .clone()
+            .rotate_by(finite_f32("rotation", angle)?);
         Ok(self)
     }
 
@@ -121,7 +122,19 @@ impl FrontendDetachedMobject {
         blue: f64,
         alpha: f64,
     ) -> Result<&mut Self, String> {
-        self.handle.set_color(red, green, blue, alpha)?;
+        let color = color(red, green, blue, alpha)?;
+        if let Some(fill) = &mut self.handle.style.fill {
+            *fill = Color {
+                alpha: fill.alpha,
+                ..color
+            };
+        }
+        if let Some(stroke) = &mut self.handle.style.stroke {
+            *stroke = Color {
+                alpha: stroke.alpha,
+                ..color
+            };
+        }
         Ok(self)
     }
 
@@ -132,13 +145,21 @@ impl FrontendDetachedMobject {
         blue: f64,
         opacity: f64,
     ) -> Result<&mut Self, String> {
-        self.handle.set_fill_color(red, green, blue, 1.0)?;
-        self.handle.set_fill_opacity(opacity)?;
+        self.handle = self.handle.clone().set_fill(
+            Some(color(red, green, blue, 1.0)?),
+            Some(unit_f32("opacity", opacity)?),
+        );
         Ok(self)
     }
 
     pub fn set_opacity(&mut self, opacity: f64) -> Result<&mut Self, String> {
-        self.handle.set_opacity(opacity)?;
+        let opacity = unit_f32("opacity", opacity)?;
+        if let Some(fill) = &mut self.handle.style.fill {
+            fill.alpha = opacity;
+        }
+        if let Some(stroke) = &mut self.handle.style.stroke {
+            stroke.alpha = opacity;
+        }
         Ok(self)
     }
 
@@ -149,21 +170,28 @@ impl FrontendDetachedMobject {
         direction_y: f64,
         buff: f64,
     ) -> Result<&mut Self, String> {
-        self.handle
-            .next_to_handle(&other.handle, direction_x, direction_y, buff)?;
+        let direction = vec2("direction", direction_x, direction_y)?;
+        if direction.normalized().is_none() {
+            return Err("direction must be non-zero".into());
+        }
+        self.handle =
+            self.handle
+                .clone()
+                .next_to(&other.handle, direction, finite_f32("buff", buff)?);
         Ok(self)
     }
 
     pub fn center(&self) -> (f64, f64) {
-        self.handle.center()
+        let center = self.handle.center();
+        (center.x as f64, center.y as f64)
     }
 
     pub fn width(&self) -> f64 {
-        self.handle.width()
+        self.handle.width() as f64
     }
 
     pub fn height(&self) -> f64 {
-        self.handle.height()
+        self.handle.height() as f64
     }
 }
 
@@ -254,7 +282,8 @@ impl FrontendPlayBatch {
     }
 }
 
-/// Browser-facing authoring state backed directly by the public Rust `noon::Scene`.
+/// Legacy JS snapshot authoring adapter, removed with #959.
+/// Backed by the explicit `noon::legacy::Scene` value API.
 ///
 /// Frontends receive small stable local handles. Canonical object identity,
 /// target-state lowering, lifecycle and timing remain owned by `noon`/`noon-core`.
@@ -283,7 +312,7 @@ impl FrontendAuthoringScene {
             .next_handle
             .checked_add(1)
             .ok_or_else(|| "authoring mobject handle space exhausted".to_owned())?;
-        let mobject = self.scene.add(object.handle.snapshot().clone());
+        let mobject = self.scene.add(object.handle.clone());
         self.objects.insert(handle, mobject);
         Ok(handle)
     }
@@ -424,7 +453,7 @@ impl FrontendAuthoringScene {
     ) -> Result<(), String> {
         batch
             .animations
-            .push(Transform::new(self.object(handle)?, target.handle.snapshot().clone()).into());
+            .push(Transform::new(self.object(handle)?, target.handle.clone()).into());
         Ok(())
     }
 

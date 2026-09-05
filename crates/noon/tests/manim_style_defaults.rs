@@ -1,4 +1,4 @@
-use noon::prelude::*;
+use noon::legacy::prelude::*;
 
 #[test]
 fn rust_authoring_shapes_use_manim_vmobject_defaults() {

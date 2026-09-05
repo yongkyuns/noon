@@ -1,5 +1,5 @@
 export const AUTHORING_CHANNEL = "noon.authoring";
-export const AUTHORING_PROTOCOL_VERSION = 5;
+export const AUTHORING_PROTOCOL_VERSION = 6;
 export const NOON_IR_VERSION = 1;
 export const SCENE_SPEC_VERSION = 1;
 export const RETAINED_AUTHORING_CHANNEL = "noon.authoring.retained";
@@ -50,12 +50,15 @@ export class PythonAuthoringClient {
     return this.#readyPromise;
   }
 
-  async run(source, context = {}) {
+  async run(source, context = {}, { exportDocument = false } = {}) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
     }
     if (!isRecord(context)) {
       throw new TypeError("Python authoring context must be an object");
+    }
+    if (typeof exportDocument !== "boolean") {
+      throw new TypeError("Python authoring exportDocument must be a boolean");
     }
     await this.ready();
     const requestId = this.#beginRequest();
@@ -65,6 +68,7 @@ export class PythonAuthoringClient {
         requestId,
         source,
         context,
+        exportDocument,
       }),
     );
     return result;
@@ -102,6 +106,68 @@ export class PythonAuthoringClient {
     const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
     this.#worker.postMessage(envelope("attach_engine_port", { requestId, port }), [port]);
+    return result;
+  }
+
+  async attachSemanticExecution(
+    contextId,
+    controlPort,
+    renderPort,
+    {
+      transportMode,
+      sharedSlotCapacity,
+      loopDurationSeconds,
+      session,
+    },
+  ) {
+    validateSemanticExecutionContextId(contextId);
+    if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
+      throw new TypeError("semantic execution attachment requires control and render MessagePorts");
+    }
+    if (transportMode !== "shared" && transportMode !== "transferable") {
+      throw new TypeError(`unsupported semantic execution transport mode ${transportMode}`);
+    }
+    if (!Number.isSafeInteger(sharedSlotCapacity) || sharedSlotCapacity <= 0) {
+      throw new TypeError("semantic execution shared slot capacity must be a positive safe integer");
+    }
+    if (!Number.isFinite(loopDurationSeconds) || loopDurationSeconds <= 0) {
+      throw new TypeError("semantic execution loop duration must be positive and finite");
+    }
+    if (!Number.isSafeInteger(session) || session < 0) {
+      throw new TypeError("semantic execution session must be a non-negative safe integer");
+    }
+    await this.ready();
+    const requestId = this.#beginRequest();
+    const result = this.#resultFor(requestId);
+    this.#worker.postMessage(
+      envelope("attach_semantic_execution", {
+        requestId,
+        contextId,
+        controlPort,
+        renderPort,
+        transportMode,
+        sharedSlotCapacity,
+        loopDurationSeconds,
+        session,
+      }),
+      [controlPort, renderPort],
+    );
+    return result;
+  }
+
+  // Until an execution-client transition commits, the context token remains owned
+  // by the authoring result, including when attachment or renderer preflight fails.
+  // The owner may retry it without reconstructing semantic state, or retire it with
+  // this explicit release. A successful transition transfers that duty to the
+  // execution client.
+  async releaseSemanticExecution(contextId) {
+    validateSemanticExecutionContextId(contextId);
+    await this.ready();
+    const requestId = this.#beginRequest();
+    const result = this.#resultFor(requestId);
+    this.#worker.postMessage(
+      envelope("release_semantic_execution", { requestId, contextId }),
+    );
     return result;
   }
 
@@ -173,6 +239,16 @@ export class PythonAuthoringClient {
         return;
       }
 
+      if (message.type === "semantic_execution_attached") {
+        this.#settle(message.requestId, ({ resolve }) => resolve(message));
+        return;
+      }
+
+      if (message.type === "semantic_execution_released") {
+        this.#settle(message.requestId, ({ resolve }) => resolve(message));
+        return;
+      }
+
       throw new Error(`Unknown Python authoring message type: ${message.type}`);
     } catch (error) {
       this.#fail(error);
@@ -224,6 +300,17 @@ export function parseAuthoringResult(resultJson) {
   if (!isRecord(result)) {
     throw new Error("Python authoring result must be an object");
   }
+  const semanticExecution = validateSemanticExecutionDescriptor(result.semantic_execution);
+  if (semanticExecution !== null) {
+    if (result.kind !== "scene_document") {
+      throw new Error("semantic execution descriptor requires a scene_document result");
+    }
+    return {
+      kind: result.kind,
+      semanticExecution,
+      duration: validateSceneDuration(result.duration),
+    };
+  }
   if (result.kind === "patch_batch") {
     return {
       kind: result.kind,
@@ -251,6 +338,24 @@ export function parseAuthoringResult(resultJson) {
     return parsed;
   }
   throw new Error(`Unknown Python authoring result kind: ${result.kind}`);
+}
+
+export function validateSemanticExecutionDescriptor(descriptor) {
+  if (descriptor === null || descriptor === undefined) {
+    return null;
+  }
+  if (!isRecord(descriptor)) {
+    throw new Error("Python semantic execution descriptor must be an object");
+  }
+  validateSemanticExecutionContextId(descriptor.context_id);
+  return Object.freeze({ contextId: descriptor.context_id });
+}
+
+function validateSemanticExecutionContextId(contextId) {
+  if (typeof contextId !== "string" || contextId.trim() === "") {
+    throw new TypeError("semantic execution context ID must be a non-empty string");
+  }
+  return contextId;
 }
 
 export function parsePatchBatchJson(json) {

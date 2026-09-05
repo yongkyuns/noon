@@ -496,6 +496,7 @@ function ensureRuntimePreparation() {
 
 async function ensureRuntimeReady({
   preparation = null,
+  semanticExecution = null,
   sceneJson,
   sceneSpecJson,
   startRetained,
@@ -525,15 +526,20 @@ async function ensureRuntimeReady({
       patchStatus.value = "Starting authored GPU execution engine…";
       patchStatus.dataset.state = "running";
 
-      const ready = startRetained
-        ? await nextPlayer.startRetainedCanonical(sceneSpecJson, {
+      const ready = semanticExecution !== null
+        ? await nextPlayer.startSemanticExecution(semanticExecution, {
+            authoringClient: client,
             loopDurationSeconds,
           })
-        : await nextPlayer.start(sceneJson, {
-            loopDurationSeconds,
-            callbacks,
-            authoringClient: client,
-          });
+        : startRetained
+          ? await nextPlayer.startRetainedCanonical(sceneSpecJson, {
+              loopDurationSeconds,
+            })
+          : await nextPlayer.start(sceneJson, {
+              loopDurationSeconds,
+              callbacks,
+              authoringClient: client,
+            });
       const initialState = await nextPlayer.state();
 
       player = nextPlayer;
@@ -544,7 +550,10 @@ async function ensureRuntimeReady({
       rendererBackend = ready.render.backend;
       status.dataset.rendererBackend = rendererBackend;
       status.dataset.executionMode = nextPlayer.mode;
-      status.dataset.executionTopology = "authoring-engine-render-workers";
+      status.dataset.executionTopology =
+        semanticExecution === null
+          ? "authoring-engine-render-workers"
+          : "python-semantic-engine-render-worker";
       status.dataset.runtimeStartup = "started-on-demand";
       playbackControls = new PlaygroundPlaybackControls(
         nextPlayer,
@@ -730,6 +739,17 @@ function isCurrentRun(runToken) {
   return generations.isRunCurrent(runToken, selectedExampleId);
 }
 
+async function discardSemanticExecution(authored, client) {
+  const contextId = authored?.semanticExecution?.contextId;
+  if (typeof contextId === "string") {
+    try {
+      await client.releaseSemanticExecution(contextId);
+    } catch (error) {
+      console.warn(`Failed to release discarded semantic context ${contextId}`, error);
+    }
+  }
+}
+
 async function runScene() {
   if (sceneRunPromise !== null) return sceneRunPromise;
   const example = currentExample();
@@ -768,22 +788,30 @@ async function runScene() {
         selectionGeneration: runToken.selectionGeneration,
         runGeneration: runToken.runGeneration,
       });
-      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-authoring");
+      if (!isCurrentRun(runToken)) {
+        await discardSemanticExecution(authored, client);
+        return recordStale(runToken, "after-authoring");
+      }
       if (authored.kind !== "scene_document") {
         throw new Error("Python scene source returned a PatchBatch");
       }
 
+      const semanticExecution = authored.semanticExecution ?? null;
       const runtimeDocument =
-        authored.callbacks === null
-          ? sceneIdentities.stabilize(authored.document, authored.identities)
-          : authored.document;
+        semanticExecution !== null
+          ? null
+          : authored.callbacks === null
+            ? sceneIdentities.stabilize(authored.document, authored.identities)
+            : authored.document;
       const runtimeSceneSpec =
-        authored.sceneSpec === null || authored.sceneSpec === undefined
+        semanticExecution !== null ||
+        authored.sceneSpec === null ||
+        authored.sceneSpec === undefined
           ? null
           : sceneIdentities.stabilizeSceneSpec(authored.sceneSpec, authored.identities);
-      const sceneJson = JSON.stringify(runtimeDocument);
+      const sceneJson = runtimeDocument === null ? null : JSON.stringify(runtimeDocument);
       const sceneSpecJson = runtimeSceneSpec === null ? null : JSON.stringify(runtimeSceneSpec);
-      const startRetained = sceneSpecJson !== null;
+      const startRetained = semanticExecution === null && sceneSpecJson !== null;
       const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
 
       await runPlaygroundTestHook("beforeReconcile", {
@@ -791,12 +819,16 @@ async function runScene() {
         selectionGeneration: runToken.selectionGeneration,
         runGeneration: runToken.runGeneration,
       });
-      if (!isCurrentRun(runToken)) return recordStale(runToken, "before-reconcile");
+      if (!isCurrentRun(runToken)) {
+        await discardSemanticExecution(authored, client);
+        return recordStale(runToken, "before-reconcile");
+      }
 
       let result;
       if (player === null) {
         result = await ensureRuntimeReady({
           preparation,
+          semanticExecution,
           sceneJson,
           sceneSpecJson,
           startRetained,
@@ -807,13 +839,21 @@ async function runScene() {
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");
       } else {
         await ensureExecutionReady();
-        if (!isCurrentRun(runToken)) return recordStale(runToken, "after-restart");
-        result = await player.reconcileScene(sceneJson, {
-          sceneSpecJson,
-          callbacks: authored.callbacks,
-          authoringClient: client,
-          loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
-        });
+        if (!isCurrentRun(runToken)) {
+          await discardSemanticExecution(authored, client);
+          return recordStale(runToken, "after-restart");
+        }
+        result = semanticExecution !== null
+          ? await player.reconcileSemanticExecution(semanticExecution, {
+              authoringClient: client,
+              loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
+            })
+          : await player.reconcileScene(sceneJson, {
+              sceneSpecJson,
+              callbacks: authored.callbacks,
+              authoringClient: client,
+              loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
+            });
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
       }
 

@@ -1,778 +1,15 @@
-use noon_core::{
-    Bounds2D64, Color, GeometryRef, ObjectSnapshot, PathCommand, SemanticNodeId, SemanticNodeKind,
-    SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, StrokeCap,
-    StrokeJoin, StrokeWidthMode, Style, Transform2D, Vec2, VectorPath,
+use noon::semantic_mobject::{
+    authoring_render_f64 as render_f64, authoring_xy_f64 as semantic_xy_f64,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ManimNextToArgs {
-    direction: (f64, f64),
-    buff: f64,
-    aligned_edge: (f64, f64),
-    mask: (f64, f64),
-}
-
-fn manim_vmobject_style(color: Color) -> Style {
-    let mut fill = color;
-    fill.alpha = 0.0;
-    Style {
-        fill: Some(fill),
-        stroke: Some(color),
-        stroke_width: 0.04,
-        stroke_width_mode: StrokeWidthMode::ScreenSpace,
-        stroke_join: StrokeJoin::Miter,
-        stroke_cap: StrokeCap::Butt,
-        opacity: 1.0,
-    }
-}
-
-fn positive_f32(name: &str, value: f64) -> Result<f32, String> {
-    let value = finite_f32(name, value)?;
-    if value <= 0.0 {
-        return Err(format!("{name} must be positive"));
-    }
-    Ok(value)
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct FrontendMobjectHandle {
-    snapshot: ObjectSnapshot,
-    semantic_transform: SemanticTransform2_5D,
-    semantic_style: SemanticStyle,
-}
-
-impl FrontendMobjectHandle {
-    fn from_manim_geometry(geometry: GeometryRef, color: Color) -> Self {
-        Self::from_snapshot(ObjectSnapshot {
-            geometry,
-            transform: Transform2D::IDENTITY,
-            style: manim_vmobject_style(color),
-        })
-    }
-
-    pub fn manim_circle(radius: f64) -> Result<Self, String> {
-        Ok(Self::from_manim_geometry(
-            GeometryRef::circle(positive_f32("radius", radius)?),
-            Color::RED,
-        ))
-    }
-
-    pub fn manim_square(side_length: f64) -> Result<Self, String> {
-        let side = positive_f32("side_length", side_length)?;
-        Ok(Self::from_manim_geometry(
-            GeometryRef::rectangle(side, side),
-            Color::WHITE,
-        ))
-    }
-
-    pub fn manim_rectangle(width: f64, height: f64) -> Result<Self, String> {
-        Ok(Self::from_manim_geometry(
-            GeometryRef::rectangle(
-                positive_f32("width", width)?,
-                positive_f32("height", height)?,
-            ),
-            Color::WHITE,
-        ))
-    }
-
-    pub fn manim_line(start_x: f64, start_y: f64, end_x: f64, end_y: f64) -> Result<Self, String> {
-        Ok(Self::from_manim_geometry(
-            GeometryRef::line(
-                Vec2::new(
-                    finite_f32("start.x", start_x)?,
-                    finite_f32("start.y", start_y)?,
-                ),
-                Vec2::new(finite_f32("end.x", end_x)?, finite_f32("end.y", end_y)?),
-            ),
-            Color::WHITE,
-        ))
-    }
-
-    pub fn from_snapshot(snapshot: ObjectSnapshot) -> Self {
-        let transform = snapshot.transform;
-        let semantic_transform = SemanticTransform2_5D {
-            translation: SemanticVec3::new(
-                f64::from(transform.translation.x),
-                f64::from(transform.translation.y),
-                0.0,
-            ),
-            scale: SemanticVec3::new(
-                f64::from(transform.scale.x),
-                f64::from(transform.scale.y),
-                1.0,
-            ),
-            rotation_z: f64::from(transform.rotation),
-        };
-        let semantic_style = authoring_style_from_legacy(snapshot.style);
-        Self {
-            snapshot,
-            semantic_transform,
-            semantic_style,
-        }
-    }
-
-    pub fn from_json(snapshot_json: &str) -> Result<Self, String> {
-        serde_json::from_str(snapshot_json)
-            .map(Self::from_snapshot)
-            .map_err(|error| format!("invalid mobject snapshot: {error}"))
-    }
-
-    pub fn snapshot(&self) -> &ObjectSnapshot {
-        &self.snapshot
-    }
-
-    pub fn snapshot_json(&self) -> Result<String, String> {
-        serde_json::to_string(&self.snapshot)
-            .map_err(|error| format!("unable to serialize mobject snapshot: {error}"))
-    }
-
-    pub fn wire_translation(&self) -> (f64, f64) {
-        let value = self.snapshot.transform.translation;
-        (f64::from(value.x), f64::from(value.y))
-    }
-
-    pub fn wire_scale(&self) -> (f64, f64) {
-        let value = self.snapshot.transform.scale;
-        (f64::from(value.x), f64::from(value.y))
-    }
-
-    pub fn wire_rotation(&self) -> f64 {
-        f64::from(self.snapshot.transform.rotation)
-    }
-
-    pub fn wire_fill(&self) -> Option<(f64, f64, f64, f64)> {
-        self.snapshot.style.fill.map(|color| {
-            (
-                f64::from(color.red),
-                f64::from(color.green),
-                f64::from(color.blue),
-                f64::from(color.alpha),
-            )
-        })
-    }
-
-    pub fn wire_stroke(&self) -> Option<(f64, f64, f64, f64)> {
-        self.snapshot.style.stroke.map(|color| {
-            (
-                f64::from(color.red),
-                f64::from(color.green),
-                f64::from(color.blue),
-                f64::from(color.alpha),
-            )
-        })
-    }
-
-    pub fn wire_stroke_width(&self) -> f64 {
-        f64::from(self.snapshot.style.stroke_width)
-    }
-
-    pub fn wire_object_opacity(&self) -> f64 {
-        f64::from(self.snapshot.style.opacity)
-    }
-
-    /// Clone this semantic state into a detached target editor. The returned
-    /// handle is the editor: all target mutations stay in Rust until its final
-    /// snapshot is requested for animation lowering.
-    pub fn target_editor(&self) -> Self {
-        self.clone()
-    }
-
-    pub fn replace_json(&mut self, snapshot_json: &str) -> Result<(), String> {
-        *self = Self::from_json(snapshot_json)?;
-        Ok(())
-    }
-
-    pub fn layout_bounds(&self) -> Option<Bounds2D64> {
-        snapshot_layout_bounds(&self.snapshot, self.semantic_transform)
-    }
-
-    pub fn center(&self) -> (f64, f64) {
-        self.layout_bounds()
-            .map(|bounds| {
-                (
-                    (bounds.min_x + bounds.max_x) * 0.5,
-                    (bounds.min_y + bounds.max_y) * 0.5,
-                )
-            })
-            .unwrap_or_else(|| {
-                let translation = self.semantic_transform.translation;
-                (translation.x, translation.y)
-            })
-    }
-
-    pub fn width(&self) -> f64 {
-        self.layout_bounds().map_or(0.0, Bounds2D64::width)
-    }
-
-    pub fn height(&self) -> f64 {
-        self.layout_bounds().map_or(0.0, Bounds2D64::height)
-    }
-
-    pub fn critical_point(&self, direction_x: f64, direction_y: f64) -> (f64, f64) {
-        let Some(bounds) = self.layout_bounds() else {
-            return self.center();
-        };
-        let center = self.center();
-        (
-            if direction_x < 0.0 {
-                bounds.min_x
-            } else if direction_x > 0.0 {
-                bounds.max_x
-            } else {
-                center.0
-            },
-            if direction_y < 0.0 {
-                bounds.min_y
-            } else if direction_y > 0.0 {
-                bounds.max_y
-            } else {
-                center.1
-            },
-        )
-    }
-
-    pub fn shift(&mut self, x: f64, y: f64) -> Result<(), String> {
-        let offset = semantic_xy_f64(x, y)?;
-        let translation = SemanticVec3::new(
-            self.semantic_transform.translation.x + offset.x,
-            self.semantic_transform.translation.y + offset.y,
-            self.semantic_transform.translation.z,
-        );
-        translation
-            .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
-        self.semantic_transform.translation = translation;
-        self.sync_legacy_transform()
-    }
-
-    pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), String> {
-        semantic_xy(x, y)?;
-        let center = self.center();
-        self.shift(x - center.0, y - center.1)
-    }
-
-    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), String> {
-        let value = semantic_xy_f64(x, y)?;
-        self.semantic_transform.translation.x = value.x;
-        self.semantic_transform.translation.y = value.y;
-        self.sync_legacy_transform()
-    }
-
-    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
-        let value = semantic_xy_f64(x, y)?;
-        self.semantic_transform.scale.x = value.x;
-        self.semantic_transform.scale.y = value.y;
-        self.sync_legacy_transform()
-    }
-
-    pub fn set_rotation(&mut self, angle: f64) -> Result<(), String> {
-        self.semantic_transform.rotation_z = render_f64("rotation", angle)?;
-        self.sync_legacy_transform()
-    }
-
-    pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
-        let mode = match mode {
-            "scale_with_object" => StrokeWidthMode::ScaleWithObject,
-            "screen_space" => StrokeWidthMode::ScreenSpace,
-            _ => {
-                return Err(
-                    "stroke_width_mode must be scale_with_object or screen_space".to_owned(),
-                )
-            }
-        };
-        self.semantic_style.stroke_width_mode = mode;
-        self.snapshot.style.stroke_width_mode = mode;
-        Ok(())
-    }
-
-    pub fn set_stroke_join(&mut self, join: &str) -> Result<(), String> {
-        self.snapshot.style.stroke_join = match join {
-            "round" => StrokeJoin::Round,
-            "miter" => StrokeJoin::Miter,
-            "bevel" => StrokeJoin::Bevel,
-            _ => return Err("stroke_join must be round, miter, or bevel".to_owned()),
-        };
-        Ok(())
-    }
-
-    pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), String> {
-        self.snapshot.style.stroke_cap = match cap {
-            "round" => StrokeCap::Round,
-            "butt" => StrokeCap::Butt,
-            "square" => StrokeCap::Square,
-            _ => return Err("stroke_cap must be round, butt, or square".to_owned()),
-        };
-        Ok(())
-    }
-
-    pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        let opacity = render_f64("opacity", opacity)?;
-        self.semantic_style.object_opacity = opacity;
-        self.snapshot.style.opacity = finite_f32("opacity", opacity)?;
-        Ok(())
-    }
-
-    /// ManimCE-compatible move_to for a leaf mobject target.
-    ///
-    /// `aligned_edge` selects matching critical points and `coor_mask` suppresses
-    /// translation components. Frontends only coerce host vectors; placement math
-    /// stays in this shared semantic handle.
-    pub fn manim_move_to_handle(
-        &mut self,
-        other: &Self,
-        aligned_edge_x: f64,
-        aligned_edge_y: f64,
-        mask_x: f64,
-        mask_y: f64,
-    ) -> Result<(), String> {
-        let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y)?;
-        let mask = semantic_xy_f64(mask_x, mask_y)?;
-        let source = self.critical_point(edge.x, edge.y);
-        let target = other.critical_point(edge.x, edge.y);
-        self.shift(
-            (target.0 - source.0) * mask.x,
-            (target.1 - source.1) * mask.y,
-        )
-    }
-
-    /// ManimCE-compatible move_to for a point target.
-    pub fn manim_move_to_point(
-        &mut self,
-        point_x: f64,
-        point_y: f64,
-        aligned_edge_x: f64,
-        aligned_edge_y: f64,
-        mask_x: f64,
-        mask_y: f64,
-    ) -> Result<(), String> {
-        let point = semantic_xy_f64(point_x, point_y)?;
-        let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y)?;
-        let mask = semantic_xy_f64(mask_x, mask_y)?;
-        let source = self.critical_point(edge.x, edge.y);
-        self.shift((point.x - source.0) * mask.x, (point.y - source.1) * mask.y)
-    }
-
-    /// ManimCE-compatible next_to for a leaf mobject target.
-    ///
-    /// Unlike Noon's generic `next_to_handle`, Manim intentionally does not
-    /// normalize `direction`: both critical-point selection and `direction * buff`
-    /// use the supplied vector directly.
-    pub fn manim_next_to_handle(
-        &mut self,
-        other: &Self,
-        args: ManimNextToArgs,
-    ) -> Result<(), String> {
-        let direction = semantic_xy_f64(args.direction.0, args.direction.1)?;
-        let edge = semantic_xy_f64(args.aligned_edge.0, args.aligned_edge.1)?;
-        let mask = semantic_xy_f64(args.mask.0, args.mask.1)?;
-        let buff = render_f64("buffer", args.buff)?;
-        let source = self.critical_point(edge.x - direction.x, edge.y - direction.y);
-        let target = other.critical_point(edge.x + direction.x, edge.y + direction.y);
-        self.shift(
-            (target.0 - source.0 + direction.x * buff) * mask.x,
-            (target.1 - source.1 + direction.y * buff) * mask.y,
-        )
-    }
-
-    /// ManimCE-compatible next_to for a point target.
-    pub fn manim_next_to_point(
-        &mut self,
-        point_x: f64,
-        point_y: f64,
-        args: ManimNextToArgs,
-    ) -> Result<(), String> {
-        let point = semantic_xy_f64(point_x, point_y)?;
-        let direction = semantic_xy_f64(args.direction.0, args.direction.1)?;
-        let edge = semantic_xy_f64(args.aligned_edge.0, args.aligned_edge.1)?;
-        let mask = semantic_xy_f64(args.mask.0, args.mask.1)?;
-        let buff = render_f64("buffer", args.buff)?;
-        let source = self.critical_point(edge.x - direction.x, edge.y - direction.y);
-        self.shift(
-            (point.x - source.0 + direction.x * buff) * mask.x,
-            (point.y - source.1 + direction.y * buff) * mask.y,
-        )
-    }
-
-    pub fn scale(&mut self, x: f64, y: f64) -> Result<(), String> {
-        let x = render_f64("scale.x", x)?;
-        let y = render_f64("scale.y", y)?;
-        let scale = SemanticVec3::new(
-            self.semantic_transform.scale.x * x,
-            self.semantic_transform.scale.y * y,
-            self.semantic_transform.scale.z,
-        );
-        scale.lower_xy_f32().map_err(|error| error.to_string())?;
-        self.semantic_transform.scale = scale;
-        self.sync_legacy_transform()
-    }
-
-    pub fn rotate(&mut self, angle: f64) -> Result<(), String> {
-        let angle = render_f64("rotation", angle)?;
-        let rotation = self.semantic_transform.rotation_z + angle;
-        finite_f32("rotation result", rotation)?;
-        self.semantic_transform.rotation_z = rotation;
-        self.sync_legacy_transform()
-    }
-
-    pub fn rotate_about_point(
-        &mut self,
-        angle: f64,
-        point_x: f64,
-        point_y: f64,
-    ) -> Result<(), String> {
-        let angle = render_f64("rotation", angle)?;
-        let pivot = semantic_xy_f64(point_x, point_y)?;
-        let rotation = self.semantic_transform.rotation_z + angle;
-        finite_f32("rotation result", rotation)?;
-
-        let translation = self.semantic_transform.translation;
-        let relative_x = translation.x - pivot.x;
-        let relative_y = translation.y - pivot.y;
-        let cosine = angle.cos();
-        let sine = angle.sin();
-        let next_translation = SemanticVec3::new(
-            pivot.x + relative_x * cosine - relative_y * sine,
-            pivot.y + relative_x * sine + relative_y * cosine,
-            translation.z,
-        );
-        next_translation
-            .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
-        self.semantic_transform.translation = next_translation;
-        self.semantic_transform.rotation_z = rotation;
-        self.sync_legacy_transform()
-    }
-
-    pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
-        let color = opaque_color("color", red, green, blue)?;
-        let opacity = unit_opacity("color.alpha", alpha)?;
-        let had_fill = self.semantic_style.fill.is_some();
-        let had_stroke = self.semantic_style.stroke.is_some();
-        if had_fill {
-            self.semantic_style.fill = Some(SemanticPaint::Solid(color));
-            self.semantic_style.fill_opacity = opacity;
-        }
-        if had_stroke {
-            self.semantic_style.stroke = Some(SemanticPaint::Solid(color));
-            self.semantic_style.stroke_opacity = opacity;
-        }
-        if !had_fill && !had_stroke {
-            self.semantic_style.fill = Some(SemanticPaint::Solid(color));
-            self.semantic_style.fill_opacity = opacity;
-        }
-        self.sync_legacy_style();
-        Ok(())
-    }
-
-    pub fn disable_fill(&mut self) {
-        self.semantic_style.fill = None;
-        self.sync_legacy_style();
-    }
-
-    pub fn set_fill_color(
-        &mut self,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<(), String> {
-        let color = opaque_color("fill", red, green, blue)?;
-        let requested_opacity = unit_opacity("fill.alpha", alpha)?;
-        if self.semantic_style.fill.is_none() {
-            self.semantic_style.fill_opacity = requested_opacity;
-        }
-        self.semantic_style.fill = Some(SemanticPaint::Solid(color));
-        self.sync_legacy_style();
-        Ok(())
-    }
-
-    pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        let opacity = unit_opacity("fill opacity", opacity)?;
-        if self.semantic_style.fill.is_none() {
-            self.semantic_style.fill = Some(SemanticPaint::Solid(Color::WHITE));
-        }
-        self.semantic_style.fill_opacity = opacity;
-        self.sync_legacy_style();
-        Ok(())
-    }
-
-    /// Apply a Manim-style fill color and opacity as one target-state edit.
-    ///
-    /// This keeps the common `.animate.set_fill(...)` operation entirely inside
-    /// the shared handle. Validate both inputs before changing state so a bad
-    /// opacity cannot leave a partially edited target.
-    pub fn set_fill(
-        &mut self,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<(), String> {
-        let color = opaque_color("fill", red, green, blue)?;
-        let opacity = unit_opacity("fill opacity", opacity)?;
-        self.semantic_style.fill = Some(SemanticPaint::Solid(color));
-        self.semantic_style.fill_opacity = opacity;
-        self.sync_legacy_style();
-        Ok(())
-    }
-
-    pub fn fill_opacity(&self) -> f64 {
-        if self.semantic_style.fill.is_some() {
-            self.semantic_style.fill_opacity
-        } else {
-            0.0
-        }
-    }
-
-    pub fn disable_stroke(&mut self) {
-        self.semantic_style.stroke = None;
-        self.sync_legacy_style();
-    }
-
-    pub fn set_stroke_color(
-        &mut self,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<(), String> {
-        let color = opaque_color("stroke", red, green, blue)?;
-        let requested_opacity = unit_opacity("stroke.alpha", alpha)?;
-        if self.semantic_style.stroke.is_none() {
-            self.semantic_style.stroke_opacity = requested_opacity;
-        }
-        self.semantic_style.stroke = Some(SemanticPaint::Solid(color));
-        self.sync_legacy_style();
-        Ok(())
-    }
-
-    pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
-        let width = render_f64("stroke width", width)?;
-        if width < 0.0 {
-            return Err("stroke width must be non-negative".to_owned());
-        }
-        self.semantic_style.stroke_width = width;
-        if self.semantic_style.stroke.is_none() {
-            self.semantic_style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
-            self.semantic_style.stroke_opacity = 1.0;
-        }
-        self.sync_legacy_style();
-        Ok(())
-    }
-
-    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        let opacity = unit_opacity("stroke opacity", opacity)?;
-        if self.semantic_style.stroke.is_none() {
-            self.semantic_style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
-        }
-        self.semantic_style.stroke_opacity = opacity;
-        self.sync_legacy_style();
-        Ok(())
-    }
-
-    pub fn stroke_opacity(&self) -> f64 {
-        if self.semantic_style.stroke.is_some() {
-            self.semantic_style.stroke_opacity
-        } else {
-            0.0
-        }
-    }
-
-    pub fn set_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        let opacity = unit_opacity("opacity", opacity)?;
-        if self.semantic_style.fill.is_some() {
-            self.semantic_style.fill_opacity = opacity;
-        }
-        if self.semantic_style.stroke.is_some() {
-            self.semantic_style.stroke_opacity = opacity;
-        }
-        self.sync_legacy_style();
-        Ok(())
-    }
-
-    fn sync_legacy_transform(&mut self) -> Result<(), String> {
-        self.snapshot.transform.translation = self
-            .semantic_transform
-            .translation
-            .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
-        self.snapshot.transform.scale = self
-            .semantic_transform
-            .scale
-            .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
-        self.snapshot.transform.rotation =
-            finite_f32("rotation", self.semantic_transform.rotation_z)?;
-        Ok(())
-    }
-
-    fn sync_legacy_style(&mut self) {
-        self.snapshot.style.fill = legacy_solid_color(
-            self.semantic_style.fill.as_ref(),
-            self.semantic_style.fill_opacity,
-        );
-        self.snapshot.style.stroke = legacy_solid_color(
-            self.semantic_style.stroke.as_ref(),
-            self.semantic_style.stroke_opacity,
-        );
-        self.snapshot.style.stroke_width = self.semantic_style.stroke_width as f32;
-        self.snapshot.style.stroke_width_mode = self.semantic_style.stroke_width_mode;
-        self.snapshot.style.opacity = self.semantic_style.object_opacity as f32;
-    }
-
-    pub fn become_handle(&mut self, other: &Self) {
-        self.snapshot = other.snapshot.clone();
-        self.semantic_transform = other.semantic_transform;
-        self.semantic_style = other.semantic_style.clone();
-    }
-
-    pub fn replace_handle(
-        &mut self,
-        other: &Self,
-        dim_to_match: u32,
-        stretch: bool,
-    ) -> Result<(), String> {
-        if dim_to_match > 1 {
-            return Err(
-                "replace currently supports width (0) or height (1) in the 2D authoring model"
-                    .to_owned(),
-            );
-        }
-        let target_center = other.center();
-        let source_width = self.width();
-        let source_height = self.height();
-        let target_width = other.width();
-        let target_height = other.height();
-
-        if stretch {
-            if source_width == 0.0 || source_height == 0.0 {
-                return Err("cannot stretch-replace an object with zero width or height".to_owned());
-            }
-            self.scale(target_width / source_width, target_height / source_height)?;
-        } else {
-            let (source_length, target_length) = if dim_to_match == 0 {
-                (source_width, target_width)
-            } else {
-                (source_height, target_height)
-            };
-            if source_length == 0.0 {
-                return Err("cannot replace along a zero-length dimension".to_owned());
-            }
-            let factor = target_length / source_length;
-            self.scale(factor, factor)?;
-        }
-        self.move_to(target_center.0, target_center.1)
-    }
-
-    pub fn next_to_handle(
-        &mut self,
-        other: &Self,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-    ) -> Result<(), String> {
-        let (axis_x, axis_y) = normalized_direction(direction_x, direction_y)?;
-        let source = self.critical_point(-axis_x, -axis_y);
-        let target = other.critical_point(axis_x, axis_y);
-        self.shift(
-            target.0 - source.0 + axis_x * buff,
-            target.1 - source.1 + axis_y * buff,
-        )
-    }
-
-    pub fn next_to_point(
-        &mut self,
-        point_x: f64,
-        point_y: f64,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-    ) -> Result<(), String> {
-        semantic_xy(point_x, point_y)?;
-        let (axis_x, axis_y) = normalized_direction(direction_x, direction_y)?;
-        let source = self.critical_point(-axis_x, -axis_y);
-        self.shift(
-            point_x - source.0 + axis_x * buff,
-            point_y - source.1 + axis_y * buff,
-        )
-    }
-
-    pub fn align_to_handle(
-        &mut self,
-        other: &Self,
-        direction_x: f64,
-        direction_y: f64,
-    ) -> Result<(), String> {
-        finite_f32("direction.x", direction_x)?;
-        finite_f32("direction.y", direction_y)?;
-        let source = self.critical_point(direction_x, direction_y);
-        let target = other.critical_point(direction_x, direction_y);
-        self.shift(
-            if direction_x == 0.0 {
-                0.0
-            } else {
-                target.0 - source.0
-            },
-            if direction_y == 0.0 {
-                0.0
-            } else {
-                target.1 - source.1
-            },
-        )
-    }
-
-    pub fn align_to_point(
-        &mut self,
-        point_x: f64,
-        point_y: f64,
-        direction_x: f64,
-        direction_y: f64,
-    ) -> Result<(), String> {
-        semantic_xy(point_x, point_y)?;
-        let source = self.critical_point(direction_x, direction_y);
-        self.shift(
-            if direction_x == 0.0 {
-                0.0
-            } else {
-                point_x - source.0
-            },
-            if direction_y == 0.0 {
-                0.0
-            } else {
-                point_y - source.1
-            },
-        )
-    }
-
-    pub fn align_on_frame(
-        &mut self,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-    ) -> Result<(), String> {
-        finite_f32("direction.x", direction_x)?;
-        finite_f32("direction.y", direction_y)?;
-        let point = self.critical_point(direction_x, direction_y);
-        let mut shift_x = 0.0;
-        let mut shift_y = 0.0;
-        if direction_x != 0.0 {
-            let target = direction_x.signum() * f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5;
-            shift_x = target - point.0 - direction_x * buff;
-        }
-        if direction_y != 0.0 {
-            let target = direction_y.signum() * f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5;
-            shift_y = target - point.1 - direction_y * buff;
-        }
-        self.shift(shift_x, shift_y)
-    }
-}
+pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
+use noon_core::{Bounds2D64, SemanticNodeId, SemanticNodeKind, SemanticStore};
 
 /// Shared target-family construction used by frontend Group/VGroup animation builders.
 ///
 /// The Python/JS wrapper tree is host-language identity metadata only. This editor
 /// snapshots the source family's authoritative ordered membership, validates each
 /// wrapper pair against that order, and constructs the target family in the same
-/// semantic store. Leaf target state is edited through `FrontendMobjectHandle`.
+/// semantic store. Leaf target state is edited through `Mobject`.
 #[derive(Clone, Debug)]
 pub struct FrontendFamilyTargetEditor {
     source_members: Vec<SemanticNodeId>,
@@ -898,7 +135,7 @@ impl FrontendFamilyTranslation {
     pub fn apply(
         &mut self,
         source_member: SemanticNodeId,
-        member: &mut FrontendMobjectHandle,
+        member: &mut Mobject,
     ) -> Result<(), String> {
         self.apply_with(source_member, |delta| member.shift(delta.0, delta.1))
     }
@@ -1076,295 +313,6 @@ fn semantic_family_leaf_ids(
     Ok(leaves)
 }
 
-fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
-    render_f64(name, value).map(|value| value as f32)
-}
-
-fn render_f64(name: &str, value: f64) -> Result<f64, String> {
-    if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
-        return Err(format!("{name} must be a finite f32-compatible number"));
-    }
-    Ok(value)
-}
-
-fn unit_opacity(name: &str, value: f64) -> Result<f64, String> {
-    let value = render_f64(name, value)?;
-    if !(0.0..=1.0).contains(&value) {
-        return Err(format!("{name} must be between 0 and 1"));
-    }
-    Ok(value)
-}
-
-fn opaque_color(name: &str, red: f64, green: f64, blue: f64) -> Result<Color, String> {
-    Ok(Color::rgba(
-        finite_f32(&format!("{name}.red"), red)?,
-        finite_f32(&format!("{name}.green"), green)?,
-        finite_f32(&format!("{name}.blue"), blue)?,
-        1.0,
-    ))
-}
-
-fn authoring_style_from_legacy(style: Style) -> SemanticStyle {
-    let mut semantic = SemanticStyle::from_legacy(style);
-    if let Some(SemanticPaint::Solid(color)) = &mut semantic.fill {
-        semantic.fill_opacity = f64::from(color.alpha);
-        color.alpha = 1.0;
-    }
-    if let Some(SemanticPaint::Solid(color)) = &mut semantic.stroke {
-        semantic.stroke_opacity = f64::from(color.alpha);
-        color.alpha = 1.0;
-    }
-    semantic
-}
-
-fn legacy_solid_color(paint: Option<&SemanticPaint>, opacity: f64) -> Option<Color> {
-    let SemanticPaint::Solid(color) = paint? else {
-        return None;
-    };
-    Some(Color {
-        alpha: opacity as f32,
-        ..*color
-    })
-}
-
-fn semantic_xy(x: f64, y: f64) -> Result<Vec2, String> {
-    semantic_xy_f64(x, y)?
-        .lower_xy_f32()
-        .map_err(|error| error.to_string())
-}
-
-fn semantic_xy_f64(x: f64, y: f64) -> Result<SemanticVec3, String> {
-    let value = SemanticVec3::new(x, y, 0.0);
-    value.lower_xy_f32().map_err(|error| error.to_string())?;
-    Ok(value)
-}
-
-fn normalized_direction(x: f64, y: f64) -> Result<(f64, f64), String> {
-    if !x.is_finite() || !y.is_finite() {
-        return Err("direction must be finite".to_owned());
-    }
-    let length = x.hypot(y);
-    if length == 0.0 {
-        return Err("direction must be non-zero".to_owned());
-    }
-    Ok((x / length, y / length))
-}
-
-fn include_layout_point(bounds: &mut Option<Bounds2D64>, point: (f64, f64)) {
-    if let Some(bounds) = bounds {
-        bounds.include(point.0, point.1);
-    } else {
-        *bounds = Some(Bounds2D64::point(point.0, point.1));
-    }
-}
-
-fn transform_layout_point(transform: SemanticTransform2_5D, point: Vec2) -> (f64, f64) {
-    let x = f64::from(point.x) * transform.scale.x;
-    let y = f64::from(point.y) * transform.scale.y;
-    let sine = transform.rotation_z.sin();
-    let cosine = transform.rotation_z.cos();
-    (
-        x * cosine - y * sine + transform.translation.x,
-        x * sine + y * cosine + transform.translation.y,
-    )
-}
-
-fn quadratic_layout_point(p0: (f64, f64), p1: (f64, f64), p2: (f64, f64), t: f64) -> (f64, f64) {
-    let u = 1.0 - t;
-    (
-        u * u * p0.0 + 2.0 * u * t * p1.0 + t * t * p2.0,
-        u * u * p0.1 + 2.0 * u * t * p1.1 + t * t * p2.1,
-    )
-}
-
-fn cubic_layout_point(
-    p0: (f64, f64),
-    p1: (f64, f64),
-    p2: (f64, f64),
-    p3: (f64, f64),
-    t: f64,
-) -> (f64, f64) {
-    let u = 1.0 - t;
-    (
-        u * u * u * p0.0 + 3.0 * u * u * t * p1.0 + 3.0 * u * t * t * p2.0 + t * t * t * p3.0,
-        u * u * u * p0.1 + 3.0 * u * u * t * p1.1 + 3.0 * u * t * t * p2.1 + t * t * t * p3.1,
-    )
-}
-
-fn cubic_layout_derivative_roots(p0: f64, p1: f64, p2: f64, p3: f64) -> Vec<f64> {
-    let a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
-    let b = 2.0 * (p0 - 2.0 * p1 + p2);
-    let c = p1 - p0;
-    let epsilon = 1.0e-14;
-    if a.abs() <= epsilon {
-        if b.abs() <= epsilon {
-            return Vec::new();
-        }
-        return vec![-c / b];
-    }
-    let discriminant = b * b - 4.0 * a * c;
-    if discriminant < 0.0 {
-        return Vec::new();
-    }
-    let root = discriminant.sqrt();
-    let mut roots = vec![(-b + root) / (2.0 * a)];
-    if root > epsilon {
-        roots.push((-b - root) / (2.0 * a));
-    }
-    roots
-}
-
-fn transformed_path_layout_bounds(
-    path: &VectorPath,
-    transform: SemanticTransform2_5D,
-) -> Option<Bounds2D64> {
-    let mut bounds = None;
-    let mut current = None;
-    let mut subpath_start = None;
-
-    for command in path.commands() {
-        match *command {
-            PathCommand::MoveTo { to } => {
-                let point = transform_layout_point(transform, to);
-                include_layout_point(&mut bounds, point);
-                current = Some(point);
-                subpath_start = Some(point);
-            }
-            PathCommand::LineTo { to } => {
-                let end = transform_layout_point(transform, to);
-                if let Some(start) = current {
-                    include_layout_point(&mut bounds, start);
-                }
-                include_layout_point(&mut bounds, end);
-                current = Some(end);
-            }
-            PathCommand::QuadraticTo { control, to } => {
-                let end = transform_layout_point(transform, to);
-                let Some(start) = current else {
-                    include_layout_point(&mut bounds, end);
-                    current = Some(end);
-                    continue;
-                };
-                let control = transform_layout_point(transform, control);
-                include_layout_point(&mut bounds, start);
-                include_layout_point(&mut bounds, end);
-                for axis in 0..2 {
-                    let (p0, p1, p2) = if axis == 0 {
-                        (start.0, control.0, end.0)
-                    } else {
-                        (start.1, control.1, end.1)
-                    };
-                    let denominator = p0 - 2.0 * p1 + p2;
-                    if denominator.abs() <= 1.0e-14 {
-                        continue;
-                    }
-                    let t = (p0 - p1) / denominator;
-                    if (0.0..1.0).contains(&t) {
-                        include_layout_point(
-                            &mut bounds,
-                            quadratic_layout_point(start, control, end, t),
-                        );
-                    }
-                }
-                current = Some(end);
-            }
-            PathCommand::CubicTo {
-                control1,
-                control2,
-                to,
-            } => {
-                let end = transform_layout_point(transform, to);
-                let Some(start) = current else {
-                    include_layout_point(&mut bounds, end);
-                    current = Some(end);
-                    continue;
-                };
-                let control1 = transform_layout_point(transform, control1);
-                let control2 = transform_layout_point(transform, control2);
-                include_layout_point(&mut bounds, start);
-                include_layout_point(&mut bounds, end);
-                let mut roots =
-                    cubic_layout_derivative_roots(start.0, control1.0, control2.0, end.0);
-                roots.extend(cubic_layout_derivative_roots(
-                    start.1, control1.1, control2.1, end.1,
-                ));
-                for t in roots {
-                    if (0.0..1.0).contains(&t) {
-                        include_layout_point(
-                            &mut bounds,
-                            cubic_layout_point(start, control1, control2, end, t),
-                        );
-                    }
-                }
-                current = Some(end);
-            }
-            PathCommand::Close => {
-                if let Some(end) = current {
-                    include_layout_point(&mut bounds, end);
-                }
-                if let Some(start) = subpath_start {
-                    include_layout_point(&mut bounds, start);
-                    current = Some(start);
-                }
-            }
-        }
-    }
-    bounds
-}
-
-fn snapshot_layout_bounds(
-    snapshot: &ObjectSnapshot,
-    transform: SemanticTransform2_5D,
-) -> Option<Bounds2D64> {
-    match &snapshot.geometry {
-        GeometryRef::Circle { radius } => {
-            let radius = f64::from(*radius);
-            let sine = transform.rotation_z.sin();
-            let cosine = transform.rotation_z.cos();
-            let half_width = radius * (transform.scale.x * cosine).hypot(transform.scale.y * sine);
-            let half_height = radius * (transform.scale.x * sine).hypot(transform.scale.y * cosine);
-            Some(Bounds2D64 {
-                min_x: transform.translation.x - half_width,
-                min_y: transform.translation.y - half_height,
-                max_x: transform.translation.x + half_width,
-                max_y: transform.translation.y + half_height,
-            })
-        }
-        GeometryRef::Rectangle { size } => {
-            let half_x = f64::from(size.x) * 0.5;
-            let half_y = f64::from(size.y) * 0.5;
-            let mut bounds = None;
-            for (x, y) in [
-                (-half_x, -half_y),
-                (-half_x, half_y),
-                (half_x, -half_y),
-                (half_x, half_y),
-            ] {
-                let sine = transform.rotation_z.sin();
-                let cosine = transform.rotation_z.cos();
-                let x = x * transform.scale.x;
-                let y = y * transform.scale.y;
-                include_layout_point(
-                    &mut bounds,
-                    (
-                        x * cosine - y * sine + transform.translation.x,
-                        x * sine + y * cosine + transform.translation.y,
-                    ),
-                );
-            }
-            bounds
-        }
-        GeometryRef::Line { start, end } => {
-            let mut bounds = None;
-            include_layout_point(&mut bounds, transform_layout_point(transform, *start));
-            include_layout_point(&mut bounds, transform_layout_point(transform, *end));
-            bounds
-        }
-        GeometryRef::VectorPath(path) => transformed_path_layout_bounds(path, transform),
-        GeometryRef::External(_) => None,
-    }
-}
-
 fn manim_family_arrange_deltas(
     member_bounds: &[Option<Bounds2D64>],
     direction_x: f64,
@@ -1493,8 +441,8 @@ mod wasm {
     use super::{
         manim_family_align_to_delta, manim_family_next_to_delta, render_f64,
         semantic_family_leaf_ids, semantic_xy_f64, Bounds2D64, FrontendFamilyArrangePlan,
-        FrontendFamilyTargetEditor, FrontendFamilyTranslation, FrontendMobjectHandle,
-        ManimNextToArgs, SemanticNodeId, SemanticStore,
+        FrontendFamilyTargetEditor, FrontendFamilyTranslation, ManimNextToArgs, Mobject,
+        SemanticNodeId, SemanticStore,
     };
 
     fn js_error(error: String) -> JsValue {
@@ -1572,17 +520,6 @@ mod wasm {
         }
     }
 
-    impl WasmAuthoringStore {
-        fn attach_handle(&self, handle: FrontendMobjectHandle) -> WasmAuthoringMobjectHandle {
-            let id = self.semantics.borrow_mut().insert_authoring_object();
-            WasmAuthoringMobjectHandle {
-                handle,
-                semantics: Rc::clone(&self.semantics),
-                id,
-            }
-        }
-    }
-
     #[wasm_bindgen]
     impl WasmAuthoringStore {
         #[wasm_bindgen(constructor)]
@@ -1592,13 +529,22 @@ mod wasm {
             }
         }
 
+        #[wasm_bindgen(js_name = createSceneContext)]
+        pub fn create_scene_context(&self) -> crate::CanonicalAuthoringSceneContext {
+            crate::CanonicalAuthoringSceneContext::with_store(Rc::clone(&self.semantics))
+        }
+
         #[wasm_bindgen(js_name = createMobject)]
         pub fn create_mobject(
             &self,
             snapshot_json: &str,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            let handle = FrontendMobjectHandle::from_json(snapshot_json).map_err(js_error)?;
-            Ok(self.attach_handle(handle))
+            let snapshot = serde_json::from_str(snapshot_json)
+                .map_err(|error| js_error(format!("invalid mobject snapshot: {error}")))?;
+            let handle =
+                noon::legacy::import_mobject_snapshot(Rc::clone(&self.semantics), snapshot)
+                    .map_err(js_error)?;
+            Ok(WasmAuthoringMobjectHandle { handle })
         }
 
         #[wasm_bindgen(js_name = createManimCircle)]
@@ -1606,8 +552,8 @@ mod wasm {
             &self,
             radius: f64,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            FrontendMobjectHandle::manim_circle(radius)
-                .map(|handle| self.attach_handle(handle))
+            Mobject::manim_circle(Rc::clone(&self.semantics), radius)
+                .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(js_error)
         }
 
@@ -1616,8 +562,8 @@ mod wasm {
             &self,
             side_length: f64,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            FrontendMobjectHandle::manim_square(side_length)
-                .map(|handle| self.attach_handle(handle))
+            Mobject::manim_square(Rc::clone(&self.semantics), side_length)
+                .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(js_error)
         }
 
@@ -1627,8 +573,8 @@ mod wasm {
             width: f64,
             height: f64,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            FrontendMobjectHandle::manim_rectangle(width, height)
-                .map(|handle| self.attach_handle(handle))
+            Mobject::manim_rectangle(Rc::clone(&self.semantics), width, height)
+                .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(js_error)
         }
 
@@ -1640,8 +586,8 @@ mod wasm {
             end_x: f64,
             end_y: f64,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            FrontendMobjectHandle::manim_line(start_x, start_y, end_x, end_y)
-                .map(|handle| self.attach_handle(handle))
+            Mobject::manim_line(Rc::clone(&self.semantics), start_x, start_y, end_x, end_y)
+                .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(js_error)
         }
 
@@ -1748,7 +694,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let id = self.mobject_member_id(member)?;
             self.plan
-                .accept_member_bounds(id, member.handle.layout_bounds())
+                .accept_member_bounds(id, member.handle.layout_bounds().map_err(js_error)?)
                 .map_err(js_error)
         }
 
@@ -1900,7 +846,7 @@ mod wasm {
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             let id = member.id_in_store(&self.semantics, "family layout")?;
-            self.include_leaf_bounds(id, member.handle.layout_bounds())
+            self.include_leaf_bounds(id, member.handle.layout_bounds().map_err(js_error)?)
         }
 
         #[wasm_bindgen(js_name = includeRetainedNativeText)]
@@ -1983,7 +929,10 @@ mod wasm {
             let mask = semantic_xy_f64(mask_x, mask_y).map_err(js_error)?;
             let source_x = self.critical_x(edge.x, edge.y)?;
             let source_y = self.critical_y(edge.x, edge.y)?;
-            let target_point = target.handle.critical_point(edge.x, edge.y);
+            let target_point = target
+                .handle
+                .critical_point(edge.x, edge.y)
+                .map_err(js_error)?;
             self.translation(
                 (target_point.0 - source_x) * mask.x,
                 (target_point.1 - source_y) * mask.y,
@@ -2101,7 +1050,8 @@ mod wasm {
             );
             let target_point = target
                 .handle
-                .critical_point(edge.x + direction.x, edge.y + direction.y);
+                .critical_point(edge.x + direction.x, edge.y + direction.y)
+                .map_err(js_error)?;
             let delta = manim_family_next_to_delta(
                 source,
                 target_point,
@@ -2229,7 +1179,10 @@ mod wasm {
                 self.critical_x(axis.x, axis.y)?,
                 self.critical_y(axis.x, axis.y)?,
             );
-            let target_point = target.handle.critical_point(axis.x, axis.y);
+            let target_point = target
+                .handle
+                .critical_point(axis.x, axis.y)
+                .map_err(js_error)?;
             let delta = manim_family_align_to_delta(source, target_point, (axis.x, axis.y))
                 .map_err(js_error)?;
             self.translation(delta.0, delta.1)
@@ -2628,39 +1581,28 @@ mod wasm {
         }
     }
 
-    /// Store-scoped geometry handle. Construction belongs to `WasmAuthoringStore`;
-    /// clones and target editors retain that store and receive fresh semantic IDs.
-    ///
-    /// #958/#61 still own replacing the frontend presentation payload with real
-    /// node-owned `SemanticObjectState`; there is no unscoped construction fallback.
+    /// Thin language wrapper over the same store-scoped handle used by Rust.
     #[wasm_bindgen]
     pub struct WasmAuthoringMobjectHandle {
-        handle: FrontendMobjectHandle,
-        semantics: SharedSemanticStore,
-        id: SemanticNodeId,
+        handle: Mobject,
     }
 
     impl WasmAuthoringMobjectHandle {
+        pub(crate) fn semantic_mobject(&self) -> &Mobject {
+            &self.handle
+        }
         fn id_in_store(
             &self,
             semantics: &SharedSemanticStore,
             context: &str,
         ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(semantics, &self.semantics) {
+            if !Rc::ptr_eq(semantics, self.handle.store()) {
                 return Err(js_error(format!(
                     "{context} and mobject belong to different authoring stores"
                 )));
             }
-            Ok(self.id)
-        }
-
-        fn clone_with_handle(&self, handle: FrontendMobjectHandle) -> Self {
-            let id = self.semantics.borrow_mut().insert_authoring_object();
-            Self {
-                handle,
-                semantics: Rc::clone(&self.semantics),
-                id,
-            }
+            self.handle.validate().map_err(js_error)?;
+            Ok(self.handle.node_id())
         }
     }
 
@@ -2668,150 +1610,193 @@ mod wasm {
     impl WasmAuthoringMobjectHandle {
         #[wasm_bindgen(getter, js_name = semanticSlot)]
         pub fn semantic_slot(&self) -> u32 {
-            self.id.slot()
+            self.handle.node_id().slot()
         }
-
         #[wasm_bindgen(getter, js_name = semanticGeneration)]
         pub fn semantic_generation(&self) -> u32 {
-            self.id.generation()
+            self.handle.node_id().generation()
         }
-
         #[wasm_bindgen(js_name = cloneHandle)]
-        pub fn clone_handle(&self) -> WasmAuthoringMobjectHandle {
-            self.clone_with_handle(self.handle.clone())
+        pub fn clone_handle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            self.handle
+                .copy_handle()
+                .map(|handle| Self { handle })
+                .map_err(js_error)
         }
-
-        /// Start a detached target-state edit from this handle without crossing
-        /// the JS boundary with a serialized snapshot. The existing handle type
-        /// is the editor; this alias makes that ownership explicit to frontends.
         #[wasm_bindgen(js_name = targetEditor)]
-        pub fn target_editor(&self) -> WasmAuthoringMobjectHandle {
-            self.clone_with_handle(self.handle.target_editor())
+        pub fn target_editor(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            self.clone_handle()
         }
 
         #[wasm_bindgen(js_name = snapshotJson)]
         pub fn snapshot_json(&self) -> Result<String, JsValue> {
-            self.handle.snapshot_json().map_err(js_error)
+            self.handle.validate().map_err(js_error)?;
+            serde_json::to_string(
+                &noon::legacy::export_mobject_snapshot(&self.handle).map_err(js_error)?,
+            )
+            .map_err(|error| js_error(error.to_string()))
         }
 
         #[wasm_bindgen(getter, js_name = wireTranslationX)]
-        pub fn wire_translation_x(&self) -> f64 {
-            self.handle.wire_translation().0
+        pub fn wire_translation_x(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.wire_translation().map_err(js_error)?.0)
         }
 
         #[wasm_bindgen(getter, js_name = wireTranslationY)]
-        pub fn wire_translation_y(&self) -> f64 {
-            self.handle.wire_translation().1
+        pub fn wire_translation_y(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.wire_translation().map_err(js_error)?.1)
         }
 
         #[wasm_bindgen(getter, js_name = wireScaleX)]
-        pub fn wire_scale_x(&self) -> f64 {
-            self.handle.wire_scale().0
+        pub fn wire_scale_x(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.wire_scale().map_err(js_error)?.0)
         }
 
         #[wasm_bindgen(getter, js_name = wireScaleY)]
-        pub fn wire_scale_y(&self) -> f64 {
-            self.handle.wire_scale().1
+        pub fn wire_scale_y(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.wire_scale().map_err(js_error)?.1)
         }
 
         #[wasm_bindgen(getter, js_name = wireRotation)]
-        pub fn wire_rotation(&self) -> f64 {
-            self.handle.wire_rotation()
+        pub fn wire_rotation(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.wire_rotation().map_err(js_error)?)
         }
 
         #[wasm_bindgen(getter, js_name = wireHasFill)]
-        pub fn wire_has_fill(&self) -> bool {
-            self.handle.wire_fill().is_some()
+        pub fn wire_has_fill(&self) -> Result<bool, JsValue> {
+            Ok(self.handle.wire_fill().map_err(js_error)?.is_some())
         }
 
         #[wasm_bindgen(getter, js_name = wireFillRed)]
-        pub fn wire_fill_red(&self) -> f64 {
-            self.handle.wire_fill().map_or(0.0, |value| value.0)
+        pub fn wire_fill_red(&self) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .wire_fill()
+                .map_err(js_error)?
+                .map_or(0.0, |value| value.0))
         }
 
         #[wasm_bindgen(getter, js_name = wireFillGreen)]
-        pub fn wire_fill_green(&self) -> f64 {
-            self.handle.wire_fill().map_or(0.0, |value| value.1)
+        pub fn wire_fill_green(&self) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .wire_fill()
+                .map_err(js_error)?
+                .map_or(0.0, |value| value.1))
         }
 
         #[wasm_bindgen(getter, js_name = wireFillBlue)]
-        pub fn wire_fill_blue(&self) -> f64 {
-            self.handle.wire_fill().map_or(0.0, |value| value.2)
+        pub fn wire_fill_blue(&self) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .wire_fill()
+                .map_err(js_error)?
+                .map_or(0.0, |value| value.2))
         }
 
         #[wasm_bindgen(getter, js_name = wireFillAlpha)]
-        pub fn wire_fill_alpha(&self) -> f64 {
-            self.handle.wire_fill().map_or(0.0, |value| value.3)
+        pub fn wire_fill_alpha(&self) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .wire_fill()
+                .map_err(js_error)?
+                .map_or(0.0, |value| value.3))
         }
 
         #[wasm_bindgen(getter, js_name = wireHasStroke)]
-        pub fn wire_has_stroke(&self) -> bool {
-            self.handle.wire_stroke().is_some()
+        pub fn wire_has_stroke(&self) -> Result<bool, JsValue> {
+            Ok(self.handle.wire_stroke().map_err(js_error)?.is_some())
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeRed)]
-        pub fn wire_stroke_red(&self) -> f64 {
-            self.handle.wire_stroke().map_or(0.0, |value| value.0)
+        pub fn wire_stroke_red(&self) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .wire_stroke()
+                .map_err(js_error)?
+                .map_or(0.0, |value| value.0))
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeGreen)]
-        pub fn wire_stroke_green(&self) -> f64 {
-            self.handle.wire_stroke().map_or(0.0, |value| value.1)
+        pub fn wire_stroke_green(&self) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .wire_stroke()
+                .map_err(js_error)?
+                .map_or(0.0, |value| value.1))
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeBlue)]
-        pub fn wire_stroke_blue(&self) -> f64 {
-            self.handle.wire_stroke().map_or(0.0, |value| value.2)
+        pub fn wire_stroke_blue(&self) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .wire_stroke()
+                .map_err(js_error)?
+                .map_or(0.0, |value| value.2))
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeAlpha)]
-        pub fn wire_stroke_alpha(&self) -> f64 {
-            self.handle.wire_stroke().map_or(0.0, |value| value.3)
+        pub fn wire_stroke_alpha(&self) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .wire_stroke()
+                .map_err(js_error)?
+                .map_or(0.0, |value| value.3))
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeWidth)]
-        pub fn wire_stroke_width(&self) -> f64 {
-            self.handle.wire_stroke_width()
+        pub fn wire_stroke_width(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.wire_stroke_width().map_err(js_error)?)
         }
 
         #[wasm_bindgen(getter, js_name = wireObjectOpacity)]
-        pub fn wire_object_opacity(&self) -> f64 {
-            self.handle.wire_object_opacity()
+        pub fn wire_object_opacity(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.wire_object_opacity().map_err(js_error)?)
         }
 
         #[wasm_bindgen(js_name = replaceSnapshotJson)]
         pub fn replace_snapshot_json(&mut self, snapshot_json: &str) -> Result<(), JsValue> {
-            self.handle.replace_json(snapshot_json).map_err(js_error)
+            let snapshot = serde_json::from_str(snapshot_json)
+                .map_err(|error| js_error(format!("invalid mobject snapshot: {error}")))?;
+            noon::legacy::replace_mobject_snapshot(&mut self.handle, snapshot).map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = centerX)]
-        pub fn center_x(&self) -> f64 {
-            self.handle.center().0
+        pub fn center_x(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.center().map_err(js_error)?.0)
         }
 
         #[wasm_bindgen(getter, js_name = centerY)]
-        pub fn center_y(&self) -> f64 {
-            self.handle.center().1
+        pub fn center_y(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.center().map_err(js_error)?.1)
         }
 
         #[wasm_bindgen(getter)]
-        pub fn width(&self) -> f64 {
-            self.handle.width()
+        pub fn width(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.width().map_err(js_error)?)
         }
 
         #[wasm_bindgen(getter)]
-        pub fn height(&self) -> f64 {
-            self.handle.height()
+        pub fn height(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.height().map_err(js_error)?)
         }
 
         #[wasm_bindgen(js_name = criticalX)]
-        pub fn critical_x(&self, direction_x: f64, direction_y: f64) -> f64 {
-            self.handle.critical_point(direction_x, direction_y).0
+        pub fn critical_x(&self, direction_x: f64, direction_y: f64) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .critical_point(direction_x, direction_y)
+                .map_err(js_error)?
+                .0)
         }
 
         #[wasm_bindgen(js_name = criticalY)]
-        pub fn critical_y(&self, direction_x: f64, direction_y: f64) -> f64 {
-            self.handle.critical_point(direction_x, direction_y).1
+        pub fn critical_y(&self, direction_x: f64, direction_y: f64) -> Result<f64, JsValue> {
+            Ok(self
+                .handle
+                .critical_point(direction_x, direction_y)
+                .map_err(js_error)?
+                .1)
         }
 
         pub fn shift(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
@@ -2986,8 +1971,8 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = disableFill)]
-        pub fn disable_fill(&mut self) {
-            self.handle.disable_fill();
+        pub fn disable_fill(&mut self) -> Result<(), JsValue> {
+            self.handle.disable_fill().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setFillColor)]
@@ -3022,13 +2007,13 @@ mod wasm {
         }
 
         #[wasm_bindgen(getter, js_name = fillOpacity)]
-        pub fn fill_opacity(&self) -> f64 {
-            self.handle.fill_opacity()
+        pub fn fill_opacity(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.fill_opacity().map_err(js_error)?)
         }
 
         #[wasm_bindgen(js_name = disableStroke)]
-        pub fn disable_stroke(&mut self) {
-            self.handle.disable_stroke();
+        pub fn disable_stroke(&mut self) -> Result<(), JsValue> {
+            self.handle.disable_stroke().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStrokeColor)]
@@ -3055,8 +2040,8 @@ mod wasm {
         }
 
         #[wasm_bindgen(getter, js_name = strokeOpacity)]
-        pub fn stroke_opacity(&self) -> f64 {
-            self.handle.stroke_opacity()
+        pub fn stroke_opacity(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.stroke_opacity().map_err(js_error)?)
         }
 
         #[wasm_bindgen(js_name = setOpacity)]
@@ -3065,8 +2050,8 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = becomeHandle)]
-        pub fn become_handle(&mut self, other: &WasmAuthoringMobjectHandle) {
-            self.handle.become_handle(&other.handle);
+        pub fn become_handle(&mut self, other: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
+            self.handle.become_handle(&other.handle).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = replaceHandle)]
@@ -3152,7 +2137,10 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, ObjectSnapshot, Transform2D, VectorPath};
+    use noon_core::{
+        Color, GeometryRef, ObjectSnapshot, StrokeCap, StrokeJoin, StrokeWidthMode, Transform2D,
+        Vec2, VectorPath,
+    };
 
     use super::*;
 
@@ -3221,123 +2209,216 @@ mod tests {
 
     #[test]
     fn handle_mutations_keep_state_in_shared_rust_semantics() {
-        let mut handle = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(1.0)));
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let mut handle = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::circle(1.0)),
+        )
+        .unwrap();
         handle.shift(2.0, -1.0).unwrap();
         handle.scale(1.5, 0.5).unwrap();
-        assert_eq!(handle.center(), (2.0, -1.0));
-        assert_eq!(handle.width(), 3.0);
-        assert_eq!(handle.height(), 1.0);
+        assert_eq!(handle.center().unwrap(), (2.0, -1.0));
+        assert_eq!(handle.width().unwrap(), 3.0);
+        assert_eq!(handle.height().unwrap(), 1.0);
         assert_eq!(
-            handle.snapshot().transform.translation,
+            noon::legacy::export_mobject_snapshot(&handle)
+                .unwrap()
+                .transform
+                .translation,
             Vec2::new(2.0, -1.0)
         );
     }
 
     #[test]
     fn authoring_transform_keeps_f64_precision_until_render_lowering() {
-        let mut handle =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 1.0)));
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let mut handle = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::rectangle(2.0, 1.0)),
+        )
+        .unwrap();
         handle.shift(0.7, 0.3).unwrap();
-        assert_eq!(handle.semantic_transform.translation.x, 0.7);
-        assert_eq!(handle.semantic_transform.translation.y, 0.3);
-        assert!((handle.critical_point(-1.0, 0.0).0 + 0.3).abs() < 1e-12);
-        assert!((handle.critical_point(0.0, 1.0).1 - 0.8).abs() < 1e-12);
-        assert_ne!(f64::from(handle.snapshot().transform.translation.x), 0.7);
+        assert_eq!(handle.state().unwrap().transform.translation.x, 0.7);
+        assert_eq!(handle.state().unwrap().transform.translation.y, 0.3);
+        assert!((handle.critical_point(-1.0, 0.0).unwrap().0 + 0.3).abs() < 1e-12);
+        assert!((handle.critical_point(0.0, 1.0).unwrap().1 - 0.8).abs() < 1e-12);
+        assert_ne!(
+            f64::from(
+                noon::legacy::export_mobject_snapshot(&handle)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x
+            ),
+            0.7
+        );
 
         handle.scale(1.1, 0.9).unwrap();
         handle.rotate(0.2).unwrap();
-        assert_eq!(handle.semantic_transform.scale.x, 1.1);
-        assert_eq!(handle.semantic_transform.scale.y, 0.9);
-        assert_eq!(handle.semantic_transform.rotation_z, 0.2);
+        assert_eq!(handle.state().unwrap().transform.scale.x, 1.1);
+        assert_eq!(handle.state().unwrap().transform.scale.y, 0.9);
+        assert_eq!(handle.state().unwrap().transform.rotation_z, 0.2);
     }
 
     #[test]
     fn pivoted_rotation_preserves_offset_line_center() {
-        let mut handle = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::line(
-            Vec2::ZERO,
-            Vec2::new(1.0, 0.0),
-        )));
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let mut handle = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 0.0))),
+        )
+        .unwrap();
         handle.shift(2.0, 0.0).unwrap();
-        let pivot = handle.center();
+        let pivot = handle.center().unwrap();
         assert!((pivot.0 - 2.5).abs() < 1e-12);
         assert!(pivot.1.abs() < 1e-12);
         handle
             .rotate_about_point(std::f64::consts::FRAC_PI_2, pivot.0, pivot.1)
             .unwrap();
-        let center = handle.center();
+        let center = handle.center().unwrap();
         assert!((center.0 - 2.5).abs() < 1e-9);
         assert!(center.1.abs() < 1e-9);
-        assert!((handle.semantic_transform.translation.x - 2.5).abs() < 1e-12);
-        assert!((handle.semantic_transform.translation.y + 0.5).abs() < 1e-12);
-        assert!((handle.semantic_transform.rotation_z - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert!((handle.state().unwrap().transform.translation.x - 2.5).abs() < 1e-12);
+        assert!((handle.state().unwrap().transform.translation.y + 0.5).abs() < 1e-12);
+        assert!(
+            (handle.state().unwrap().transform.rotation_z - std::f64::consts::FRAC_PI_2).abs()
+                < 1e-12
+        );
     }
 
     #[test]
     fn vector_path_layout_uses_extrema_not_control_hull() {
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
         let path = VectorPath::new()
             .move_to(Vec2::new(-1.0, 0.0))
             .quadratic_to(Vec2::new(0.0, 2.0), Vec2::new(1.0, 0.0));
-        let handle = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::path(path)));
-        let bounds = handle.layout_bounds().unwrap();
+        let handle = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::path(path)),
+        )
+        .unwrap();
+        let bounds = handle.layout_bounds().unwrap().unwrap();
         assert!((bounds.min_x + 1.0).abs() < 1e-9);
         assert!((bounds.max_x - 1.0).abs() < 1e-9);
         assert!(bounds.min_y.abs() < 1e-9);
         assert!((bounds.max_y - 1.0).abs() < 1e-9);
-        assert!((handle.height() - 1.0).abs() < 1e-9);
+        assert!((handle.height().unwrap() - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn transformed_layout_bounds_match_manim_world_extrema() {
-        let mut ellipse = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(1.0)));
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let mut ellipse = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::circle(1.0)),
+        )
+        .unwrap();
         ellipse.scale(2.0, 1.0).unwrap();
         ellipse.rotate(std::f64::consts::FRAC_PI_4).unwrap();
-        assert!((ellipse.width() - 10.0_f64.sqrt()).abs() < 1e-12);
-        assert!((ellipse.height() - 10.0_f64.sqrt()).abs() < 1e-12);
+        assert!((ellipse.width().unwrap() - 10.0_f64.sqrt()).abs() < 1e-12);
+        assert!((ellipse.height().unwrap() - 10.0_f64.sqrt()).abs() < 1e-12);
 
-        let mut diagonal = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::line(
-            Vec2::ZERO,
-            Vec2::new(1.0, 1.0),
-        )));
+        let mut diagonal = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 1.0))),
+        )
+        .unwrap();
         diagonal.rotate(std::f64::consts::FRAC_PI_4).unwrap();
-        assert!(diagonal.width().abs() < 1e-12);
-        assert!((diagonal.height() - 2.0_f64.sqrt()).abs() < 1e-12);
+        assert!(diagonal.width().unwrap().abs() < 1e-12);
+        assert!((diagonal.height().unwrap() - 2.0_f64.sqrt()).abs() < 1e-12);
 
         let path = VectorPath::new()
             .move_to(Vec2::new(-1.0, 0.0))
             .quadratic_to(Vec2::new(0.0, 2.0), Vec2::new(1.0, 0.0));
-        let mut curve = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::path(path)));
+        let mut curve = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::path(path)),
+        )
+        .unwrap();
         curve.rotate(std::f64::consts::FRAC_PI_4).unwrap();
         let expected = 9.0 * 2.0_f64.sqrt() / 8.0;
-        assert!((curve.width() - expected).abs() < 1e-12);
-        assert!((curve.height() - expected).abs() < 1e-12);
+        assert!((curve.width().unwrap() - expected).abs() < 1e-12);
+        assert!((curve.height().unwrap() - expected).abs() < 1e-12);
     }
 
     #[test]
     fn manim_primitive_constructors_own_geometry_and_cairo_defaults() {
-        let circle = FrontendMobjectHandle::manim_circle(1.5).unwrap();
-        assert_eq!(circle.snapshot().geometry, GeometryRef::circle(1.5));
-        let fill = circle.snapshot().style.fill.unwrap();
-        let stroke = circle.snapshot().style.stroke.unwrap();
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let circle = Mobject::manim_circle(std::rc::Rc::clone(&authoring_store), 1.5).unwrap();
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&circle)
+                .unwrap()
+                .geometry,
+            GeometryRef::circle(1.5)
+        );
+        let fill = noon::legacy::export_mobject_snapshot(&circle)
+            .unwrap()
+            .style
+            .fill
+            .unwrap();
+        let stroke = noon::legacy::export_mobject_snapshot(&circle)
+            .unwrap()
+            .style
+            .stroke
+            .unwrap();
         assert_eq!(fill.red, Color::RED.red);
         assert_eq!(fill.alpha, 0.0);
         assert_eq!(stroke.red, Color::RED.red);
         assert_eq!(stroke.alpha, 1.0);
-        assert_eq!(circle.snapshot().style.stroke_width, 0.04);
         assert_eq!(
-            circle.snapshot().style.stroke_width_mode,
+            noon::legacy::export_mobject_snapshot(&circle)
+                .unwrap()
+                .style
+                .stroke_width,
+            0.04
+        );
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&circle)
+                .unwrap()
+                .style
+                .stroke_width_mode,
             StrokeWidthMode::ScreenSpace
         );
-        assert_eq!(circle.snapshot().style.stroke_join, StrokeJoin::Miter);
-        assert_eq!(circle.snapshot().style.stroke_cap, StrokeCap::Butt);
-
-        let line = FrontendMobjectHandle::manim_line(-2.0, 1.0, 3.0, -1.0).unwrap();
         assert_eq!(
-            line.snapshot().geometry,
+            noon::legacy::export_mobject_snapshot(&circle)
+                .unwrap()
+                .style
+                .stroke_join,
+            StrokeJoin::Miter
+        );
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&circle)
+                .unwrap()
+                .style
+                .stroke_cap,
+            StrokeCap::Butt
+        );
+
+        let line = Mobject::manim_line(std::rc::Rc::clone(&authoring_store), -2.0, 1.0, 3.0, -1.0)
+            .unwrap();
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&line)
+                .unwrap()
+                .geometry,
             GeometryRef::line(Vec2::new(-2.0, 1.0), Vec2::new(3.0, -1.0))
         );
-        assert_eq!(line.snapshot().style.stroke.unwrap().red, Color::WHITE.red);
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&line)
+                .unwrap()
+                .style
+                .stroke
+                .unwrap()
+                .red,
+            Color::WHITE.red
+        );
 
-        let mut square = FrontendMobjectHandle::manim_square(2.0).unwrap();
+        let mut square = Mobject::manim_square(std::rc::Rc::clone(&authoring_store), 2.0).unwrap();
         square.set_translation(2.0, 3.0).unwrap();
         square.set_scale(2.0, 0.5).unwrap();
         square.set_rotation(0.4).unwrap();
@@ -3345,27 +2426,57 @@ mod tests {
         square.set_stroke_join("bevel").unwrap();
         square.set_stroke_cap("square").unwrap();
         square.set_object_opacity(0.8).unwrap();
-        assert_eq!(square.wire_translation(), (2.0, 3.0));
-        assert_eq!(square.wire_scale(), (2.0, 0.5));
-        assert!((square.wire_rotation() - 0.4_f32 as f64).abs() < 1e-7);
+        assert_eq!(square.wire_translation().unwrap(), (2.0, 3.0));
+        assert_eq!(square.wire_scale().unwrap(), (2.0, 0.5));
+        assert!((square.wire_rotation().unwrap() - 0.4_f32 as f64).abs() < 1e-7);
         assert_eq!(
-            square.snapshot().style.stroke_width_mode,
+            noon::legacy::export_mobject_snapshot(&square)
+                .unwrap()
+                .style
+                .stroke_width_mode,
             StrokeWidthMode::ScaleWithObject
         );
-        assert_eq!(square.snapshot().style.stroke_join, StrokeJoin::Bevel);
-        assert_eq!(square.snapshot().style.stroke_cap, StrokeCap::Square);
-        assert_eq!(square.snapshot().style.opacity, 0.8);
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&square)
+                .unwrap()
+                .style
+                .stroke_join,
+            StrokeJoin::Bevel
+        );
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&square)
+                .unwrap()
+                .style
+                .stroke_cap,
+            StrokeCap::Square
+        );
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&square)
+                .unwrap()
+                .style
+                .opacity,
+            0.8
+        );
     }
 
     #[test]
     fn layout_operations_are_shared_and_deterministic() {
-        let left = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.5)));
-        let mut right =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(1.0, 1.0)));
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let left = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::circle(0.5)),
+        )
+        .unwrap();
+        let mut right = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::rectangle(1.0, 1.0)),
+        )
+        .unwrap();
         right.next_to_handle(&left, 1.0, 0.0, 0.25).unwrap();
-        assert!((right.center().0 - 1.25).abs() < 1e-9);
+        assert!((right.center().unwrap().0 - 1.25).abs() < 1e-9);
         right.align_on_frame(1.0, 1.0, 0.5).unwrap();
-        let bounds = right.layout_bounds().unwrap();
+        let bounds = right.layout_bounds().unwrap().unwrap();
         assert!(
             (bounds.max_x - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - 0.5)).abs() < 1e-6
         );
@@ -3376,10 +2487,18 @@ mod tests {
 
     #[test]
     fn manim_leaf_placement_preserves_raw_direction_edges_and_masks() {
-        let reference =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 2.0)));
-        let mut diagonal =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 2.0)));
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let reference = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::rectangle(2.0, 2.0)),
+        )
+        .unwrap();
+        let mut diagonal = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::rectangle(2.0, 2.0)),
+        )
+        .unwrap();
         diagonal
             .manim_next_to_handle(
                 &reference,
@@ -3391,66 +2510,104 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!((diagonal.center().0 - 2.25).abs() < 1e-12);
-        assert!((diagonal.center().1 - 2.25).abs() < 1e-12);
+        assert!((diagonal.center().unwrap().0 - 2.25).abs() < 1e-12);
+        assert!((diagonal.center().unwrap().1 - 2.25).abs() < 1e-12);
 
-        let mut moved =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(1.0, 1.0)));
+        let mut moved = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::rectangle(1.0, 1.0)),
+        )
+        .unwrap();
         moved.shift(0.0, -2.0).unwrap();
         moved
             .manim_move_to_handle(&reference, -1.0, 1.0, 1.0, 0.0)
             .unwrap();
-        assert!((moved.center().0 + 0.5).abs() < 1e-12);
-        assert!((moved.center().1 + 2.0).abs() < 1e-12);
+        assert!((moved.center().unwrap().0 + 0.5).abs() < 1e-12);
+        assert!((moved.center().unwrap().1 + 2.0).abs() < 1e-12);
 
-        let mut aligned =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(1.0, 1.0)));
+        let mut aligned = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::rectangle(1.0, 1.0)),
+        )
+        .unwrap();
         aligned.shift(0.0, -1.0).unwrap();
         aligned.align_to_handle(&reference, 1.0, 0.0).unwrap();
-        assert!((aligned.center().0 - 0.5).abs() < 1e-12);
-        assert!((aligned.center().1 + 1.0).abs() < 1e-12);
+        assert!((aligned.center().unwrap().0 - 0.5).abs() < 1e-12);
+        assert!((aligned.center().unwrap().1 + 1.0).abs() < 1e-12);
     }
 
     #[test]
     fn shared_style_mutations_preserve_independent_channels() {
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
         let mut value = snapshot(GeometryRef::circle(1.0));
         value.style.fill = Some(Color::rgba(1.0, 0.0, 0.0, 0.4));
         value.style.stroke = Some(Color::rgba(0.0, 0.0, 1.0, 0.7));
-        let mut handle = FrontendMobjectHandle::from_snapshot(value);
+        let mut handle =
+            noon::legacy::import_mobject_snapshot(std::rc::Rc::clone(&authoring_store), value)
+                .unwrap();
 
         handle.set_fill_color(0.0, 1.0, 0.0, 1.0).unwrap();
-        assert!((handle.fill_opacity() - 0.4).abs() < 1e-6);
+        assert!((handle.fill_opacity().unwrap() - 0.4).abs() < 1e-6);
         handle.set_fill_opacity(0.25).unwrap();
         handle.set_stroke_width(3.5).unwrap();
         handle.set_stroke_opacity(0.6).unwrap();
-        assert_eq!(handle.fill_opacity(), 0.25);
-        assert_eq!(handle.stroke_opacity(), 0.6);
-        assert!((handle.snapshot().style.stroke_width - 3.5).abs() < 1e-6);
-        assert!((handle.snapshot().style.stroke.unwrap().alpha - 0.6).abs() < 1e-6);
+        assert_eq!(handle.fill_opacity().unwrap(), 0.25);
+        assert_eq!(handle.stroke_opacity().unwrap(), 0.6);
+        assert!(
+            (noon::legacy::export_mobject_snapshot(&handle)
+                .unwrap()
+                .style
+                .stroke_width
+                - 3.5)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (noon::legacy::export_mobject_snapshot(&handle)
+                .unwrap()
+                .style
+                .stroke
+                .unwrap()
+                .alpha
+                - 0.6)
+                .abs()
+                < 1e-6
+        );
 
         handle.set_opacity(0.2).unwrap();
-        assert_eq!(handle.fill_opacity(), 0.2);
-        assert_eq!(handle.stroke_opacity(), 0.2);
-        handle.disable_fill();
-        assert_eq!(handle.fill_opacity(), 0.0);
+        assert_eq!(handle.fill_opacity().unwrap(), 0.2);
+        assert_eq!(handle.stroke_opacity().unwrap(), 0.2);
+        handle.disable_fill().unwrap();
+        assert_eq!(handle.fill_opacity().unwrap(), 0.0);
     }
 
     #[test]
     fn target_editor_alias_supports_moving_around_without_snapshot_round_trips() {
-        let base = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(1.0)));
-        let mut target = base.target_editor();
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let base = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::circle(1.0)),
+        )
+        .unwrap();
+        let mut target = base.target_editor().unwrap();
 
         target.shift(-1.0, 0.0).unwrap();
         target.set_fill(1.0, 0.525, 0.184, 0.5).unwrap();
         target.scale(0.3, 0.3).unwrap();
         target.rotate(0.4).unwrap();
 
-        assert_eq!(base.center(), (0.0, 0.0));
-        assert_eq!(target.semantic_transform.translation.x, -1.0);
-        assert_eq!(target.semantic_transform.scale.x, 0.3);
-        assert_eq!(target.semantic_transform.rotation_z, 0.4);
-        assert_eq!(target.fill_opacity(), 0.5);
-        let fill = target.snapshot().style.fill.unwrap();
+        assert_eq!(base.center().unwrap(), (0.0, 0.0));
+        assert_eq!(target.state().unwrap().transform.translation.x, -1.0);
+        assert_eq!(target.state().unwrap().transform.scale.x, 0.3);
+        assert_eq!(target.state().unwrap().transform.rotation_z, 0.4);
+        assert_eq!(target.fill_opacity().unwrap(), 0.5);
+        let fill = noon::legacy::export_mobject_snapshot(&target)
+            .unwrap()
+            .style
+            .fill
+            .unwrap();
         assert_eq!(fill.red, 1.0);
         assert_eq!(fill.green, 0.525);
         assert_eq!(fill.blue, 0.184);
@@ -3459,22 +2616,32 @@ mod tests {
 
     #[test]
     fn target_editor_clone_alias_is_independent_and_set_fill_is_transactional() {
-        let base = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(1.0)));
-        let mut target = base.target_editor();
-        let sibling = target.target_editor();
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let base = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::circle(1.0)),
+        )
+        .unwrap();
+        let mut target = base.target_editor().unwrap();
+        let sibling = target.target_editor().unwrap();
 
         target.shift(2.0, 0.0).unwrap();
         target.set_fill(0.0, 1.0, 0.0, 0.25).unwrap();
-        assert_eq!(base.center(), (0.0, 0.0));
-        assert_eq!(sibling.center(), (0.0, 0.0));
-        assert_eq!(sibling.fill_opacity(), 1.0);
-        let sibling_fill = sibling.snapshot().style.fill.unwrap();
+        assert_eq!(base.center().unwrap(), (0.0, 0.0));
+        assert_eq!(sibling.center().unwrap(), (0.0, 0.0));
+        assert_eq!(sibling.fill_opacity().unwrap(), 1.0);
+        let sibling_fill = noon::legacy::export_mobject_snapshot(&sibling)
+            .unwrap()
+            .style
+            .fill
+            .unwrap();
         assert_eq!(sibling_fill.red, 1.0);
         assert_eq!(sibling_fill.green, 1.0);
 
-        let before = target.clone();
+        let before = target.state().unwrap();
         assert!(target.set_fill(1.0, 0.0, 0.0, 2.0).is_err());
-        assert_eq!(target, before);
+        assert_eq!(target.state().unwrap(), before);
     }
 
     #[test]
@@ -3506,6 +2673,8 @@ mod tests {
 
     #[test]
     fn family_translation_uses_shared_recursive_leaf_order() {
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
         let mut store = SemanticStore::new();
         let first = store.insert_authoring_object();
         let second = store.insert_authoring_object();
@@ -3515,10 +2684,12 @@ mod tests {
         store.add_member(outer, nested).unwrap();
         store.add_member(outer, second).unwrap();
 
-        let mut first_handle = FrontendMobjectHandle::manim_circle(1.0).unwrap();
-        let mut second_handle = FrontendMobjectHandle::manim_square(2.0).unwrap();
-        let first_before = first_handle.center();
-        let second_before = second_handle.center();
+        let mut first_handle =
+            Mobject::manim_circle(std::rc::Rc::clone(&authoring_store), 1.0).unwrap();
+        let mut second_handle =
+            Mobject::manim_square(std::rc::Rc::clone(&authoring_store), 2.0).unwrap();
+        let first_before = first_handle.center().unwrap();
+        let second_before = second_handle.center().unwrap();
 
         let mut translation = FrontendFamilyTranslation::begin(&store, outer, 2.5, -1.25).unwrap();
         translation.apply(first, &mut first_handle).unwrap();
@@ -3526,11 +2697,11 @@ mod tests {
         translation.finish().unwrap();
 
         assert_eq!(
-            first_handle.center(),
+            first_handle.center().unwrap(),
             (first_before.0 + 2.5, first_before.1 - 1.25)
         );
         assert_eq!(
-            second_handle.center(),
+            second_handle.center().unwrap(),
             (second_before.0 + 2.5, second_before.1 - 1.25)
         );
 
@@ -3603,36 +2774,58 @@ mod tests {
 
     #[test]
     fn become_and_replace_keep_state_inside_shared_handle() {
-        let mut source = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.5)));
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let mut source = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::circle(0.5)),
+        )
+        .unwrap();
         source.shift(-2.0, 0.5).unwrap();
-        let mut target =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 1.0)));
+        let mut target = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::rectangle(2.0, 1.0)),
+        )
+        .unwrap();
         target.shift(1.0, -0.25).unwrap();
 
-        source.become_handle(&target);
-        assert_eq!(source.snapshot(), target.snapshot());
+        source.become_handle(&target).unwrap();
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&source).unwrap(),
+            noon::legacy::export_mobject_snapshot(&target).unwrap()
+        );
 
-        let mut replacement =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.25)));
+        let mut replacement = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::circle(0.25)),
+        )
+        .unwrap();
         replacement.replace_handle(&target, 0, false).unwrap();
-        assert!((replacement.width() - 2.0).abs() < 1e-6);
-        assert!((replacement.height() - 2.0).abs() < 1e-6);
-        assert!((replacement.center().0 - 1.0).abs() < 1e-6);
-        assert!((replacement.center().1 + 0.25).abs() < 1e-6);
+        assert!((replacement.width().unwrap() - 2.0).abs() < 1e-6);
+        assert!((replacement.height().unwrap() - 2.0).abs() < 1e-6);
+        assert!((replacement.center().unwrap().0 - 1.0).abs() < 1e-6);
+        assert!((replacement.center().unwrap().1 + 0.25).abs() < 1e-6);
 
-        let mut stretched =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.25)));
+        let mut stretched = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::circle(0.25)),
+        )
+        .unwrap();
         stretched.replace_handle(&target, 0, true).unwrap();
-        assert!((stretched.width() - 2.0).abs() < 1e-6);
-        assert!((stretched.height() - 1.0).abs() < 1e-6);
+        assert!((stretched.width().unwrap() - 2.0).abs() < 1e-6);
+        assert!((stretched.height().unwrap() - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn wire_projection_matches_lowered_snapshot_after_shared_edits() {
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
         let mut value = snapshot(GeometryRef::rectangle(2.0, 1.0));
         value.style.fill = Some(Color::rgba(0.2, 0.3, 0.4, 0.5));
         value.style.stroke = Some(Color::rgba(0.6, 0.7, 0.8, 0.9));
-        let mut handle = FrontendMobjectHandle::from_snapshot(value);
+        let mut handle =
+            noon::legacy::import_mobject_snapshot(std::rc::Rc::clone(&authoring_store), value)
+                .unwrap();
 
         handle.shift(0.7, -0.3).unwrap();
         handle.scale(1.1, 0.9).unwrap();
@@ -3640,35 +2833,48 @@ mod tests {
         handle.set_fill_opacity(0.25).unwrap();
         handle.set_stroke_width(3.5).unwrap();
 
-        let snapshot = handle.snapshot();
+        let snapshot = noon::legacy::export_mobject_snapshot(&handle).unwrap();
         assert_eq!(
-            handle.wire_translation(),
+            handle.wire_translation().unwrap(),
             (
                 f64::from(snapshot.transform.translation.x),
                 f64::from(snapshot.transform.translation.y),
             )
         );
         assert_eq!(
-            handle.wire_scale(),
+            handle.wire_scale().unwrap(),
             (
                 f64::from(snapshot.transform.scale.x),
                 f64::from(snapshot.transform.scale.y),
             )
         );
         assert_eq!(
-            handle.wire_rotation(),
+            handle.wire_rotation().unwrap(),
             f64::from(snapshot.transform.rotation)
         );
-        assert_eq!(handle.wire_fill().unwrap().3, 0.25_f32 as f64);
-        assert_eq!(handle.wire_stroke_width(), 3.5_f32 as f64);
+        assert_eq!(handle.wire_fill().unwrap().unwrap().3, 0.25_f32 as f64);
+        assert_eq!(handle.wire_stroke_width().unwrap(), 3.5_f32 as f64);
     }
 
     #[test]
     fn json_round_trip_preserves_wire_snapshot() {
-        let handle =
-            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 3.0)));
-        let json = handle.snapshot_json().unwrap();
-        let restored = FrontendMobjectHandle::from_json(&json).unwrap();
-        assert_eq!(restored, handle);
+        let authoring_store =
+            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let handle = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            snapshot(GeometryRef::rectangle(2.0, 3.0)),
+        )
+        .unwrap();
+        let json = serde_json::to_string(&noon::legacy::export_mobject_snapshot(&handle).unwrap())
+            .unwrap();
+        let restored = noon::legacy::import_mobject_snapshot(
+            std::rc::Rc::clone(&authoring_store),
+            serde_json::from_str(&json).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            noon::legacy::export_mobject_snapshot(&restored).unwrap(),
+            noon::legacy::export_mobject_snapshot(&handle).unwrap()
+        );
     }
 }

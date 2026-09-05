@@ -112,7 +112,7 @@ const preparationCall = runSceneBody.indexOf(
 const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
 const ensureRuntimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");
 const ensureExecutionCall = runSceneBody.indexOf("await ensureExecutionReady();");
-const reconcileCall = runSceneBody.indexOf("result = await player.reconcileScene(sceneJson,");
+const reconcileCall = runSceneBody.indexOf("await player.reconcileScene(sceneJson,");
 assert.ok(authoringCall >= 0, "Run must author the selected Python source");
 assert.ok(
   preparationCall >= 0 && preparationCall < authoringCall,
@@ -133,7 +133,7 @@ assert.ok(
 );
 assert.match(
   runSceneBody,
-  /const startRetained = sceneSpecJson !== null;/,
+  /const startRetained = semanticExecution === null && sceneSpecJson !== null;/,
   "first-run retained engine selection must derive from canonical SceneSpec availability",
 );
 assert.doesNotMatch(

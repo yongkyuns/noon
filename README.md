@@ -64,23 +64,28 @@ class Demo(Scene):
         self.wait(0.5)
 ```
 
-Equivalent Rust authoring uses the same object, animation, timing, layout, signal, and interaction model expressed idiomatically:
+The public Rust `Scene` and `Mobject` API authors directly into the same semantic store used by the WASM handles:
 
 ```rust
-use noon::prelude::*;
+use noon::Scene;
 
 let mut scene = Scene::new();
-let circle = scene.add(Circle::new(0.6).color(BLUE).shift(LEFT * 2.0));
-let square = scene.add(Square::new(1.2).color(PINK));
-scene.edit(square)?.next_to(circle, RIGHT, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER)?;
-
-scene
-    .play((circle.animate().shift(RIGHT * 2.0), square.animate().rotate(45.0 * DEGREES)))
-    .run_time(2.0)?;
-scene
-    .play(Transform::new(circle, Square::new(1.4).color(PURPLE)))
-    .run_time(1.5)?;
+let mut circle = scene.circle(0.6)?;
+circle.shift(-2.0, 0.0)?;
+circle.set_fill(0.0, 0.0, 1.0, 0.5)?;
+let mut square = scene.square(1.2)?;
+square.next_to_handle(&circle, 1.0, 0.0, 0.25)?;
+scene.add(&circle)?;
+scene.add(&square)?;
+let session = scene.execution_session()?;
+assert_eq!(session.frame().objects.len(), 2);
 ```
+
+This is an intentional source API change: constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for an executable static and affine animation example using typed lowering and runtime execution.
+
+The older fluent snapshot authoring API is available explicitly through `noon::legacy`, including `noon::legacy::prelude`; it is migration code owned for deletion by #959. Its advanced animation examples have not yet all moved to the canonical public API. Initial membership changes prepare subsequent sessions; they do not implicitly mutate an already running session.
+
+Static Python geometry scenes now execute directly from their shared semantic handles. The browser sends execution deltas across the renderer worker boundary without exporting a scene document. Python animation, text and callback scenes still use migration code until their shared execution and continuation contracts are complete. Document-oriented tools can explicitly request `exportDocument: true` from `PythonAuthoringClient.run`.
 
 The API is intentionally mutable and interactive. The implementation is not forced to remain dynamic: predetermined animation lowers to compiled tracks, common reactive behavior lowers to a native dependency graph, and only semantics that genuinely require arbitrary host-language execution retain host callback slots.
 

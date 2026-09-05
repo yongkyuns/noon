@@ -24,7 +24,7 @@ assert.ok(runStart >= 0 && runEnd > runStart, "runScene boundary must exist");
 const runBody = main.slice(runStart, runEnd);
 
 const beforeReconcileCheck = runBody.indexOf(
-  'if (!isCurrentRun(runToken)) return recordStale(runToken, "before-reconcile");',
+  'return recordStale(runToken, "before-reconcile");',
 );
 const coldCommitCheck = runBody.indexOf(
   'if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");',

@@ -166,6 +166,7 @@ impl From<CompilePatchError> for ExecutionSessionAnimationError {
 #[derive(Clone, Debug)]
 pub struct ExecutionSession {
     execution_index: SemanticExecutionIndex,
+    slots: noon_runtime::ExecutionSlotTable,
     reactive_projection: SemanticReactiveProjection,
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
@@ -209,10 +210,12 @@ impl ExecutionSession {
             .map(|track| track.id.get())
             .max()
             .map_or(Some(0), |id| id.checked_add(1));
+        let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
         let reactive_projection = lowered.reactive().clone();
         let runtime = SceneInstance::from_semantic_execution(lowered);
         Self {
             execution_index,
+            slots,
             reactive_projection,
             runtime,
             camera_object,
@@ -224,6 +227,16 @@ impl ExecutionSession {
     /// Current renderer-facing runtime frame.
     pub fn frame(&self) -> &FrameState {
         self.runtime.frame()
+    }
+
+    /// Stable runtime identity for an initially lowered row. This session does not
+    /// expose structural mutation; value/timeline changes preserve this slot table.
+    pub fn execution_slot_for_frame_index(
+        &self,
+        index: usize,
+    ) -> Option<noon_runtime::ExecutionSlotId> {
+        let object = self.frame().objects.get(index)?;
+        self.slots.slot_for_object(object.id)
     }
 
     /// Exact authored/executable/effective publication context of this session.

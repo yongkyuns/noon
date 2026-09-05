@@ -1,4 +1,4 @@
-use noon::{
+use noon::legacy::{
     BackgroundRectangle, Cross, IntoSnapshot, SurroundingRectangle, Underline,
     SURROUNDING_RECTANGLE_DEFAULT_COLOR,
 };
@@ -227,7 +227,7 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon::{
+    use noon::legacy::{
         IntoSnapshot, Rectangle, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
         DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_UNDERLINE_BUFF,
     };

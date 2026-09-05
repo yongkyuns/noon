@@ -173,7 +173,7 @@ try {
     });
     worker.addEventListener("message", (event) => {
       const message = event.data;
-      if (message?.channel !== "noon.authoring" || message?.protocolVersion !== 5) {
+      if (message?.channel !== "noon.authoring" || message?.protocolVersion !== 6) {
         const error = new Error("invalid retained text worker envelope");
         rejectReady(error);
         for (const { reject } of pending.values()) reject(error);
@@ -215,11 +215,12 @@ try {
         const result = new Promise((resolve, reject) => pending.set(requestId, { resolve, reject }));
         worker.postMessage({
           channel: "noon.authoring",
-          protocolVersion: 5,
+          protocolVersion: 6,
           type: "run",
           requestId,
           source,
           context: {},
+          exportDocument: true,
         });
         return result;
       },

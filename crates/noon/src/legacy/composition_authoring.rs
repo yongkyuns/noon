@@ -229,7 +229,7 @@ fn schedule_leaf(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Circle, Square, DOWN, RIGHT, UP};
+    use crate::legacy::{Circle, Square, DOWN, RIGHT, UP};
 
     #[test]
     fn linear_animation_group_stays_flattened() {

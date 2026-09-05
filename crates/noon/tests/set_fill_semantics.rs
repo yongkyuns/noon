@@ -1,4 +1,4 @@
-use noon::{Circle, IntoSnapshot, Scene, GREEN, PINK, RED};
+use noon::legacy::{Circle, IntoSnapshot, Scene, GREEN, PINK, RED};
 
 #[test]
 fn shape_set_fill_keeps_stroke_and_object_opacity_independent() {

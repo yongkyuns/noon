@@ -450,8 +450,11 @@ impl SemanticStore {
     pub fn insert_geometry_path(
         &mut self,
         path: crate::VectorPath,
-    ) -> crate::GeometryResourceHandle {
-        self.geometry_resources.insert_path(path)
+    ) -> Result<crate::GeometryResourceHandle, String> {
+        if !path.is_finite() {
+            return Err("geometry path contains non-finite points".into());
+        }
+        Ok(self.geometry_resources.insert_path(path))
     }
 
     pub fn new() -> Self {
@@ -1198,8 +1201,8 @@ mod tests {
         use std::sync::Arc;
         let mut first = SemanticStore::new();
         let mut second = SemanticStore::new();
-        let a = first.insert_geometry_path(VectorPath::new());
-        let b = second.insert_geometry_path(VectorPath::new());
+        let a = first.insert_geometry_path(VectorPath::new()).unwrap();
+        let b = second.insert_geometry_path(VectorPath::new()).unwrap();
         assert_eq!((a.id, a.version), (b.id, b.version));
         assert_ne!(a.arena, b.arena);
         assert!(first.geometry_resources().get(b).is_none());

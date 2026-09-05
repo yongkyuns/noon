@@ -97,13 +97,17 @@ fn invalid_object_state_rolls_back_earlier_mutation_before_allocation() {
 fn unavailable_geometry_resource_is_rejected_before_node_allocation() {
     let mut store = SemanticStore::new();
     let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
-    let valid = store.insert_geometry_path(
-        VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(Vec2::new(1.0, 0.0)),
-    );
+    let valid = store
+        .insert_geometry_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0)),
+        )
+        .unwrap();
     let mut foreign_store = SemanticStore::new();
-    let foreign = foreign_store.insert_geometry_path(VectorPath::new().move_to(Vec2::ZERO));
+    let foreign = foreign_store
+        .insert_geometry_path(VectorPath::new().move_to(Vec2::ZERO))
+        .unwrap();
     let stale = crate::GeometryResourceHandle {
         version: valid.version + 1,
         ..valid
@@ -262,4 +266,34 @@ fn add_node_is_local_with_large_unrelated_scene() {
     ));
     assert_eq!(store.len(), before_len + 1);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
+}
+
+#[test]
+fn invalid_paint_and_inline_geometry_fail_before_any_node_is_published() {
+    let mut store = SemanticStore::new();
+    let mut invalid_paint = object_state(1.0);
+    invalid_paint.style.fill = Some(crate::SemanticPaint::Solid(crate::Color {
+        red: f32::NAN,
+        ..crate::Color::BLUE
+    }));
+    for state in [
+        invalid_paint,
+        object_state(f32::NAN),
+        SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(1.0, f32::INFINITY),
+        }),
+        SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(f32::NAN, 0.0),
+        }),
+    ] {
+        let revision = store.scene_revision();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .add_node(SemanticNodeCreation::object(object_state(1.0)))
+            .add_node(SemanticNodeCreation::object(state));
+        assert!(transaction.apply(&mut store).is_err());
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(store.len(), 0);
+    }
 }

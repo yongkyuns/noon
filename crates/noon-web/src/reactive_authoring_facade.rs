@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use noon::{Circle, Mobject, ReactiveTimelineScene, ValueTracker};
+use noon::legacy::{Circle, Mobject};
+use noon::{ReactiveTimelineScene, ValueTracker};
 use noon_core::{RateFunction, Vec2};
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {

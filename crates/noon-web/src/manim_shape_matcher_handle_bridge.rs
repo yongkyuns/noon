@@ -1,4 +1,4 @@
-use noon::{
+use noon::legacy::{
     BackgroundRectangle, IntoSnapshot, SurroundingRectangle, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
 };
 use noon_core::{Rect, Vec2, BLACK};
@@ -90,6 +90,25 @@ mod wasm {
         JsValue::from_str(&error)
     }
 
+    fn mobject_bounds(handle: &WasmAuthoringMobjectHandle) -> Result<Rect, JsValue> {
+        let object = handle.semantic_mobject();
+        let (center, width, height) = match object.layout_bounds().map_err(js_error)? {
+            Some(bounds) => (
+                (
+                    (bounds.min_x + bounds.max_x) * 0.5,
+                    (bounds.min_y + bounds.max_y) * 0.5,
+                ),
+                bounds.width(),
+                bounds.height(),
+            ),
+            None => {
+                let point = object.state().map_err(js_error)?.transform.translation;
+                ((point.x, point.y), 0.0, 0.0)
+            }
+        };
+        rect_from_center_size(center.0, center.1, width, height).map_err(js_error)
+    }
+
     fn family_bounds(layout: &WasmAuthoringFamilyLayout) -> Result<Rect, JsValue> {
         rect_from_center_size(
             layout.center_x()?,
@@ -109,13 +128,8 @@ mod wasm {
             buff_y: f64,
             corner_radius: f64,
         ) -> Result<String, JsValue> {
-            crate::manim_shape_matcher_bridge::manim_surrounding_rectangle_snapshot_json(
-                &self.snapshot_json()?,
-                buff_x,
-                buff_y,
-                corner_radius,
-            )
-            .map_err(js_error)
+            surrounding_from_bounds_json(mobject_bounds(self)?, buff_x, buff_y, corner_radius)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = backgroundRectangleSnapshotJson)]
@@ -126,8 +140,8 @@ mod wasm {
             corner_radius: f64,
             fill_opacity: f64,
         ) -> Result<String, JsValue> {
-            crate::manim_shape_matcher_bridge::manim_background_rectangle_snapshot_json(
-                &self.snapshot_json()?,
+            background_from_bounds_json(
+                mobject_bounds(self)?,
                 buff_x,
                 buff_y,
                 corner_radius,
@@ -172,7 +186,7 @@ mod wasm {
 
 #[cfg(test)]
 mod tests {
-    use noon::BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY;
+    use noon::legacy::BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY;
     use noon_core::{ObjectSnapshot, Vec2};
 
     use super::*;

@@ -1,0 +1,156 @@
+{
+  "deletion_issue": "#959",
+  "rewritten_imports": {
+    "crates/noon-web/examples/manim_elbow_oracle.rs": {
+      "noon::legacy::Elbow": 1,
+      "noon::legacy::IntoSnapshot": 1
+    },
+    "crates/noon-web/src/authoring_facade.rs": {
+      "noon::legacy::Animate": 1,
+      "noon::legacy::Animation": 1,
+      "noon::legacy::Circle": 1,
+      "noon::legacy::Create": 1,
+      "noon::legacy::FadeIn": 1,
+      "noon::legacy::FadeOut": 1,
+      "noon::legacy::IntoSnapshot": 1,
+      "noon::legacy::Line": 1,
+      "noon::legacy::Mobject": 1,
+      "noon::legacy::Rectangle": 1,
+      "noon::legacy::Rotate": 1,
+      "noon::legacy::Scene": 1,
+      "noon::legacy::Square": 1,
+      "noon::legacy::Transform": 1
+    },
+    "crates/noon-web/src/manim_dashed_line_bridge.rs": {
+      "noon::legacy::DashedLine": 1,
+      "noon::legacy::IntoSnapshot": 1,
+      "noon::legacy::DEFAULT_DASHED_RATIO": 1,
+      "noon::legacy::DEFAULT_DASH_LENGTH": 1
+    },
+    "crates/noon-web/src/manim_elbow_bridge.rs": {
+      "noon::legacy::Elbow": 1,
+      "noon::legacy::IntoSnapshot": 1
+    },
+    "crates/noon-web/src/manim_geometry_bridge.rs": {
+      "noon::legacy::arc_center_from_snapshot": 2,
+      "noon::legacy::arc_end_from_snapshot": 2,
+      "noon::legacy::arc_start_from_snapshot": 2,
+      "noon::legacy::arc_stop_angle_from_snapshot": 1,
+      "noon::legacy::Arc": 1,
+      "noon::legacy::ArcBetweenPoints": 1,
+      "noon::legacy::ArcMetadata": 1,
+      "noon::legacy::Dot": 1,
+      "noon::legacy::IntoSnapshot": 1,
+      "noon::legacy::RoundedRectangle": 1,
+      "noon::legacy::Triangle": 1
+    },
+    "crates/noon-web/src/manim_path_query_bridge.rs": {
+      "noon::legacy::Arc": 1,
+      "noon::legacy::IntoSnapshot": 1
+    },
+    "crates/noon-web/src/manim_sector_bridge.rs": {
+      "noon::legacy::AnnularSector": 1,
+      "noon::legacy::Annulus": 1,
+      "noon::legacy::IntoSnapshot": 1,
+      "noon::legacy::Sector": 1
+    },
+    "crates/noon-web/src/manim_shape_matcher_bridge.rs": {
+      "noon::legacy::BackgroundRectangle": 1,
+      "noon::legacy::Cross": 1,
+      "noon::legacy::IntoSnapshot": 2,
+      "noon::legacy::SurroundingRectangle": 1,
+      "noon::legacy::Underline": 1,
+      "noon::legacy::SURROUNDING_RECTANGLE_DEFAULT_COLOR": 1,
+      "noon::legacy::Rectangle": 1,
+      "noon::legacy::BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY": 1,
+      "noon::legacy::DEFAULT_CROSS_SCALE_FACTOR": 1,
+      "noon::legacy::DEFAULT_CROSS_STROKE_WIDTH": 1,
+      "noon::legacy::DEFAULT_UNDERLINE_BUFF": 1
+    },
+    "crates/noon-web/src/manim_shape_matcher_handle_bridge.rs": {
+      "noon::legacy::BackgroundRectangle": 1,
+      "noon::legacy::IntoSnapshot": 1,
+      "noon::legacy::SurroundingRectangle": 1,
+      "noon::legacy::SURROUNDING_RECTANGLE_DEFAULT_COLOR": 1,
+      "noon::legacy::BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY": 1
+    },
+    "crates/noon-web/src/reactive_authoring_facade.rs": {
+      "noon::legacy::Circle": 1,
+      "noon::legacy::Mobject": 1
+    },
+    "crates/noon-web/tests/manim_shape_matcher_bridge.rs": {
+      "noon::legacy::IntoSnapshot": 1,
+      "noon::legacy::Rectangle": 1,
+      "noon::legacy::BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY": 1
+    },
+    "crates/noon-web/tests/moving_camera_determinism.rs": {
+      "noon::legacy::prelude::*": 1
+    },
+    "crates/noon/examples/cross_language_parity.rs": {
+      "noon::legacy::prelude::*": 1
+    },
+    "crates/noon/examples/manim_gallery_moving_around.rs": {
+      "noon::legacy::prelude::*": 1
+    },
+    "crates/noon/examples/manim_gallery_moving_camera_center.rs": {
+      "noon::legacy::prelude::*": 1
+    },
+    "crates/noon/examples/manim_quickstart_equivalents.rs": {
+      "noon::legacy::prelude::*": 1
+    },
+    "crates/noon/tests/cross_geometry_transform.rs": {
+      "noon::legacy::prelude::*": 1
+    },
+    "crates/noon/tests/manim_gallery_moving_around.rs": {
+      "noon::legacy::prelude::*": 1
+    },
+    "crates/noon/tests/manim_style_defaults.rs": {
+      "noon::legacy::prelude::*": 1
+    },
+    "crates/noon/tests/set_fill_semantics.rs": {
+      "noon::legacy::Circle": 1,
+      "noon::legacy::IntoSnapshot": 1,
+      "noon::legacy::Scene": 1,
+      "noon::legacy::GREEN": 1,
+      "noon::legacy::PINK": 1,
+      "noon::legacy::RED": 1
+    }
+  },
+  "token_budgets": {
+    "crates/noon/src/legacy/semantic_snapshot.rs": {
+      "ObjectSnapshot": 6,
+      "from_legacy": 5
+    },
+    "crates/noon-web/src/authoring_facade.rs": {
+      "ObjectSnapshot": 3,
+      "noon::legacy": 2
+    },
+    "crates/noon-web/src/authoring_mobject.rs": {
+      "ObjectSnapshot": 3,
+      "noon::legacy": 51
+    },
+    "crates/noon-web/src/canonical_authoring_scene.rs": {
+      "ObjectSnapshot": 12,
+      "SceneSpec": 3,
+      "noon::legacy": 3
+    },
+    "crates/noon-core/src/patch.rs": {
+      "ObjectDefinition": 12,
+      "SceneDefinition": 17
+    },
+    "web/authoring-client.js": {
+      "scene_document": 3
+    },
+    "web/authoring-client.test.mjs": {
+      "scene_document": 7,
+      "SceneSpec": 3
+    },
+    "web/python-worker.source.js": {
+      "_manim_canonical_scene": 5
+    }
+  },
+  "adapter_call_sites": [
+    "crates/noon-web/src/authoring_mobject.rs",
+    "crates/noon-web/src/canonical_authoring_scene.rs"
+  ]
+}

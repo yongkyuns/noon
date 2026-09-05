@@ -53,6 +53,7 @@ mod retained_resource_transport;
 mod retained_scene_spec_runtime;
 mod retained_text_family_transport;
 mod retained_typst_canvas;
+mod semantic_execution_player;
 mod semantic_snapshot;
 
 pub use authoring_facade::*;
@@ -107,4 +108,5 @@ pub use retained_resource_transport::*;
 pub use retained_text_family_transport::*;
 #[cfg(target_arch = "wasm32")]
 pub use retained_typst_canvas::*;
+pub use semantic_execution_player::*;
 pub use semantic_snapshot::*;

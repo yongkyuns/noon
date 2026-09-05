@@ -2,6 +2,7 @@ import { ExecutionWorkerClient } from "./execution-worker-client.js";
 
 export const AUTHORING_EXECUTION_LEGACY = "legacy";
 export const AUTHORING_EXECUTION_RETAINED = "retained";
+export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
 
 const SCENE_SPEC_VERSION = 1;
 const DEFAULT_LOOP_DURATION_SECONDS = 4;
@@ -172,6 +173,93 @@ export class AuthoringExecutionClient {
     return ready;
   }
 
+  async startSemanticExecution(
+    descriptor,
+    {
+      authoringClient,
+      loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
+      transportMode = undefined,
+      sharedSlotCapacity = undefined,
+    } = {},
+  ) {
+    if (this.#player !== null || this.#transition !== null) {
+      throw new Error("AuthoringExecutionClient is already started");
+    }
+    const contextId = validateSemanticExecutionDescriptor(descriptor);
+    validateSemanticAuthoringClient(authoringClient);
+    this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
+    this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
+    const options = {
+      loopDurationSeconds: this.#loopDurationSeconds,
+      sharedSlotCapacity: this.#sharedSlotCapacity,
+    };
+    if (transportMode !== undefined) {
+      options.transportMode = transportMode;
+    }
+    const generation = this.#lifecycleGeneration;
+    const player = this.#preparedPlayer ?? this.#createPlayer();
+    const terminateCandidate = createIdempotentTerminator(player);
+    try {
+      const ready = await player.startSemanticExecution(contextId, authoringClient, options);
+      this.#assertLifecycleCurrent(generation, terminateCandidate);
+      if (this.#preparedPlayer === player) {
+        this.#preparedPlayer = null;
+      }
+      this.#player = player;
+      this.#mode = AUTHORING_EXECUTION_SEMANTIC;
+      this.#rendererBackend = ready.render.backend;
+      this.#transportMode = ready.transportMode;
+      this.#resizeCurrentCanvas();
+      return ready;
+    } catch (error) {
+      if (this.#preparedPlayer === player) {
+        this.#preparedPlayer = null;
+      }
+      terminateCandidate();
+      if (generation === this.#lifecycleGeneration) {
+        this.#adoptPlayerCanvas(player);
+      }
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
+      throw error;
+    }
+  }
+
+  async reconcileSemanticExecution(
+    descriptor,
+    { authoringClient, loopDurationSeconds = null } = {},
+  ) {
+    if (this.#transition !== null) {
+      await this.#transition;
+    }
+    this.#requireStarted();
+    const contextId = validateSemanticExecutionDescriptor(descriptor);
+    validateSemanticAuthoringClient(authoringClient);
+    const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
+    if (duration !== null) {
+      this.#loopDurationSeconds = duration;
+    }
+    return this.#runTransition(async () => {
+      const ready = await this.#player.switchToSemanticExecution(contextId, authoringClient, {
+        loopDurationSeconds: duration,
+      });
+      this.#mode = AUTHORING_EXECUTION_SEMANTIC;
+      this.#rendererBackend = ready.render.backend;
+      this.#resizeCurrentCanvas();
+      const state = await this.#player.state();
+      return {
+        type: "result",
+        operation: "rebuild_semantic_execution",
+        incremental: false,
+        rebuilt: true,
+        mode: this.#mode,
+        ready,
+        ...state,
+      };
+    });
+  }
+
   async reconcileScene(
     sceneJson,
     {
@@ -292,7 +380,7 @@ export class AuthoringExecutionClient {
   async applyPatchBatch(patchBatchJson) {
     return this.#withStablePlayer((player, mode) => {
       if (mode !== AUTHORING_EXECUTION_LEGACY) {
-        throw new Error("patch batches are not supported by mixed retained execution yet");
+        throw new Error("patch batches are not supported by this execution mode");
       }
       return player.applyPatchBatch(patchBatchJson);
     });
@@ -645,4 +733,20 @@ function validateSharedSlotCapacity(sharedSlotCapacity) {
     throw new TypeError("shared execution slot capacity must be a positive safe integer");
   }
   return sharedSlotCapacity;
+}
+
+function validateSemanticExecutionDescriptor(descriptor) {
+  if (!descriptor || typeof descriptor !== "object" || Array.isArray(descriptor)) {
+    throw new TypeError("semantic execution descriptor must be an object");
+  }
+  if (typeof descriptor.contextId !== "string" || descriptor.contextId.trim() === "") {
+    throw new TypeError("semantic execution context ID must be a non-empty string");
+  }
+  return descriptor.contextId;
+}
+
+function validateSemanticAuthoringClient(authoringClient) {
+  if (!authoringClient || typeof authoringClient.attachSemanticExecution !== "function") {
+    throw new TypeError("semantic execution requires a Python authoring client");
+  }
 }

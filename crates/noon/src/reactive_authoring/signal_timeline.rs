@@ -6,7 +6,8 @@ use noon_core::{
     Vec2,
 };
 
-use crate::{AuthoringError, BoolSignal, ReactiveScene, ValueTracker, VectorSignal};
+use crate::legacy::AuthoringError;
+use crate::{BoolSignal, ReactiveScene, ValueTracker, VectorSignal};
 
 /// Reactive authoring scene with deterministic timeline-driven tracker inputs and
 /// declarative native browser/runtime inputs.
@@ -273,7 +274,7 @@ mod tests {
     use noon_core::{NativeInputBinding, Property, ReactiveValue, RIGHT};
 
     use super::*;
-    use crate::Circle;
+    use crate::legacy::Circle;
 
     #[test]
     fn tracker_play_uses_shared_cursor_rate_function_and_native_signal_track() {

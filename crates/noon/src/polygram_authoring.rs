@@ -6,7 +6,7 @@
 //! `get_vertices()` and `get_vertex_groups()` to shared Rust semantics.
 
 use crate::legacy::{IntoSnapshot, Path};
-use crate::{Polygon, RegularPolygon, RegularPolygram, Star, Triangle};
+use crate::legacy::{Polygon, RegularPolygon, RegularPolygram, Star, Triangle};
 use noon_core::{Color, GeometryRef, ObjectSnapshot, PathCommand, Vec2, VectorPath, BLUE};
 
 #[derive(Clone, Debug, PartialEq)]

@@ -1,4 +1,4 @@
-use noon::{Elbow, IntoSnapshot};
+use noon::legacy::{Elbow, IntoSnapshot};
 use noon_core::{GeometryRef, ObjectSnapshot, PathCommand, Vec2};
 use serde_json::{json, Map, Value};
 

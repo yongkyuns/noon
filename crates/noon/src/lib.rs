@@ -1,8 +1,7 @@
 //! Ergonomic Rust authoring facade for Noon.
 //!
-//! The established deterministic authoring surface lives in `legacy`; native
-//! reactive authoring is layered beside it without introducing another persisted
-//! scene model. Both lower into `noon_core` semantics.
+//! `Scene` and `Mobject` author directly into the shared semantic store and
+//! lower through `ExecutionSession`. Snapshot-era APIs are explicit in `legacy`.
 
 #![forbid(unsafe_code)]
 
@@ -14,63 +13,35 @@ mod elbow_authoring;
 mod execution_segment;
 mod execution_session;
 mod geometry_authoring;
-mod legacy;
+pub mod legacy;
 mod line_matcher_authoring;
 mod polygram_authoring;
 mod reactive_authoring;
 mod retained_family_authoring_lowering;
 mod rounded_rectangle_authoring;
 mod sector_authoring;
+pub mod semantic_mobject;
 mod shape_matcher_authoring;
 mod text_authoring;
 
-pub use analytic_geometry_authoring::*;
-pub use arc_authoring::*;
-pub use camera_authoring::*;
-pub use dashed_line_authoring::*;
-pub use elbow_authoring::*;
 pub use execution_segment::*;
 pub use execution_session::*;
-pub use geometry_authoring::*;
-pub use legacy::*;
-pub use line_matcher_authoring::*;
+pub use noon_core::*;
 pub use noon_runtime::{
     EvaluationError, FrameChanges, FrameObjectState, FrameState, RuntimeWakeState,
     TimelineWakeState,
 };
-pub use polygram_authoring::*;
 pub use reactive_authoring::*;
 pub use retained_family_authoring_lowering::*;
-pub use rounded_rectangle_authoring::*;
-pub use sector_authoring::*;
-pub use shape_matcher_authoring::*;
+pub use semantic_mobject::Mobject;
+mod scene;
+pub use scene::Scene;
 pub use text_authoring::*;
 
-/// Common imports for deterministic and native-reactive Noon authoring.
+/// Common imports for direct typed semantic authoring.
 pub mod prelude {
-    pub use crate::legacy::prelude::*;
-    pub use crate::{
-        AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
-        Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow, ElbowAuthoringError, Ellipse,
-        ExecutionSegment, ExecutionSegmentError, ExecutionSegmentState, ExecutionSession,
-        ExecutionSessionInputError, GeometryAuthoringError, LineMatcherAuthoringError,
-        LoweredRetainedFamilyAnimation, MathTypst, MovingCameraScene, Polygon, Polygram,
-        PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
-        RegularPolygram, RetainedFamilyAnimationLoweringError,
-        RetainedFamilyAnimationLoweringSession, RetainedMobject, RetainedScene, RoundedRectangle,
-        RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
-        SurroundingRectangle, Text, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
-        VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
-        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO, DEFAULT_DASH_LENGTH, DEFAULT_DOT_RADIUS,
-        DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
-        DEFAULT_NATIVE_TEXT_FONT_SIZE, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
-        DEFAULT_UNDERLINE_BUFF, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
-    };
+    pub use crate::{ExecutionSession, Mobject, Scene};
     pub use noon_core::{
-        resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,
-        resolve_uniform_composition_schedule, validate_presence_transition, AnimationDefaults,
-        AnimationOptions, AnimationOptionsError, CompositionError, CompositionInterval,
-        CompositionSchedule, LifecycleBinding, LifecycleError, LifecycleIntent, LifecyclePlan,
-        LifecycleState, PresenceTransitionError, ResolvedAnimationOptions,
+        Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,
     };
 }

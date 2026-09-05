@@ -191,13 +191,17 @@ fn unavailable_geometry_resource_replacement_rolls_back_atomically() {
     let mut store = SemanticStore::new();
     let live = object(&mut store, 1.0);
     let earlier = object(&mut store, 2.0);
-    let valid = store.insert_geometry_path(
-        VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(Vec2::new(1.0, 0.0)),
-    );
+    let valid = store
+        .insert_geometry_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0)),
+        )
+        .unwrap();
     let mut foreign_store = SemanticStore::new();
-    let foreign = foreign_store.insert_geometry_path(VectorPath::new().move_to(Vec2::ZERO));
+    let foreign = foreign_store
+        .insert_geometry_path(VectorPath::new().move_to(Vec2::ZERO))
+        .unwrap();
     let stale = crate::GeometryResourceHandle {
         version: valid.version + 1,
         ..valid

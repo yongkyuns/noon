@@ -481,6 +481,23 @@ pub struct VectorPath {
 }
 
 impl VectorPath {
+    /// Whether every point, including morph targets, is finite.
+    pub fn is_finite(&self) -> bool {
+        let vec2_is_finite = |value: Vec2| value.x.is_finite() && value.y.is_finite();
+        self.commands().iter().all(|command| match *command {
+            PathCommand::MoveTo { to } | PathCommand::LineTo { to } => vec2_is_finite(to),
+            PathCommand::QuadraticTo { control, to } => {
+                vec2_is_finite(control) && vec2_is_finite(to)
+            }
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => vec2_is_finite(control1) && vec2_is_finite(control2) && vec2_is_finite(to),
+            PathCommand::Close => true,
+        }) && self.morph_target().is_none_or(VectorPath::is_finite)
+    }
+
     pub const fn new() -> Self {
         Self {
             commands: Vec::new(),
@@ -603,6 +620,18 @@ pub enum GeometryRef {
 }
 
 impl GeometryRef {
+    /// Check the complete inline/path payload before resource admission.
+    pub fn is_finite(&self) -> bool {
+        let point = |p: Vec2| p.x.is_finite() && p.y.is_finite();
+        match self {
+            Self::Circle { radius } => radius.is_finite(),
+            Self::Rectangle { size } => point(*size),
+            Self::Line { start, end } => point(*start) && point(*end),
+            Self::VectorPath(path) => path.is_finite(),
+            Self::External(_) => true,
+        }
+    }
+
     pub const fn circle(radius: f32) -> Self {
         Self::Circle { radius }
     }

@@ -1,4 +1,4 @@
-use noon::{DashedLine, IntoSnapshot};
+use noon::legacy::{DashedLine, IntoSnapshot};
 use noon_core::{ObjectSnapshot, Vec2};
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
@@ -56,7 +56,7 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon::{DEFAULT_DASHED_RATIO, DEFAULT_DASH_LENGTH};
+    use noon::legacy::{DEFAULT_DASHED_RATIO, DEFAULT_DASH_LENGTH};
     use noon_core::{
         GeometryRef, PathCommand, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, WHITE,
     };

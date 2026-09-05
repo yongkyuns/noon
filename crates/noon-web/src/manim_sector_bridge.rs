@@ -1,4 +1,4 @@
-use noon::{AnnularSector, Annulus, IntoSnapshot, Sector};
+use noon::legacy::{AnnularSector, Annulus, IntoSnapshot, Sector};
 use noon_core::{ObjectSnapshot, Vec2, WHITE};
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
