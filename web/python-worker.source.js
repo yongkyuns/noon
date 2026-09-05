@@ -55,6 +55,10 @@ async function initializePyodide() {
   self.noonCreateCanonicalAuthoringSceneContext = () =>
     authoringStore.createSceneContext();
   self.noonRegisterSemanticExecution = (context) => {
+    // Registration is the authoring-run publication boundary. It retains a
+    // returned runtime for renderer recovery, but invalidates one only when
+    // direct authored work changed since that runtime was published.
+    context.prepareExecutionRun();
     const token = `semantic-${nextSemanticContext++}`;
     semanticContexts.set(token, { context, endpoints: new Set(), released: false });
     return token;

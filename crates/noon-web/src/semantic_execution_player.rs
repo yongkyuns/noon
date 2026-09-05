@@ -58,6 +58,12 @@ impl SemanticExecutionPlayer {
         Ok(())
     }
 
+    /// The authored scene revision represented by this runtime.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn scene_revision(&self) -> noon_core::SceneRevision {
+        self.session.publication_context().scene_revision()
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_translation(
         &mut self,

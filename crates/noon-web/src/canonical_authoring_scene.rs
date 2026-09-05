@@ -226,6 +226,28 @@ impl CanonicalAuthoringScene {
         Ok(self.live_player.as_mut().expect("live player initialized"))
     }
 
+    /// Begin an explicit authoring-run publication boundary.
+    ///
+    /// Renderer recovery returns its player to this context and therefore keeps
+    /// its effective runtime. A subsequent Python run may mutate authored state
+    /// directly before registration; only this boundary is allowed to discard a
+    /// now-stale returned runtime and lower a fresh one on attach.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn prepare_execution_run(&mut self) -> Result<(), String> {
+        if self.live_player_transferred {
+            return Err("semantic execution session is running in the semantic engine".into());
+        }
+        if self
+            .live_player
+            .as_ref()
+            .map(crate::SemanticExecutionPlayer::scene_revision)
+            != Some(self.scene.store().borrow().scene_revision())
+        {
+            self.live_player = None;
+        }
+        Ok(())
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn active_live_player(&mut self) -> Result<&mut crate::SemanticExecutionPlayer, String> {
         if self.live_player_transferred {
@@ -452,6 +474,11 @@ mod wasm {
                 .live_player(duration)
                 .map(|_| ())
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = prepareExecutionRun)]
+        pub fn prepare_execution_run(&mut self) -> Result<(), JsValue> {
+            self.inner.prepare_execution_run().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetTranslation)]
@@ -836,6 +863,7 @@ mod tests {
             );
         }
 
+        context.prepare_execution_run().unwrap();
         let mut handed_off = context.take_execution_player(2.0, 17).unwrap();
         assert_eq!(
             handed_off
@@ -867,5 +895,32 @@ mod tests {
         assert_eq!(recovery_snapshot.session, 18);
         assert_eq!(recovery_snapshot.objects[0].transform.translation.x, 2.0);
         assert!(context.live_player(2.0).is_err());
+    }
+
+    #[test]
+    fn new_authoring_run_refreshes_a_returned_runtime_after_direct_scene_edits() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+
+        let initial = context.take_execution_player(1.0, 17).unwrap();
+        context.return_execution_player(initial).unwrap();
+
+        // A direct authoring operation happens outside the returned runtime.
+        // The next registration boundary lowers precisely one fresh runtime.
+        circle.shift(3.0, -1.0).unwrap();
+        context.prepare_execution_run().unwrap();
+        assert!(context.live_player.is_none());
+
+        let mut rerun = context.take_execution_player(1.0, 18).unwrap();
+        let effective = rerun.live_effective(&circle).unwrap();
+        assert_eq!(
+            effective.transform.translation,
+            SemanticVec3::new(3.0, -1.0, 0.0)
+        );
+        let snapshot: crate::ExecutionDeltaEnvelope =
+            serde_json::from_str(&rerun.initial_delta_json().unwrap()).unwrap();
+        assert_eq!(snapshot.session, 18);
+        assert_eq!(snapshot.objects[0].transform.translation.x, 3.0);
     }
 }
