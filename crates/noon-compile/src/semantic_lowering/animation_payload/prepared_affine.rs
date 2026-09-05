@@ -1,13 +1,15 @@
 use noon_core::{
     resolve_animation_options, validate_track_definition, AnimationDefaults, AnimationOptions,
-    AnimationOptionsError, CompositionTimeMap, ObjectId, Property, ResolvedAnimationOptions,
-    SemanticLoweringError, SemanticNodeId, SemanticObjectProperty, SemanticSceneOperationError,
-    SemanticSignalValue, SemanticStore, TimelineError, TrackDefinition, TrackId, TrackTiming,
-    TrackValues, Transform2D,
+    AnimationOptionsError, CompositionTimeMap, ObjectId, Property, SemanticLoweringError,
+    SemanticNodeId, SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue,
+    SemanticStore, TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
 };
 
 use super::super::SemanticExecutionIndex;
-use super::affine::{transform_is_finite, SemanticAffineAnimationField};
+use super::affine::{
+    lower_affine_channels, validate_affine_payload, AffinePayloadIssue,
+    SemanticAffineAnimationField,
+};
 
 /// One affine channel prepared for an animation declaration that has not committed yet.
 ///
@@ -145,182 +147,76 @@ where
     let options =
         resolve_animation_options(AnimationDefaults::MANIM, declaration_options, play_options)
             .map_err(PreparedSemanticTransformToError::Options)?;
-    validate_prepared_static_payload(source, target_object, options)?;
-
+    validate_affine_payload(source, target_object, options)
+        .map_err(|issue| prepared_payload_error(target, issue))?;
     let from = effective_transform(execution_object_id).ok_or(
         PreparedSemanticTransformToError::MissingEffectiveTransform {
             target,
             execution_object_id,
         },
     )?;
-    if !transform_is_finite(from) {
-        return Err(PreparedSemanticTransformToError::InvalidEffectiveTransform(
-            target,
-        ));
-    }
-    let to = lower_prepared_target_transform(target_object)?;
+    let channels = lower_affine_channels(source, target_object, from)
+        .map_err(|issue| prepared_payload_error(target, issue))?;
     let timing = TrackTiming::new(start_time, options.run_time, options.rate_func);
-    let time_map = CompositionTimeMap::default();
-    let mut tracks = Vec::with_capacity(3);
-    push_prepared_property_if_changed(
-        source,
-        target,
-        execution_object_id,
-        SemanticObjectProperty::Translation,
-        Property::Position,
-        TrackValues::Vec2 {
-            from: from.translation,
-            to: to.translation,
-        },
-        SemanticSignalValue::Vec3(target_object.transform.translation),
-        from.translation != to.translation,
-        timing,
-        &time_map,
-        &mut tracks,
-    )?;
-    push_prepared_property_if_changed(
-        source,
-        target,
-        execution_object_id,
-        SemanticObjectProperty::RotationZ,
-        Property::Rotation,
-        TrackValues::Scalar {
-            from: from.rotation,
-            to: to.rotation,
-        },
-        SemanticSignalValue::Scalar(target_object.transform.rotation_z),
-        from.rotation != to.rotation,
-        timing,
-        &time_map,
-        &mut tracks,
-    )?;
-    push_prepared_property_if_changed(
-        source,
-        target,
-        execution_object_id,
-        SemanticObjectProperty::Scale,
-        Property::Scale,
-        TrackValues::Vec2 {
-            from: from.scale,
-            to: to.scale,
-        },
-        SemanticSignalValue::Vec3(target_object.transform.scale),
-        from.scale != to.scale,
-        timing,
-        &time_map,
-        &mut tracks,
-    )?;
+    let tracks = channels
+        .into_iter()
+        .map(|channel| PreparedSemanticAffineTrack {
+            target,
+            execution_object_id,
+            property: channel.property,
+            semantic_property: channel.semantic_property,
+            completion_value: channel.completion_value,
+            values: channel.values,
+            timing,
+            time_map: CompositionTimeMap::identity(),
+        })
+        .collect();
     Ok(PreparedSemanticTransformToProjection {
         run_time: options.run_time,
         tracks,
     })
 }
 
-fn validate_prepared_static_payload(
-    source: &noon_core::SemanticObjectState,
-    target: &noon_core::SemanticObjectState,
-    options: ResolvedAnimationOptions,
-) -> Result<(), PreparedSemanticTransformToError> {
-    if options.remover || options.introducer {
-        return Err(PreparedSemanticTransformToError::UnsupportedLifecycle {
-            remover: options.remover,
-            introducer: options.introducer,
-        });
-    }
-    if source.content != target.content {
-        return Err(PreparedSemanticTransformToError::UnsupportedContentChange);
-    }
-    if source.style != target.style {
-        return Err(PreparedSemanticTransformToError::UnsupportedStyleChange);
-    }
-    if source.z_index() != target.z_index() {
-        return Err(PreparedSemanticTransformToError::UnsupportedPainterOrderChange);
-    }
-    if source.signal_bindings() != target.signal_bindings() {
-        return Err(PreparedSemanticTransformToError::UnsupportedBindingChange);
-    }
-    if source.transform.translation.z != target.transform.translation.z {
-        return Err(PreparedSemanticTransformToError::UnsupportedDepthChange(
-            SemanticAffineAnimationField::Translation,
-        ));
-    }
-    if source.transform.scale.z != target.transform.scale.z {
-        return Err(PreparedSemanticTransformToError::UnsupportedDepthChange(
-            SemanticAffineAnimationField::Scale,
-        ));
-    }
-    Ok(())
-}
-
-fn lower_prepared_target_transform(
-    state: &noon_core::SemanticObjectState,
-) -> Result<Transform2D, PreparedSemanticTransformToError> {
-    let translation = state
-        .transform
-        .translation
-        .lower_xy_f32()
-        .map_err(
-            |error| PreparedSemanticTransformToError::InvalidTargetValue {
-                field: SemanticAffineAnimationField::Translation,
-                error,
-            },
-        )?;
-    let scale = state.transform.scale.lower_xy_f32().map_err(|error| {
-        PreparedSemanticTransformToError::InvalidTargetValue {
-            field: SemanticAffineAnimationField::Scale,
-            error,
-        }
-    })?;
-    let rotation = state.transform.rotation_z;
-    if !rotation.is_finite() || rotation.abs() > f32::MAX as f64 {
-        return Err(PreparedSemanticTransformToError::TargetValueOutOfRange(
-            SemanticAffineAnimationField::RotationZ,
-        ));
-    }
-    Ok(Transform2D {
-        translation,
-        rotation: rotation as f32,
-        scale,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_prepared_property_if_changed(
-    source: &noon_core::SemanticObjectState,
+fn prepared_payload_error(
     target: SemanticNodeId,
-    execution_object_id: ObjectId,
-    semantic_property: SemanticObjectProperty,
-    property: Property,
-    values: TrackValues,
-    completion_value: SemanticSignalValue,
-    changed: bool,
-    timing: TrackTiming,
-    time_map: &CompositionTimeMap,
-    tracks: &mut Vec<PreparedSemanticAffineTrack>,
-) -> Result<(), PreparedSemanticTransformToError> {
-    if !changed {
-        return Ok(());
+    issue: AffinePayloadIssue,
+) -> PreparedSemanticTransformToError {
+    match issue {
+        AffinePayloadIssue::InvalidEffectiveTransform => {
+            PreparedSemanticTransformToError::InvalidEffectiveTransform(target)
+        }
+        AffinePayloadIssue::UnsupportedContentChange => {
+            PreparedSemanticTransformToError::UnsupportedContentChange
+        }
+        AffinePayloadIssue::UnsupportedStyleChange => {
+            PreparedSemanticTransformToError::UnsupportedStyleChange
+        }
+        AffinePayloadIssue::UnsupportedPainterOrderChange => {
+            PreparedSemanticTransformToError::UnsupportedPainterOrderChange
+        }
+        AffinePayloadIssue::UnsupportedBindingChange => {
+            PreparedSemanticTransformToError::UnsupportedBindingChange
+        }
+        AffinePayloadIssue::UnsupportedDepthChange(field) => {
+            PreparedSemanticTransformToError::UnsupportedDepthChange(field)
+        }
+        AffinePayloadIssue::UnsupportedLifecycle {
+            remover,
+            introducer,
+        } => PreparedSemanticTransformToError::UnsupportedLifecycle {
+            remover,
+            introducer,
+        },
+        AffinePayloadIssue::ReactiveDriverConflict(property) => {
+            PreparedSemanticTransformToError::ReactiveDriverConflict(property)
+        }
+        AffinePayloadIssue::InvalidTargetValue { field, error } => {
+            PreparedSemanticTransformToError::InvalidTargetValue { field, error }
+        }
+        AffinePayloadIssue::TargetValueOutOfRange(field) => {
+            PreparedSemanticTransformToError::TargetValueOutOfRange(field)
+        }
     }
-    if source
-        .signal_bindings()
-        .iter()
-        .any(|binding| binding.property() == semantic_property)
-    {
-        return Err(PreparedSemanticTransformToError::ReactiveDriverConflict(
-            semantic_property,
-        ));
-    }
-    tracks.push(PreparedSemanticAffineTrack {
-        target,
-        execution_object_id,
-        property,
-        semantic_property,
-        completion_value,
-        values,
-        timing,
-        time_map: time_map.clone(),
-    });
-    Ok(())
 }
 
 #[cfg(test)]
@@ -328,6 +224,7 @@ mod tests {
     use noon_core::{RateFunction, SemanticObjectState, SemanticVec3, StoredGeometry, Vec2};
 
     use super::*;
+    use crate::{lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule};
 
     #[test]
     fn prepared_transform_reads_only_its_effective_target_once() {
@@ -403,5 +300,61 @@ mod tests {
             ),
             Err(PreparedSemanticTransformToError::UnsupportedContentChange)
         );
+    }
+
+    #[test]
+    fn prepared_and_predeclared_paths_share_exact_affine_channel_semantics() {
+        let mut store = SemanticStore::new();
+        let source =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(source).unwrap();
+        let mut target = store.semantic_object_state_checked(source).unwrap().clone();
+        target.transform.translation = SemanticVec3::new(7.0, -1.0, 0.0);
+        target.transform.rotation_z = 0.75;
+        target.transform.scale = SemanticVec3::new(1.5, 0.5, 1.0);
+        let target = store.insert_semantic_object(target);
+        let options = AnimationOptions::new()
+            .run_time(2.5)
+            .rate_func(RateFunction::Linear);
+        let animation = store
+            .insert_semantic_transform_animation(source, target, options)
+            .unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        index.lower_scene(&store).unwrap();
+        let effective = Transform2D {
+            translation: Vec2::new(2.0, 3.0),
+            rotation: 0.25,
+            scale: Vec2::new(1.0, 2.0),
+        };
+
+        let schedule =
+            lower_semantic_animation_schedule(&store, &index, animation, 4.0, options).unwrap();
+        let existing =
+            lower_semantic_affine_animation_tracks(&store, &schedule, |_| Some(effective)).unwrap();
+        let prepared = lower_prepared_semantic_transform_to(
+            &store,
+            &index,
+            source,
+            target,
+            options,
+            options,
+            4.0,
+            |_| Some(effective),
+        )
+        .unwrap();
+
+        assert_eq!(existing.tracks().len(), prepared.tracks().len());
+        for (existing, prepared) in existing.tracks().iter().zip(prepared.tracks()) {
+            assert_eq!(existing.target, prepared.target);
+            assert_eq!(existing.execution_object_id, prepared.execution_object_id);
+            assert_eq!(existing.property, prepared.property);
+            assert_eq!(existing.semantic_property, prepared.semantic_property);
+            assert_eq!(existing.completion_value, prepared.completion_value);
+            assert_eq!(existing.values, prepared.values);
+            assert_eq!(existing.timing, prepared.timing);
+            assert_eq!(existing.time_map, prepared.time_map);
+        }
     }
 }
