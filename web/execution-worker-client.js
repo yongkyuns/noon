@@ -948,6 +948,18 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  // Forward one normalized semantic native-state sample to the canonical session.
+  async setNativeStateInput(source, value) {
+    this.#requireSemanticMode("native state input");
+    return this.#requestEngine("native_state_input", { source, value });
+  }
+
+  // Forward one normalized semantic native-event source to the canonical session.
+  async emitNativeEvent(source) {
+    this.#requireSemanticMode("native event input");
+    return this.#requestEngine("native_event", { source });
+  }
+
   async applyPatchBatch(patchBatchJson) {
     this.#requireLegacyMode("apply patch batches");
     if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
@@ -1536,6 +1548,13 @@ export class ExecutionWorkerClient {
     this.#requireStarted();
     if (this.#mode !== EXECUTION_MODE_LEGACY) {
       throw new Error(`${operation} require legacy execution mode`);
+    }
+  }
+
+  #requireSemanticMode(operation) {
+    this.#requireStarted();
+    if (this.#mode !== EXECUTION_MODE_SEMANTIC) {
+      throw new Error(`${operation} requires semantic execution mode`);
     }
   }
 

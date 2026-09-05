@@ -3,11 +3,14 @@ use noon::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
     ExecutionSession, RuntimeIdentity,
 };
-#[cfg(any(target_arch = "wasm32", test))]
-use noon_core::ReactiveValue;
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
     Transform2D,
+};
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::{
+    NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource, ReactiveValue,
+    Vec2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +42,10 @@ pub struct SemanticExecutionPlayer {
     /// frontend scheduler or animation state mirror.
     #[cfg(any(target_arch = "wasm32", test))]
     live_segment: Option<noon::ExecutionSegment>,
+    /// Host-local occurrence order for the genuine browser control-port input
+    /// boundary. Returning and re-leasing this player preserves the sequence.
+    #[cfg(any(target_arch = "wasm32", test))]
+    next_native_event_sequence: u64,
 }
 
 impl SemanticExecutionPlayer {
@@ -116,6 +123,8 @@ impl SemanticExecutionPlayer {
             semantic_root: None,
             #[cfg(any(target_arch = "wasm32", test))]
             live_segment: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            next_native_event_sequence: 0,
         })
     }
 
@@ -139,6 +148,7 @@ impl SemanticExecutionPlayer {
             semantics: Some(semantics),
             semantic_root: Some(semantic_root),
             live_segment: None,
+            next_native_event_sequence: 0,
         })
     }
 
@@ -536,6 +546,31 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn set_native_state_input(
+        &mut self,
+        source: NativeStateSource,
+        value: NativeInputValue,
+    ) -> Result<(), String> {
+        self.session
+            .set_native_state_input(source, value)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn emit_native_event(&mut self, source: NativeEventSource) -> Result<(), String> {
+        let sequence = self.next_native_event_sequence;
+        let next = sequence
+            .checked_add(1)
+            .ok_or("native input event sequence exhausted")?;
+        self.session
+            .emit_native_event(NativeEventOccurrence::new(sequence, source))
+            .map_err(|error| error.to_string())?;
+        self.next_native_event_sequence = next;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn session_mut_for_test(&mut self) -> &mut ExecutionSession {
         &mut self.session
@@ -718,6 +753,39 @@ enum CallbackWriteWire {
 struct CallbackBatchWire {
     token: CallbackTokenWire,
     writes: Vec<CallbackWriteWire>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct NativeStateInputWire {
+    source: NativeStateSource,
+    value: NativeInputValueWire,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum NativeInputValueWire {
+    Scalar { value: f32 },
+    Bool { value: bool },
+    Vec2 { x: f32, y: f32 },
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl From<NativeInputValueWire> for NativeInputValue {
+    fn from(value: NativeInputValueWire) -> Self {
+        match value {
+            NativeInputValueWire::Scalar { value } => Self::Scalar(value),
+            NativeInputValueWire::Bool { value } => Self::Bool(value),
+            NativeInputValueWire::Vec2 { x, y } => Self::Vec2(Vec2::new(x, y)),
+        }
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct NativeEventInputWire {
+    source: NativeEventSource,
 }
 
 fn validate_callback_transform(transform: Transform2D) -> Result<(), String> {
@@ -930,6 +998,24 @@ impl SemanticExecutionPlayer {
             .transpose()
     }
 
+    /// Decode one sampled native state update at the genuine worker control-port boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setNativeStateInputJson))]
+    pub fn set_native_state_input_json(&mut self, json: &str) -> Result<(), String> {
+        let input: NativeStateInputWire = serde_json::from_str(json)
+            .map_err(|error| format!("invalid native state input JSON: {error}"))?;
+        self.set_native_state_input(input.source, input.value.into())
+    }
+
+    /// Decode one ordered native event at the genuine worker control-port boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = emitNativeEventJson))]
+    pub fn emit_native_event_json(&mut self, json: &str) -> Result<(), String> {
+        let input: NativeEventInputWire = serde_json::from_str(json)
+            .map_err(|error| format!("invalid native event input JSON: {error}"))?;
+        self.emit_native_event(input.source)
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaJson))]
     pub fn drain_delta_json(&mut self) -> Result<Option<String>, String> {
         self.encoded_delta(false)
@@ -1003,7 +1089,10 @@ impl SemanticExecutionPlayer {
 mod tests {
     use super::*;
     use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
-    use noon_core::{AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction};
+    use noon_core::{
+        AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
+        SemanticObjectProperty, SemanticObjectState, SemanticStore, StoredGeometry,
+    };
 
     #[test]
     fn membership_snapshot_omits_retired_rows_and_preserves_incremental_order() {
@@ -1077,6 +1166,85 @@ mod tests {
             )
             .unwrap();
         SemanticExecutionPlayer::from_session(session, 2.0, 42).unwrap()
+    }
+
+    #[test]
+    fn native_input_codec_reaches_one_session_and_keeps_event_occurrences_ordered() {
+        let mut store = SemanticStore::new();
+        let opacity = store.insert_semantic_input_signal(0.25_f64).unwrap();
+        let clicks = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_native_state_input(
+                opacity,
+                NativeStateSource::Control {
+                    name: "opacity".to_owned(),
+                },
+            )
+            .unwrap();
+        store
+            .bind_semantic_native_event_input(
+                clicks,
+                NativeEventSource::PointerDown { button: 0 },
+            )
+            .unwrap();
+        let object = store.insert_semantic_object(SemanticObjectState::new(
+            StoredGeometry::Circle { radius: 1.0 },
+        ));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(opacity, object, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        store
+            .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 61).unwrap();
+
+        player
+            .set_native_state_input_json(
+                r#"{"source":{"kind":"control","name":"opacity"},"value":{"kind":"scalar","value":0.75}}"#,
+            )
+            .unwrap();
+        let event = r#"{"source":{"kind":"pointer_down","button":0}}"#;
+        player.emit_native_event_json(event).unwrap();
+        player.emit_native_event_json(event).unwrap();
+
+        assert_eq!(player.session.frame().objects[0].style.opacity, 0.75);
+        assert_eq!(player.session.frame().objects[0].transform.rotation, 2.0);
+        assert_eq!(player.next_native_event_sequence, 2);
+    }
+
+    #[test]
+    fn rejected_native_input_keeps_frame_and_player_event_sequence_unchanged() {
+        let mut store = SemanticStore::new();
+        let clicks = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_native_event_input(
+                clicks,
+                NativeEventSource::PointerDown { button: 0 },
+            )
+            .unwrap();
+        let object = store.insert_semantic_object(SemanticObjectState::new(
+            StoredGeometry::Circle { radius: 1.0 },
+        ));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(object, HostCallbackId::new(9), 0.0, None);
+        transaction.apply(&mut store).unwrap();
+        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 62).unwrap();
+        let frame = player.session.frame().clone();
+
+        let error = player
+            .emit_native_event_json(r#"{"source":{"kind":"pointer_down","button":0}}"#)
+            .unwrap_err();
+
+        assert!(error.contains("unsupported while required callbacks are configured"));
+        assert_eq!(player.session.frame(), &frame);
+        assert_eq!(player.next_native_event_sequence, 0);
     }
 
     #[test]

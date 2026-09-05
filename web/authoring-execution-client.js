@@ -360,6 +360,24 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.seek(timeSeconds));
   }
 
+  async setNativeStateInput(source, value) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("native state input requires semantic execution mode");
+      }
+      return player.setNativeStateInput(source, value);
+    });
+  }
+
+  async emitNativeEvent(source) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("native event input requires semantic execution mode");
+      }
+      return player.emitNativeEvent(source);
+    });
+  }
+
   async restartPlayback() {
     return this.#withStablePlayer((player) => player.restartPlayback());
   }

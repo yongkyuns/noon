@@ -24,6 +24,7 @@ function fixture(transportMode = "transferable", runRequiredCallbackPhase = null
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
+  const nativeInputs = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: json,
@@ -36,6 +37,8 @@ function fixture(transportMode = "transferable", runRequiredCallbackPhase = null
     callbackTerminationJson: () => null,
     tickDeltaJson: () => null,
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
+    setNativeStateInputJson: (value) => { nativeInputs.push({ type: "state", value: JSON.parse(value) }); },
+    emitNativeEventJson: (value) => { nativeInputs.push({ type: "event", value: JSON.parse(value) }); },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
     time: () => time, isPlaying: () => playing,
   };
@@ -43,7 +46,7 @@ function fixture(transportMode = "transferable", runRequiredCallbackPhase = null
     createExecutionPlayer: () => player,
     returnExecutionPlayer: (value) => { returned += 1; returnedPlayer = value; },
   };
-  return { control, render, player, stats: () => ({ returned, returnedPlayer, stopped }),
+  return { control, render, player, stats: () => ({ returned, returnedPlayer, stopped, nativeInputs }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode,
@@ -77,6 +80,45 @@ test("semantic producer installs mixed resources before its retained snapshot an
     assert.equal(f.stats().returnedPlayer, f.player);
     assert.equal(f.stats().stopped, 1);
   } finally { f.close(); }
+});
+
+test("native state and event controls reach the leased player in accepted order", async () => {
+  const f = fixture();
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+
+    const state = await request(f.control.port2, "native_state_input", 20, {
+      source: { kind: "control", name: "opacity" },
+      value: { kind: "scalar", value: 0.75 },
+    });
+    assert.equal(state.type, "native_state_input");
+    const event = await request(f.control.port2, "native_event", 21, {
+      source: { kind: "pointer_down", button: 0 },
+    });
+    assert.equal(event.type, "native_event");
+    assert.deepEqual(f.stats().nativeInputs, [
+      {
+        type: "state",
+        value: {
+          source: { kind: "control", name: "opacity" },
+          value: { kind: "scalar", value: 0.75 },
+        },
+      },
+      { type: "event", value: { source: { kind: "pointer_down", button: 0 } } },
+    ]);
+
+    f.player.setNativeStateInputJson = () => { throw new Error("native value rejected"); };
+    const rejected = await request(f.control.port2, "native_state_input", 22, {
+      source: { kind: "control", name: "opacity" },
+      value: { kind: "bool", value: true },
+    });
+    assert.equal(rejected.type, "error");
+    assert.match(rejected.message, /native value rejected/);
+    assert.equal(f.stats().nativeInputs.length, 2);
+  } finally { endpoint?.stop(); f.close(); }
 });
 
 test("initial snapshot failure returns the exact player for retry", async () => {
@@ -272,7 +314,7 @@ test("full transport queues controls until a writable event without recursive dr
   } finally { f.close(); }
 });
 
-test("stalled control queue rejects overflow and preserves accepted command order", async () => {
+test("stalled native-event queue rejects overflow and preserves accepted command order", async () => {
   const f = fixture();
   try {
     const ready = next(f.control.port2);
@@ -284,14 +326,16 @@ test("stalled control queue rejects overflow and preserves accepted command orde
     const tick = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
     f.render.port2.postMessage({ type: "tick", timestamp: 16 });
     await tick;
+    f.player.drainDeltaJson = () => null;
     const accepted = [];
     f.control.port2.on("message", (message) => {
-      if (message.type === "pause") accepted.push(message.requestId);
+      if (message.type === "native_event") accepted.push(message.requestId);
     });
     const rejected = nextMatching(f.control.port2, (message) => message.type === "error");
     for (let id = 1; id <= MAX_PENDING_SEMANTIC_CONTROLS + 1; id += 1) {
       f.control.port2.postMessage({
-        channel: "noon.engine", protocolVersion: 1, type: "pause", requestId: id,
+        channel: "noon.engine", protocolVersion: 1, type: "native_event", requestId: id,
+        source: { kind: "control_commit", name: `control-${id}` },
       });
     }
     const overflow = await rejected;
@@ -303,6 +347,10 @@ test("stalled control queue rejects overflow and preserves accepted command orde
     f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
     await drained;
     assert.deepEqual(accepted, Array.from({ length: MAX_PENDING_SEMANTIC_CONTROLS }, (_, index) => index + 1));
+    assert.deepEqual(
+      f.stats().nativeInputs.map(({ value }) => value.source.name),
+      Array.from({ length: MAX_PENDING_SEMANTIC_CONTROLS }, (_, index) => `control-${index + 1}`),
+    );
     endpoint.stop();
   } finally { f.close(); }
 });

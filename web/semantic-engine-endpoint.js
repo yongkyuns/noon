@@ -91,6 +91,17 @@ export async function attachSemanticEngine(
           case "set_loop_duration": player.setLoopDuration(message.loopDurationSeconds); break;
           case "seek": latestTick = null; send(player.seekDeltaJson(message.time)); break;
           case "restart_playback": latestTick = null; send(player.seekDeltaJson(0)); break;
+          case "native_state_input":
+            player.setNativeStateInputJson(JSON.stringify({
+              source: message.source,
+              value: message.value,
+            }));
+            send(player.drainDeltaJson());
+            break;
+          case "native_event":
+            player.emitNativeEventJson(JSON.stringify({ source: message.source }));
+            send(player.drainDeltaJson());
+            break;
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         post({ requestId: message.requestId, ...state(message.type) });
@@ -171,7 +182,10 @@ export async function attachSemanticEngine(
           post({ requestId: message.requestId, type: "metrics", metrics: { host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 } } });
           return;
         }
-        if (!["pause", "resume", "seek", "restart_playback", "set_loop_duration"].includes(message.type)) {
+        if (![
+          "pause", "resume", "seek", "restart_playback", "set_loop_duration",
+          "native_state_input", "native_event",
+        ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
