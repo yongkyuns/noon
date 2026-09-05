@@ -1,0 +1,95 @@
+name: Temporary regression repair v3
+
+on:
+  push:
+    branches:
+      - fix/playground-regression-gate
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/playground-regression-gate
+      - name: Centralize compatibility projection
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          helper = '''      function retainedTextView(result, label = "retained text") {\n        if (result.kind !== "scene_document") {\n          throw new Error(`${label} returned ${result.kind}`);\n        }\n        if (result.retainedDocument != null) {\n          throw new Error(`${label} must export mixed content through SceneSpec only`);\n        }\n        const sceneSpec = result.sceneSpec;\n        if (!sceneSpec || sceneSpec.version !== 1 || !Array.isArray(sceneSpec.objects)) {\n          throw new Error(`${label} did not produce SceneSpec v1 objects`);\n        }\n        const textEntries = sceneSpec.objects\n          .map((object, order) => ({ object, order }))\n          .filter(({ object }) => object.content?.kind === "text");\n        if (textEntries.length === 0) return null;\n        const ids = new Set(textEntries.map(({ object }) => object.id));\n        return {\n          channel: "noon.authoring.retained",\n          protocol_version: 2,\n          objects: textEntries.map(({ object, order }) => ({\n            object: object.id,\n            order,\n            text: {\n              ...object.content.value,\n              transform: object.transform,\n              style: object.style,\n            },\n          })),\n          tracks: (sceneSpec.tracks ?? []).filter((track) => ids.has(track.object)),\n        };\n      }\n\n'''
+
+          p = Path("web/manim-compat-smoke.html")
+          text = p.read_text()
+          marker = "      function oneFamilyRequest(result, label) {\n"
+          if helper.strip() not in text:
+              if marker not in text:
+                  raise SystemExit("manim compat helper insertion marker missing")
+              text = text.replace(marker, helper + marker, 1)
+          export_marker = "        run: runForExport,\n"
+          if "        retainedTextView,\n" not in text:
+              if export_marker not in text:
+                  raise SystemExit("manim compat export marker missing")
+              text = text.replace(export_marker, "        retainedTextView,\n" + export_marker, 1)
+          p.write_text(text)
+
+          old_helper = '''function canonicalRetainedView(result, label) {\n  assert.equal(\n    result.retainedDocument ?? null,\n    null,\n    `${label}: mixed text must export through canonical SceneSpec only`,\n  );\n  const sceneSpec = result.sceneSpec;\n  assert.ok(sceneSpec, `${label}: canonical SceneSpec is required`);\n  assert.equal(sceneSpec.version, 1, `${label}: expected SceneSpec v1`);\n  const textEntries = (sceneSpec.objects ?? [])\n    .map((object, order) => ({ object, order }))\n    .filter(({ object }) => object.content?.kind === "text");\n  if (textEntries.length === 0) return null;\n  const ids = new Set(textEntries.map(({ object }) => object.id));\n  return {\n    channel: "noon.authoring.retained",\n    protocol_version: 2,\n    objects: textEntries.map(({ object, order }) => ({\n      object: object.id,\n      order,\n      text: { ...object.content.value, transform: object.transform, style: object.style },\n    })),\n    tracks: (sceneSpec.tracks ?? []).filter((track) => ids.has(track.object)),\n  };\n}\n\n'''
+
+          p = Path("scripts/retained-text-animation-smoke.mjs")
+          text = p.read_text()
+          if old_helper not in text:
+              raise SystemExit("retained animation compatibility helper missing")
+          text = text.replace(old_helper, "", 1)
+          text = text.replace(
+              '  const retained = canonicalRetainedView(result, "retained animation");',
+              '''  const retained = await page.evaluate(\n    ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),\n    { result, label: "retained animation" },\n  );''',
+              1,
+          )
+          text = text.replace(
+              '  const fadeRetained = canonicalRetainedView(fadeResult, "retained fade");',
+              '''  const fadeRetained = await page.evaluate(\n    ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),\n    { result: fadeResult, label: "retained fade" },\n  );''',
+              1,
+          )
+          p.write_text(text)
+
+          p = Path("scripts/manim-tutorial-smoke.mjs")
+          text = p.read_text()
+          if old_helper not in text:
+              raise SystemExit("tutorial compatibility helper missing")
+          text = text.replace(old_helper, "", 1)
+          text = text.replace(
+              "function authoredObjectCount(entry, result) {\n  const geometryCount = result.document.objects.length;\n  const retained = canonicalRetainedView(result, entry.id);",
+              "function authoredObjectCount(entry, result, retained) {\n  const geometryCount = result.document.objects.length;",
+              1,
+          )
+          text = text.replace(
+              "function assertRetainedShrinkTrack(result) {",
+              "function assertRetainedShrinkTrack(result, retained) {",
+              1,
+          )
+          text = text.replace(
+              "  const retained = canonicalRetainedView(result, retainedTextAnimationId);\n",
+              "",
+              1,
+          )
+          needle = '''    assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);\n    assert.ok(authoredObjectCount(entry, result) > 0, `${entry.id}: expected scene objects`);\n    assertDurationContract(entry, result);\n    if (entry.id === retainedTextAnimationId) {\n      assertRetainedShrinkTrack(result);\n    }'''
+          replacement = '''    assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);\n    const retained = await page.evaluate(\n      ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),\n      { result, label: entry.id },\n    );\n    assert.ok(authoredObjectCount(entry, result, retained) > 0, `${entry.id}: expected scene objects`);\n    assertDurationContract(entry, result);\n    if (entry.id === retainedTextAnimationId) {\n      assertRetainedShrinkTrack(result, retained);\n    }'''
+          if needle not in text:
+              raise SystemExit("tutorial loop replacement block missing")
+          text = text.replace(needle, replacement, 1)
+          p.write_text(text)
+          PY
+          git diff --check
+          git status --short
+      - name: Commit repair
+        run: |
+          git config user.name "ChatGPT Codex Connector"
+          git config user.email "noreply@openai.com"
+          git add web/manim-compat-smoke.html \
+            scripts/retained-text-animation-smoke.mjs \
+            scripts/manim-tutorial-smoke.mjs
+          git commit -m "test: keep migration projection inside compat harness"
+          git push origin HEAD:fix/playground-regression-gate
