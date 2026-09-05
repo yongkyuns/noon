@@ -104,32 +104,6 @@ function assertNear(actual, expected, message) {
   );
 }
 
-function canonicalRetainedView(result, label) {
-  assert.equal(
-    result.retainedDocument ?? null,
-    null,
-    `${label}: mixed text must export through canonical SceneSpec only`,
-  );
-  const sceneSpec = result.sceneSpec;
-  assert.ok(sceneSpec, `${label}: canonical SceneSpec is required`);
-  assert.equal(sceneSpec.version, 1, `${label}: expected SceneSpec v1`);
-  const textEntries = (sceneSpec.objects ?? [])
-    .map((object, order) => ({ object, order }))
-    .filter(({ object }) => object.content?.kind === "text");
-  if (textEntries.length === 0) return null;
-  const ids = new Set(textEntries.map(({ object }) => object.id));
-  return {
-    channel: "noon.authoring.retained",
-    protocol_version: 2,
-    objects: textEntries.map(({ object, order }) => ({
-      object: object.id,
-      order,
-      text: { ...object.content.value, transform: object.transform, style: object.style },
-    })),
-    tracks: (sceneSpec.tracks ?? []).filter((track) => ids.has(track.object)),
-  };
-}
-
 let browser = null;
 try {
   await waitForServer();
@@ -160,7 +134,10 @@ try {
     0,
     "retained Text.animate must not create legacy placeholder geometry",
   );
-  const retained = canonicalRetainedView(result, "retained animation");
+  const retained = await page.evaluate(
+    ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
+    { result, label: "retained animation" },
+  );
   assert.ok(retained, "retained animation must emit canonical text content");
   assert.equal(retained.objects.length, 1);
   assert.equal(retained.objects[0].text.source, "Animate");
@@ -256,7 +233,10 @@ try {
     0,
     "retained Text fades must not create legacy placeholder geometry",
   );
-  const fadeRetained = canonicalRetainedView(fadeResult, "retained fade");
+  const fadeRetained = await page.evaluate(
+    ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
+    { result: fadeResult, label: "retained fade" },
+  );
   assert.ok(fadeRetained, "retained fade must emit canonical text content");
   assert.equal(fadeRetained.objects.length, 1);
   assert.equal(fadeRetained.objects[0].text.source, "Fade");
