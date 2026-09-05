@@ -1,30 +1,35 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    SemanticNodeId, SemanticNodeKind, SemanticSceneOperationError, SemanticStore,
-    SemanticStoreError,
+    PendingNodeKind, SemanticNodeKind, SemanticPendingFamilyError, SemanticSceneOperationError,
+    SemanticStore, SemanticStoreError, SemanticTransactionNodeRef, SemanticTransactionNodeToken,
 };
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum FamilyEdgePreflightError {
+    Existing(SemanticSceneOperationError),
+    Pending(SemanticPendingFamilyError),
+}
 
 #[derive(Debug, Default)]
 pub(super) struct FamilyEdgePreflight {
-    overrides: HashMap<(SemanticNodeId, SemanticNodeId), bool>,
+    overrides: HashMap<(SemanticTransactionNodeRef, SemanticTransactionNodeRef), bool>,
 }
 
 impl FamilyEdgePreflight {
     pub(super) fn add(
         &mut self,
         store: &SemanticStore,
-        family: SemanticNodeId,
-        member: SemanticNodeId,
-    ) -> Result<bool, SemanticSceneOperationError> {
-        validate_edge(store, family, member)?;
+        pending: &HashMap<SemanticTransactionNodeToken, PendingNodeKind>,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    ) -> Result<bool, FamilyEdgePreflightError> {
+        validate_edge(store, pending, family, member)?;
         if self.contains(store, family, member) {
             return Ok(false);
         }
         if family == member || self.reaches(store, member, family) {
-            return Err(SemanticSceneOperationError::Store(
-                SemanticStoreError::FamilyCycle { family, member },
-            ));
+            return Err(cycle_error(family, member));
         }
         self.overrides.insert((family, member), true);
         Ok(true)
@@ -33,10 +38,11 @@ impl FamilyEdgePreflight {
     pub(super) fn remove(
         &mut self,
         store: &SemanticStore,
-        family: SemanticNodeId,
-        member: SemanticNodeId,
-    ) -> Result<bool, SemanticSceneOperationError> {
-        validate_edge(store, family, member)?;
+        pending: &HashMap<SemanticTransactionNodeToken, PendingNodeKind>,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    ) -> Result<bool, FamilyEdgePreflightError> {
+        validate_edge(store, pending, family, member)?;
         let changed = self.contains(store, family, member);
         if changed {
             self.overrides.insert((family, member), false);
@@ -47,58 +53,49 @@ impl FamilyEdgePreflight {
     pub(super) fn reorder(
         &mut self,
         store: &SemanticStore,
-        family: SemanticNodeId,
-        member: SemanticNodeId,
-        before: Option<SemanticNodeId>,
-    ) -> Result<bool, SemanticSceneOperationError> {
-        validate_edge(store, family, member)?;
+        pending: &HashMap<SemanticTransactionNodeToken, PendingNodeKind>,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+        before: Option<SemanticTransactionNodeRef>,
+    ) -> Result<bool, FamilyEdgePreflightError> {
+        validate_edge(store, pending, family, member)?;
         if !self.contains(store, family, member) {
-            return Err(SemanticSceneOperationError::Store(
-                SemanticStoreError::NotFamilyMember { family, member },
-            ));
+            return Err(not_member_error(family, member));
         }
         if let Some(anchor) = before {
-            validate_edge(store, family, anchor)?;
+            validate_edge(store, pending, family, anchor)?;
             if !self.contains(store, family, anchor) {
-                return Err(SemanticSceneOperationError::Store(
-                    SemanticStoreError::NotFamilyMember {
-                        family,
-                        member: anchor,
-                    },
-                ));
+                return Err(not_member_error(family, anchor));
             }
         }
-
-        // Exact order is intentionally not materialized during preflight. Direct
-        // membership is the only validity requirement for identity-relative reorder.
-        // Commit classifies already-correct adjacency/tail placement as a no-op after
-        // the complete transaction has been validated. This keeps reorder-only
-        // preflight proportional to the touched nodes' direct parent degree rather
-        // than to the number of siblings in the family.
         Ok(before != Some(member))
     }
 
     fn contains(
         &self,
         store: &SemanticStore,
-        family: SemanticNodeId,
-        member: SemanticNodeId,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
     ) -> bool {
         self.overrides
             .get(&(family, member))
             .copied()
-            .unwrap_or_else(|| {
-                store
+            .unwrap_or_else(|| match (family, member) {
+                (
+                    SemanticTransactionNodeRef::Existing(family),
+                    SemanticTransactionNodeRef::Existing(member),
+                ) => store
                     .node(member)
-                    .is_some_and(|node| node.parents().contains(&family))
+                    .is_some_and(|node| node.parents().contains(&family)),
+                _ => false,
             })
     }
 
     fn reaches(
         &self,
         store: &SemanticStore,
-        start: SemanticNodeId,
-        target: SemanticNodeId,
+        start: SemanticTransactionNodeRef,
+        target: SemanticTransactionNodeRef,
     ) -> bool {
         let mut stack = vec![start];
         let mut seen = HashSet::new();
@@ -114,11 +111,23 @@ impl FamilyEdgePreflight {
         false
     }
 
-    fn members(&self, store: &SemanticStore, family: SemanticNodeId) -> Vec<SemanticNodeId> {
-        let mut members = store
-            .node(family)
-            .map(|node| node.members())
-            .unwrap_or_default();
+    fn members(
+        &self,
+        store: &SemanticStore,
+        family: SemanticTransactionNodeRef,
+    ) -> Vec<SemanticTransactionNodeRef> {
+        let mut members = match family {
+            SemanticTransactionNodeRef::Existing(family) => store
+                .node(family)
+                .map(|node| {
+                    node.members()
+                        .into_iter()
+                        .map(SemanticTransactionNodeRef::Existing)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            SemanticTransactionNodeRef::Pending(_) => Vec::new(),
+        };
         members.retain(|member| {
             self.overrides
                 .get(&(family, *member))
@@ -136,30 +145,98 @@ impl FamilyEdgePreflight {
 
 fn validate_edge(
     store: &SemanticStore,
-    family: SemanticNodeId,
-    member: SemanticNodeId,
-) -> Result<(), SemanticSceneOperationError> {
-    let family_node = store
-        .node(family)
-        .ok_or(SemanticSceneOperationError::UnknownNode(family))?;
-    if !matches!(family_node.kind(), SemanticNodeKind::Family) {
-        return Err(SemanticSceneOperationError::NotSemanticFamily(family));
+    pending: &HashMap<SemanticTransactionNodeToken, PendingNodeKind>,
+    family: SemanticTransactionNodeRef,
+    member: SemanticTransactionNodeRef,
+) -> Result<(), FamilyEdgePreflightError> {
+    match family {
+        SemanticTransactionNodeRef::Existing(family) => {
+            let family_node = store.node(family).ok_or_else(|| {
+                FamilyEdgePreflightError::Existing(SemanticSceneOperationError::UnknownNode(family))
+            })?;
+            if !matches!(family_node.kind(), SemanticNodeKind::Family) {
+                return Err(FamilyEdgePreflightError::Existing(
+                    SemanticSceneOperationError::NotSemanticFamily(family),
+                ));
+            }
+        }
+        SemanticTransactionNodeRef::Pending(token) => match pending.get(&token) {
+            Some(PendingNodeKind::Family) => {}
+            Some(PendingNodeKind::Object) => {
+                return Err(FamilyEdgePreflightError::Pending(
+                    SemanticPendingFamilyError::NotFamily(token),
+                ));
+            }
+            None => {
+                return Err(FamilyEdgePreflightError::Pending(
+                    SemanticPendingFamilyError::UnknownToken(token),
+                ));
+            }
+        },
     }
 
-    let member_node = store
-        .node(member)
-        .ok_or(SemanticSceneOperationError::UnknownNode(member))?;
-    let is_target_authoring_node = match member_node.kind() {
-        SemanticNodeKind::Family => true,
-        SemanticNodeKind::AuthoringObject => member_node.semantic_object_state().is_some(),
-        SemanticNodeKind::Object(_)
-        | SemanticNodeKind::Signal(_)
-        | SemanticNodeKind::Animation(_) => false,
-    };
-    if !is_target_authoring_node {
-        return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(
-            member,
-        ));
+    match member {
+        SemanticTransactionNodeRef::Pending(token) => {
+            if !pending.contains_key(&token) {
+                return Err(FamilyEdgePreflightError::Pending(
+                    SemanticPendingFamilyError::UnknownToken(token),
+                ));
+            }
+        }
+        SemanticTransactionNodeRef::Existing(member) => {
+            let member_node = store.node(member).ok_or_else(|| {
+                FamilyEdgePreflightError::Existing(SemanticSceneOperationError::UnknownNode(member))
+            })?;
+            let is_target_authoring_node = match member_node.kind() {
+                SemanticNodeKind::Family => true,
+                SemanticNodeKind::AuthoringObject => member_node.semantic_object_state().is_some(),
+                SemanticNodeKind::Object(_)
+                | SemanticNodeKind::Signal(_)
+                | SemanticNodeKind::Animation(_) => false,
+            };
+            if !is_target_authoring_node {
+                return Err(FamilyEdgePreflightError::Existing(
+                    SemanticSceneOperationError::NotSemanticAuthoringNode(member),
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+fn cycle_error(
+    family: SemanticTransactionNodeRef,
+    member: SemanticTransactionNodeRef,
+) -> FamilyEdgePreflightError {
+    match (family, member) {
+        (
+            SemanticTransactionNodeRef::Existing(family),
+            SemanticTransactionNodeRef::Existing(member),
+        ) => FamilyEdgePreflightError::Existing(SemanticSceneOperationError::Store(
+            SemanticStoreError::FamilyCycle { family, member },
+        )),
+        (family, member) => {
+            FamilyEdgePreflightError::Pending(SemanticPendingFamilyError::Cycle { family, member })
+        }
+    }
+}
+
+fn not_member_error(
+    family: SemanticTransactionNodeRef,
+    member: SemanticTransactionNodeRef,
+) -> FamilyEdgePreflightError {
+    match (family, member) {
+        (
+            SemanticTransactionNodeRef::Existing(family),
+            SemanticTransactionNodeRef::Existing(member),
+        ) => FamilyEdgePreflightError::Existing(SemanticSceneOperationError::Store(
+            SemanticStoreError::NotFamilyMember { family, member },
+        )),
+        (family, member) => {
+            FamilyEdgePreflightError::Pending(SemanticPendingFamilyError::NotFamilyMember {
+                family,
+                member,
+            })
+        }
+    }
 }
