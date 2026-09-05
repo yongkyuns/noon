@@ -80,6 +80,7 @@ pub enum ExecutionSessionInputError {
     Reactive(ReactiveError),
     Evaluation(EvaluationError),
     TimelineOwnedSignal { signal: SemanticNodeId },
+    NativeOwnedSignal { signal: SemanticNodeId },
 }
 
 impl std::fmt::Display for ExecutionSessionInputError {
@@ -107,6 +108,12 @@ impl std::fmt::Display for ExecutionSessionInputError {
             Self::TimelineOwnedSignal { signal } => write!(
                 formatter,
                 "semantic signal {}:{} is timeline-owned and cannot be set directly",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NativeOwnedSignal { signal } => write!(
+                formatter,
+                "semantic signal {}:{} is native-owned and cannot be set directly",
                 signal.slot(),
                 signal.generation()
             ),
@@ -884,6 +891,9 @@ impl ExecutionSession {
         if self.signal_timeline.owns(signal) {
             return Err(ExecutionSessionInputError::TimelineOwnedSignal { signal });
         }
+        if self.reactive_projection.is_native_owned(signal) {
+            return Err(ExecutionSessionInputError::NativeOwnedSignal { signal });
+        }
         let execution_signal = self
             .reactive_projection
             .execution_signal_id(signal)
@@ -1429,6 +1439,15 @@ mod tests {
             .bind_semantic_signal(signal, object, SemanticObjectProperty::ObjectOpacity)
             .unwrap();
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+        let before = session.frame().clone();
+        let publication = session.publication_context();
+        assert_eq!(
+            session.set_reactive_input(signal, 0.9_f32),
+            Err(ExecutionSessionInputError::NativeOwnedSignal { signal })
+        );
+        assert_eq!(session.frame(), &before);
+        assert_eq!(session.publication_context(), publication);
 
         session.take_frame_changes();
         session
