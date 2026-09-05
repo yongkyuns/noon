@@ -146,12 +146,13 @@ def execution_context(scene, callbacks=None):
 class LiveExecution:
     """Explicit live property/query facade over one Rust/WASM execution session.
 
-    The wrapper retains only Python object ergonomics.  The canonical context
-    owns the semantic store and the returned player owns the one corresponding
-    runtime session; no Python snapshot is consulted for a live read or write.
+    The wrapper retains only Python object ergonomics. The canonical context
+    owns the semantic store and its one runtime session until normal execution
+    leases that same session to the renderer; no Python snapshot is consulted
+    for a live read or write.
     """
 
-    def __init__(self, scene: _base.Scene, duration: float = 1.0, session: int = 0) -> None:
+    def __init__(self, scene: _base.Scene, duration: float = 1.0) -> None:
         context = execution_context(scene)
         if context is None:
             raise RuntimeError(
@@ -159,7 +160,8 @@ class LiveExecution:
                 "callbacks, retained text, or timeline tracks"
             )
         self._scene = scene
-        self._player = context.createExecutionPlayer(float(duration), int(session))
+        context.beginLiveExecution(float(duration))
+        self._context = context
 
     def _handle(self, mobject: _base.Mobject) -> object:
         if not isinstance(mobject, _base.Mobject) or mobject._scene is not self._scene:
@@ -170,28 +172,28 @@ class LiveExecution:
         return handle
 
     def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        self._player.setTranslation(self._handle(mobject), float(x), float(y))
+        self._context.liveSetTranslation(self._handle(mobject), float(x), float(y))
 
     def shift(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        self._player.shift(self._handle(mobject), float(x), float(y))
+        self._context.liveShift(self._handle(mobject), float(x), float(y))
 
     def set_scale(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        self._player.setScale(self._handle(mobject), float(x), float(y))
+        self._context.liveSetScale(self._handle(mobject), float(x), float(y))
 
     def set_rotation(self, mobject: _base.Mobject, angle: float) -> None:
-        self._player.setRotation(self._handle(mobject), float(angle))
+        self._context.liveSetRotation(self._handle(mobject), float(angle))
 
     def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
-        observed = self._player.effectiveMobject(self._handle(mobject))
+        observed = self._context.liveEffectiveMobject(self._handle(mobject))
         return _base.Vec2(
             float(observed.translationX),
             float(observed.translationY),
         )
 
 
-def _live_execution(self: _base.Scene, duration: float = 1.0, session: int = 0) -> LiveExecution:
+def _live_execution(self: _base.Scene, duration: float = 1.0) -> LiveExecution:
     """Create an explicit typed live session for the currently supported subset."""
-    return LiveExecution(self, duration, session)
+    return LiveExecution(self, duration)
 
 
 def _append_snapshot(

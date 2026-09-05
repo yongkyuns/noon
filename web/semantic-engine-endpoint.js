@@ -12,6 +12,9 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
     throw new Error("semantic execution requires control and render ports");
   }
   let player = null;
+  // A player is leased from the authoring context. The transport session only
+  // frames deltas; it never selects or creates a second runtime for a scene.
+  let playerLeased = false;
   let transport;
   let stopped = false;
   let latestTick = null;
@@ -55,7 +58,12 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
     transport?.close?.();
     renderPort.close();
     controlPort.close();
+    if (playerLeased) {
+      try { context.releaseExecutionPlayer?.(); } catch { /* teardown is best effort */ }
+      playerLeased = false;
+    }
     player?.free();
+    player = null;
     onStop();
   }
   try {
@@ -66,6 +74,7 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
       throw new Error("unsupported semantic execution transport");
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
+    playerLeased = true;
     controlPort.addEventListener("message", ({ data: message }) => {
       if (stopped) return;
       try {
@@ -102,6 +111,19 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
     controlPort.start();
     renderPort.start();
     post({ type: "ready", transportMode });
-  } catch (error) { stop(); throw error; }
+  } catch (error) {
+    // Setup can fail after the player was moved out of its context (for
+    // example, malformed transport setup). Return that exact runtime so retry
+    // remains one session rather than lowering a parallel runtime.
+    if (playerLeased && player && typeof context.restoreExecutionPlayer === "function") {
+      try {
+        context.restoreExecutionPlayer(player);
+        player = null;
+        playerLeased = false;
+      } catch { /* stop releases the failed lease if restoration is unavailable */ }
+    }
+    stop();
+    throw error;
+  }
   return { stop };
 }

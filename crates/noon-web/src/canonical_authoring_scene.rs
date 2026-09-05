@@ -18,6 +18,8 @@ pub struct CanonicalAuthoringScene {
     identities: BTreeMap<noon_core::SemanticNodeId, ObjectId>,
     text_adapters: BTreeMap<noon_core::SemanticNodeId, ObjectSpec>,
     retained_scale_factors: BTreeMap<ObjectId, Vec2>,
+    live_player: Option<crate::SemanticExecutionPlayer>,
+    live_player_transferred: bool,
 }
 
 impl Default for CanonicalAuthoringScene {
@@ -39,6 +41,8 @@ impl CanonicalAuthoringScene {
             identities: BTreeMap::new(),
             text_adapters: BTreeMap::new(),
             retained_scale_factors: BTreeMap::new(),
+            live_player: None,
+            live_player_transferred: false,
         }
     }
 
@@ -197,6 +201,90 @@ impl CanonicalAuthoringScene {
             .map_err(|error| error.to_string())
     }
 
+    fn live_player(
+        &mut self,
+        duration: f64,
+    ) -> Result<&mut crate::SemanticExecutionPlayer, String> {
+        if self.live_player_transferred {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if self.live_player.is_none() {
+            let execution = self.lower_execution()?;
+            self.live_player = Some(crate::SemanticExecutionPlayer::from_live_session(
+                execution,
+                std::rc::Rc::clone(self.scene.store()),
+                duration,
+                0,
+            )?);
+        } else {
+            self.live_player
+                .as_mut()
+                .expect("live player initialized")
+                .set_loop_duration(duration)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(self.live_player.as_mut().expect("live player initialized"))
+    }
+
+    fn active_live_player(&mut self) -> Result<&mut crate::SemanticExecutionPlayer, String> {
+        if self.live_player_transferred {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        self.live_player
+            .as_mut()
+            .ok_or_else(|| "begin live execution before reading or mutating it".into())
+    }
+
+    fn take_execution_player(
+        &mut self,
+        duration: f64,
+        transport_session: u32,
+    ) -> Result<crate::SemanticExecutionPlayer, String> {
+        if let Some(player) = self.live_player.as_mut() {
+            player.rebind_transport(duration, transport_session)?;
+            let player = self.live_player.take().expect("live player initialized");
+            self.live_player_transferred = true;
+            return Ok(player);
+        }
+        if self.live_player_transferred {
+            return Err("live execution session was already transferred".into());
+        }
+        let execution = self.lower_execution()?;
+        let store = std::rc::Rc::clone(self.scene.store());
+        let player = crate::SemanticExecutionPlayer::from_live_session(
+            execution,
+            store,
+            duration,
+            transport_session,
+        )?;
+        self.live_player_transferred = true;
+        Ok(player)
+    }
+
+    /// Return a player after endpoint setup failed. This preserves the one
+    /// runtime so a retry does not lower a second session for this scene.
+    fn restore_execution_player(
+        &mut self,
+        player: crate::SemanticExecutionPlayer,
+    ) -> Result<(), String> {
+        if !self.live_player_transferred || self.live_player.is_some() {
+            return Err("semantic execution player is not leased by this context".into());
+        }
+        self.live_player = Some(player);
+        self.live_player_transferred = false;
+        Ok(())
+    }
+
+    /// Mark a completed engine lease as gone. A later execution is a new,
+    /// sequential run and may lower a fresh runtime; no active runtime remains.
+    fn release_execution_player(&mut self) -> Result<(), String> {
+        if !self.live_player_transferred || self.live_player.is_some() {
+            return Err("semantic execution player is not leased by this context".into());
+        }
+        self.live_player_transferred = false;
+        Ok(())
+    }
+
     /// Derive the migration/export document from live semantic state at the boundary.
     pub fn finalize(
         &self,
@@ -313,6 +401,23 @@ mod wasm {
         inner: CanonicalAuthoringScene,
     }
 
+    #[wasm_bindgen]
+    pub struct WasmLiveMobjectState {
+        state: noon::EffectiveMobjectState,
+    }
+
+    #[wasm_bindgen]
+    impl WasmLiveMobjectState {
+        #[wasm_bindgen(getter, js_name = translationX)]
+        pub fn translation_x(&self) -> f64 {
+            self.state.transform.translation.x as f64
+        }
+        #[wasm_bindgen(getter, js_name = translationY)]
+        pub fn translation_y(&self) -> f64 {
+            self.state.transform.translation.y as f64
+        }
+    }
+
     impl CanonicalAuthoringSceneContext {
         pub(crate) fn with_store(
             store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -339,18 +444,111 @@ mod wasm {
 
         #[wasm_bindgen(js_name = createExecutionPlayer)]
         pub fn create_execution_player(
-            &self,
+            &mut self,
             duration: f64,
             session: u32,
         ) -> Result<crate::SemanticExecutionPlayer, JsValue> {
-            let execution = self.inner.lower_execution().map_err(js_error)?;
-            crate::SemanticExecutionPlayer::from_live_session(
-                execution,
-                std::rc::Rc::clone(self.inner.scene.store()),
-                duration,
-                session,
-            )
-            .map_err(js_error)
+            self.inner
+                .take_execution_player(duration, session)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = beginLiveExecution)]
+        pub fn begin_live_execution(&mut self, duration: f64) -> Result<(), JsValue> {
+            self.inner
+                .live_player(duration)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetTranslation)]
+        pub fn live_set_translation(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_translation(handle.semantic_mobject(), x, y)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveShift)]
+        pub fn live_shift(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_shift(handle.semantic_mobject(), x, y)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetScale)]
+        pub fn live_set_scale(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_scale(handle.semantic_mobject(), x, y)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetRotation)]
+        pub fn live_set_rotation(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_rotation(handle.semantic_mobject(), angle)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveEffectiveMobject)]
+        pub fn live_effective_mobject(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<WasmLiveMobjectState, JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            Ok(WasmLiveMobjectState {
+                state: self
+                    .inner
+                    .active_live_player()
+                    .map_err(js_error)?
+                    .live_effective(handle.semantic_mobject())
+                    .map_err(js_error)?,
+            })
+        }
+
+        #[wasm_bindgen(js_name = restoreExecutionPlayer)]
+        pub fn restore_execution_player(
+            &mut self,
+            player: crate::SemanticExecutionPlayer,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .restore_execution_player(player)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = releaseExecutionPlayer)]
+        pub fn release_execution_player(&mut self) -> Result<(), JsValue> {
+            self.inner.release_execution_player().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = bindGeometry)]
@@ -439,7 +637,11 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, Transform2D};
+    use noon_core::{
+        AnimationOptions, GeometryRef, RateFunction, SemanticAnimationIntent,
+        SemanticAnimationState, SemanticMutationImpact, SemanticMutationTransaction, SemanticVec3,
+        Transform2D,
+    };
     use noon_ir::{ObjectSpecContent, TextSpecKind};
 
     use super::*;
@@ -590,5 +792,78 @@ mod tests {
             .update_geometry(id, ObjectSnapshot::new(GeometryRef::circle(1.0)))
             .unwrap_err();
         assert!(error.contains("not geometry-backed"));
+    }
+
+    #[test]
+    fn live_runtime_is_transferred_to_normal_execution_without_losing_active_driver() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, 0.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let store = std::rc::Rc::clone(context.scene.store());
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+
+        {
+            let player = context.live_player(2.0).unwrap();
+            let mut declaration = SemanticMutationTransaction::new();
+            declaration.add_animation(SemanticAnimationState::new(
+                SemanticAnimationIntent::TransformTo {
+                    target: circle.node_id(),
+                    target_state: target.node_id(),
+                },
+                options,
+            ));
+            let result = player
+                .session_mut_for_test()
+                .apply_semantic_transaction(&mut store.borrow_mut(), declaration)
+                .unwrap();
+            let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
+                panic!("one animation declaration must allocate one identity")
+            };
+            player
+                .session_mut_for_test()
+                .activate_animation(&store.borrow(), *animation, options)
+                .unwrap();
+            player.session_mut_for_test().seek(1.0).unwrap();
+
+            player.live_set_translation(&circle, 100.0, 0.0).unwrap();
+            assert_eq!(
+                store
+                    .borrow()
+                    .semantic_object_state_checked(circle.node_id())
+                    .unwrap()
+                    .transform
+                    .translation,
+                SemanticVec3::new(100.0, 0.0, 0.0)
+            );
+            assert_eq!(
+                player
+                    .live_effective(&circle)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
+                2.0
+            );
+        }
+
+        let mut handed_off = context.take_execution_player(2.0, 17).unwrap();
+        assert_eq!(
+            handed_off
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            2.0
+        );
+        let snapshot: crate::ExecutionDeltaEnvelope =
+            serde_json::from_str(&handed_off.initial_delta_json().unwrap()).unwrap();
+        assert_eq!(snapshot.session, 17);
+        assert_eq!(snapshot.objects[0].transform.translation.x, 2.0);
+        assert!(context.live_player(2.0).is_err());
     }
 }

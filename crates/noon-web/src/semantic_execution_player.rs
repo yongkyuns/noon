@@ -8,9 +8,8 @@ pub struct SemanticExecutionPlayer {
     session: ExecutionSession,
     clock: PlaybackClock,
     encoder: ExecutionDeltaEncoder,
-    /// Present only for the direct same-context WASM facade. This is the one
+    /// Present when the player came from canonical authoring. This is the one
     /// semantic store that produced `session`, not an execution mirror.
-    #[cfg(target_arch = "wasm32")]
     semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
 }
 
@@ -24,12 +23,10 @@ impl SemanticExecutionPlayer {
             session,
             clock: PlaybackClock::looping(duration).map_err(|e| e.to_string())?,
             encoder: ExecutionDeltaEncoder::new(transport_session),
-            #[cfg(target_arch = "wasm32")]
             semantics: None,
         })
     }
 
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn from_live_session(
         session: ExecutionSession,
         semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -42,6 +39,100 @@ impl SemanticExecutionPlayer {
             encoder: ExecutionDeltaEncoder::new(transport_session),
             semantics: Some(semantics),
         })
+    }
+
+    /// Change only derived transport framing while retaining the same runtime.
+    pub(crate) fn rebind_transport(
+        &mut self,
+        duration: f64,
+        transport_session: u32,
+    ) -> Result<(), String> {
+        self.clock
+            .set_loop_duration(duration)
+            .map_err(|error| error.to_string())?;
+        self.encoder = ExecutionDeltaEncoder::new(transport_session);
+        Ok(())
+    }
+
+    pub(crate) fn live_set_translation(
+        &mut self,
+        mobject: &noon::Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .set_translation(mobject, x, y)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn live_shift(
+        &mut self,
+        mobject: &noon::Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .shift(mobject, x, y)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn live_set_scale(
+        &mut self,
+        mobject: &noon::Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .set_scale(mobject, x, y)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn live_set_rotation(
+        &mut self,
+        mobject: &noon::Mobject,
+        angle: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .set_rotation(mobject, angle)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn live_effective(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<noon::EffectiveMobjectState, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .effective(mobject)
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_mut_for_test(&mut self) -> &mut ExecutionSession {
+        &mut self.session
     }
 
     fn delta(&mut self, snapshot: bool) -> Result<Option<ExecutionDeltaEnvelope>, String> {
@@ -126,123 +217,6 @@ impl SemanticExecutionPlayer {
     }
     pub fn time(&self) -> f64 {
         self.session.frame().time
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod wasm {
-    use wasm_bindgen::prelude::*;
-
-    use super::*;
-
-    fn js_error(error: impl ToString) -> JsValue {
-        JsValue::from_str(&error.to_string())
-    }
-
-    fn semantics(
-        player: &SemanticExecutionPlayer,
-    ) -> Result<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>, JsValue> {
-        player.semantics.clone().ok_or_else(|| {
-            js_error("this execution player was not created from a live semantic scene")
-        })
-    }
-
-    #[wasm_bindgen]
-    pub struct WasmEffectiveMobjectState {
-        state: noon::EffectiveMobjectState,
-    }
-
-    #[wasm_bindgen]
-    impl WasmEffectiveMobjectState {
-        #[wasm_bindgen(getter, js_name = translationX)]
-        pub fn translation_x(&self) -> f64 {
-            self.state.transform.translation.x as f64
-        }
-
-        #[wasm_bindgen(getter, js_name = translationY)]
-        pub fn translation_y(&self) -> f64 {
-            self.state.transform.translation.y as f64
-        }
-    }
-
-    #[wasm_bindgen]
-    impl SemanticExecutionPlayer {
-        /// Publish a semantic transform into this already-lowered session. The
-        /// handle carries typed store/node identity; no scene payload crosses
-        /// the browser boundary.
-        #[wasm_bindgen(js_name = setTranslation)]
-        pub fn set_translation(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            x: f64,
-            y: f64,
-        ) -> Result<(), JsValue> {
-            let semantics = semantics(self)?;
-            let node = handle.id_in_store(&semantics, "live execution player")?;
-            noon::LiveSession::new(&semantics, &mut self.session)
-                .set_translation(handle.semantic_mobject(), x, y)
-                .map_err(js_error)?;
-            debug_assert_eq!(node, handle.semantic_mobject().node_id());
-            Ok(())
-        }
-
-        #[wasm_bindgen(js_name = shift)]
-        pub fn shift(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            x: f64,
-            y: f64,
-        ) -> Result<(), JsValue> {
-            let semantics = semantics(self)?;
-            handle.id_in_store(&semantics, "live execution player")?;
-            noon::LiveSession::new(&semantics, &mut self.session)
-                .shift(handle.semantic_mobject(), x, y)
-                .map_err(js_error)?;
-            Ok(())
-        }
-
-        #[wasm_bindgen(js_name = setScale)]
-        pub fn set_scale(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            x: f64,
-            y: f64,
-        ) -> Result<(), JsValue> {
-            let semantics = semantics(self)?;
-            handle.id_in_store(&semantics, "live execution player")?;
-            noon::LiveSession::new(&semantics, &mut self.session)
-                .set_scale(handle.semantic_mobject(), x, y)
-                .map(|_| ())
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setRotation)]
-        pub fn set_rotation(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            angle: f64,
-        ) -> Result<(), JsValue> {
-            let semantics = semantics(self)?;
-            handle.id_in_store(&semantics, "live execution player")?;
-            noon::LiveSession::new(&semantics, &mut self.session)
-                .set_rotation(handle.semantic_mobject(), angle)
-                .map(|_| ())
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = effectiveMobject)]
-        pub fn effective_mobject(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<WasmEffectiveMobjectState, JsValue> {
-            let semantics = semantics(self)?;
-            handle.id_in_store(&semantics, "live execution player")?;
-            Ok(WasmEffectiveMobjectState {
-                state: noon::LiveSession::new(&semantics, &mut self.session)
-                    .effective(handle.semantic_mobject())
-                    .map_err(js_error)?,
-            })
-        }
     }
 }
 

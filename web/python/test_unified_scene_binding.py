@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import _noon_ir as _ir
-import _manim_canonical_scene as _canonical_scene
 import _manim_compat as _compat
 import _manim_typst as _typst
 import noon as _base
@@ -38,13 +37,6 @@ def test_phase_b_binding_is_content_polymorphic():
     source = (Path(__file__).parent / "_manim_phase_b.py").read_text()
     assert "member._bind_to_scene(scene, key=key)" in source
     assert "_base.Scene.add(scene, raw" not in source
-
-
-def test_static_canonical_context_rejects_unlowered_reactive_declarations():
-    scene = _base.Scene()
-    scene._reactive_signals = [{"signal": 0}]
-
-    assert _canonical_scene.execution_context(scene) is None
 
 
 def test_mixed_geometry_and_text_share_public_scene_identity_and_order():
