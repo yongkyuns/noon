@@ -41,5 +41,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wait = live.wait_segment(0.25)?;
     live.advance_segment_to(wait, wait.end_time())?;
     assert!(live.segment_state(wait).is_complete());
+    noon_native::run(session)?;
     Ok(())
 }
