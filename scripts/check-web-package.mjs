@@ -164,7 +164,7 @@ const expectedTypeSurface = [
   "textSpecJson(): string",
   "export class SemanticExecutionPlayer",
   "resourceBundleBytes(): Uint8Array",
-  "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<WasmExecutionCanvasRenderer>",
+  "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
   "export class CanonicalAuthoringSceneContext",
   "export class WasmValueTrackerHandle",
   "export class WasmTrackerPositionHandle",
