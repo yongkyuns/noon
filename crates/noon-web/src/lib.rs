@@ -20,6 +20,8 @@ mod family_bounds;
 mod family_write_authoring;
 #[cfg(any(target_arch = "wasm32", test))]
 mod gpu_diagnostics;
+#[cfg(target_arch = "wasm32")]
+mod gpu_timestamps;
 mod host_player;
 mod legacy;
 mod lifecycle;

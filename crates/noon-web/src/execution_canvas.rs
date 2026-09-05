@@ -28,6 +28,7 @@ mod wasm {
 
     use crate::{
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
+        gpu_timestamps::GpuTimestampProfiler,
         BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan,
         BrowserHostWake, ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
     };
@@ -154,6 +155,7 @@ mod wasm {
         queue: wgpu::Queue,
         backend: wgpu::Backend,
         config: wgpu::SurfaceConfiguration,
+        timestamp_query_supported: bool,
     }
 
     enum CanvasExecutionSource {
@@ -225,6 +227,8 @@ mod wasm {
         direct_wake_clock: BrowserExecutionWakeClock,
         preparer: FramePreparer,
         renderer: GpuRenderer,
+        timestamp_query_supported: bool,
+        timestamp_profiler: Option<GpuTimestampProfiler>,
         camera_center: Vec2,
         camera_height: f32,
         clear_color: wgpu::Color,
@@ -373,10 +377,38 @@ mod wasm {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Noon execution render worker frame"),
                 });
-            let draw = self
-                .renderer
-                .encode(&mut encoder, &view, &prepared, self.clear_color);
+            let timestamp_slot = self
+                .timestamp_profiler
+                .as_mut()
+                .and_then(GpuTimestampProfiler::reserve_slot);
+            let draw = if let Some(slot) = timestamp_slot {
+                self.renderer.encode_profiled(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    self.clear_color,
+                    self.timestamp_profiler
+                        .as_ref()
+                        .expect("timestamp profiler reserved its own slot")
+                        .query_set(slot),
+                )
+            } else {
+                self.renderer
+                    .encode(&mut encoder, &view, &prepared, self.clear_color)
+            };
+            if let Some(slot) = timestamp_slot {
+                self.timestamp_profiler
+                    .as_ref()
+                    .expect("timestamp profiler reserved its own slot")
+                    .resolve(&mut encoder, slot);
+            }
             self.queue.submit(Some(encoder.finish()));
+            if let Some(slot) = timestamp_slot {
+                self.timestamp_profiler
+                    .as_ref()
+                    .expect("timestamp profiler reserved its own slot")
+                    .map_after_submit(slot);
+            }
             self.queue.present(surface_texture);
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
@@ -456,6 +488,45 @@ mod wasm {
                 .take_for_generation(self.gpu_generation)
                 .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))
                 .transpose()
+        }
+
+        /// Drain asynchronously completed WebGPU render-pass timestamps. The
+        /// host never waits for a mapped buffer while presenting a frame.
+        #[wasm_bindgen(js_name = takeGpuTimestampJson)]
+        pub fn take_gpu_timestamp_json(&self) -> Result<String, JsValue> {
+            let metrics = self
+                .timestamp_profiler
+                .as_ref()
+                .map(GpuTimestampProfiler::take_metrics)
+                .unwrap_or_default();
+            serde_json::to_string(&metrics).map_err(js_error)
+        }
+
+        /// Timestamp diagnostics are opt-in so ordinary browser presentation
+        /// never allocates or maps profiling buffers.
+        #[wasm_bindgen(js_name = enableGpuTimestampProfiling)]
+        pub fn enable_gpu_timestamp_profiling(&mut self, enabled: bool) -> bool {
+            if !enabled {
+                self.timestamp_profiler = None;
+                return false;
+            }
+            if !self.timestamp_query_supported {
+                return false;
+            }
+            if self.timestamp_profiler.is_none() {
+                self.timestamp_profiler =
+                    Some(GpuTimestampProfiler::new(&self.device, &self.queue));
+            }
+            true
+        }
+
+        /// Start a new measurement window only once preceding asynchronous
+        /// readbacks have drained, keeping its counters frame-local.
+        #[wasm_bindgen(js_name = resetGpuTimestampMetrics)]
+        pub fn reset_gpu_timestamp_metrics(&self) -> bool {
+            self.timestamp_profiler
+                .as_ref()
+                .is_some_and(GpuTimestampProfiler::reset)
         }
 
         pub fn time(&self) -> f64 {
@@ -925,6 +996,7 @@ mod wasm {
                 queue,
                 backend,
                 config,
+                timestamp_query_supported,
             } = initialize_gpu(&canvas, width, height).await?;
             let gpu_generation = 1;
             let gpu_diagnostics = GpuDiagnosticMailbox::default();
@@ -945,6 +1017,8 @@ mod wasm {
                 direct_wake_clock: BrowserExecutionWakeClock::default(),
                 preparer: FramePreparer::new(),
                 renderer,
+                timestamp_query_supported,
+                timestamp_profiler: None,
                 camera_center,
                 camera_height,
                 clear_color: MANIM_DEFAULT_CLEAR_COLOR,
@@ -1035,7 +1109,7 @@ mod wasm {
             .await
             .map_err(|error| error.to_string())?;
         let backend = adapter.get_info().backend;
-        let (device, queue) = request_device(&adapter, backend).await?;
+        let (device, queue, timestamp_query_supported) = request_device(&adapter, backend).await?;
 
         // Do not claim a canvas context until WebGPU has a usable device. Once a
         // canvas is bound to WebGPU, browsers cannot reliably create WebGL2 from
@@ -1050,6 +1124,7 @@ mod wasm {
             queue,
             backend,
             config,
+            timestamp_query_supported,
         })
     }
 
@@ -1070,7 +1145,7 @@ mod wasm {
             .await
             .map_err(|error| error.to_string())?;
         let backend = adapter.get_info().backend;
-        let (device, queue) = request_device(&adapter, backend).await?;
+        let (device, queue, timestamp_query_supported) = request_device(&adapter, backend).await?;
         let config = default_surface_config(&surface, &adapter, width, height)?;
         surface.configure(&device, &config);
         Ok(InitializedGpu {
@@ -1080,6 +1155,7 @@ mod wasm {
             queue,
             backend,
             config,
+            timestamp_query_supported,
         })
     }
 
@@ -1093,20 +1169,28 @@ mod wasm {
     async fn request_device(
         adapter: &wgpu::Adapter,
         backend: wgpu::Backend,
-    ) -> Result<(wgpu::Device, wgpu::Queue), String> {
+    ) -> Result<(wgpu::Device, wgpu::Queue, bool), String> {
         let required_limits = if backend == wgpu::Backend::Gl {
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
         } else {
             wgpu::Limits::default()
         };
+        let timestamp_query_supported = backend == wgpu::Backend::BrowserWebGpu
+            && adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let required_features = if timestamp_query_supported {
+            wgpu::Features::TIMESTAMP_QUERY
+        } else {
+            wgpu::Features::empty()
+        };
         adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Noon execution render worker GPU device"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 required_limits,
                 ..Default::default()
             })
             .await
+            .map(|(device, queue)| (device, queue, timestamp_query_supported))
             .map_err(|error| error.to_string())
     }
 
