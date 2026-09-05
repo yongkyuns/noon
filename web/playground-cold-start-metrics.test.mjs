@@ -79,10 +79,12 @@ test("preloadedColdStartMilestones reports the automatic preload path", () => {
   );
 });
 
-test("authoring startup metrics expose parallel resources and sequential bootstrap cost", () => {
+test("authoring startup metrics expose module graph, parallel resources, and sequential bootstrap cost", () => {
   const summary = summarizeAuthoringStartup({
     version: 1,
-    totalMs: 900,
+    totalMs: 1050,
+    moduleGraphLoadMs: 150,
+    initializeMs: 900,
     startupResourcesMs: 600,
     noonWebInitMs: 320,
     pyodideInitMs: 590,
@@ -93,6 +95,8 @@ test("authoring startup metrics expose parallel resources and sequential bootstr
     compatibilityModuleCount: 27,
     compatibilitySourceChars: 500_000,
   });
+  assert.equal(summary.moduleGraphLoadMs, 150);
+  assert.equal(summary.initializeMs, 900);
   assert.equal(summary.criticalResource, "pyodide");
   assert.equal(summary.criticalResourceMs, 590);
   assert.equal(summary.resourceWorkMs, 1010);
@@ -112,6 +116,8 @@ test("authoring startup metrics reject malformed diagnostic payloads", () => {
       validateAuthoringStartupMetrics({
         version: 1,
         totalMs: Number.NaN,
+        moduleGraphLoadMs: 1,
+        initializeMs: 1,
         startupResourcesMs: 1,
         noonWebInitMs: 1,
         pyodideInitMs: 1,
