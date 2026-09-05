@@ -51,6 +51,7 @@ impl ExecutionViewportQuery {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionSessionInputError {
     RequiredCallbackPending,
+    RequiredCallbacksConfigured,
     UnknownSemanticSignal(SemanticNodeId),
     NativeInput(NativeInputRuntimeError),
     NativeEventOutOfOrder { previous: u64, next: u64 },
@@ -63,6 +64,9 @@ impl std::fmt::Display for ExecutionSessionInputError {
             Self::RequiredCallbackPending => {
                 formatter.write_str("a required callback publication is pending")
             }
+            Self::RequiredCallbacksConfigured => formatter.write_str(
+                "direct native/reactive input is unsupported while required callbacks are configured",
+            ),
             Self::UnknownSemanticSignal(signal) => write!(
                 formatter,
                 "semantic signal {}:{} is not present in this execution session",
@@ -260,6 +264,16 @@ impl Clone for ExecutionSession {
 }
 
 impl ExecutionSession {
+    fn ensure_direct_input_ingress_available(&self) -> Result<(), ExecutionSessionInputError> {
+        if !self.callback_schedule.is_empty() {
+            return Err(ExecutionSessionInputError::RequiredCallbacksConfigured);
+        }
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionInputError::RequiredCallbackPending);
+        }
+        Ok(())
+    }
+
     /// Lower one authoritative semantic snapshot and instantiate the existing runtime.
     pub fn from_semantic_store(
         store: &SemanticStore,
@@ -637,9 +651,7 @@ impl ExecutionSession {
         signal: SemanticNodeId,
         value: impl Into<ReactiveValue>,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
-        if self.pending_callback.is_some() {
-            return Err(ExecutionSessionInputError::RequiredCallbackPending);
-        }
+        self.ensure_direct_input_ingress_available()?;
         let execution_signal = self
             .reactive_projection
             .execution_signal_id(signal)
@@ -658,9 +670,7 @@ impl ExecutionSession {
         source: NativeStateSource,
         value: NativeInputValue,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
-        if self.pending_callback.is_some() {
-            return Err(ExecutionSessionInputError::RequiredCallbackPending);
-        }
+        self.ensure_direct_input_ingress_available()?;
         let update = NativeStateUpdate::new(source, value)?;
         let targets = self
             .reactive_projection
@@ -682,9 +692,7 @@ impl ExecutionSession {
         &mut self,
         occurrence: NativeEventOccurrence,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
-        if self.pending_callback.is_some() {
-            return Err(ExecutionSessionInputError::RequiredCallbackPending);
-        }
+        self.ensure_direct_input_ingress_available()?;
         if let Some(previous) = self.last_native_event_sequence {
             if occurrence.sequence <= previous {
                 return Err(ExecutionSessionInputError::NativeEventOutOfOrder {
