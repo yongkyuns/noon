@@ -30,12 +30,15 @@ jobs:
           scripts/check.sh
           scripts/architecture-ratchet.sh
           scripts/architecture-ratchet.test.sh
+          scripts/noon-core-module-ownership-ratchet.sh
+          scripts/noon-core-module-ownership-ratchet.test.sh
           scripts/active-perf-frontend-ratchet.sh
           scripts/active-perf-frontend-ratchet.test.sh
 
       - name: Exercise architecture guardrails
         run: |
           bash scripts/architecture-ratchet.test.sh
+          bash scripts/noon-core-module-ownership-ratchet.test.sh
           bash scripts/active-perf-frontend-ratchet.test.sh
 
       - name: Keep ScenePlayer crate-private
@@ -59,4 +62,5 @@ jobs:
             base="HEAD^"
           fi
           bash scripts/architecture-ratchet.sh "$base"
+          bash scripts/noon-core-module-ownership-ratchet.sh
           bash scripts/active-perf-frontend-ratchet.sh
