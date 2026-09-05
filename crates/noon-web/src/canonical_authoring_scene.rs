@@ -344,8 +344,13 @@ mod wasm {
             session: u32,
         ) -> Result<crate::SemanticExecutionPlayer, JsValue> {
             let execution = self.inner.lower_execution().map_err(js_error)?;
-            crate::SemanticExecutionPlayer::from_session(execution, duration, session)
-                .map_err(js_error)
+            crate::SemanticExecutionPlayer::from_live_session(
+                execution,
+                std::rc::Rc::clone(self.inner.scene.store()),
+                duration,
+                session,
+            )
+            .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = bindGeometry)]

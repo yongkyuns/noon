@@ -1591,7 +1591,7 @@ mod wasm {
         pub(crate) fn semantic_mobject(&self) -> &Mobject {
             &self.handle
         }
-        fn id_in_store(
+        pub(crate) fn id_in_store(
             &self,
             semantics: &SharedSemanticStore,
             context: &str,

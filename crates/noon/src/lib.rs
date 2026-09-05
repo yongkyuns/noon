@@ -15,6 +15,7 @@ mod execution_session;
 mod geometry_authoring;
 pub mod legacy;
 mod line_matcher_authoring;
+mod live_session;
 mod polygram_authoring;
 mod reactive_authoring;
 mod retained_family_authoring_lowering;
@@ -26,6 +27,7 @@ mod text_authoring;
 
 pub use execution_segment::*;
 pub use execution_session::*;
+pub use live_session::{EffectiveMobjectState, LiveSession, LiveSessionError};
 pub use noon_core::*;
 pub use noon_runtime::{
     EvaluationError, FrameChanges, FrameObjectState, FrameState, RuntimeWakeState,
@@ -40,7 +42,7 @@ pub use text_authoring::*;
 
 /// Common imports for direct typed semantic authoring.
 pub mod prelude {
-    pub use crate::{ExecutionSession, Mobject, Scene};
+    pub use crate::{EffectiveMobjectState, ExecutionSession, LiveSession, Mobject, Scene};
     pub use noon_core::{
         Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,
     };
