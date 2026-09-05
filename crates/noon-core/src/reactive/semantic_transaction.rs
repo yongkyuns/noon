@@ -592,6 +592,22 @@ impl SemanticMutationTransaction {
         }
         let removed_nodes = store.semantic_removal_closure(&removed_nodes);
         let pending_creations = catalog.cloned_creations();
+        let surviving_object_creations = pending_creations
+            .iter()
+            .filter(|(token, creation)| {
+                !removed_pending.contains(token)
+                    && matches!(creation, SemanticNodeCreation::Object { .. })
+            })
+            .count();
+        let surviving_object_creations = u64::try_from(surviving_object_creations)
+            .map_err(|_| SemanticMutationTransactionError::InsertionOrderExhausted)?;
+        if store
+            .next_insertion_order()
+            .checked_add(surviving_object_creations)
+            .is_none()
+        {
+            return Err(SemanticMutationTransactionError::InsertionOrderExhausted);
+        }
 
         let mut targets = HashSet::with_capacity(self.mutations.len());
         let mut style_replacements = HashSet::new();
@@ -1164,6 +1180,7 @@ impl SemanticMutationTransactionResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticMutationTransactionError {
     SceneRevisionExhausted,
+    InsertionOrderExhausted,
     PendingNodeFromDifferentTransaction {
         index: usize,
         token: SemanticLocalNodeToken,
@@ -1410,6 +1427,9 @@ impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SceneRevisionExhausted => write!(formatter, "Noon scene revision space exhausted"),
+            Self::InsertionOrderExhausted => {
+                write!(formatter, "Noon semantic insertion-order space exhausted")
+            }
             Self::PendingNodeFromDifferentTransaction { index, token } => write!(
                 formatter,
                 "semantic transaction mutation {index} uses pending node {token:?} from another transaction"

@@ -159,6 +159,7 @@ pub enum ExecutionSlotError {
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
     GenerationExhausted(ExecutionSlotId),
+    CapacityExhausted,
 }
 
 impl std::fmt::Display for ExecutionSlotError {
@@ -174,6 +175,7 @@ impl std::fmt::Display for ExecutionSlotError {
                 id.slot(),
                 id.generation()
             ),
+            Self::CapacityExhausted => formatter.write_str("execution slot capacity exhausted"),
         }
     }
 }

@@ -716,6 +716,24 @@ impl CompiledScene {
         transaction_preflight::preflight_transaction(self, transaction)
     }
 
+    /// Validate append-only structural capacity before transaction-local semantic
+    /// identities are promoted. Removed rows remain tombstones, so only appended
+    /// objects affect this bound.
+    pub fn preflight_object_appends(
+        &self,
+        additional_objects: usize,
+    ) -> Result<(), CompilePatchError> {
+        let count = self
+            .objects
+            .len()
+            .checked_add(additional_objects)
+            .ok_or(CompilePatchError::TooManyObjects(usize::MAX))?;
+        if count != 0 && u32::try_from(count - 1).is_err() {
+            return Err(CompilePatchError::TooManyObjects(count));
+        }
+        Ok(())
+    }
+
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
         self.apply_patch_with_stats(patch).map(|_| ())
     }

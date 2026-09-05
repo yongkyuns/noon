@@ -90,6 +90,52 @@ impl SceneInstance {
         self.effective_object(id).map(|object| object.transform)
     }
 
+    /// Finish every fallible runtime check available before transaction-local
+    /// semantic identities are assigned. `transaction` contains value edits and
+    /// conservative removals; `additional_objects` reserves append-only rows.
+    pub fn preflight_authored_transaction_shape(
+        &self,
+        transaction: &MutationTransaction,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+        additional_objects: usize,
+        structural_change_possible: bool,
+    ) -> Result<(), AuthoredPublicationError> {
+        let current = self.publication_context();
+        if expected != current {
+            return Err(AuthoredPublicationError::StalePublication {
+                expected,
+                actual: current,
+            });
+        }
+        let scene_changed = scene_revision != current.scene_revision();
+        if scene_changed && current.scene_revision().checked_next() != Some(scene_revision) {
+            return Err(AuthoredPublicationError::InvalidSceneRevision {
+                current: current.scene_revision(),
+                proposed: scene_revision,
+            });
+        }
+        self.compiled.preflight_transaction(transaction)?;
+        self.compiled.preflight_object_appends(additional_objects)?;
+        let execution_change_possible = structural_change_possible
+            || final_value_writes(transaction)
+                .into_iter()
+                .any(|patch| self.compiled.patch_changes_execution(patch));
+        if execution_change_possible && current.execution_revision().checked_next().is_none() {
+            return Err(AuthoredPublicationError::ExecutionRevisionExhausted(
+                current.execution_revision(),
+            ));
+        }
+        if (scene_changed || execution_change_possible)
+            && current.frame_epoch().checked_next().is_none()
+        {
+            return Err(AuthoredPublicationError::FrameEpochExhausted(
+                current.frame_epoch(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Publish one already-authored mutation transaction atomically into the runtime.
     ///
     /// The compiled scene preflights the complete transaction against staged

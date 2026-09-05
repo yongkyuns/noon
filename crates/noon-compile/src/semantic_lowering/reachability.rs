@@ -110,6 +110,22 @@ impl SemanticExecutionReachability {
         Ok(reachability)
     }
 
+    /// Build reachability for one explicitly selected execution root without
+    /// changing authored scene residency.
+    pub fn from_root(
+        store: &SemanticStore,
+        root: SemanticNodeId,
+    ) -> Result<Self, SemanticLoweringError> {
+        let mut reachability = Self::default();
+        let mut journal = ReachabilityJournal::default();
+        reachability.set_scene_root(store, root, true, &mut journal)?;
+        if let Err(error) = reachability.validate_new_visible_objects(store, &journal) {
+            reachability.rollback(journal);
+            return Err(error);
+        }
+        Ok(reachability)
+    }
+
     pub fn is_reachable(&self, id: SemanticNodeId) -> bool {
         self.nodes
             .get(&id)
@@ -127,6 +143,12 @@ impl SemanticExecutionReachability {
             .values()
             .filter(|node| node.is_reachable_object())
             .count()
+    }
+
+    pub fn reachable_objects(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.nodes
+            .iter()
+            .filter_map(|(id, node)| node.is_reachable_object().then_some(*id))
     }
 
     /// Synchronize one explicitly changed top-level scene-root residency bit.

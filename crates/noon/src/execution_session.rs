@@ -1,12 +1,15 @@
 mod publication;
 pub use publication::*;
 
+use std::collections::{BTreeMap, HashMap};
+
 use crate::execution_segment::{ExecutionSegment, ExecutionSegmentError};
 use noon_compile::{
     lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
     lower_semantic_execution, lower_semantic_execution_root, CompilePatchError,
     SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
-    SemanticExecutionLoweringError, SemanticExecutionLoweringOutput, SemanticReactiveProjection,
+    SemanticExecutionLoweringError, SemanticExecutionLoweringOutput, SemanticExecutionReachability,
+    SemanticReactiveProjection,
 };
 use noon_core::{
     AnimationOptions, Camera2DState, MutationTransaction, NativeEventOccurrence,
@@ -176,12 +179,15 @@ impl From<CompilePatchError> for ExecutionSessionAnimationError {
 pub struct ExecutionSession {
     store_identity: noon_core::SemanticStoreIdentity,
     execution_index: SemanticExecutionIndex,
+    reachability: SemanticExecutionReachability,
+    painter_order: SemanticPainterOrderIndex,
     slots: noon_runtime::ExecutionSlotTable,
     reactive_projection: SemanticReactiveProjection,
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
+    last_structural_publication: StructuralPublicationStats,
 }
 
 impl ExecutionSession {
@@ -190,10 +196,14 @@ impl ExecutionSession {
         store: &SemanticStore,
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
+        let reachability = SemanticExecutionReachability::from_store(store)?;
+        let painter_order = semantic_painter_order(store, &reachability);
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
         Ok(Self::from_lowered(
             store.identity(),
             execution_index,
+            reachability,
+            painter_order,
             lowered,
         ))
     }
@@ -209,10 +219,14 @@ impl ExecutionSession {
         root: SemanticNodeId,
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
+        let reachability = SemanticExecutionReachability::from_root(store, root)?;
+        let painter_order = semantic_painter_order(store, &reachability);
         let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
         Ok(Self::from_lowered(
             store.identity(),
             execution_index,
+            reachability,
+            painter_order,
             lowered,
         ))
     }
@@ -220,6 +234,8 @@ impl ExecutionSession {
     fn from_lowered(
         store_identity: noon_core::SemanticStoreIdentity,
         execution_index: SemanticExecutionIndex,
+        reachability: SemanticExecutionReachability,
+        painter_order: SemanticPainterOrderIndex,
         lowered: SemanticExecutionLoweringOutput,
     ) -> Self {
         let camera_object = lowered.camera_object();
@@ -235,12 +251,15 @@ impl ExecutionSession {
         Self {
             store_identity,
             execution_index,
+            reachability,
+            painter_order,
             slots,
             reactive_projection,
             runtime,
             camera_object,
             next_activation_track_id,
             last_native_event_sequence: None,
+            last_structural_publication: StructuralPublicationStats::default(),
         }
     }
 
@@ -264,8 +283,8 @@ impl ExecutionSession {
         self.runtime.geometry_resources()
     }
 
-    /// Stable runtime identity for an initially lowered row. This session does not
-    /// expose structural mutation; value/timeline changes preserve this slot table.
+    /// Stable runtime identity for a current frame row. Structural publication
+    /// retires and allocates durable slots without renumbering unrelated identities.
     pub fn execution_slot_for_frame_index(
         &self,
         index: usize,
@@ -497,6 +516,46 @@ impl ExecutionSession {
     /// Resolve an authoritative semantic object identity to its current execution key.
     pub fn execution_object_id(&self, node: SemanticNodeId) -> Option<ObjectId> {
         self.execution_index.execution_object_id(node)
+    }
+}
+
+fn semantic_painter_order(
+    store: &SemanticStore,
+    reachability: &SemanticExecutionReachability,
+) -> SemanticPainterOrderIndex {
+    let mut index = SemanticPainterOrderIndex::default();
+    for node in reachability.reachable_objects() {
+        let state = store
+            .semantic_object_state_checked(node)
+            .expect("reachable semantic object was validated during initial lowering");
+        index.insert(node, state.presentation().order_key());
+    }
+    index
+}
+
+#[derive(Clone, Debug, Default)]
+struct SemanticPainterOrderIndex {
+    ordered: BTreeMap<(i32, u64), SemanticNodeId>,
+    keys: HashMap<SemanticNodeId, (i32, u64)>,
+}
+
+impl SemanticPainterOrderIndex {
+    fn tail(&self) -> Option<(i32, u64)> {
+        self.ordered.last_key_value().map(|(key, _)| *key)
+    }
+
+    fn insert(&mut self, node: SemanticNodeId, key: (i32, u64)) {
+        debug_assert!(self.keys.insert(node, key).is_none());
+        debug_assert!(self.ordered.insert(key, node).is_none());
+    }
+
+    fn remove(&mut self, node: SemanticNodeId) {
+        let key = self
+            .keys
+            .remove(&node)
+            .expect("exited execution object has a painter-order entry");
+        let removed = self.ordered.remove(&key);
+        debug_assert_eq!(removed, Some(node));
     }
 }
 
