@@ -616,7 +616,26 @@ mod tests {
 
         assert_family_midpoint(&forward_mirror, text_id, circle_id);
         assert_family_midpoint(&direct_mirror, text_id, circle_id);
-        assert_eq!(forward_mirror.frame(), direct_mirror.frame());
+        let forward_frame = forward_mirror.frame().unwrap();
+        let direct_frame = direct_mirror.frame().unwrap();
+        assert_eq!(
+            crate::determinism::normalized_frame_value(forward_frame),
+            crate::determinism::normalized_frame_value(direct_frame),
+        );
+        for (forward_object, direct_object) in
+            forward_frame.objects.iter().zip(&direct_frame.objects)
+        {
+            assert_eq!(forward_object.text_bounds, direct_object.text_bounds);
+            if let (Some(forward_text), Some(direct_text)) =
+                (forward_object.text(), direct_object.text())
+            {
+                assert_ne!(forward_text.arena, direct_text.arena);
+                assert_eq!(
+                    forward_mirror.resources().texts().get(forward_text),
+                    direct_mirror.resources().texts().get(direct_text),
+                );
+            }
+        }
     }
 
     #[test]
