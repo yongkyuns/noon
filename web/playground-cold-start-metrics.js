@@ -131,6 +131,133 @@ export function summarizeWorkers(events) {
   });
 }
 
+export function classifyColdStartResource(url) {
+  const value = String(url ?? "");
+  if (/\/noon_web_bg\.wasm(?:[?#]|$)/.test(value)) return "noon-wasm";
+  if (/\/pyodide\.asm\.wasm(?:[?#]|$)/.test(value)) return "pyodide-wasm";
+  if (/\/pyodide(?:\.mjs|\.js)(?:[?#]|$)/.test(value)) return "pyodide";
+  if (/\.wasm(?:[?#]|$)/.test(value)) return "wasm";
+  if (/compat-bundle(?:\.[a-f0-9]+)?\.json(?:[?#]|$)/.test(value)) return "compat-bundle";
+  return "other";
+}
+
+export function summarizeResourceFootprint(contexts, { noonWasmPackageBytes } = {}) {
+  if (!Array.isArray(contexts) || contexts.length === 0) {
+    throw new TypeError("resource footprint contexts must be a non-empty array");
+  }
+  if (!Number.isSafeInteger(noonWasmPackageBytes) || noonWasmPackageBytes <= 0) {
+    throw new TypeError("Noon WASM package bytes must be a positive safe integer");
+  }
+
+  const rows = [];
+  const contextSummaries = [];
+  for (const context of contexts) {
+    if (
+      !isRecord(context) ||
+      typeof context.name !== "string" ||
+      context.name.trim() === "" ||
+      typeof context.role !== "string" ||
+      context.role.trim() === "" ||
+      !Array.isArray(context.entries)
+    ) {
+      throw new TypeError("resource footprint context must contain name, role, and entries");
+    }
+    let transferBytes = 0;
+    let encodedBodyBytes = 0;
+    let decodedBodyBytes = 0;
+    let wasmRequests = 0;
+    for (const entry of context.entries) {
+      const checked = validateResourceTimingEntry(entry);
+      const kind = classifyColdStartResource(checked.name);
+      if (kind === "noon-wasm" || kind === "pyodide-wasm" || kind === "wasm") {
+        wasmRequests += 1;
+      }
+      transferBytes += checked.transferSize;
+      encodedBodyBytes += checked.encodedBodySize;
+      decodedBodyBytes += checked.decodedBodySize;
+      rows.push({
+        context: context.name,
+        role: context.role,
+        kind,
+        ...checked,
+      });
+    }
+    contextSummaries.push(
+      Object.freeze({
+        name: context.name,
+        role: context.role,
+        requests: context.entries.length,
+        transferBytes,
+        encodedBodyBytes,
+        decodedBodyBytes,
+        wasmRequests,
+      }),
+    );
+  }
+
+  const noonWasmRows = rows.filter(({ kind }) => kind === "noon-wasm");
+  const wasmRows = rows.filter(
+    ({ kind }) => kind === "noon-wasm" || kind === "pyodide-wasm" || kind === "wasm",
+  );
+  const noonWasmOwners = [...new Set(noonWasmRows.map(({ context }) => context))].sort();
+  const uniqueWasmUrls = [...new Set(wasmRows.map(({ name }) => name))].sort();
+  const sum = (values, field) => values.reduce((total, value) => total + value[field], 0);
+  const largestResources = rows
+    .slice()
+    .sort((left, right) => {
+      const leftSize = Math.max(left.encodedBodySize, left.transferSize);
+      const rightSize = Math.max(right.encodedBodySize, right.transferSize);
+      return rightSize - leftSize || left.name.localeCompare(right.name);
+    })
+    .slice(0, 20)
+    .map((row) => Object.freeze({ ...row }));
+
+  return Object.freeze({
+    contextCount: contexts.length,
+    requestCount: rows.length,
+    transferBytes: sum(rows, "transferSize"),
+    encodedBodyBytes: sum(rows, "encodedBodySize"),
+    decodedBodyBytes: sum(rows, "decodedBodySize"),
+    wasmRequestCount: wasmRows.length,
+    uniqueWasmUrls: Object.freeze(uniqueWasmUrls),
+    noonWasm: Object.freeze({
+      requestCount: noonWasmRows.length,
+      observedOwnerCount: noonWasmOwners.length,
+      owners: Object.freeze(noonWasmOwners),
+      transferBytes: sum(noonWasmRows, "transferSize"),
+      encodedBodyBytes: sum(noonWasmRows, "encodedBodySize"),
+      decodedBodyBytes: sum(noonWasmRows, "decodedBodySize"),
+      packageBytes: noonWasmPackageBytes,
+      packageBytesAcrossObservedOwners: noonWasmPackageBytes * noonWasmOwners.length,
+    }),
+    contexts: Object.freeze(contextSummaries),
+    largestResources: Object.freeze(largestResources),
+  });
+}
+
+function validateResourceTimingEntry(entry) {
+  if (!isRecord(entry) || typeof entry.name !== "string" || entry.name.trim() === "") {
+    throw new TypeError("resource timing entry must contain a non-empty name");
+  }
+  const checked = {
+    name: entry.name,
+    initiatorType: typeof entry.initiatorType === "string" ? entry.initiatorType : "",
+  };
+  for (const field of [
+    "transferSize",
+    "encodedBodySize",
+    "decodedBodySize",
+    "duration",
+  ]) {
+    const value = entry[field];
+    if (!Number.isFinite(value) || value < 0) {
+      throw new TypeError(`resource timing ${field} must be finite and non-negative`);
+    }
+    checked[field] = value;
+  }
+  return checked;
+}
+
 function validateOrderedMilestones(timestamps, required, label) {
   for (const name of required) {
     const value = timestamps?.[name];
