@@ -83,6 +83,19 @@ pub async fn create_direct_execution_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Browser proof that the same target-neutral Rust callback scene used by the
+/// native example executes and renders entirely inside one WASM context.
+#[wasm_bindgen(js_name = createDirectAffineCallbackSmokeRenderer)]
+pub async fn create_direct_affine_callback_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (session, callbacks) = noon::example_scenes::live_affine_callbacks().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session_with_callbacks(
+        canvas, session, callbacks,
+    )
+    .await
+}
+
 fn js_error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
 }

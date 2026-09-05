@@ -11,6 +11,7 @@ mod arc_authoring;
 mod camera_authoring;
 mod dashed_line_authoring;
 mod elbow_authoring;
+pub mod example_scenes;
 mod execution_segment;
 mod execution_session;
 mod geometry_authoring;

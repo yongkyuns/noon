@@ -267,6 +267,38 @@ async function directExecutionProof(page, expectedBackend) {
     true,
     "direct Rust/WASM renderer prepared a static frame without a publication",
   );
+  assert.equal(
+    direct.metrics.affineCallbacks?.backend,
+    expectedBackend,
+    "direct Rust/WASM callbacks did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.affineCallbacks?.authoredTime,
+    2,
+    "direct Rust/WASM callbacks did not reach the exact authored endpoint",
+  );
+  assert.equal(
+    direct.metrics.affineCallbacks?.objectCount,
+    2,
+    "direct Rust/WASM callback scene did not retain both Rust-authored objects",
+  );
+  assert.ok(
+    direct.metrics.affineCallbacks?.sourceLuma >= 180,
+    "direct Rust/WASM ordered callbacks did not render the transformed translucent source",
+  );
+  assert.ok(
+    direct.metrics.affineCallbacks?.driftLuma >= 600,
+    "direct Rust/WASM dt callback did not render the accumulated drift object",
+  );
+  assert.ok(
+    direct.metrics.affineCallbacks?.driftLuma >=
+      direct.metrics.affineCallbacks?.sourceLuma + 120,
+    "direct Rust/WASM ordered opacity callback did not affect the source",
+  );
+  assert.ok(
+    direct.metrics.affineCallbacks?.bootstrapVacatedLuma <= 60,
+    "direct Rust/WASM time-zero callback did not publish before the first renderer frame",
+  );
   return direct.metrics;
 }
 

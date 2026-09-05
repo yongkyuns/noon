@@ -1,4 +1,7 @@
-import { createDirectExecutionSmokeRenderer } from "./pkg/noon_web.js";
+import {
+  createDirectAffineCallbackSmokeRenderer,
+  createDirectExecutionSmokeRenderer,
+} from "./pkg/noon_web.js";
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
 
 const state = {
@@ -37,6 +40,113 @@ async function waitForDirectExecutionToSettle(renderer, driver) {
   throw new Error(
     `direct execution wake driver did not settle: time=${renderer.time()}, stats=${JSON.stringify(driver.stats())}`,
   );
+}
+
+async function presentDirectFrame(renderer) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (renderer.render()) {
+      return;
+    }
+    await sleep(10);
+  }
+  throw new Error("direct affine callback renderer could not acquire a frame");
+}
+
+async function advanceDirectCallbackFrame(renderer, wallTimeMs) {
+  const directive = JSON.parse(renderer.directWakeDirectiveJson(wallTimeMs));
+  if (directive.cadence !== "animation-frame") {
+    throw new Error(
+      `direct affine callbacks expected runtime animation-frame cadence, got ${directive.cadence}`,
+    );
+  }
+  if (!renderer.advanceDirectRealtime(wallTimeMs)) {
+    throw new Error(`direct affine callbacks published no frame at ${wallTimeMs}ms`);
+  }
+  await presentDirectFrame(renderer);
+}
+
+async function sampleRenderedPixel(canvas, worldX, worldY) {
+  const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
+  const pixels = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = pixels.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("direct affine callback proof could not create its pixel reader");
+  }
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const worldHeight = 8;
+  const worldWidth = worldHeight * (canvas.width / canvas.height);
+  const x = Math.round(((worldX + worldWidth / 2) / worldWidth) * (canvas.width - 1));
+  const y = Math.round(((worldHeight / 2 - worldY) / worldHeight) * (canvas.height - 1));
+  const data = context.getImageData(x, y, 1, 1).data;
+  return data[0] + data[1] + data[2];
+}
+
+async function directAffineCallbackProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectAffineCallbackSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow) {
+    throw new Error("direct affine callback session did not expose its initial publication");
+  }
+  await presentDirectFrame(renderer);
+  const bootstrapSourceLuma = await sampleRenderedPixel(canvas, 0, 1);
+  const bootstrapDriftLuma = await sampleRenderedPixel(canvas, -3, 0);
+  const bootstrapVacatedLuma = await sampleRenderedPixel(canvas, 0, -0.75);
+  if (
+    bootstrapSourceLuma < 180 ||
+    bootstrapDriftLuma < bootstrapSourceLuma + 120 ||
+    bootstrapVacatedLuma > 60
+  ) {
+    throw new Error(
+      `direct affine callback bootstrap did not publish its time-zero phase: ${JSON.stringify({
+        bootstrapSourceLuma,
+        bootstrapDriftLuma,
+        bootstrapVacatedLuma,
+      })}`,
+    );
+  }
+  await advanceDirectCallbackFrame(renderer, 1000);
+  await advanceDirectCallbackFrame(renderer, 2000);
+
+  const sourceLuma = await sampleRenderedPixel(canvas, 2, 1);
+  const driftLuma = await sampleRenderedPixel(canvas, -3, 2);
+  const backgroundLuma = await sampleRenderedPixel(canvas, 0, -3);
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    sourceLuma,
+    driftLuma,
+    backgroundLuma,
+    bootstrapSourceLuma,
+    bootstrapDriftLuma,
+    bootstrapVacatedLuma,
+  };
+  if (metrics.backend !== expectedBackend) {
+    throw new Error(
+      `direct affine callback renderer selected ${metrics.backend}; expected ${expectedBackend}`,
+    );
+  }
+  if (metrics.authoredTime !== 2) {
+    throw new Error(`direct affine callback authored time is ${metrics.authoredTime}; expected 2`);
+  }
+  if (metrics.objectCount !== 2 || metrics.drawCalls <= 0) {
+    throw new Error(`direct affine callback renderer produced invalid metrics ${JSON.stringify(metrics)}`);
+  }
+  if (
+    sourceLuma < 180 ||
+    driftLuma < 600 ||
+    driftLuma < sourceLuma + 120 ||
+    backgroundLuma > 60
+  ) {
+    throw new Error(`direct affine callback pixels do not match the Rust scene ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
 }
 
 async function start() {
@@ -106,6 +216,8 @@ async function start() {
   if (!metrics.staticFrameSkipped) {
     throw new Error("direct execution renderer prepared a static frame without a publication");
   }
+
+  metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
 
   state.metrics = metrics;
   state.ready = true;

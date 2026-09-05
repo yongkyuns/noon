@@ -39,6 +39,8 @@ for (const required of [
   "activate_animation",
   "Mobject::from_text",
   "Text::new(\"Noon\")",
+  "example_scenes::live_affine_callbacks",
+  "create_from_execution_session_with_callbacks",
 ]) {
   assert.ok(rustHarness.includes(required), `direct Rust/WASM proof must contain ${required}`);
 }
@@ -61,6 +63,7 @@ for (const required of [
   "BrowserExecutionWakePlan::from_session(session)",
   "session.wake_state().frame_pending()",
   "session.take_renderer_publication()",
+  ".advance_to(session, target_time)",
   "directWakeDirectiveJson",
   "advanceDirectRealtime",
 ]) {
@@ -116,6 +119,10 @@ for (const required of [
   "new OffscreenCanvas",
   "renderer.time() >= 0.1",
   "textDrawCalls",
+  "createDirectAffineCallbackSmokeRenderer",
+  "canvas.convertToBlob",
+  "sourceLuma",
+  "driftLuma",
 ]) {
   assert.ok(browserProbe.includes(required), `browser direct-execution proof must contain ${required}`);
 }
@@ -127,6 +134,9 @@ for (const forbidden of [
   "initialDeltaJson",
   "applyDeltaJson",
   "setCamera",
+  "callbackId",
+  "occurrenceIndex",
+  "CallbackPhaseOverlay",
   "throw error;",
 ]) {
   assert.equal(

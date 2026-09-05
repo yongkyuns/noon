@@ -13,7 +13,7 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 mod wasm {
     use std::mem;
 
-    use noon::ExecutionSession;
+    use noon::{ExecutionSession, RustHostCallbackTable};
     use noon_core::{
         Camera2DState, GeometryRef, ObjectId, ReactiveValue, Rect, SemanticNodeId, Transform2D,
         Vec2,
@@ -160,23 +160,29 @@ mod wasm {
         timestamp_query_supported: bool,
     }
 
+    struct DirectExecutionSource {
+        session: ExecutionSession,
+        callbacks: RustHostCallbackTable,
+    }
+
     enum CanvasExecutionSource {
         Transport(ExecutionFrameMirror),
-        Direct(ExecutionSession),
+        Direct(DirectExecutionSource),
     }
 
     impl CanvasExecutionSource {
         fn frame(&self) -> Option<&FrameState> {
             match self {
                 Self::Transport(mirror) => mirror.frame(),
-                Self::Direct(session) => Some(session.frame()),
+                Self::Direct(direct) => Some(direct.session.frame()),
             }
         }
 
         fn live_object_count(&self) -> usize {
             match self {
                 Self::Transport(mirror) => mirror.live_object_count(),
-                Self::Direct(session) => session
+                Self::Direct(direct) => direct
+                    .session
                     .frame()
                     .presences
                     .iter()
@@ -202,14 +208,23 @@ mod wasm {
         fn direct(&self) -> Option<&ExecutionSession> {
             match self {
                 Self::Transport(_) => None,
-                Self::Direct(session) => Some(session),
+                Self::Direct(direct) => Some(&direct.session),
             }
         }
 
         fn direct_mut(&mut self) -> Option<&mut ExecutionSession> {
             match self {
                 Self::Transport(_) => None,
-                Self::Direct(session) => Some(session),
+                Self::Direct(direct) => Some(&mut direct.session),
+            }
+        }
+
+        fn direct_parts_mut(
+            &mut self,
+        ) -> Option<(&mut ExecutionSession, &mut RustHostCallbackTable)> {
+            match self {
+                Self::Transport(_) => None,
+                Self::Direct(direct) => Some((&mut direct.session, &mut direct.callbacks)),
             }
         }
     }
@@ -318,7 +333,9 @@ mod wasm {
         pub fn render(&mut self) -> Result<bool, JsValue> {
             let changes_pending = match &self.source {
                 CanvasExecutionSource::Transport(_) => !self.pending_changes.is_empty(),
-                CanvasExecutionSource::Direct(session) => session.wake_state().frame_pending(),
+                CanvasExecutionSource::Direct(direct) => {
+                    direct.session.wake_state().frame_pending()
+                }
             };
             if !self.drawable || !changes_pending {
                 return Ok(false);
@@ -597,10 +614,12 @@ mod wasm {
                 return Ok(false);
             };
             let (pending, camera) = {
-                let session = self.source.direct_mut().ok_or_else(|| {
+                let (session, callbacks) = self.source.direct_parts_mut().ok_or_else(|| {
                     js_message("direct realtime APIs require a direct ExecutionSession source")
                 })?;
-                session.advance_to(target_time).map_err(js_error)?;
+                callbacks
+                    .advance_to(session, target_time)
+                    .map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
             };
@@ -899,10 +918,31 @@ mod wasm {
             canvas: OffscreenCanvas,
             session: ExecutionSession,
         ) -> Result<Self, JsValue> {
+            Self::create_from_execution_session_with_callbacks(
+                canvas,
+                session,
+                RustHostCallbackTable::new(),
+            )
+            .await
+        }
+
+        /// Build the browser canvas host from one typed session and its Rust callables.
+        ///
+        /// The callable table stays in the same WASM execution context. JavaScript
+        /// receives neither callback requests nor effective-property overlays.
+        pub async fn create_from_execution_session_with_callbacks(
+            canvas: OffscreenCanvas,
+            mut session: ExecutionSession,
+            mut callbacks: RustHostCallbackTable,
+        ) -> Result<Self, JsValue> {
+            let initial_time = session.frame().time;
+            callbacks
+                .advance_to(&mut session, initial_time)
+                .map_err(js_error)?;
             let camera = session.camera().map_err(js_error)?;
             Self::create_with_source(
                 canvas,
-                CanvasExecutionSource::Direct(session),
+                CanvasExecutionSource::Direct(DirectExecutionSource { session, callbacks }),
                 FrameChanges::default(),
                 camera.center,
                 camera.height,
@@ -917,6 +957,11 @@ mod wasm {
                 let session = self.source.direct_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
+                if session.has_required_callbacks() {
+                    return Err(js_message(
+                        "opaque host callback sessions require monotonic realtime advancement",
+                    ));
+                }
                 session.evaluate(time).map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
@@ -933,6 +978,11 @@ mod wasm {
                 let session = self.source.direct_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
+                if session.has_required_callbacks() {
+                    return Err(js_message(
+                        "opaque host callback sessions do not support seek or replay",
+                    ));
+                }
                 session.seek(time).map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
