@@ -113,9 +113,14 @@ impl ExecutionSession {
     pub fn segment_state(&self, segment: ExecutionSegment) -> ExecutionSegmentState {
         let now = self.frame().time;
         if now >= segment.end_time {
+            let complete = self.callback_progression_is_coherent_at(now);
             return ExecutionSegmentState {
-                complete: true,
-                timeline: TimelineWakeState::Quiescent,
+                complete,
+                timeline: if complete || self.callback_progression_is_terminal() {
+                    TimelineWakeState::Quiescent
+                } else {
+                    TimelineWakeState::Continuous
+                },
             };
         }
 

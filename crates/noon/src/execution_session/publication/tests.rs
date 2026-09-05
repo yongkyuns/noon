@@ -507,3 +507,24 @@ fn authored_value_change_during_animation_preserves_effective_driver() {
         4.0
     );
 }
+
+#[test]
+fn authored_publication_is_rejected_while_required_callback_is_pending() {
+    let (mut store, mut session, nodes) = fixture(1);
+    let context = session.publication_context();
+    let frame = session.frame().clone();
+    let store_revision = store.scene_revision();
+    let token = session
+        .begin_required_callback_phase(1.0, [nodes[0]])
+        .unwrap()
+        .token();
+
+    assert_eq!(
+        session.apply_semantic_transaction(&mut store, translation(nodes[0], 3.0)),
+        Err(ExecutionSessionPublicationError::RequiredCallbackPending)
+    );
+    assert_eq!(store.scene_revision(), store_revision);
+    assert_eq!(session.publication_context(), context);
+    assert_eq!(session.frame(), &frame);
+    session.fail_required_callback_phase(token).unwrap();
+}

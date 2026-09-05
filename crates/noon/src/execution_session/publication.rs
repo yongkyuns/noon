@@ -16,6 +16,7 @@ use super::ExecutionSession;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionPublicationError {
+    RequiredCallbackPending,
     ForeignSemanticStore,
     StaleSceneRevision {
         expected: SceneRevision,
@@ -31,6 +32,9 @@ pub enum ExecutionSessionPublicationError {
 impl std::fmt::Display for ExecutionSessionPublicationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RequiredCallbackPending => {
+                f.write_str("a required callback publication is pending")
+            }
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
             }
@@ -106,6 +110,9 @@ impl ExecutionSession {
         store: &mut SemanticStore,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
+        }
         self.require_published_store(store)?;
         validate_semantic_publication(&transaction)
             .map_err(ExecutionSessionPublicationError::Lowering)?;

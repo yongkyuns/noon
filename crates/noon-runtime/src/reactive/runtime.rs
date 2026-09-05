@@ -7,7 +7,7 @@ use noon_core::{
     SignalId,
 };
 
-use crate::{FrameState, SceneInstance};
+use crate::{frame_row_mut, FrameRowMut, FrameState, SceneInstance};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneBuildError {
@@ -335,6 +335,26 @@ impl SceneInstance {
             apply_reactive_value(frame, target.object_index, target.property, value);
         }
     }
+
+    pub(crate) fn reapply_reactive_to_row(&self, object_index: usize, mut row: FrameRowMut<'_>) {
+        if !self.object_slot_is_live(object_index) {
+            return;
+        }
+        let Some(reactive) = self.reactive.as_ref() else {
+            return;
+        };
+        let Some(target_indices) = reactive.targets_by_object.get(object_index) else {
+            return;
+        };
+        for target_index in target_indices {
+            let target = reactive.targets[*target_index];
+            let value = reactive
+                .state
+                .value(target.signal)
+                .expect("lowered reactive target references a valid signal");
+            apply_reactive_value_to_row(&mut row, target.property, value);
+        }
+    }
 }
 
 fn runtime_stats(
@@ -374,56 +394,71 @@ fn apply_reactive_value(
     property: Property,
     value: &ReactiveValue,
 ) -> bool {
+    apply_reactive_value_to_row(&mut frame_row_mut(frame, object_index), property, value)
+}
+
+fn apply_reactive_value_to_row(
+    row: &mut FrameRowMut<'_>,
+    property: Property,
+    value: &ReactiveValue,
+) -> bool {
     match (property, value) {
         (Property::Presence, ReactiveValue::Bool(value)) => {
-            let changed = frame.presences[object_index] != *value;
-            frame.presences[object_index] = *value;
+            let changed = *row.presence != *value;
+            *row.presence = *value;
             changed
         }
         (Property::Position, ReactiveValue::Vec2(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.translation != *value;
-            object.transform.translation = *value;
+            let render_changed = crate::release_render_transform(
+                row.render_geometry,
+                row.render_transform,
+                *row.transform,
+            );
+            let changed = row.transform.translation != *value;
+            row.transform.translation = *value;
             changed || render_changed
         }
         (Property::Rotation, ReactiveValue::Scalar(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.rotation != *value;
-            object.transform.rotation = *value;
+            let render_changed = crate::release_render_transform(
+                row.render_geometry,
+                row.render_transform,
+                *row.transform,
+            );
+            let changed = row.transform.rotation != *value;
+            row.transform.rotation = *value;
             changed || render_changed
         }
         (Property::Scale, ReactiveValue::Vec2(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.scale != *value;
-            object.transform.scale = *value;
+            let render_changed = crate::release_render_transform(
+                row.render_geometry,
+                row.render_transform,
+                *row.transform,
+            );
+            let changed = row.transform.scale != *value;
+            row.transform.scale = *value;
             changed || render_changed
         }
         (Property::Opacity, ReactiveValue::Scalar(value)) => {
-            let object = &mut frame.objects[object_index];
-            let changed = object.style.opacity != *value;
-            object.style.opacity = *value;
+            let changed = row.style.opacity != *value;
+            row.style.opacity = *value;
             changed
         }
         (Property::Appearance, ReactiveValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let object = &mut frame.objects[object_index];
-            let changed = object.appearance != value;
-            object.appearance = value;
+            let changed = *row.appearance != value;
+            *row.appearance = value;
             changed
         }
         (Property::Reveal, ReactiveValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let changed = frame.reveals[object_index] != value;
-            frame.reveals[object_index] = value;
+            let changed = *row.reveal != value;
+            *row.reveal = value;
             changed
         }
         (Property::Morph, ReactiveValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let changed = frame.morphs[object_index] != value;
-            frame.morphs[object_index] = value;
+            let changed = *row.morph != value;
+            *row.morph = value;
             changed
         }
         (Property::Transform, _) => {

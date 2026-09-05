@@ -1,5 +1,9 @@
+mod callback;
 mod publication;
+pub use callback::*;
 pub use publication::*;
+
+use callback::{CallbackSchedule, PendingCallbackPhase};
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -46,6 +50,7 @@ impl ExecutionViewportQuery {
 /// Error produced when semantic/native reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionSessionInputError {
+    RequiredCallbackPending,
     UnknownSemanticSignal(SemanticNodeId),
     NativeInput(NativeInputRuntimeError),
     NativeEventOutOfOrder { previous: u64, next: u64 },
@@ -55,6 +60,9 @@ pub enum ExecutionSessionInputError {
 impl std::fmt::Display for ExecutionSessionInputError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RequiredCallbackPending => {
+                formatter.write_str("a required callback publication is pending")
+            }
             Self::UnknownSemanticSignal(signal) => write!(
                 formatter,
                 "semantic signal {}:{} is not present in this execution session",
@@ -113,6 +121,7 @@ impl std::error::Error for ExecutionSessionCameraError {}
 /// Error produced while activating one authoritative semantic animation declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionAnimationError {
+    RequiredCallbackPending,
     ForeignSemanticStore,
     StaleSceneRevision {
         expected: noon_core::SceneRevision,
@@ -128,6 +137,9 @@ pub enum ExecutionSessionAnimationError {
 impl std::fmt::Display for ExecutionSessionAnimationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RequiredCallbackPending => {
+                formatter.write_str("a required callback publication is pending")
+            }
             Self::ForeignSemanticStore => {
                 formatter.write_str("semantic store does not own this execution session")
             }
@@ -196,7 +208,7 @@ impl From<CompilePatchError> for ExecutionSessionAnimationError {
 /// Runtime mutation is intentionally not exposed as a mutable escape hatch here:
 /// authored/live structural mutation remains owned by semantic transactions and
 /// incremental lowering rather than the migration-era runtime patch surface.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ExecutionSession {
     store_identity: noon_core::SemanticStoreIdentity,
     execution_index: SemanticExecutionIndex,
@@ -211,6 +223,40 @@ pub struct ExecutionSession {
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
     last_structural_publication: StructuralPublicationStats,
+    callback_schedule: CallbackSchedule,
+    next_callback_sequence: Option<u64>,
+    pending_callback: Option<PendingCallbackPhase>,
+    callback_termination: Option<CallbackTermination>,
+}
+
+impl Clone for ExecutionSession {
+    fn clone(&self) -> Self {
+        let runtime = self.runtime.clone();
+        let callback_termination = self.callback_termination.or_else(|| {
+            self.pending_callback
+                .as_ref()
+                .map(|pending| pending.interrupted_clone(runtime.runtime_identity()))
+        });
+        Self {
+            store_identity: self.store_identity.clone(),
+            execution_index: self.execution_index.clone(),
+            reachability: self.reachability.clone(),
+            painter_order: self.painter_order.clone(),
+            slots: self.slots.clone(),
+            spatial_index: self.spatial_index.clone(),
+            last_spatial_update: self.last_spatial_update,
+            reactive_projection: self.reactive_projection.clone(),
+            runtime,
+            camera_object: self.camera_object,
+            next_activation_track_id: self.next_activation_track_id,
+            last_native_event_sequence: self.last_native_event_sequence,
+            last_structural_publication: self.last_structural_publication,
+            callback_schedule: self.callback_schedule.clone(),
+            next_callback_sequence: Some(0),
+            pending_callback: None,
+            callback_termination,
+        }
+    }
 }
 
 impl ExecutionSession {
@@ -270,6 +316,7 @@ impl ExecutionSession {
             .map_or(Some(0), |id| id.checked_add(1));
         let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
         let reactive_projection = lowered.reactive().clone();
+        let callback_schedule = CallbackSchedule::new(lowered.host_callbacks().clone());
         let mut runtime = SceneInstance::from_semantic_execution(lowered);
         let mut spatial_index = ExecutionSpatialIndex::default();
         let live_slots =
@@ -300,6 +347,10 @@ impl ExecutionSession {
             next_activation_track_id,
             last_native_event_sequence: None,
             last_structural_publication: StructuralPublicationStats::default(),
+            callback_schedule,
+            next_callback_sequence: Some(0),
+            pending_callback: None,
+            callback_termination: None,
         }
     }
 
@@ -448,7 +499,18 @@ impl ExecutionSession {
     /// Read runtime-owned presentation dirtiness and timeline cadence without
     /// exposing the runtime scheduler or introducing a host-side timing model.
     pub fn wake_state(&self) -> RuntimeWakeState {
-        self.runtime.wake_state()
+        if self.callback_termination.is_some() {
+            return self.runtime.wake_state().without_timeline_wake();
+        }
+        let callback_timeline = if self.pending_callback.is_some() {
+            noon_runtime::TimelineWakeState::Continuous
+        } else {
+            self.callback_schedule
+                .wake_timeline(self.runtime.frame().time)
+        };
+        self.runtime
+            .wake_state()
+            .with_additional_timeline(callback_timeline)
     }
 
     /// Consume renderer-facing invalidation state accumulated by the runtime.
@@ -463,16 +525,34 @@ impl ExecutionSession {
 
     /// Evaluate deterministically at an absolute time.
     pub fn evaluate(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+        if self.pending_callback.is_some() {
+            return Err(EvaluationError::RequiredCallbackPending);
+        }
+        if !self.callback_schedule.is_empty() {
+            return Err(EvaluationError::RequiredCallbackBarrier);
+        }
         self.runtime.evaluate(time)
     }
 
     /// Seek deterministically to an absolute time.
     pub fn seek(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+        if self.pending_callback.is_some() {
+            return Err(EvaluationError::RequiredCallbackPending);
+        }
+        if !self.callback_schedule.is_empty() {
+            return Err(EvaluationError::RequiredCallbackBarrier);
+        }
         self.runtime.seek(time)
     }
 
     /// Advance to an absolute time, falling back to deterministic seek when time moves backward.
     pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+        if self.pending_callback.is_some() {
+            return Err(EvaluationError::RequiredCallbackPending);
+        }
+        if !self.callback_schedule.is_empty() {
+            return Err(EvaluationError::RequiredCallbackBarrier);
+        }
         self.runtime.advance_to(time)
     }
 
@@ -506,6 +586,9 @@ impl ExecutionSession {
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionAnimationError::RequiredCallbackPending);
+        }
         if store.identity() != self.store_identity {
             return Err(ExecutionSessionAnimationError::ForeignSemanticStore);
         }
@@ -554,6 +637,9 @@ impl ExecutionSession {
         signal: SemanticNodeId,
         value: impl Into<ReactiveValue>,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionInputError::RequiredCallbackPending);
+        }
         let execution_signal = self
             .reactive_projection
             .execution_signal_id(signal)
@@ -572,6 +658,9 @@ impl ExecutionSession {
         source: NativeStateSource,
         value: NativeInputValue,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionInputError::RequiredCallbackPending);
+        }
         let update = NativeStateUpdate::new(source, value)?;
         let targets = self
             .reactive_projection
@@ -593,6 +682,9 @@ impl ExecutionSession {
         &mut self,
         occurrence: NativeEventOccurrence,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionInputError::RequiredCallbackPending);
+        }
         if let Some(previous) = self.last_native_event_sequence {
             if occurrence.sequence <= previous {
                 return Err(ExecutionSessionInputError::NativeEventOutOfOrder {

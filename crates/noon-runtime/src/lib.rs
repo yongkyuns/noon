@@ -3,16 +3,24 @@
 #![forbid(unsafe_code)]
 
 mod execution_slots;
+mod prepared_frame;
 mod reactive;
 mod renderer_publication;
 mod spatial_index;
 
 pub use execution_slots::*;
+pub use prepared_frame::*;
 pub use reactive::*;
 pub use renderer_publication::*;
 pub use spatial_index::*;
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, ExecutionPatch,
@@ -94,6 +102,269 @@ impl FrameState {
 
     pub fn text(&self, object_index: usize) -> Option<TextResourceHandle> {
         self.objects[object_index].text()
+    }
+}
+
+/// Copyable effective properties exposed to required host callbacks without
+/// copying immutable geometry or text payloads out of the retained frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectiveObjectProperties {
+    pub transform: Transform2D,
+    pub style: Style,
+    pub appearance: f32,
+    pub presence: bool,
+    pub reveal: f32,
+    pub morph: f32,
+    pub bounds: Option<noon_core::Rect>,
+    bounds_basis: Option<EffectiveBoundsBasis>,
+}
+
+impl EffectiveObjectProperties {
+    fn from_frame(
+        frame: &FrameState,
+        object_index: usize,
+        bounds: Option<noon_core::Rect>,
+    ) -> Self {
+        Self {
+            transform: frame.objects[object_index].transform,
+            style: frame.objects[object_index].style,
+            appearance: frame.objects[object_index].appearance,
+            presence: frame.presences[object_index],
+            reveal: frame.reveals[object_index],
+            morph: frame.morphs[object_index],
+            bounds,
+            bounds_basis: EffectiveBoundsBasis::from_frame(frame, object_index),
+        }
+    }
+
+    pub fn set_transform(&mut self, transform: Transform2D) {
+        self.transform = transform;
+        self.refresh_bounds();
+    }
+
+    pub fn set_style(&mut self, style: Style) {
+        self.style = style;
+        self.refresh_bounds();
+    }
+
+    fn refresh_bounds(&mut self) {
+        self.bounds = self
+            .bounds_basis
+            .and_then(|basis| basis.world_bounds(self.transform, self.style));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EffectiveBoundsBasis {
+    Circle(f32),
+    Rect(noon_core::Rect),
+}
+
+impl EffectiveBoundsBasis {
+    fn from_frame(frame: &FrameState, object_index: usize) -> Option<Self> {
+        let object = &frame.objects[object_index];
+        Self::from_content(frame.render_geometry(object_index), object.text_bounds)
+    }
+
+    fn from_content(
+        geometry: Option<&GeometryRef>,
+        text_bounds: Option<noon_core::Rect>,
+    ) -> Option<Self> {
+        match geometry {
+            Some(GeometryRef::Circle { radius }) => Some(Self::Circle(*radius)),
+            Some(GeometryRef::Rectangle { size }) => {
+                let half = *size * 0.5;
+                Some(Self::Rect(noon_core::Rect::new(-half, half)))
+            }
+            Some(GeometryRef::Line { start, end }) => {
+                noon_core::Rect::from_points([*start, *end]).map(Self::Rect)
+            }
+            Some(GeometryRef::VectorPath(_) | GeometryRef::External(_)) => None,
+            None => text_bounds.map(Self::Rect),
+        }
+    }
+
+    fn world_bounds(self, transform: Transform2D, style: Style) -> Option<noon_core::Rect> {
+        let mut bounds = match self {
+            Self::Circle(radius) => GeometryRef::circle(radius).world_bounds(transform)?,
+            Self::Rect(local) => {
+                let corners = [
+                    local.min,
+                    Vec2::new(local.min.x, local.max.y),
+                    Vec2::new(local.max.x, local.min.y),
+                    local.max,
+                ];
+                noon_core::Rect::from_points(corners.map(|point| transform.transform_point(point)))?
+            }
+        };
+        if style.stroke.is_some() && style.stroke_width.is_finite() {
+            let scale = transform.scale.x.abs().max(transform.scale.y.abs());
+            let expansion = style.stroke_width.abs() * scale * 0.5;
+            bounds.min.x -= expansion;
+            bounds.min.y -= expansion;
+            bounds.max.x += expansion;
+            bounds.max.y += expansion;
+        }
+        (bounds.min.x.is_finite()
+            && bounds.min.y.is_finite()
+            && bounds.max.x.is_finite()
+            && bounds.max.y.is_finite())
+        .then_some(bounds)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct FrameRowState {
+    transform: Transform2D,
+    style: Style,
+    appearance: f32,
+    presence: bool,
+    reveal: f32,
+    morph: f32,
+    content_override: Option<ObjectContentRef>,
+    render_geometry: Option<Arc<GeometryRef>>,
+    render_transform: Option<Transform2D>,
+}
+
+impl FrameRowState {
+    fn from_frame(frame: &FrameState, object_index: usize) -> Self {
+        Self {
+            transform: frame.objects[object_index].transform,
+            style: frame.objects[object_index].style,
+            appearance: frame.objects[object_index].appearance,
+            presence: frame.presences[object_index],
+            reveal: frame.reveals[object_index],
+            morph: frame.morphs[object_index],
+            content_override: None,
+            render_geometry: frame.render_geometries[object_index].clone(),
+            render_transform: frame.render_transforms[object_index],
+        }
+    }
+
+    fn write_to_frame(self, frame: &mut FrameState, object_index: usize) {
+        let object = &mut frame.objects[object_index];
+        object.transform = self.transform;
+        object.style = self.style;
+        object.appearance = self.appearance;
+        if let Some(content) = self.content_override {
+            object.content = content;
+        }
+        frame.presences[object_index] = self.presence;
+        frame.reveals[object_index] = self.reveal;
+        frame.morphs[object_index] = self.morph;
+        frame.render_geometries[object_index] = self.render_geometry;
+        frame.render_transforms[object_index] = self.render_transform;
+    }
+
+    fn differs_from_frame(&self, frame: &FrameState, object_index: usize) -> bool {
+        let object = &frame.objects[object_index];
+        self.transform != object.transform
+            || self.style != object.style
+            || self.appearance != object.appearance
+            || self.presence != frame.presences[object_index]
+            || self.reveal != frame.reveals[object_index]
+            || self.morph != frame.morphs[object_index]
+            || self
+                .content_override
+                .as_ref()
+                .is_some_and(|content| content != &object.content)
+            || self.render_geometry != frame.render_geometries[object_index]
+            || self.render_transform != frame.render_transforms[object_index]
+    }
+
+    fn properties(
+        &self,
+        bounds: Option<noon_core::Rect>,
+        bounds_basis: Option<EffectiveBoundsBasis>,
+    ) -> EffectiveObjectProperties {
+        EffectiveObjectProperties {
+            transform: self.transform,
+            style: self.style,
+            appearance: self.appearance,
+            presence: self.presence,
+            reveal: self.reveal,
+            morph: self.morph,
+            bounds,
+            bounds_basis,
+        }
+    }
+
+    fn spatially_differs_from_frame(&self, frame: &FrameState, object_index: usize) -> bool {
+        let object = &frame.objects[object_index];
+        self.transform != object.transform
+            || self.style.stroke != object.style.stroke
+            || self.style.stroke_width != object.style.stroke_width
+            || self.content_override.is_some()
+            || self.render_geometry != frame.render_geometries[object_index]
+            || self.render_transform != frame.render_transforms[object_index]
+    }
+
+    fn as_mut<'a>(&'a mut self, base_content: &'a ObjectContentRef) -> FrameRowMut<'a> {
+        FrameRowMut {
+            content: FrameContentMut::Staged {
+                base: base_content,
+                content_override: &mut self.content_override,
+            },
+            transform: &mut self.transform,
+            style: &mut self.style,
+            appearance: &mut self.appearance,
+            presence: &mut self.presence,
+            reveal: &mut self.reveal,
+            morph: &mut self.morph,
+            render_geometry: &mut self.render_geometry,
+            render_transform: &mut self.render_transform,
+        }
+    }
+}
+
+enum FrameContentMut<'a> {
+    Direct(&'a mut ObjectContentRef),
+    Staged {
+        base: &'a ObjectContentRef,
+        content_override: &'a mut Option<ObjectContentRef>,
+    },
+}
+
+impl FrameContentMut<'_> {
+    fn geometry_mut(&mut self) -> Option<&mut GeometryRef> {
+        let content: &mut ObjectContentRef = match self {
+            Self::Direct(content) => &mut **content,
+            Self::Staged {
+                base,
+                content_override,
+            } => (*content_override).get_or_insert_with(|| (**base).clone()),
+        };
+        let ObjectContentRef::Geometry(geometry) = content else {
+            return None;
+        };
+        Some(geometry)
+    }
+}
+
+struct FrameRowMut<'a> {
+    content: FrameContentMut<'a>,
+    transform: &'a mut Transform2D,
+    style: &'a mut Style,
+    appearance: &'a mut f32,
+    presence: &'a mut bool,
+    reveal: &'a mut f32,
+    morph: &'a mut f32,
+    render_geometry: &'a mut Option<Arc<GeometryRef>>,
+    render_transform: &'a mut Option<Transform2D>,
+}
+
+fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> FrameRowMut<'_> {
+    let object = &mut frame.objects[object_index];
+    FrameRowMut {
+        content: FrameContentMut::Direct(&mut object.content),
+        transform: &mut object.transform,
+        style: &mut object.style,
+        appearance: &mut object.appearance,
+        presence: &mut frame.presences[object_index],
+        reveal: &mut frame.reveals[object_index],
+        morph: &mut frame.morphs[object_index],
+        render_geometry: &mut frame.render_geometries[object_index],
+        render_transform: &mut frame.render_transforms[object_index],
     }
 }
 
@@ -231,12 +502,28 @@ pub struct EvaluationStats {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvaluationError {
     InvalidTime(f64),
+    NonMonotonicPreparedAdvance { current: f64, requested: f64 },
+    FrameEpochExhausted(noon_core::FrameEpoch),
+    RequiredCallbackPending,
+    RequiredCallbackBarrier,
 }
 
 impl std::fmt::Display for EvaluationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidTime(time) => write!(formatter, "invalid scene time {time}"),
+            Self::NonMonotonicPreparedAdvance { current, requested } => write!(
+                formatter,
+                "required callback preparation cannot move backward from {current} to {requested}"
+            ),
+            Self::FrameEpochExhausted(epoch) => {
+                write!(formatter, "frame epoch exhausted after {epoch:?}")
+            }
+            Self::RequiredCallbackPending => {
+                formatter.write_str("a required callback publication is pending")
+            }
+            Self::RequiredCallbackBarrier => formatter
+                .write_str("semantic host callbacks require callback-aware session advancement"),
         }
     }
 }
@@ -264,8 +551,34 @@ pub struct RuntimePatchStats {
     pub full_seeks: usize,
 }
 
-#[derive(Clone, Debug)]
+static NEXT_RUNTIME_IDENTITY: AtomicU64 = AtomicU64::new(1);
+
+/// Process-local identity of one mutable runtime incarnation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RuntimeIdentity(u64);
+
+impl RuntimeIdentity {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    fn fresh() -> Self {
+        let raw = NEXT_RUNTIME_IDENTITY
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .expect("runtime identity space exhausted");
+        Self(raw)
+    }
+}
+
+#[derive(Debug)]
 pub struct SceneInstance {
+    identity: RuntimeIdentity,
     compiled: CompiledScene,
     frame: FrameState,
     groups: BTreeMap<CompiledChannelKey, TrackGroup>,
@@ -277,6 +590,27 @@ pub struct SceneInstance {
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
+    effective_driver_rows: BTreeSet<usize>,
+}
+
+impl Clone for SceneInstance {
+    fn clone(&self) -> Self {
+        Self {
+            identity: RuntimeIdentity::fresh(),
+            compiled: self.compiled.clone(),
+            frame: self.frame.clone(),
+            groups: self.groups.clone(),
+            timeline_scheduler: self.timeline_scheduler.clone(),
+            last_stats: self.last_stats,
+            last_patch_stats: self.last_patch_stats,
+            changes: self.changes.clone(),
+            spatial_changes: self.spatial_changes.clone(),
+            reactive: self.reactive.clone(),
+            last_reactive_stats: self.last_reactive_stats,
+            publication: self.publication,
+            effective_driver_rows: self.effective_driver_rows.clone(),
+        }
+    }
 }
 
 impl SceneInstance {
@@ -285,6 +619,7 @@ impl SceneInstance {
         let groups = build_groups(&compiled);
         let timeline_scheduler = TimelineEventScheduler::from_compiled(&compiled);
         let mut instance = Self {
+            identity: RuntimeIdentity::fresh(),
             compiled,
             frame,
             groups,
@@ -296,13 +631,28 @@ impl SceneInstance {
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
+            effective_driver_rows: BTreeSet::new(),
         };
         instance.seek_unchecked(0.0);
         instance
     }
 
+    pub const fn runtime_identity(&self) -> RuntimeIdentity {
+        self.identity
+    }
+
     pub fn frame(&self) -> &FrameState {
         &self.frame
+    }
+
+    pub fn effective_properties_at(
+        &self,
+        object_index: usize,
+        cached_bounds: Option<noon_core::Rect>,
+    ) -> Option<EffectiveObjectProperties> {
+        self.object_slot_is_live(object_index).then(|| {
+            EffectiveObjectProperties::from_frame(&self.frame, object_index, cached_bounds)
+        })
     }
 
     pub const fn last_stats(&self) -> EvaluationStats {
@@ -386,13 +736,10 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
-        let previous_time = self.frame.time;
-        if time >= previous_time {
+        if time >= self.frame.time {
             self.advance_unchecked(time);
         } else {
             self.seek_unchecked(time);
-        }
-        if self.frame.time != previous_time {
             self.publish_effective_change();
         }
         Ok(&self.frame)
@@ -417,11 +764,11 @@ impl SceneInstance {
         let previous_time = self.frame.time;
         if time < previous_time {
             self.seek_unchecked(time);
+            if self.frame.time != previous_time {
+                self.publish_effective_change();
+            }
         } else {
             self.advance_unchecked(time);
-        }
-        if self.frame.time != previous_time {
-            self.publish_effective_change();
         }
         Ok(&self.frame)
     }
@@ -685,6 +1032,7 @@ impl SceneInstance {
 
     fn seek_unchecked(&mut self, time: f64) {
         self.frame = base_frame(&self.compiled, time);
+        self.effective_driver_rows.clear();
         self.mark_all_changed();
         let mut stats = EvaluationStats::default();
 
@@ -701,6 +1049,19 @@ impl SceneInstance {
     }
 
     fn advance_unchecked(&mut self, time: f64) {
+        if !self.effective_driver_rows.is_empty() {
+            let prepared = self
+                .prepare_advance_to(time)
+                .expect("unchecked forward evaluation receives a valid monotonic time");
+            let effective = self
+                .prepare_effective_property_batch(&[])
+                .expect("empty effective batch is valid");
+            self.commit_prepared_frame(prepared, effective)
+                .expect("immediate evaluation cannot stale its own prepared frame");
+            return;
+        }
+
+        let previous_time = self.frame.time;
         self.frame.time = time;
         let requested_count = self.timeline_scheduler.advance(time);
         let mut stats = EvaluationStats::default();
@@ -722,6 +1083,9 @@ impl SceneInstance {
         }
 
         self.last_stats = stats;
+        if self.frame.time != previous_time {
+            self.publish_effective_change();
+        }
     }
 }
 
@@ -977,6 +1341,16 @@ fn apply_group(
     group: &TrackGroup,
     time: f64,
 ) -> bool {
+    let object_index = group.channel.object_index as usize;
+    apply_group_to_row(frame_row_mut(frame, object_index), tracks, group, time)
+}
+
+fn apply_group_to_row(
+    mut row: FrameRowMut<'_>,
+    tracks: &[CompiledTrack],
+    group: &TrackGroup,
+    time: f64,
+) -> bool {
     if group.cursor == 0 {
         return false;
     }
@@ -985,9 +1359,8 @@ fn apply_group(
         let TrackValues::Bool { to, .. } = &track.values else {
             unreachable!("compiled Presence track must contain bool values");
         };
-        let object_index = group.channel.object_index as usize;
-        let changed = frame.presences[object_index] != *to;
-        frame.presences[object_index] = *to;
+        let changed = *row.presence != *to;
+        *row.presence = *to;
         return changed;
     }
 
@@ -1004,65 +1377,71 @@ fn apply_group(
         return false;
     };
 
-    let object_index = group.channel.object_index as usize;
     if group.channel.property == Property::Transform {
-        return apply_transform_track(frame, object_index, track, progress);
+        return apply_transform_track(&mut row, track, progress);
     }
     let value = interpolate(track, progress);
-    apply_evaluated_value(frame, object_index, group.channel.property, value)
+    apply_evaluated_value(&mut row, group.channel.property, value)
+}
+
+fn apply_effective_property_to_row(row: FrameRowMut<'_>, write: EffectivePropertyWrite) {
+    match write {
+        EffectivePropertyWrite::Transform { transform, .. } => {
+            release_render_transform(row.render_geometry, row.render_transform, *row.transform);
+            *row.transform = transform;
+        }
+        EffectivePropertyWrite::Style { style, .. } => *row.style = style,
+    }
 }
 
 fn apply_evaluated_value(
-    frame: &mut FrameState,
-    object_index: usize,
+    row: &mut FrameRowMut<'_>,
     property: Property,
     value: EvaluatedValue,
 ) -> bool {
     match (property, value) {
         (Property::Appearance, EvaluatedValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let object = &mut frame.objects[object_index];
-            let changed = object.appearance != value;
-            object.appearance = value;
+            let changed = *row.appearance != value;
+            *row.appearance = value;
             changed
         }
         (Property::Reveal, EvaluatedValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let changed = frame.reveals[object_index] != value;
-            frame.reveals[object_index] = value;
+            let changed = *row.reveal != value;
+            *row.reveal = value;
             changed
         }
         (Property::Morph, EvaluatedValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let changed = frame.morphs[object_index] != value;
-            frame.morphs[object_index] = value;
+            let changed = *row.morph != value;
+            *row.morph = value;
             changed
         }
         (Property::Position, EvaluatedValue::Vec2(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.translation != value;
-            object.transform.translation = value;
+            let render_changed =
+                release_render_transform(row.render_geometry, row.render_transform, *row.transform);
+            let changed = row.transform.translation != value;
+            row.transform.translation = value;
             changed || render_changed
         }
         (Property::Rotation, EvaluatedValue::Scalar(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.rotation != value;
-            object.transform.rotation = value;
+            let render_changed =
+                release_render_transform(row.render_geometry, row.render_transform, *row.transform);
+            let changed = row.transform.rotation != value;
+            row.transform.rotation = value;
             changed || render_changed
         }
         (Property::Scale, EvaluatedValue::Vec2(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.scale != value;
-            object.transform.scale = value;
+            let render_changed =
+                release_render_transform(row.render_geometry, row.render_transform, *row.transform);
+            let changed = row.transform.scale != value;
+            row.transform.scale = value;
             changed || render_changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
-            let object = &mut frame.objects[object_index];
-            let changed = object.style.opacity != value;
-            object.style.opacity = value;
+            let changed = row.style.opacity != value;
+            row.style.opacity = value;
             changed
         }
         _ => unreachable!("compiled track value type must match its property"),
@@ -1075,12 +1454,7 @@ enum EvaluatedValue {
     Vec2(Vec2),
 }
 
-fn apply_transform_track(
-    frame: &mut FrameState,
-    object_index: usize,
-    track: &CompiledTrack,
-    progress: f32,
-) -> bool {
+fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progress: f32) -> bool {
     let TrackValues::Object { from, to } = &track.values else {
         unreachable!("compiled Transform track must contain object snapshots");
     };
@@ -1136,29 +1510,28 @@ fn apply_transform_track(
         } if !fixed_endpoint => *render_transform,
         _ => None,
     };
-    let transform_changed = frame.render_transforms[object_index] != next_render_transform;
-    frame.render_transforms[object_index] = next_render_transform;
+    let transform_changed = *row.render_transform != next_render_transform;
+    *row.render_transform = next_render_transform;
 
-    let object = &mut frame.objects[object_index];
-    let ObjectContentRef::Geometry(geometry) = &mut object.content else {
+    let Some(geometry) = row.content.geometry_mut() else {
         unreachable!("compiler rejects geometry-only Transform tracks on text content");
     };
     let mut changed =
         transform_changed | apply_transform_geometry(geometry, plan, from, to, progress);
-    if object.transform != next_transform {
-        object.transform = next_transform;
+    if *row.transform != next_transform {
+        *row.transform = next_transform;
         changed = true;
     }
-    if object.style != next_style {
-        object.style = next_style;
+    if *row.style != next_style {
+        *row.style = next_style;
         changed = true;
     }
-    if frame.morphs[object_index] != next_morph {
-        frame.morphs[object_index] = next_morph;
+    if *row.morph != next_morph {
+        *row.morph = next_morph;
         changed = true;
     }
     changed |= set_optional_geometry_if_changed(
-        &mut frame.render_geometries[object_index],
+        row.render_geometry,
         next_render_geometry,
         owned_render_geometry.is_none(),
     );
