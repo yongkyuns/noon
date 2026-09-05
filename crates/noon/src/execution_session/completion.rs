@@ -111,6 +111,16 @@ impl ExecutionSession {
                 ExecutionSessionPublicationError::ForeignSemanticStore,
             ));
         }
+        let expected_revision = self.publication_context().scene_revision();
+        let actual_revision = store.scene_revision();
+        if actual_revision != expected_revision {
+            return Err(ExecutionSegmentCompletionError::Publication(
+                ExecutionSessionPublicationError::StaleSceneRevision {
+                    expected: expected_revision,
+                    actual: actual_revision,
+                },
+            ));
+        }
         if token.is_some_and(|token| self.segment_was_completed(token)) {
             return Ok(self.frame());
         }
@@ -318,6 +328,91 @@ mod tests {
         assert!(session.segment_state(segment).is_complete());
         session.seek(2.0).unwrap();
         assert_eq!(session.frame().objects[0].transform.translation.x, 9.0);
+    }
+
+    #[test]
+    fn completed_segment_rejects_an_out_of_band_store_revision() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        session
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+
+        let expected = session.publication_context().scene_revision();
+        let mut out_of_band = SemanticMutationTransaction::new();
+        out_of_band.set_property(
+            object,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(8.0, 0.0, 0.0),
+        );
+        out_of_band.apply(&mut store).unwrap();
+        let actual = store.scene_revision();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+
+        assert_eq!(
+            session.complete_segment(&mut store, segment),
+            Err(ExecutionSegmentCompletionError::Publication(
+                ExecutionSessionPublicationError::StaleSceneRevision { expected, actual }
+            ))
+        );
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+    }
+
+    #[test]
+    fn wait_completion_rejects_an_out_of_band_store_revision() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let wait = session.wait_segment(1.0).unwrap();
+        session.advance_segment_to(wait, wait.end_time()).unwrap();
+
+        let expected = session.publication_context().scene_revision();
+        let mut out_of_band = SemanticMutationTransaction::new();
+        out_of_band.set_property(
+            object,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(2.0, 0.0, 0.0),
+        );
+        out_of_band.apply(&mut store).unwrap();
+        let actual = store.scene_revision();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+
+        assert_eq!(
+            session.complete_segment(&mut store, wait),
+            Err(ExecutionSegmentCompletionError::Publication(
+                ExecutionSessionPublicationError::StaleSceneRevision { expected, actual }
+            ))
+        );
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
     }
 
     #[test]
