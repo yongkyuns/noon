@@ -926,6 +926,13 @@ impl SemanticMutationTransaction {
                     property,
                     value,
                 } => {
+                    if *property == SemanticObjectProperty::Presence {
+                        return Err(SemanticMutationTransactionError::UnsupportedPropertyWrite {
+                            index,
+                            object: *object,
+                            property: *property,
+                        });
+                    }
                     let state = catalog.staged_object_state(
                         &mut staged_objects,
                         &mut staged_object_order,
@@ -1204,6 +1211,9 @@ fn object_property_value(
     property: SemanticObjectProperty,
 ) -> SemanticSignalValue {
     match property {
+        SemanticObjectProperty::Presence => {
+            unreachable!("presence is currently authored only through a typed signal binding")
+        }
         SemanticObjectProperty::Translation => {
             SemanticSignalValue::Vec3(state.transform.translation)
         }
@@ -1284,6 +1294,9 @@ fn apply_object_property(
     value: SemanticSignalValue,
 ) {
     match (property, value) {
+        (SemanticObjectProperty::Presence, _) => {
+            unreachable!("presence property writes are rejected during transaction preflight")
+        }
         (SemanticObjectProperty::Translation, SemanticSignalValue::Vec3(value)) => {
             state.transform.translation = value;
         }
@@ -1483,6 +1496,11 @@ pub enum SemanticMutationTransactionError {
         property: SemanticObjectProperty,
         expected: SemanticSignalValueKind,
         actual: SemanticSignalValueKind,
+    },
+    UnsupportedPropertyWrite {
+        index: usize,
+        object: SemanticTransactionNodeRef,
+        property: SemanticObjectProperty,
     },
     InvalidPendingStyle {
         index: usize,
@@ -1743,6 +1761,14 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::PendingPropertyTypeMismatch { index, object, property, expected, actual } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot set {property:?} on pending object {object:?} requiring {expected} to {actual}"
+            ),
+            Self::UnsupportedPropertyWrite {
+                index,
+                object,
+                property,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot directly set {property:?} on {object:?}; this property currently requires a typed signal binding"
             ),
             Self::InvalidPendingStyle { index, object } => write!(
                 formatter,

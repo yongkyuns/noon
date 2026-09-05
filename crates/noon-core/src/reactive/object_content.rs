@@ -66,6 +66,7 @@ pub enum SemanticObjectRole {
 /// mutation class rather than being forced into the scalar/vector signal model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SemanticObjectProperty {
+    Presence,
     Translation,
     Scale,
     RotationZ,
@@ -78,6 +79,7 @@ pub enum SemanticObjectProperty {
 impl SemanticObjectProperty {
     pub const fn value_kind(self) -> SemanticSignalValueKind {
         match self {
+            Self::Presence => SemanticSignalValueKind::Bool,
             Self::Translation | Self::Scale => SemanticSignalValueKind::Vec3,
             Self::RotationZ
             | Self::FillOpacity
@@ -320,6 +322,10 @@ mod tests {
         ] {
             assert_eq!(property.value_kind(), SemanticSignalValueKind::Scalar);
         }
+        assert_eq!(
+            SemanticObjectProperty::Presence.value_kind(),
+            SemanticSignalValueKind::Bool
+        );
     }
 
     #[test]

@@ -19,6 +19,7 @@ mod host_callbacks;
 pub mod legacy;
 mod line_matcher_authoring;
 mod live_session;
+mod native_signal_authoring;
 mod polygram_authoring;
 mod reactive_authoring;
 mod retained_family_authoring_lowering;
@@ -36,6 +37,7 @@ pub use host_callbacks::*;
 pub use live_session::{
     EffectiveMobjectLayout, EffectiveMobjectState, LiveSession, LiveSessionError,
 };
+pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::*;
 pub use noon_runtime::{
     EffectiveObjectProperties, EvaluationError, FrameChanges, FrameObjectState, FrameState,
@@ -55,8 +57,8 @@ pub use text_authoring::*;
 /// Common imports for direct typed semantic authoring.
 pub mod prelude {
     pub use crate::{
-        DeclaredAnimation, EffectiveMobjectState, ExecutionSession, LiveSession, Mobject, Scene,
-        TrackerPosition, ValueTracker,
+        DeclaredAnimation, EffectiveMobjectState, ExecutionSession, LiveSession, Mobject,
+        NativeBoolSignal, NativeVectorSignal, Scene, TrackerPosition, ValueTracker,
     };
     pub use noon_core::{
         Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,

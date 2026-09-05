@@ -25,6 +25,13 @@ pub struct ValueTracker {
 }
 
 impl ValueTracker {
+    pub(crate) fn from_semantic_node(
+        store: Rc<RefCell<SemanticStore>>,
+        node: SemanticNodeId,
+    ) -> Self {
+        Self { store, node }
+    }
+
     /// The scene-global semantic identity of this scalar input.
     pub const fn node_id(&self) -> SemanticNodeId {
         self.node
@@ -36,7 +43,7 @@ impl ValueTracker {
         Rc::ptr_eq(&self.store, store)
     }
 
-    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
+    pub(crate) fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
         if !Rc::ptr_eq(&self.store, store) {
             return Err("ValueTracker belongs to another scene store".into());
         }

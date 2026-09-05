@@ -396,6 +396,7 @@ fn lower_property(
     property: SemanticObjectProperty,
 ) -> Result<Property, SemanticReactiveLoweringError> {
     match property {
+        SemanticObjectProperty::Presence => Ok(Property::Presence),
         SemanticObjectProperty::Translation => Ok(Property::Position),
         SemanticObjectProperty::Scale => Ok(Property::Scale),
         SemanticObjectProperty::RotationZ => Ok(Property::Rotation),

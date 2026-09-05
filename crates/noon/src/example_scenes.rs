@@ -202,3 +202,32 @@ pub fn live_value_tracker() -> Result<ExecutionSession, Box<dyn Error>> {
     ));
     Ok(session)
 }
+
+/// Build a canonical scene whose native sources lower into one execution session.
+///
+/// Browser/native hosts deliver normalized source occurrences to the returned
+/// session. They do not own signal identities, routing tables, or reactive state.
+pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut square = scene.square(0.9)?;
+    square.set_fill(0.0, 0.4, 1.0, 1.0)?;
+    scene.add(&square)?;
+
+    let pointer = scene.pointer_position_signal()?;
+    scene.bind_native_translation(&square, &pointer)?;
+    let opacity = scene.control_signal("opacity", 1.0)?;
+    scene.bind_opacity(&square, &opacity)?;
+    let clicks = scene.pointer_down_events(0)?;
+    scene.bind_rotation(&square, &clicks)?;
+
+    // These declarations prove the remaining normalized source vocabulary is
+    // authored on semantic signal nodes. Unbound sources lower to runtime no-ops.
+    let visible = scene.key_state_signal("Space", false)?;
+    scene.bind_presence(&square, &visible)?;
+    let _ = scene.viewport_size_signal()?;
+    let _ = scene.wheel_delta_signal()?;
+    let _ = scene.wheel_events()?;
+    let _ = scene.control_commit_events("opacity")?;
+
+    Ok(scene.execution_session()?)
+}
