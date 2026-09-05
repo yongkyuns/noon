@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    GeometryRef, GeometryResourceHandle, SemanticNodeId, SemanticObjectContent, StoredGeometry,
-    TextResourceHandle,
+    GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceHandle, SemanticNodeId,
+    SemanticObjectContent, StoredGeometry, TextResourceHandle,
 };
 
 use crate::{CompiledObject, CompiledScene, DynamicProperties};
@@ -51,7 +51,7 @@ impl std::fmt::Display for SemanticCompiledSceneError {
             ),
             Self::UnsupportedGeometryResource { node, resource } => write!(
                 formatter,
-                "semantic object {}:{} uses versioned geometry resource {}@{} before the compiled resource key carries version identity",
+                "semantic object {}:{} uses unresolved geometry resource {}@{}",
                 node.slot(),
                 node.generation(),
                 resource.id.get(),
@@ -82,7 +82,7 @@ impl CompiledScene {
     pub fn from_semantic_projection(
         projection: &SemanticExecutionProjection,
     ) -> Result<Self, SemanticCompiledSceneError> {
-        materialize_semantic_projection(projection, false)
+        materialize_semantic_projection(projection, false, None)
     }
 
     /// Materialize object values after the canonical A1.6 entry point has
@@ -91,14 +91,16 @@ impl CompiledScene {
     /// bindings by opting into this path directly.
     pub(crate) fn from_semantic_projection_after_reactive_lowering(
         projection: &SemanticExecutionProjection,
+        resources: &GeometryResourceArena,
     ) -> Result<Self, SemanticCompiledSceneError> {
-        materialize_semantic_projection(projection, true)
+        materialize_semantic_projection(projection, true, Some(resources))
     }
 }
 
 fn materialize_semantic_projection(
     projection: &SemanticExecutionProjection,
     reactive_bindings_lowered: bool,
+    resources: Option<&GeometryResourceArena>,
 ) -> Result<CompiledScene, SemanticCompiledSceneError> {
     let mut ordered = projection.objects().iter().collect::<Vec<_>>();
     ordered.sort_by_key(|object| object.presentation.order_key());
@@ -121,7 +123,7 @@ fn materialize_semantic_projection(
 
         let object_index =
             u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
-        let geometry = lower_geometry(object.semantic_id, object.content)?;
+        let geometry = lower_geometry(object.semantic_id, object.content, resources)?;
         objects.push(CompiledObject {
             id: object.execution_id,
             geometry,
@@ -146,6 +148,7 @@ fn materialize_semantic_projection(
 fn lower_geometry(
     node: SemanticNodeId,
     content: SemanticObjectContent,
+    resources: Option<&GeometryResourceArena>,
 ) -> Result<GeometryRef, SemanticCompiledSceneError> {
     match content {
         SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) => {
@@ -171,7 +174,14 @@ fn lower_geometry(
             Ok(GeometryRef::line(start, end))
         }
         SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) => {
-            Err(SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource })
+            match resources.and_then(|arena| arena.get(resource)) {
+                Some(GeometryResource::VectorPath(path)) => {
+                    Ok(GeometryRef::path(path.as_ref().clone()))
+                }
+                None => {
+                    Err(SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource })
+                }
+            }
         }
         SemanticObjectContent::Text(text) => {
             Err(SemanticCompiledSceneError::UnsupportedText { node, text })
@@ -188,6 +198,31 @@ mod tests {
 
     use super::*;
     use crate::SemanticExecutionIndex;
+
+    #[test]
+    fn canonical_lowering_resolves_only_the_owning_stores_path() {
+        use noon_core::VectorPath;
+        let mut store = SemanticStore::new();
+        let path = VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE);
+        let resource = store.insert_geometry_path(path.clone());
+        let node = store
+            .insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
+        store.attach_to_scene(node).unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = crate::lower_semantic_execution(&store, &mut index).unwrap();
+        assert_eq!(
+            lowered.compiled().objects()[0].geometry,
+            GeometryRef::path(path)
+        );
+        let mut foreign = SemanticStore::new();
+        foreign.insert_geometry_path(VectorPath::new());
+        let node = foreign
+            .insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
+        foreign.attach_to_scene(node).unwrap();
+        assert!(
+            crate::lower_semantic_execution(&foreign, &mut SemanticExecutionIndex::new()).is_err()
+        );
+    }
 
     fn circle(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
@@ -296,6 +331,7 @@ mod tests {
     fn versioned_geometry_resource_is_not_degraded_to_an_unversioned_key() {
         let mut store = SemanticStore::new();
         let resource = GeometryResourceHandle {
+            arena: 0,
             id: GeometryId::new(7),
             version: 3,
         };

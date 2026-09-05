@@ -22,10 +22,11 @@ use crate::TransportTextResourceHandle;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 1;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TransportGeometryResourceHandle {
+    pub arena: u64,
     pub id: u64,
     pub version: u64,
 }
@@ -33,6 +34,7 @@ pub struct TransportGeometryResourceHandle {
 impl From<GeometryResourceHandle> for TransportGeometryResourceHandle {
     fn from(value: GeometryResourceHandle) -> Self {
         Self {
+            arena: value.arena,
             id: value.id.get(),
             version: value.version,
         }

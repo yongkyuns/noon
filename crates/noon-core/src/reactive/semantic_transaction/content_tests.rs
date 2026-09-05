@@ -1,5 +1,5 @@
 use super::*;
-use crate::{SemanticObjectState, SemanticVec3, StoredGeometry, Vec2};
+use crate::{SemanticObjectState, SemanticVec3, StoredGeometry, Vec2, VectorPath};
 
 fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
     store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
@@ -184,4 +184,48 @@ fn content_replacement_is_one_slot_local_with_large_unrelated_scene() {
         result.impacts(),
         &[SemanticMutationImpact::ObjectContent { object: target }]
     );
+}
+
+#[test]
+fn unavailable_geometry_resource_replacement_rolls_back_atomically() {
+    let mut store = SemanticStore::new();
+    let live = object(&mut store, 1.0);
+    let earlier = object(&mut store, 2.0);
+    let valid = store.insert_geometry_path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0)),
+    );
+    let mut foreign_store = SemanticStore::new();
+    let foreign = foreign_store.insert_geometry_path(VectorPath::new().move_to(Vec2::ZERO));
+    let stale = crate::GeometryResourceHandle {
+        version: valid.version + 1,
+        ..valid
+    };
+
+    for unavailable in [foreign, stale] {
+        let before = store.semantic_object_state_checked(live).unwrap().clone();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .set_property(earlier, SemanticObjectProperty::RotationZ, 0.5_f64)
+            .replace_content(live, StoredGeometry::Resource(unavailable));
+
+        assert_eq!(
+            transaction.apply(&mut store),
+            Err(SemanticMutationTransactionError::InvalidGeometryResource {
+                index: 1,
+                resource: unavailable,
+            })
+        );
+        assert_eq!(store.semantic_object_state_checked(live).unwrap(), &before);
+        assert_eq!(
+            store
+                .semantic_object_state_checked(earlier)
+                .unwrap()
+                .transform
+                .rotation_z,
+            0.0
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
 }

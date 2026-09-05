@@ -5,7 +5,7 @@ use super::{
     SemanticAnimationState, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
     SemanticObjectProperty, SemanticObjectState, SemanticSceneOperationError,
     SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
-    SemanticSignalValueKind, SemanticStore, SemanticStoreError,
+    SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle, StoredGeometry,
 };
 
 mod animation_addition;
@@ -40,6 +40,10 @@ pub enum SemanticMutation {
     ReplaceContent {
         object: SemanticNodeId,
         content: SemanticObjectContent,
+    },
+    ReplaceStyle {
+        object: SemanticNodeId,
+        style: SemanticStyle,
     },
     ChangeSubscription {
         object: SemanticNodeId,
@@ -84,6 +88,7 @@ impl SemanticMutation {
             Self::SetSignal { signal, .. } => Some(*signal),
             Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
+            | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => Some(*object),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
@@ -106,6 +111,7 @@ impl SemanticMutation {
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
+            Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
                 object, property, ..
             } => Some(SemanticMutationKey::Subscription {
@@ -139,6 +145,7 @@ enum SemanticMutationKey {
         property: SemanticObjectProperty,
     },
     ObjectContent(SemanticNodeId),
+    ObjectStyle(SemanticNodeId),
     Subscription {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
@@ -170,6 +177,9 @@ pub enum SemanticMutationImpact {
         property: SemanticObjectProperty,
     },
     ObjectContent {
+        object: SemanticNodeId,
+    },
+    ObjectStyle {
         object: SemanticNodeId,
     },
     Subscription {
@@ -248,6 +258,17 @@ impl SemanticMutationTransaction {
             object,
             content: content.into(),
         });
+        self
+    }
+
+    /// Replace the complete authored style of one semantic object.
+    ///
+    /// This carries paints and discrete stroke topology through the same atomic
+    /// mutation vocabulary as scalar style properties. A transaction cannot mix
+    /// full-style replacement with scalar style writes for the same object.
+    pub fn replace_style(&mut self, object: SemanticNodeId, style: SemanticStyle) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::ReplaceStyle { object, style });
         self
     }
 
@@ -406,6 +427,11 @@ impl SemanticMutationTransaction {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
                 }
+                SemanticMutation::ReplaceStyle { object, style } => {
+                    set_object_style(store, object, style);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ObjectStyle { object });
+                }
                 SemanticMutation::ChangeSubscription {
                     object,
                     property,
@@ -543,6 +569,8 @@ impl SemanticMutationTransaction {
         let removed_nodes = store.semantic_removal_closure(&removed_nodes);
 
         let mut targets = HashSet::with_capacity(self.mutations.len());
+        let mut style_replacements = HashSet::new();
+        let mut style_property_writes = HashSet::new();
         let mut changed = Vec::with_capacity(self.mutations.len());
         let mut family_edges = FamilyEdgePreflight::default();
         let mut pending_sources = HashSet::new();
@@ -619,6 +647,30 @@ impl SemanticMutationTransaction {
                 }
             }
 
+            match mutation {
+                SemanticMutation::ReplaceStyle { object, .. } => {
+                    if style_property_writes.contains(object) {
+                        return Err(SemanticMutationTransactionError::ConflictingStyleMutation {
+                            index,
+                            object: *object,
+                        });
+                    }
+                    style_replacements.insert(*object);
+                }
+                SemanticMutation::SetProperty {
+                    object, property, ..
+                } if is_style_property(*property) => {
+                    if style_replacements.contains(object) {
+                        return Err(SemanticMutationTransactionError::ConflictingStyleMutation {
+                            index,
+                            object: *object,
+                        });
+                    }
+                    style_property_writes.insert(*object);
+                }
+                _ => {}
+            }
+
             if let Some(key) = mutation.key() {
                 if !targets.insert(key) {
                     return Err(match key {
@@ -634,6 +686,9 @@ impl SemanticMutationTransaction {
                         }
                         SemanticMutationKey::ObjectContent(object) => {
                             SemanticMutationTransactionError::DuplicateContent { index, object }
+                        }
+                        SemanticMutationKey::ObjectStyle(object) => {
+                            SemanticMutationTransactionError::DuplicateStyle { index, object }
                         }
                         SemanticMutationKey::Subscription { object, property } => {
                             SemanticMutationTransactionError::DuplicateSubscription {
@@ -730,7 +785,23 @@ impl SemanticMutationTransaction {
                             index,
                             error,
                         })?;
+                    validate_object_content_resource(store, *content, index)?;
                     changed.push(state.content != *content);
+                }
+                SemanticMutation::ReplaceStyle { object, style } => {
+                    let state = store
+                        .semantic_object_state_checked(*object)
+                        .map_err(|error| SemanticMutationTransactionError::Object {
+                            index,
+                            error,
+                        })?;
+                    if !semantic_style_is_finite(style) {
+                        return Err(SemanticMutationTransactionError::InvalidStyle {
+                            index,
+                            object: *object,
+                        });
+                    }
+                    changed.push(state.style != *style);
                 }
                 SemanticMutation::ChangeSubscription {
                     object,
@@ -907,6 +978,59 @@ fn set_object_content(
         .content = content;
 }
 
+pub(super) fn validate_object_content_resource(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+    index: usize,
+) -> Result<(), SemanticMutationTransactionError> {
+    let SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) = content else {
+        return Ok(());
+    };
+    if store.geometry_resources().get(resource).is_none() {
+        return Err(SemanticMutationTransactionError::InvalidGeometryResource { index, resource });
+    }
+    Ok(())
+}
+
+fn set_object_style(store: &mut SemanticStore, object: SemanticNodeId, style: SemanticStyle) {
+    store
+        .node_mut(object)
+        .and_then(|node| node.semantic_object_state_mut())
+        .expect("preflighted semantic object must remain valid while transaction owns the store")
+        .style = style;
+}
+
+const fn is_style_property(property: SemanticObjectProperty) -> bool {
+    matches!(
+        property,
+        SemanticObjectProperty::FillOpacity
+            | SemanticObjectProperty::StrokeOpacity
+            | SemanticObjectProperty::StrokeWidth
+            | SemanticObjectProperty::ObjectOpacity
+    )
+}
+
+fn semantic_style_is_finite(style: &SemanticStyle) -> bool {
+    semantic_paint_is_finite(style.fill.as_ref())
+        && semantic_paint_is_finite(style.stroke.as_ref())
+        && style.fill_opacity.is_finite()
+        && style.stroke_opacity.is_finite()
+        && style.stroke_width.is_finite()
+        && style.object_opacity.is_finite()
+}
+
+fn semantic_paint_is_finite(paint: Option<&super::SemanticPaint>) -> bool {
+    match paint {
+        Some(super::SemanticPaint::Solid(color)) => {
+            color.red.is_finite()
+                && color.green.is_finite()
+                && color.blue.is_finite()
+                && color.alpha.is_finite()
+        }
+        Some(super::SemanticPaint::Resource(_)) | None => true,
+    }
+}
+
 fn set_object_subscription(
     store: &mut SemanticStore,
     object: SemanticNodeId,
@@ -961,6 +1085,14 @@ pub enum SemanticMutationTransactionError {
         property: SemanticObjectProperty,
     },
     DuplicateContent {
+        index: usize,
+        object: SemanticNodeId,
+    },
+    DuplicateStyle {
+        index: usize,
+        object: SemanticNodeId,
+    },
+    ConflictingStyleMutation {
         index: usize,
         object: SemanticNodeId,
     },
@@ -1078,6 +1210,14 @@ pub enum SemanticMutationTransactionError {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
     },
+    InvalidStyle {
+        index: usize,
+        object: SemanticNodeId,
+    },
+    InvalidGeometryResource {
+        index: usize,
+        resource: crate::GeometryResourceHandle,
+    },
     PropertyTypeMismatch {
         index: usize,
         object: SemanticNodeId,
@@ -1122,6 +1262,18 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::DuplicateContent { index, object } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats content replacement on object {}:{}",
+                object.slot(),
+                object.generation()
+            ),
+            Self::DuplicateStyle { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} repeats style replacement on object {}:{}",
+                object.slot(),
+                object.generation()
+            ),
+            Self::ConflictingStyleMutation { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} mixes full-style replacement with scalar style mutation on object {}:{}",
                 object.slot(),
                 object.generation()
             ),
@@ -1313,6 +1465,17 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
+            Self::InvalidStyle { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot replace style on object {}:{} with non-finite authored values",
+                object.slot(),
+                object.generation()
+            ),
+            Self::InvalidGeometryResource { index, resource } => write!(
+                formatter,
+                "semantic transaction mutation {index} references unavailable geometry resource {:?}",
+                resource
+            ),
             Self::PropertyTypeMismatch {
                 index,
                 object,
@@ -1356,6 +1519,9 @@ mod base_tests;
 
 #[cfg(test)]
 mod content_tests;
+
+#[cfg(test)]
+mod style_tests;
 
 #[cfg(test)]
 mod subscription_tests;

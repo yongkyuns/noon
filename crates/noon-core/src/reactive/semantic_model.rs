@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Color, PathCommand, Style, Vec2, VectorPath};
+use crate::{Color, PathCommand, StrokeCap, StrokeJoin, Style, Vec2, VectorPath};
 
 /// High-precision authoring vector. The current renderer remains 2D/f32; this
 /// type prevents frontend compatibility from being constrained by that backend.
@@ -94,6 +94,10 @@ pub struct SemanticStyle {
     pub stroke_opacity: f64,
     pub stroke_width: f64,
     pub stroke_width_mode: StrokeWidthMode,
+    #[serde(default)]
+    pub stroke_join: StrokeJoin,
+    #[serde(default)]
+    pub stroke_cap: StrokeCap,
     pub object_opacity: f64,
 }
 
@@ -106,6 +110,8 @@ impl Default for SemanticStyle {
             stroke_opacity: 1.0,
             stroke_width: 0.0,
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+            stroke_join: StrokeJoin::Round,
+            stroke_cap: StrokeCap::Round,
             object_opacity: 1.0,
         }
     }
@@ -122,6 +128,8 @@ impl SemanticStyle {
             stroke_opacity: 1.0,
             stroke_width: style.stroke_width as f64,
             stroke_width_mode: style.stroke_width_mode,
+            stroke_join: style.stroke_join,
+            stroke_cap: style.stroke_cap,
             object_opacity: style.opacity as f64,
         }
     }
@@ -428,6 +436,18 @@ mod tests {
         };
         assert!((style.effective_fill_opacity() - 0.2).abs() < 1e-12);
         assert!((style.effective_stroke_opacity() - 0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn style_preserves_legacy_stroke_topology() {
+        let semantic = SemanticStyle::from_legacy(Style {
+            stroke_join: StrokeJoin::Bevel,
+            stroke_cap: StrokeCap::Square,
+            ..Style::default()
+        });
+
+        assert_eq!(semantic.stroke_join, StrokeJoin::Bevel);
+        assert_eq!(semantic.stroke_cap, StrokeCap::Square);
     }
 
     #[test]

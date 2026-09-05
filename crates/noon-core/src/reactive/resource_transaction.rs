@@ -349,6 +349,7 @@ mod tests {
         let geometries = GeometryResourceArena::new();
         let fonts = FontResourceArena::new();
         let missing = GeometryResourceHandle {
+            arena: 0,
             id: GeometryId::new(42),
             version: 0,
         };

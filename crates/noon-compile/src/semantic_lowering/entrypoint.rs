@@ -148,9 +148,39 @@ pub fn lower_semantic_execution(
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let mut staged_index = index.clone();
     let projection = staged_index.lower_scene(store)?;
+    finish_semantic_execution(store, index, staged_index, projection)
+}
+
+/// Canonical initial lowering scoped to one semantic scene family.
+///
+/// Uses the same object/reactive/compute/camera handoff as [`lower_semantic_execution`].
+/// Only the selected family's reachable leaves and their signal dependencies enter
+/// execution; other attached or detached scene families remain untouched. This is
+/// initial lowering, not a live membership or runtime publication operation.
+/// `root` must be a live family ID from `store`; language wrappers must additionally
+/// validate store ownership before passing a store-local ID across their boundary.
+pub fn lower_semantic_execution_root(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+    index: &mut SemanticExecutionIndex,
+) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
+    let mut staged_index = index.clone();
+    let projection = staged_index.lower_root(store, root)?;
+    finish_semantic_execution(store, index, staged_index, projection)
+}
+
+fn finish_semantic_execution(
+    store: &SemanticStore,
+    index: &mut SemanticExecutionIndex,
+    staged_index: SemanticExecutionIndex,
+    projection: SemanticExecutionProjection,
+) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection(store, &projection)?;
-    let compiled = CompiledScene::from_semantic_projection_after_reactive_lowering(&projection)?;
+    let compiled = CompiledScene::from_semantic_projection_after_reactive_lowering(
+        &projection,
+        store.geometry_resources(),
+    )?;
     let camera_object = validate_camera_object(camera, &compiled)?;
     let program = ReactiveProgram::compile_for_execution_domain(
         compiled
@@ -246,6 +276,112 @@ mod tests {
         state.transform.translation = SemanticVec3::new(center.x as f64, center.y as f64, 0.0);
         state.set_role(SemanticObjectRole::Camera2D);
         state
+    }
+
+    #[test]
+    fn scoped_root_preserves_order_aliases_and_ignores_unrelated_scene_state() {
+        let mut store = SemanticStore::new();
+        let selected = store.insert_family();
+        let nested = store.insert_family();
+        let sibling = store.insert_family();
+        let first = store.insert_semantic_object(circle(1.0));
+        let second = store.insert_semantic_object(circle(2.0));
+        let mut invalid_state = circle(1.0);
+        invalid_state.transform.translation.x = f64::NAN;
+        let invalid = store.insert_semantic_object(invalid_state);
+        let signal = store.insert_semantic_input_signal(0.4_f64).unwrap();
+        store
+            .bind_semantic_signal(signal, second, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        store.add_semantic_family_member(selected, first).unwrap();
+        store.add_semantic_family_member(selected, nested).unwrap();
+        store.add_semantic_family_member(nested, second).unwrap();
+        store.add_semantic_family_member(nested, first).unwrap();
+        store.add_semantic_family_member(sibling, invalid).unwrap();
+        store.attach_to_scene(sibling).unwrap();
+        let roots = store.scene_roots().collect::<Vec<_>>();
+        let revision = store.scene_revision();
+        let mut index = SemanticExecutionIndex::new();
+
+        let lowered = lower_semantic_execution_root(&store, selected, &mut index).unwrap();
+
+        assert_eq!(
+            lowered
+                .compiled()
+                .objects()
+                .iter()
+                .map(|object| object.id)
+                .collect::<Vec<_>>(),
+            [
+                index.execution_object_id(first).unwrap(),
+                index.execution_object_id(second).unwrap()
+            ]
+        );
+        assert_eq!(index.len(), 2);
+        assert_eq!(index.execution_object_id(invalid), None);
+        assert_eq!(lowered.reactive().signal_count(), 1);
+        assert_eq!(lowered.compute().signal_count(), 1);
+        assert_eq!(store.scene_roots().collect::<Vec<_>>(), roots);
+        assert_eq!(store.scene_revision(), revision);
+        assert!(!store.node(selected).unwrap().is_scene_owned());
+        // The existing all-roots entry still observes (and rejects) the unrelated
+        // invalid attached family; scoped lowering does not rewrite membership.
+        assert!(lower_semantic_execution(&store, &mut SemanticExecutionIndex::new()).is_err());
+    }
+
+    #[test]
+    fn scoped_root_validates_family_identity_and_rejects_stale_generation() {
+        let mut store = SemanticStore::new();
+        let object = store.insert_semantic_object(circle(1.0));
+        let stale = store.insert_family();
+        store.remove_node(stale).unwrap();
+        let replacement = store.insert_family();
+        assert_eq!(replacement.slot(), stale.slot());
+        assert_ne!(replacement.generation(), stale.generation());
+        let mut index = SemanticExecutionIndex::new();
+        for (root, expected) in [
+            (object, noon_core::SemanticStoreError::NotFamily(object)),
+            (stale, noon_core::SemanticStoreError::UnknownNode(stale)),
+        ] {
+            assert_eq!(
+                lower_semantic_execution_root(&store, root, &mut index),
+                Err(SemanticExecutionLoweringError::Object(
+                    SemanticLoweringError::Store(expected)
+                ))
+            );
+            assert!(index.is_empty());
+        }
+        let empty = lower_semantic_execution_root(&store, replacement, &mut index).unwrap();
+        assert!(empty.compiled().objects().is_empty());
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn scoped_root_failure_keeps_preexisting_execution_index_unchanged() {
+        let mut store = SemanticStore::new();
+        let first_root = store.insert_family();
+        let first = store.insert_semantic_object(circle(1.0));
+        store.add_semantic_family_member(first_root, first).unwrap();
+        let second_root = store.insert_family();
+        let second = store.insert_semantic_object(circle(2.0));
+        store
+            .add_semantic_family_member(second_root, second)
+            .unwrap();
+        let unlowerable = store.insert_semantic_input_signal(f64::MAX).unwrap();
+        store
+            .bind_semantic_signal(unlowerable, second, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        lower_semantic_execution_root(&store, first_root, &mut index).unwrap();
+        let first_id = index.execution_object_id(first).unwrap();
+
+        assert!(matches!(
+            lower_semantic_execution_root(&store, second_root, &mut index),
+            Err(SemanticExecutionLoweringError::Reactive(_))
+        ));
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.execution_object_id(first), Some(first_id));
+        assert_eq!(index.execution_object_id(second), None);
     }
 
     #[test]

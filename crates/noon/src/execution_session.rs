@@ -1,9 +1,9 @@
 use crate::execution_segment::{ExecutionSegment, ExecutionSegmentError};
 use noon_compile::{
     lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
-    lower_semantic_execution, CompilePatchError, SemanticAffineAnimationTrackError,
-    SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
-    SemanticReactiveProjection,
+    lower_semantic_execution, lower_semantic_execution_root, CompilePatchError,
+    SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
+    SemanticExecutionLoweringError, SemanticExecutionLoweringOutput, SemanticReactiveProjection,
 };
 use noon_core::{
     AnimationOptions, Camera2DState, MutationTransaction, NativeEventOccurrence,
@@ -180,6 +180,28 @@ impl ExecutionSession {
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
+        Ok(Self::from_lowered(execution_index, lowered))
+    }
+
+    /// Instantiate the existing runtime for one semantic scene family.
+    ///
+    /// Detached families are valid initial scene roots. Other families in the
+    /// shared store do not enter this execution domain. Membership remains owned
+    /// by the store; this constructor neither mutates it nor establishes a live
+    /// structural mutation contract. `root` must originate from `store`.
+    pub fn from_semantic_root(
+        store: &SemanticStore,
+        root: SemanticNodeId,
+    ) -> Result<Self, SemanticExecutionLoweringError> {
+        let mut execution_index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
+        Ok(Self::from_lowered(execution_index, lowered))
+    }
+
+    fn from_lowered(
+        execution_index: SemanticExecutionIndex,
+        lowered: SemanticExecutionLoweringOutput,
+    ) -> Self {
         let camera_object = lowered.camera_object();
         let next_activation_track_id = lowered
             .compiled()
@@ -189,14 +211,14 @@ impl ExecutionSession {
             .map_or(Some(0), |id| id.checked_add(1));
         let reactive_projection = lowered.reactive().clone();
         let runtime = SceneInstance::from_semantic_execution(lowered);
-        Ok(Self {
+        Self {
             execution_index,
             reactive_projection,
             runtime,
             camera_object,
             next_activation_track_id,
             last_native_event_sequence: None,
-        })
+        }
     }
 
     /// Current renderer-facing runtime frame.
@@ -453,6 +475,61 @@ mod tests {
         state.transform.translation = SemanticVec3::new(center.x as f64, center.y as f64, 0.0);
         state.set_role(SemanticObjectRole::Camera2D);
         state
+    }
+
+    #[test]
+    fn semantic_family_sessions_isolate_camera_objects_and_reactive_state() {
+        let mut store = SemanticStore::new();
+        let left_root = store.insert_family();
+        let right_root = store.insert_family();
+        let left_camera = store.insert_semantic_object(camera_state(Vec2::new(-2.0, 0.0), 4.0));
+        let right_camera = store.insert_semantic_object(camera_state(Vec2::new(3.0, 1.0), 6.0));
+        let shared =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let signal = store.insert_semantic_input_signal(0.4_f64).unwrap();
+        store
+            .bind_semantic_signal(signal, shared, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        for (root, camera) in [(left_root, left_camera), (right_root, right_camera)] {
+            store.add_semantic_family_member(root, camera).unwrap();
+            store.add_semantic_family_member(root, shared).unwrap();
+        }
+        let mut left = ExecutionSession::from_semantic_root(&store, left_root).unwrap();
+        let right = ExecutionSession::from_semantic_root(&store, right_root).unwrap();
+        assert_eq!(left.frame().objects.len(), 2);
+        assert_eq!(right.frame().objects.len(), 2);
+        assert_eq!(left.execution_object_id(right_camera), None);
+        assert_eq!(right.execution_object_id(left_camera), None);
+        assert_eq!(
+            left.execution_object_id(shared),
+            right.execution_object_id(shared)
+        );
+        assert_eq!(
+            left.camera().unwrap(),
+            Camera2DState {
+                center: Vec2::new(-2.0, 0.0),
+                height: 4.0
+            }
+        );
+        assert_eq!(
+            right.camera().unwrap(),
+            Camera2DState {
+                center: Vec2::new(3.0, 1.0),
+                height: 6.0
+            }
+        );
+        left.set_reactive_input(signal, 0.8_f32).unwrap();
+        assert_eq!(left.frame().objects[1].style.opacity, 0.8);
+        assert_eq!(right.frame().objects[1].style.opacity, 0.4);
+        assert_eq!(store.scene_roots().count(), 0);
+        // Existing all-roots consumers still see the store's actual attached roots.
+        assert!(ExecutionSession::from_semantic_store(&store)
+            .unwrap()
+            .frame()
+            .objects
+            .is_empty());
     }
 
     #[test]

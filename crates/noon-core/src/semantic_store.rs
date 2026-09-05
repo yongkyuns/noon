@@ -385,8 +385,9 @@ pub struct SemanticMutationStats {
     pub cycle_nodes_visited: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct SemanticStore {
+    geometry_resources: crate::GeometryResourceArena,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
@@ -401,7 +402,58 @@ pub struct SemanticStore {
     scene_revision: crate::SceneRevision,
 }
 
+// A cloned scene is an independent authoring store. Re-namespace its resource
+// references while sharing immutable payload allocations through the arena's Arc values.
+impl Clone for SemanticStore {
+    fn clone(&self) -> Self {
+        let mut geometry_resources = self.geometry_resources.clone();
+        let namespace = geometry_resources.fork_namespace();
+        let mut slots = self.slots.clone();
+        for slot in &mut slots {
+            if let Some(node) = slot.node.as_mut() {
+                if let Some(state) = node.object_state.as_mut() {
+                    if let crate::SemanticObjectContent::Geometry(
+                        crate::StoredGeometry::Resource(handle),
+                    ) = &mut state.content
+                    {
+                        if self.geometry_resources.get(*handle).is_some() {
+                            handle.arena = namespace;
+                        }
+                    }
+                }
+            }
+        }
+        Self {
+            geometry_resources,
+            slots,
+            free_head: self.free_head,
+            live_nodes: self.live_nodes,
+            scene_head: self.scene_head,
+            scene_tail: self.scene_tail,
+            scene_nodes: self.scene_nodes,
+            next_insertion_order: self.next_insertion_order,
+            object_nodes: self.object_nodes.clone(),
+            source_nodes: self.source_nodes.clone(),
+            incoming_references: self.incoming_references.clone(),
+            last_mutation: self.last_mutation,
+            scene_revision: self.scene_revision,
+        }
+    }
+}
+
 impl SemanticStore {
+    pub fn geometry_resources(&self) -> &crate::GeometryResourceArena {
+        &self.geometry_resources
+    }
+
+    /// Intern immutable path content in this store's resource namespace.
+    pub fn insert_geometry_path(
+        &mut self,
+        path: crate::VectorPath,
+    ) -> crate::GeometryResourceHandle {
+        self.geometry_resources.insert_path(path)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1139,6 +1191,44 @@ mod tests {
     use crate::GeometryRef;
 
     use super::*;
+
+    #[test]
+    fn resources_are_store_scoped_and_clones_share_only_immutable_payloads() {
+        use crate::{GeometryResource, SemanticObjectContent, StoredGeometry, VectorPath};
+        use std::sync::Arc;
+        let mut first = SemanticStore::new();
+        let mut second = SemanticStore::new();
+        let a = first.insert_geometry_path(VectorPath::new());
+        let b = second.insert_geometry_path(VectorPath::new());
+        assert_eq!((a.id, a.version), (b.id, b.version));
+        assert_ne!(a.arena, b.arena);
+        assert!(first.geometry_resources().get(b).is_none());
+        assert!(second.geometry_resources().get(a).is_none());
+        let node =
+            first.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(a)));
+        // The low-level store fixture can contain invalid state; cloning must not legitimize it.
+        let foreign =
+            first.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(b)));
+        let cloned = first.clone();
+        let SemanticObjectContent::Geometry(StoredGeometry::Resource(c)) =
+            cloned.semantic_object_state_checked(node).unwrap().content
+        else {
+            panic!("resource content")
+        };
+        assert_ne!(a.arena, c.arena);
+        assert!(cloned.geometry_resources().get(a).is_none());
+        let GeometryResource::VectorPath(original) = first.geometry_resources().get(a).unwrap();
+        let GeometryResource::VectorPath(copied) = cloned.geometry_resources().get(c).unwrap();
+        assert!(Arc::ptr_eq(original, copied));
+        assert_eq!(
+            cloned
+                .semantic_object_state_checked(foreign)
+                .unwrap()
+                .content,
+            SemanticObjectContent::Geometry(StoredGeometry::Resource(b))
+        );
+        assert!(cloned.geometry_resources().get(b).is_none());
+    }
 
     fn object(id: u64) -> ObjectDefinition {
         ObjectDefinition::new(ObjectId::new(id), GeometryRef::circle(1.0))

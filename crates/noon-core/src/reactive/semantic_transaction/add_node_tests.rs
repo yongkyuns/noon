@@ -1,5 +1,5 @@
 use super::*;
-use crate::{SemanticNodeResidency, SourceIdentity, StoredGeometry};
+use crate::{SemanticNodeResidency, SourceIdentity, StoredGeometry, Vec2, VectorPath};
 
 fn object_state(radius: f32) -> SemanticObjectState {
     SemanticObjectState::new(StoredGeometry::Circle { radius })
@@ -91,6 +91,44 @@ fn invalid_object_state_rolls_back_earlier_mutation_before_allocation() {
     assert_eq!(scalar_input(&store, signal), 1.0);
     assert_eq!(store.len(), before_len);
     assert_eq!(store.last_mutation_stats().slots_written, 0);
+}
+
+#[test]
+fn unavailable_geometry_resource_is_rejected_before_node_allocation() {
+    let mut store = SemanticStore::new();
+    let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
+    let valid = store.insert_geometry_path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0)),
+    );
+    let mut foreign_store = SemanticStore::new();
+    let foreign = foreign_store.insert_geometry_path(VectorPath::new().move_to(Vec2::ZERO));
+    let stale = crate::GeometryResourceHandle {
+        version: valid.version + 1,
+        ..valid
+    };
+
+    for unavailable in [foreign, stale] {
+        let before_len = store.len();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .set_signal(signal, 2.0_f64)
+            .add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+                StoredGeometry::Resource(unavailable),
+            )));
+
+        assert_eq!(
+            transaction.apply(&mut store),
+            Err(SemanticMutationTransactionError::InvalidGeometryResource {
+                index: 1,
+                resource: unavailable,
+            })
+        );
+        assert_eq!(scalar_input(&store, signal), 1.0);
+        assert_eq!(store.len(), before_len);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
 }
 
 #[test]
