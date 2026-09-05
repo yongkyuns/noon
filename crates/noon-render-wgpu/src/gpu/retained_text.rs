@@ -1386,10 +1386,6 @@ impl RetainedFramePreparer {
         })
     }
 
-    fn rebuild_render_item_ranges(&mut self) {
-        rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
-    }
-
     fn project_mixed_visibility(
         &mut self,
         frame: &FrameState,

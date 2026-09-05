@@ -340,7 +340,7 @@ impl ExecutionSession {
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
         self.sync_spatial_index();
         let query = self.spatial_index.query_rect(bounds);
-        let object_indices = query
+        let object_indices: Vec<_> = query
             .slots()
             .iter()
             .filter_map(|&slot| {
