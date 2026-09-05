@@ -1,7 +1,9 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use noon_core::Vec2;
-    use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
+    use noon_render_wgpu::{
+        Camera2D, GpuRenderer, PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState,
+    };
     use noon_runtime::FrameChanges;
     use noon_text_render_wgpu::TextDeviceMetrics;
     use wasm_bindgen::prelude::*;
@@ -57,6 +59,8 @@ mod wasm {
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
         last_outline_cache_misses: u64,
+        preloaded_geometry_count: usize,
+        preload_bytes_uploaded: usize,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
     }
@@ -74,7 +78,11 @@ mod wasm {
             let camera = mirror.camera();
             let mut preparer = RetainedFramePreparer::new();
             preparer.set_scene_path_mesh_cache_budget(
-                mirror.resources().render_geometries().len(),
+                mirror
+                    .resources()
+                    .render_geometries()
+                    .len()
+                    .max(mirror.resources().render_geometry_preparation_count()),
                 mirror.resources().geometries().len(),
             );
 
@@ -123,6 +131,28 @@ mod wasm {
             renderer.set_viewport(&device, &queue, width, height);
             let text_gpu = renderer.create_retained_text_state(&device, &queue);
 
+            // Prepare derived resident GPU geometry before the worker publishes
+            // readiness. This does not evaluate the timeline or acquire a frame.
+            let resources = mirror.resources().render_geometries();
+            let requests = mirror
+                .resources()
+                .render_geometry_preparations()
+                .iter()
+                .map(|preparation| PathMeshPreload {
+                    geometry: resources[preparation.resource as usize].as_ref(),
+                    style: preparation.style,
+                    transform: preparation.transform,
+                })
+                .collect::<Vec<_>>();
+            let preload = preparer
+                .preload_path_meshes(&device, &queue, &mut renderer, &requests)
+                .map_err(js_error)?;
+            let preloaded_geometry_count = preload.geometry.geometry_cache_misses;
+            let preload_bytes_uploaded = preload.upload.bytes_uploaded;
+            // Writes and subsequent initial-frame rendering use the same queue,
+            // so no playback draw can overtake its resident resource upload.
+            queue.submit([]);
+
             let mut result = Self {
                 instance,
                 surface,
@@ -145,6 +175,8 @@ mod wasm {
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
                 last_outline_cache_misses: 0,
+                preloaded_geometry_count,
+                preload_bytes_uploaded,
                 gpu_generation,
                 gpu_diagnostics,
             };
@@ -360,6 +392,16 @@ mod wasm {
         #[wasm_bindgen(js_name = lastGeometryCacheMisses)]
         pub fn last_geometry_cache_misses(&self) -> usize {
             self.last_geometry_cache_misses
+        }
+
+        #[wasm_bindgen(js_name = preloadedGeometryCount)]
+        pub fn preloaded_geometry_count(&self) -> usize {
+            self.preloaded_geometry_count
+        }
+
+        #[wasm_bindgen(js_name = preloadBytesUploaded)]
+        pub fn preload_bytes_uploaded(&self) -> usize {
+            self.preload_bytes_uploaded
         }
 
         #[wasm_bindgen(js_name = lastOutlineCacheMisses)]

@@ -55,7 +55,12 @@ impl RetainedAuthoringPlayer {
             scene.geometries(),
             scene.fonts(),
         )?;
-        bundle.set_render_geometries(session, render_geometries.clone());
+        let preparations =
+            crate::retained_resource_transport::compiled_render_geometry_preparations(
+                &compiled,
+                &render_geometries,
+            )?;
+        bundle.set_render_geometries(session, render_geometries.clone(), preparations);
         let resource_bundle = bundle.encode_binary()?;
         let runtime = RetainedSceneInstance::new(compiled);
         Ok(Self {

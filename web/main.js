@@ -522,8 +522,8 @@ async function ensureRuntimeReady({
     const nextPlayer = prepared.candidate;
     try {
       await prepared.ready;
-      setRuntimeStatus("Starting authored execution engine…", "running");
-      patchStatus.value = "Starting authored GPU execution engine…";
+      setRuntimeStatus("Preparing animation…", "running");
+      patchStatus.value = "Preparing authored animation…";
       patchStatus.dataset.state = "running";
 
       const ready = semanticExecution !== null
@@ -760,6 +760,7 @@ async function runScene() {
   const releaseBusy = beginBusy();
   const task = (async () => {
     try {
+      setRuntimeStatus("Preparing animation…", "running");
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
       const preparation = player === null ? ensureRuntimePreparation() : null;

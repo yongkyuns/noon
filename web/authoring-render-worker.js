@@ -36,8 +36,11 @@ let transitionRequestId = null;
 let transitionResponseType = null;
 let transitionMode = null;
 let transitionResourceBytes = null;
+let transitionFrameLoopWasRunning = false;
 let needsPresent = false;
 let running = false;
+let stopped = false;
+let frameLoopGeneration = 0;
 let lastFrameTimestamp = null;
 let presentedFrames = 0;
 let modeSwitches = 0;
@@ -207,6 +210,9 @@ function beginRendererTransition(message, nextMode, responseType) {
 
   detachRenderPort();
   resetTransportState();
+  transitionFrameLoopWasRunning = running;
+  frameLoopGeneration += 1;
+  running = false;
   reconnectResourceBundlePending = false;
   transitionMode = nextMode;
   transitionResourceBytes = null;
@@ -236,10 +242,13 @@ function resize(message) {
 }
 
 function stop() {
+  stopped = true;
+  frameLoopGeneration += 1;
   running = false;
   bootstrapQueue = [];
   transitionMode = null;
   transitionResourceBytes = null;
+  transitionFrameLoopWasRunning = false;
   detachRenderPort();
   disposeRenderer();
   self.close();
@@ -394,8 +403,10 @@ function commitRendererTransition(initial) {
   }
 
   const nextResourceBytes = transitionResourceBytes;
+  const resumeFrameLoop = transitionFrameLoopWasRunning;
   transitionMode = null;
   transitionResourceBytes = null;
+  transitionFrameLoopWasRunning = false;
 
   // The replacement engine has already queued a complete bootstrap payload.
   // Retire the currently presenting renderer only once that payload reaches
@@ -405,29 +416,51 @@ function commitRendererTransition(initial) {
   reconnectResourceBundlePending = false;
   needsPresent = false;
   mode = nextMode;
-  bootstrapPromise = bootstrapRenderer(initial);
+  bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop);
   return true;
 }
 
-async function bootstrapRenderer(initial) {
-  const wasRunning = running;
+async function bootstrapRenderer(initial, resumeFrameLoop = true) {
+  const bootstrapGeneration = frameLoopGeneration;
   try {
+    let createdRenderer;
     if (mode === MODE_RETAINED) {
-      renderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      if (stopped) {
+        createdRenderer.free?.();
+        return;
+      }
+      renderer = createdRenderer;
       resourceBytes = null;
       const applied = renderer.applyDeltaJson(initial);
       if (!applied) {
         throw new Error("retained authoring renderer must begin from an applied snapshot");
       }
     } else {
-      renderer = await ExecutionCanvasRenderer.create(canvas, initial);
+      createdRenderer = await ExecutionCanvasRenderer.create(canvas, initial);
+      if (stopped) {
+        createdRenderer.free?.();
+        return;
+      }
+      renderer = createdRenderer;
     }
     renderer.resize(width, height);
     if (!drainGpuDiagnostics()) return;
     needsPresent = true;
-    running = true;
-    tryPresent();
-    if (!running || !drainGpuDiagnostics()) return;
+    while (!tryPresent()) {
+      if (
+        stopped ||
+        bootstrapGeneration !== frameLoopGeneration ||
+        !drainGpuDiagnostics()
+      ) {
+        return;
+      }
+      await nextRenderOpportunity();
+      if (stopped || bootstrapGeneration !== frameLoopGeneration) {
+        return;
+      }
+    }
+    if (stopped || bootstrapGeneration !== frameLoopGeneration || !drainGpuDiagnostics()) return;
 
     const ready = {
       mode,
@@ -435,7 +468,13 @@ async function bootstrapRenderer(initial) {
       transportMode,
       backend: renderer.rendererBackend(),
       gpuGeneration: renderer.gpuGeneration(),
+      time: renderer.time(),
+      presentedFrames,
     };
+    if (mode === MODE_RETAINED) {
+      ready.preloadedGeometryCount = renderer.preloadedGeometryCount();
+      ready.preloadBytesUploaded = renderer.preloadBytesUploaded();
+    }
     if (transitionRequestId === null) {
       postMain({ type: "ready", ...ready });
     } else {
@@ -448,8 +487,11 @@ async function bootstrapRenderer(initial) {
 
     flushBootstrapQueue();
     drainTransport();
-    if (!wasRunning) {
-      scheduleFrame();
+    if (resumeFrameLoop) {
+      running = true;
+      scheduleFrame(bootstrapGeneration);
+    } else {
+      running = false;
     }
   } catch (error) {
     const requestId = transitionRequestId;
@@ -491,19 +533,29 @@ function flushBootstrapQueue() {
   }
 }
 
-function scheduleFrame() {
+function nextRenderOpportunity() {
+  return new Promise((resolve) => {
+    if (typeof self.requestAnimationFrame === "function") {
+      self.requestAnimationFrame(resolve);
+    } else {
+      setTimeout(() => resolve(performance.now()), 16);
+    }
+  });
+}
+
+function scheduleFrame(generation = frameLoopGeneration) {
   if (!running) {
     return;
   }
   if (typeof self.requestAnimationFrame === "function") {
-    self.requestAnimationFrame(frame);
+    self.requestAnimationFrame((timestamp) => frame(timestamp, generation));
   } else {
-    setTimeout(() => frame(performance.now()), 16);
+    setTimeout(() => frame(performance.now(), generation), 16);
   }
 }
 
-function frame(timestamp) {
-  if (!running || !drainGpuDiagnostics()) {
+function frame(timestamp, generation) {
+  if (generation !== frameLoopGeneration || !running || !drainGpuDiagnostics()) {
     return;
   }
   lastFrameTimestamp = timestamp;
@@ -519,7 +571,7 @@ function frame(timestamp) {
     return;
   }
   renderPort?.postMessage({ type: "tick", timestamp });
-  scheduleFrame();
+  scheduleFrame(generation);
 }
 
 function drainGpuDiagnostics() {
@@ -578,6 +630,8 @@ function currentMetrics() {
   if (mode === MODE_RETAINED) {
     metrics.outlineCacheMisses = renderer.lastOutlineCacheMisses();
     metrics.resourceBundlePending = reconnectResourceBundlePending;
+    metrics.preloadedGeometryCount = renderer.preloadedGeometryCount();
+    metrics.preloadBytesUploaded = renderer.preloadBytesUploaded();
   }
   return metrics;
 }
@@ -641,12 +695,14 @@ function validateRequestId(requestId) {
 }
 
 function fail(error, requestId) {
+  frameLoopGeneration += 1;
   running = false;
   const effectiveRequestId = requestId ?? transitionRequestId;
   transitionRequestId = null;
   transitionResponseType = null;
   transitionMode = null;
   transitionResourceBytes = null;
+  transitionFrameLoopWasRunning = false;
   const message = String(error?.message ?? error);
   renderPort?.postMessage({ type: "render_error", message });
   postMain({ type: "error", requestId: effectiveRequestId, message });

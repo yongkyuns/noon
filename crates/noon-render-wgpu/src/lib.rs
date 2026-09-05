@@ -8,10 +8,12 @@
 
 mod gpu;
 mod mega_mesh;
+mod path_residency;
 mod render_order;
 mod reveal;
 
 pub use gpu::*;
+pub use path_residency::{PathMeshPreload, PathMeshPreloadError, PathMeshPreloadStats};
 pub use render_order::*;
 
 use bytemuck::{Pod, Zeroable};
@@ -264,6 +266,7 @@ struct CachedPathMesh {
     stroke_cap: StrokeCap,
     fill_enabled: bool,
     mesh: TessellatedPath,
+    resident: Option<path_residency::ResidentPathRanges>,
     last_used: u64,
 }
 
@@ -306,6 +309,8 @@ pub struct FramePreparer {
     // Mixed text/geometry consumers emit their own individual path painter order;
     // they never consume the per-vertex instance stream used by packed path draws.
     individual_path_draws: bool,
+    resident_vertex_count: usize,
+    resident_index_count: usize,
     mega_path_indices: Vec<u32>,
     mega_path_vertex_instances: Vec<PathInstance>,
     mega_path_batches: Vec<MegaPathBatch>,
@@ -677,7 +682,9 @@ impl FramePreparer {
             .iter()
             .position(|&existing| existing == cache_index);
         let (vertex_range, index_range, vertices_repacked, indices_repacked, mega_eligible) =
-            if let Some(batch) = shared_geometry {
+            if let Some(ranges) = &self.path_mesh_cache[cache_index].resident {
+                (ranges.vertices.clone(), ranges.indices.clone(), 0, 0, false)
+            } else if let Some(batch) = shared_geometry {
                 (
                     self.path_batch_vertex_ranges[batch].clone(),
                     self.path_batches[batch].index_range.clone(),
@@ -866,58 +873,85 @@ impl FramePreparer {
         };
         let (cache_index, cache_miss) =
             self.cache_path_mesh(path, object.style, frame.render_transform(object_index))?;
-        let mesh = &self.path_mesh_cache[cache_index].mesh;
-        let packed_vertices = mesh
-            .vertices
-            .iter()
-            .map(|vertex| PathVertex {
-                position: [vertex.position.x, vertex.position.y],
-                target_position: [vertex.target_position.x, vertex.target_position.y],
-                surface: pack_path_surface(vertex.surface, vertex.path_progress),
-            })
-            .collect::<Vec<_>>();
-        let local_indices = mesh.indices.clone();
+        let resident = self.path_mesh_cache[cache_index].resident.clone();
+        let (vertices_repacked, indices_repacked) = if let Some(ranges) = resident {
+            let old_vertices = self.path_batch_vertex_ranges[batch].clone();
+            let old_indices = self.path_batches[batch].index_range.clone();
+            if old_vertices.start as usize >= self.resident_vertex_count {
+                insert_free_range(&mut self.path_vertex_free_ranges, old_vertices);
+            }
+            if old_indices.start as usize >= self.resident_index_count {
+                insert_free_range(&mut self.path_index_free_ranges, old_indices);
+            }
+            self.path_batch_vertex_ranges[batch] = ranges.vertices;
+            self.path_batches[batch].index_range = ranges.indices;
+            (0, 0)
+        } else {
+            let mesh = &self.path_mesh_cache[cache_index].mesh;
+            let packed_vertices = mesh
+                .vertices
+                .iter()
+                .map(|vertex| PathVertex {
+                    position: [vertex.position.x, vertex.position.y],
+                    target_position: [vertex.target_position.x, vertex.target_position.y],
+                    surface: pack_path_surface(vertex.surface, vertex.path_progress),
+                })
+                .collect::<Vec<_>>();
+            let local_indices = mesh.indices.clone();
 
-        let old_vertex_range = self.path_batch_vertex_ranges[batch].clone();
-        let old_index_range = self.path_batches[batch].index_range.clone();
-        let vertex_range = allocate_replacement_range(
-            old_vertex_range,
-            packed_vertices.len(),
-            &mut self.path_vertex_free_ranges,
-            self.path_vertices.len(),
-        );
-        let index_range = allocate_replacement_range(
-            old_index_range,
-            local_indices.len(),
-            &mut self.path_index_free_ranges,
-            self.path_indices.len(),
-        );
+            let old_vertex_range = self.path_batch_vertex_ranges[batch].clone();
+            let old_vertex_range = if old_vertex_range.start < self.resident_vertex_count as u32 {
+                0..0
+            } else {
+                old_vertex_range
+            };
+            let old_index_range = self.path_batches[batch].index_range.clone();
+            let old_index_range = if old_index_range.start < self.resident_index_count as u32 {
+                0..0
+            } else {
+                old_index_range
+            };
+            let vertex_range = allocate_replacement_range(
+                old_vertex_range,
+                packed_vertices.len(),
+                &mut self.path_vertex_free_ranges,
+                self.path_vertices.len(),
+            );
+            let index_range = allocate_replacement_range(
+                old_index_range,
+                local_indices.len(),
+                &mut self.path_index_free_ranges,
+                self.path_indices.len(),
+            );
 
-        let vertex_range_usize = range_usize_u32(&vertex_range);
-        if self.path_vertices.len() < vertex_range_usize.end {
-            self.path_vertices
-                .resize(vertex_range_usize.end, PathVertex::zeroed());
-        }
-        self.path_vertices[vertex_range_usize.clone()].copy_from_slice(&packed_vertices);
-        self.path_vertex_dirty_ranges.push(vertex_range_usize);
+            let vertex_range_usize = range_usize_u32(&vertex_range);
+            if self.path_vertices.len() < vertex_range_usize.end {
+                self.path_vertices
+                    .resize(vertex_range_usize.end, PathVertex::zeroed());
+            }
+            self.path_vertices[vertex_range_usize.clone()].copy_from_slice(&packed_vertices);
+            self.path_vertex_dirty_ranges.push(vertex_range_usize);
 
-        let index_range_usize = range_usize_u32(&index_range);
-        if self.path_indices.len() < index_range_usize.end {
-            self.path_indices.resize(index_range_usize.end, 0);
-        }
-        let vertex_start = vertex_range.start;
-        for (target, local) in self.path_indices[index_range_usize.clone()]
-            .iter_mut()
-            .zip(local_indices.iter().copied())
-        {
-            *target = local
-                .checked_add(vertex_start)
-                .expect("path index exceeds renderer limits");
-        }
-        self.path_index_dirty_ranges.push(index_range_usize);
+            let index_range_usize = range_usize_u32(&index_range);
+            if self.path_indices.len() < index_range_usize.end {
+                self.path_indices.resize(index_range_usize.end, 0);
+            }
+            let vertex_start = vertex_range.start;
+            for (target, local) in self.path_indices[index_range_usize.clone()]
+                .iter_mut()
+                .zip(local_indices.iter().copied())
+            {
+                *target = local
+                    .checked_add(vertex_start)
+                    .expect("path index exceeds renderer limits");
+            }
+            self.path_index_dirty_ranges.push(index_range_usize);
 
-        self.path_batch_vertex_ranges[batch] = vertex_range;
-        self.path_batches[batch].index_range = index_range;
+            self.path_batch_vertex_ranges[batch] = vertex_range;
+            self.path_batches[batch].index_range = index_range;
+            self.path_geometry_dirty = true;
+            (packed_vertices.len(), local_indices.len())
+        };
         self.path_batch_cache_indices[batch] = cache_index;
         if let PreparedSlot::Path {
             analytic_reveal,
@@ -933,11 +967,10 @@ impl FramePreparer {
             *reveal_head = None;
         }
         self.detach_mega_path(batch);
-        self.path_geometry_dirty = true;
         Ok(PathReplacementStats {
             cache_miss,
-            vertices_repacked: packed_vertices.len(),
-            indices_repacked: local_indices.len(),
+            vertices_repacked,
+            indices_repacked,
         })
     }
 
@@ -1084,6 +1117,59 @@ impl FramePreparer {
             }
         }
 
+        let (group_offsets, path_vertices_repacked, path_indices_repacked) =
+            if self.resident_vertex_count != 0 || self.resident_index_count != 0 {
+                self.pack_resident_path_groups(path_groups)
+            } else {
+                self.pack_transient_path_groups(path_groups, &previous_path_batch_cache_indices)
+            };
+        for slot in &mut self.slots {
+            if let PreparedSlot::Path { index, batch, .. } = slot {
+                *index += group_offsets[*batch];
+            }
+        }
+        self.rebuild_ordered_render_batches();
+        self.rebuild_mega_path_draws();
+
+        if !self.circles.is_empty() {
+            self.circle_dirty_ranges.push(0..self.circles.len());
+        }
+        if !self.rectangles.is_empty() {
+            self.rectangle_dirty_ranges.push(0..self.rectangles.len());
+        }
+        if !self.lines.is_empty() {
+            self.line_dirty_ranges.push(0..self.lines.len());
+        }
+        if !self.paths.is_empty() {
+            self.path_dirty_ranges.push(0..self.paths.len());
+        }
+        self.initialized = true;
+
+        let capacities_after = self.capacities();
+        let capacity_growths = capacities_before
+            .into_iter()
+            .zip(capacities_after)
+            .filter(|(before, after)| after > before)
+            .count();
+
+        self.prepared_frame(
+            frame.time,
+            capacity_growths,
+            self.circles.len() + self.rectangles.len() + self.lines.len() + self.paths.len(),
+            geometry_cache_misses,
+            path_vertices_repacked,
+            path_indices_repacked,
+            0,
+            0,
+            1,
+        )
+    }
+
+    fn pack_transient_path_groups(
+        &mut self,
+        path_groups: Vec<PathGroup>,
+        previous_path_batch_cache_indices: &[usize],
+    ) -> (Vec<usize>, usize, usize) {
         let reuse_packed_path_geometry = self.packed_path_mesh_cache_generation
             == self.path_mesh_cache_generation
             && previous_path_batch_cache_indices.len() == path_groups.len()
@@ -1137,12 +1223,6 @@ impl FramePreparer {
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
-        for slot in &mut self.slots {
-            if let PreparedSlot::Path { index, batch, .. } = slot {
-                *index += group_offsets[*batch];
-            }
-        }
-        self.rebuild_ordered_render_batches();
         let (path_vertices_repacked, path_indices_repacked) = if reuse_packed_path_geometry {
             self.path_geometry_dirty = false;
             (0, 0)
@@ -1165,40 +1245,7 @@ impl FramePreparer {
             self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
             repacked
         };
-        self.rebuild_mega_path_draws();
-
-        if !self.circles.is_empty() {
-            self.circle_dirty_ranges.push(0..self.circles.len());
-        }
-        if !self.rectangles.is_empty() {
-            self.rectangle_dirty_ranges.push(0..self.rectangles.len());
-        }
-        if !self.lines.is_empty() {
-            self.line_dirty_ranges.push(0..self.lines.len());
-        }
-        if !self.paths.is_empty() {
-            self.path_dirty_ranges.push(0..self.paths.len());
-        }
-        self.initialized = true;
-
-        let capacities_after = self.capacities();
-        let capacity_growths = capacities_before
-            .into_iter()
-            .zip(capacities_after)
-            .filter(|(before, after)| after > before)
-            .count();
-
-        self.prepared_frame(
-            frame.time,
-            capacity_growths,
-            self.circles.len() + self.rectangles.len() + self.lines.len() + self.paths.len(),
-            geometry_cache_misses,
-            path_vertices_repacked,
-            path_indices_repacked,
-            0,
-            0,
-            1,
-        )
+        (group_offsets, path_vertices_repacked, path_indices_repacked)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1492,6 +1539,7 @@ impl FramePreparer {
             stroke_cap: style.stroke_cap,
             fill_enabled,
             mesh,
+            resident: None,
             last_used,
         });
         self.path_mesh_lookup.entry(key).or_default().push(index);
@@ -1526,7 +1574,11 @@ impl FramePreparer {
             return;
         }
 
-        let mut keep = vec![false; self.path_mesh_cache.len()];
+        let mut keep: Vec<_> = self
+            .path_mesh_cache
+            .iter()
+            .map(|entry| entry.resident.is_some())
+            .collect();
         for (object_index, object) in frame.objects.iter().enumerate() {
             if !frame.is_present(object_index) {
                 continue;
@@ -1962,6 +2014,8 @@ fn pack_optional_color(color: Option<Color>) -> ([f32; 4], u32) {
 
 #[cfg(test)]
 mod tests {
+    mod path_residency;
+
     use noon_core::{Color, GeometryId, Vec2, VectorPath};
     use noon_runtime::FrameObjectState;
 

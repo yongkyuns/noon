@@ -486,4 +486,198 @@ mod operation_selection_tests {
             crate::DEFAULT_PATH_MESH_CACHE_LIMIT
         );
     }
+    #[test]
+    fn preload_replacement_resets_prepared_state_and_failure_preserves_installation() {
+        let (_, retained, _) = fixture();
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        preparer.set_scene_path_mesh_cache_budget(10, 400);
+        let path = GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::ZERO)
+                .line_to(noon_core::Vec2::ONE),
+        );
+        let request = crate::PathMeshPreload {
+            geometry: &path,
+            style: retained.objects[0].style,
+            transform: Transform2D::IDENTITY,
+        };
+        preparer
+            .preload_path_meshes(&device, &queue, &mut renderer, &[request])
+            .unwrap();
+        let generation = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &retained,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap()
+            .text_generation;
+        let prefix = preparer.geometry.path_vertices.clone();
+        let cache_count = preparer.geometry.cached_path_mesh_count();
+        let invalid = GeometryRef::path(noon_core::VectorPath::new().line_to(noon_core::Vec2::ONE));
+        let bad = crate::PathMeshPreload {
+            geometry: &invalid,
+            ..request
+        };
+        assert!(preparer
+            .preload_path_meshes(&device, &queue, &mut renderer, &[request, bad])
+            .is_err());
+        assert_eq!(preparer.geometry.path_vertices, prefix);
+        assert_eq!(preparer.geometry.cached_path_mesh_count(), cache_count);
+        assert_eq!(preparer.text_generation, generation);
+        assert!(preparer.prepared_generation_ready);
+        let reused = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &retained,
+                &FrameChanges::default(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(reused.text_generation, generation);
+
+        preparer
+            .preload_path_meshes(&device, &queue, &mut renderer, &[request, request])
+            .unwrap();
+        assert_eq!(preparer.geometry.cached_path_mesh_count(), 1);
+        assert_eq!(preparer.geometry.path_mesh_cache_limit(), 410);
+        let rebuilt = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &retained,
+                &FrameChanges::default(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(rebuilt.geometry_stats().full_rebuilds, 1);
+        assert!(rebuilt.text_generation > generation);
+        assert_eq!(
+            rebuilt.geometry_stats().instance_count,
+            retained.objects.len()
+        );
+        let empty = preparer
+            .preload_path_meshes(&device, &queue, &mut renderer, &[])
+            .unwrap();
+        assert_eq!(empty.upload.bytes_uploaded, 0);
+        assert_eq!(preparer.geometry.cached_path_mesh_count(), 0);
+        assert_eq!(preparer.geometry.resident_vertex_count, 0);
+        assert_eq!(preparer.geometry.resident_index_count, 0);
+    }
+    #[test]
+    fn oversized_preload_preserves_previous_cpu_and_gpu_installation() {
+        let (_, mut retained, _) = fixture();
+        retained.objects.truncate(1);
+        retained.objects[0].style.fill = None;
+        retained.objects[0].style.stroke = Some(noon_core::Color::WHITE);
+        retained.objects[0].style.stroke_width = 0.02;
+        retained.presences = vec![true];
+        retained.reveals = vec![1.0];
+        retained.morphs = vec![0.0];
+        retained.render_transforms = vec![Some(Transform2D::IDENTITY)];
+        let paths: Vec<_> = (0..1024)
+            .map(|i| {
+                let x = i as f32;
+                GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::new(x, 0.0))
+                        .line_to(noon_core::Vec2::new(x + 0.5, 0.5)),
+                )
+            })
+            .collect();
+        let requests: Vec<_> = paths
+            .iter()
+            .map(|geometry| crate::PathMeshPreload {
+                geometry,
+                style: retained.objects[0].style,
+                transform: Transform2D::IDENTITY,
+            })
+            .collect();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor {
+            required_limits: wgpu::Limits {
+                max_buffer_size: 65536,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut preparer = RetainedFramePreparer::new();
+        preparer
+            .preload_path_meshes(&device, &queue, &mut renderer, &requests[..2])
+            .unwrap();
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        retained.render_geometries = vec![Some(std::sync::Arc::new(paths[0].clone()))];
+        let first = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &retained,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        renderer.upload(&device, &queue, &first.geometry);
+        let vertices = preparer.geometry.path_vertices.clone();
+        let indices = preparer.geometry.path_indices.clone();
+        let generation = preparer.text_generation;
+        let error = preparer
+            .preload_path_meshes(&device, &queue, &mut renderer, &requests)
+            .expect_err("replacement must exceed the 64 KiB device buffer limit");
+        assert!(
+            matches!(error, crate::PathMeshPreloadError::Upload(
+                crate::PathPreloadUploadError::BufferLimit { requested, limit, .. }
+            ) if requested as u64 > limit && limit == 65536),
+            "unexpected preload rejection: {error:?}"
+        );
+        assert_eq!(preparer.text_generation, generation);
+        assert_eq!(preparer.geometry.cached_path_mesh_count(), 2);
+        for path in &paths[..2] {
+            retained.render_geometries = vec![Some(std::sync::Arc::new(path.clone()))];
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &retained,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.geometry_stats().geometry_cache_misses, 0);
+            assert_eq!(prepared.geometry.path_vertices, vertices);
+            assert_eq!(prepared.geometry.path_indices, indices);
+            let mut writes = Vec::new();
+            renderer.upload_with_trace(&device, &queue, &prepared.geometry, &mut writes);
+            assert!(writes
+                .iter()
+                .all(|w| w.buffer != "path_vertex" && w.buffer != "path_index"));
+            assert_eq!(prepared.render_items.len(), 1);
+        }
+    }
 }

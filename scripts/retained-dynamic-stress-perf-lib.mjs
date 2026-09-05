@@ -94,8 +94,7 @@ export function assertSteadyStressTelemetry(samples, coldFrames = 3) {
         (sample) =>
           classifyStressPhase(sample.sceneTime) === phase &&
           sample.sceneTime > phaseDefinition.start + Number.EPSILON,
-      )
-      .slice(1);
+      );
     assert.ok(rows.length >= 20, `${phase} must retain a meaningful warm sample window`);
     assert.ok(rows.every((sample) => sample.dirty), `${phase} must remain dynamically rendered`);
     assert.ok(
@@ -120,7 +119,7 @@ export function assertSteadyStressTelemetry(samples, coldFrames = 3) {
     );
     return {
       phase,
-      coldFrames: 1,
+      coldFrames: 0,
       samples: rows.length,
       maximumGeometryCacheMisses: Math.max(...rows.map((sample) => sample.geometryCacheMisses)),
       maximumInlineRenderGeometryCount: Math.max(
@@ -165,12 +164,7 @@ export function assertRetainedMorphReactivation(samples) {
       `${phase} reactivation must continue to address retained geometry resources`,
     );
     assert.ok(
-      rows[0].uploadBytes > 0 && rows[0].uploadBytes < 16 * 1024 * 1024,
-      `${phase} reactivation entry must keep its required packed upload within the scene bound`,
-    );
-    const warmRows = rows.slice(1);
-    assert.ok(
-      warmRows.every((sample) => sample.uploadBytes > 0 && sample.uploadBytes < 1024 * 1024),
+      rows.every((sample) => sample.uploadBytes > 0 && sample.uploadBytes < 1024 * 1024),
       `${phase} reactivation must upload compact dynamic state without rebuilding packed geometry`,
     );
     return {
@@ -183,9 +177,39 @@ export function assertRetainedMorphReactivation(samples) {
       minimumRenderGeometryResourceCount: Math.min(
         ...rows.map((sample) => sample.renderGeometryResourceCount),
       ),
-      entryUploadBytes: rows[0].uploadBytes,
-      maximumWarmUploadBytes: Math.max(...warmRows.map((sample) => sample.uploadBytes)),
+      maximumUploadBytes: Math.max(...rows.map((sample) => sample.uploadBytes)),
     };
   });
   return { morphs };
+}
+
+export function assertFirstMorphActivationLatency(samples, rendererBackend) {
+  assert.ok(Array.isArray(samples), "activation samples must be an array");
+  if (rendererBackend !== "WebGPU") {
+    return { enforced: false, rendererBackend };
+  }
+  const activations = ["morph-a", "morph-b"].map((phase) => {
+    const definition = STRESS_PHASES.find((candidate) => candidate.id === phase);
+    const sample = samples.find(
+      (candidate) =>
+        classifyStressPhase(candidate.sceneTime) === phase &&
+        candidate.sceneTime > definition.start + Number.EPSILON,
+    );
+    assert.ok(sample, `${phase} must include a first interior activation sample`);
+    assert.ok(
+      sample.rendererRenderMs < 25,
+      `${phase} first WebGPU activation must render within 25ms after preload`,
+    );
+    assert.ok(
+      sample.totalMs < 50,
+      `${phase} first WebGPU activation must complete within 50ms after preload`,
+    );
+    return {
+      phase,
+      sceneTime: sample.sceneTime,
+      rendererRenderMs: sample.rendererRenderMs,
+      totalMs: sample.totalMs,
+    };
+  });
+  return { enforced: true, rendererBackend, activations };
 }
