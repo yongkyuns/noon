@@ -194,6 +194,15 @@ impl ExecutionSession {
         self.runtime.frame()
     }
 
+    /// Exact authored/executable/effective publication context of this session.
+    ///
+    /// Hosts can pin coherent live reads and cross-context work to this typed context
+    /// without receiving mutable runtime authority or substituting identity generations
+    /// for revision clocks.
+    pub const fn publication_context(&self) -> noon_core::PublicationContext {
+        self.runtime.publication_context()
+    }
+
     /// Current canonical 2D camera derived from the effective runtime frame object.
     ///
     /// Scenes without an authored camera use the shared Manim-compatible default.
@@ -449,6 +458,7 @@ mod tests {
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let execution_object = session.execution_object_id(object).unwrap();
+        let initial_publication = session.publication_context();
 
         assert_eq!(session.frame().objects.len(), 1);
         assert_eq!(session.frame().objects[0].id, execution_object);
@@ -457,13 +467,42 @@ mod tests {
 
         session.take_frame_changes();
         session.set_reactive_input(signal, 0.7_f32).unwrap();
+        let reactive_publication = session.publication_context();
 
         assert_eq!(session.frame().objects[0].style.opacity, 0.7);
         assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(
+            reactive_publication.scene_revision(),
+            initial_publication.scene_revision()
+        );
+        assert_eq!(
+            reactive_publication.execution_revision(),
+            initial_publication.execution_revision()
+        );
+        assert_eq!(
+            reactive_publication.frame_epoch(),
+            initial_publication.frame_epoch().checked_next().unwrap()
+        );
+
+        session.set_reactive_input(signal, 0.7_f32).unwrap();
+        assert_eq!(session.publication_context(), reactive_publication);
 
         session.seek(1.25).unwrap();
+        let timeline_publication = session.publication_context();
         assert_eq!(session.frame().time, 1.25);
         assert_eq!(session.frame().objects[0].style.opacity, 0.7);
+        assert_eq!(
+            timeline_publication.scene_revision(),
+            reactive_publication.scene_revision()
+        );
+        assert_eq!(
+            timeline_publication.execution_revision(),
+            reactive_publication.execution_revision()
+        );
+        assert_eq!(
+            timeline_publication.frame_epoch(),
+            reactive_publication.frame_epoch().checked_next().unwrap()
+        );
     }
 
     #[test]

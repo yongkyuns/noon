@@ -18,6 +18,9 @@ pub use host_semantics::*;
 mod lifecycle;
 pub use lifecycle::*;
 
+mod publication;
+pub use publication::*;
+
 #[path = "semantic_store.rs"]
 mod semantic_store;
 pub use semantic_store::*;
