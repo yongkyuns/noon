@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Deterministic renderer-free runtime for compiled Noon scenes"
+readme = "README.md"
 
 [dependencies]
 noon-core = { path = "../noon-core" }
