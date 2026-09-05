@@ -6,6 +6,14 @@ import { decodeTransferableExecutionDelta } from "./execution-transport.js";
 
 globalThis.MessagePort = MessagePort;
 const next = (port) => new Promise((resolve) => port.once("message", resolve));
+const nextMatching = (port, predicate) => new Promise((resolve) => {
+  const receive = (message) => {
+    if (!predicate(message)) return;
+    port.off("message", receive);
+    resolve(message);
+  };
+  port.on("message", receive);
+});
 const request = (port, type, requestId, fields = {}) => {
   const result = next(port);
   port.postMessage({ channel: "noon.engine", protocolVersion: 1, type, requestId, ...fields });
@@ -15,9 +23,10 @@ function fixture() {
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
-  const json = () => JSON.stringify({ channel: "noon.execution", protocol_version: 1, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
+  const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: json,
+    resourceBundleBytes: () => new Uint8Array([1]),
     tickDeltaJson: () => null,
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
@@ -36,12 +45,17 @@ function fixture() {
   };
 }
 
-test("semantic producer starts with ordinary seq0 transport and supports controls", async () => {
+test("semantic producer installs mixed resources before its retained snapshot and supports controls", async () => {
   const f = fixture();
   try {
-    const ready = next(f.control.port2), initial = next(f.render.port2);
+    const ready = next(f.control.port2);
+    const resources = nextMatching(f.render.port2, (message) => message.type === "retained_resources");
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
     const endpoint = f.attach();
     assert.equal((await ready).type, "ready");
+    const resourceBundle = await resources;
+    assert.equal(resourceBundle.type, "retained_resources");
+    assert.deepEqual([...resourceBundle.bytes], [1]);
     const delta = await initial;
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(delta).json).snapshot, true);
     f.render.port2.postMessage({ type: "execution_ack", session: delta.session, sequence: delta.sequence });

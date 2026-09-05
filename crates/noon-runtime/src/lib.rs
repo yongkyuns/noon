@@ -20,14 +20,26 @@ use noon_core::{
     Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
     StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
 };
+use noon_core::{ObjectContentRef, TextResourceHandle};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameObjectState {
     pub id: ObjectId,
-    pub geometry: GeometryRef,
+    pub content: ObjectContentRef,
+    pub text_bounds: Option<noon_core::Rect>,
     pub transform: Transform2D,
     pub style: Style,
     pub appearance: f32,
+}
+
+impl FrameObjectState {
+    pub fn geometry(&self) -> Option<&GeometryRef> {
+        self.content.geometry()
+    }
+
+    pub const fn text(&self) -> Option<TextResourceHandle> {
+        self.content.text()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,10 +83,14 @@ impl FrameState {
         )
     }
 
-    pub fn render_geometry(&self, object_index: usize) -> &GeometryRef {
+    pub fn render_geometry(&self, object_index: usize) -> Option<&GeometryRef> {
         self.render_geometries[object_index]
             .as_deref()
-            .unwrap_or(&self.objects[object_index].geometry)
+            .or_else(|| self.objects[object_index].geometry())
+    }
+
+    pub fn text(&self, object_index: usize) -> Option<TextResourceHandle> {
+        self.objects[object_index].text()
     }
 }
 
@@ -326,6 +342,18 @@ impl SceneInstance {
         self.compiled.object_index(id).is_some()
     }
 
+    pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {
+        self.compiled.text_resources()
+    }
+
+    pub fn font_resources(&self) -> &impl noon_core::FontResourceLookup {
+        self.compiled.font_resources()
+    }
+
+    pub fn geometry_resources(&self) -> &impl noon_core::GeometryResourceLookup {
+        self.compiled.geometry_resources()
+    }
+
     pub fn object_slot_is_live(&self, object_index: usize) -> bool {
         let Ok(object_index) = u32::try_from(object_index) else {
             return false;
@@ -556,7 +584,7 @@ impl SceneInstance {
 
         match patch {
             ScenePatch::SetGeometry { geometry, .. } => {
-                self.frame.objects[index].geometry = geometry.clone();
+                self.frame.objects[index].content = ObjectContentRef::Geometry(geometry.clone());
                 // Host callbacks run after ordinary timeline/reactive evaluation for the frame.
                 // Clearing a transient render override makes the callback geometry authoritative
                 // for this phase without rebuilding unrelated runtime slots.
@@ -674,7 +702,8 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .enumerate()
         .map(|(index, object)| FrameObjectState {
             id: object.id,
-            geometry: object.geometry.clone(),
+            content: object.content.clone(),
+            text_bounds: object.text_bounds,
             transform: object.base_transform,
             style: object.base_style,
             appearance: appearances[index],
@@ -811,7 +840,8 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     debug_assert!(object.live);
     frame.objects.push(FrameObjectState {
         id: object.id,
-        geometry: object.geometry.clone(),
+        content: object.content.clone(),
+        text_bounds: object.text_bounds,
         transform: object.base_transform,
         style: object.base_style,
         appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
@@ -842,7 +872,8 @@ fn reset_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_i
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
         id: object.id,
-        geometry: object.geometry.clone(),
+        content: object.content.clone(),
+        text_bounds: object.text_bounds,
         transform: object.base_transform,
         style: object.base_style,
         appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
@@ -1073,8 +1104,11 @@ fn apply_transform_track(
     frame.render_transforms[object_index] = next_render_transform;
 
     let object = &mut frame.objects[object_index];
-    let mut changed = transform_changed
-        | apply_transform_geometry(&mut object.geometry, plan, from, to, progress);
+    let ObjectContentRef::Geometry(geometry) = &mut object.content else {
+        unreachable!("compiler rejects geometry-only Transform tracks on text content");
+    };
+    let mut changed =
+        transform_changed | apply_transform_geometry(geometry, plan, from, to, progress);
     if object.transform != next_transform {
         object.transform = next_transform;
         changed = true;

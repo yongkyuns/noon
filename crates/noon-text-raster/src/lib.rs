@@ -10,7 +10,7 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use noon_core::{
-    FontResource, FontResourceArena, FontResourceHandle, FontVariationSetting, GlyphRun,
+    FontResource, FontResourceHandle, FontResourceLookup, FontVariationSetting, GlyphRun,
 };
 use swash::{
     scale::{image::Content, Render, ScaleContext, Source, StrikeWith},
@@ -270,9 +270,9 @@ impl GlyphRasterCache {
     /// Pixel-size selection belongs to the renderer/camera policy layer. Keeping it
     /// explicit here lets a later atlas implementation choose stable size buckets
     /// without coupling retained text resources to a particular display density.
-    pub fn prepare_run(
+    pub fn prepare_run<F: FontResourceLookup + ?Sized>(
         &mut self,
-        fonts: &FontResourceArena,
+        fonts: &F,
         run: &GlyphRun,
         pixel_size: f32,
     ) -> Result<Vec<PreparedGlyphRaster>, GlyphRasterError> {
@@ -288,9 +288,9 @@ impl GlyphRasterCache {
             .collect()
     }
 
-    pub fn get_or_rasterize(
+    pub fn get_or_rasterize<F: FontResourceLookup + ?Sized>(
         &mut self,
-        fonts: &FontResourceArena,
+        fonts: &F,
         run: &GlyphRun,
         glyph_id: u32,
         pixel_size: f32,

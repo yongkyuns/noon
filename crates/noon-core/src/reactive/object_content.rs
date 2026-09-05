@@ -187,9 +187,11 @@ impl SemanticObjectState {
     }
 }
 
-/// Migration-only retained payload used by compiler/frontend paths that still
-/// consume the pre-A1 object model. #959/A4 owns deletion of this compatibility
-/// shape after semantic-node and frontend callers move to [`SemanticObjectState`].
+/// Renderer-independent lowered content referenced by one compiled object slot.
+///
+/// The execution plan and runtime carry this same payload so geometry and text
+/// share identity, ordering, timeline evaluation, and incremental invalidation.
+/// Heavy text stays behind its immutable resource handle.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectContentRef {
     Geometry(GeometryRef),

@@ -1,10 +1,10 @@
-use noon_compile::{CompiledScene, RetainedCompiledScene};
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
     CompositionTimeMap, CompositionTimeMapStep, GeometryRef, ObjectId, Property, RateFunction,
     RetainedObjectDefinition, SceneDefinition, TextResourceHandle, TextResourceId, TimelineError,
     TrackDefinition, TrackId, TrackTiming, TrackValues, Vec2,
 };
-use noon_runtime::{RetainedSceneInstance, SceneInstance};
+use noon_runtime::SceneInstance;
 
 fn text_handle() -> TextResourceHandle {
     TextResourceHandle {
@@ -287,9 +287,20 @@ fn retained_text_cleanup_assignments_are_seekable_and_preserve_resource_identity
         ),
     ];
 
-    let compiled = RetainedCompiledScene::compile(&objects, &tracks).unwrap();
-    let mut direct = RetainedSceneInstance::new(compiled.clone());
-    let mut sequential = RetainedSceneInstance::new(compiled);
+    let objects = objects
+        .iter()
+        .map(|object| {
+            CompiledObject::new(
+                object.id,
+                object.content.clone(),
+                object.transform,
+                object.style,
+            )
+        })
+        .collect();
+    let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
+    let mut direct = SceneInstance::new(compiled.clone());
+    let mut sequential = SceneInstance::new(compiled);
 
     let hidden = direct.seek(1.0).unwrap();
     assert!(!hidden.is_present(0));

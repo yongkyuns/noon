@@ -44,7 +44,7 @@ impl TrackShadow {
 
 #[derive(Clone, Copy)]
 enum ObjectOverlay {
-    Present(u32),
+    Present { index: u32, is_text: bool },
     Removed,
 }
 
@@ -76,7 +76,7 @@ impl PreflightOverlay {
 
     fn object_index(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<u32> {
         match self.objects.get(&id).copied() {
-            Some(ObjectOverlay::Present(index)) => Some(index),
+            Some(ObjectOverlay::Present { index, .. }) => Some(index),
             Some(ObjectOverlay::Removed) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied();
@@ -84,6 +84,18 @@ impl PreflightOverlay {
                     self.seen_objects.insert(id);
                 }
                 index
+            }
+        }
+    }
+
+    fn object_is_text(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<bool> {
+        match self.objects.get(&id).copied() {
+            Some(ObjectOverlay::Present { is_text, .. }) => Some(is_text),
+            Some(ObjectOverlay::Removed) => None,
+            None => {
+                let index = scene.object_indices.get(&id).copied()?;
+                self.seen_objects.insert(id);
+                Some(scene.objects[index as usize].text().is_some())
             }
         }
     }
@@ -197,9 +209,13 @@ pub(super) fn preflight_transaction(
                     .map_err(|_| CompilePatchError::TooManyObjects(overlay.next_object_index))?;
                 validate_object_definition(object).map_err(map_object_state_error)?;
                 overlay.next_object_index += 1;
-                overlay
-                    .objects
-                    .insert(object.id, ObjectOverlay::Present(index));
+                overlay.objects.insert(
+                    object.id,
+                    ObjectOverlay::Present {
+                        index,
+                        is_text: false,
+                    },
+                );
             }
             ScenePatch::RemoveObject(id) => {
                 let index = overlay
@@ -208,9 +224,20 @@ pub(super) fn preflight_transaction(
                 overlay.objects.insert(*id, ObjectOverlay::Removed);
                 overlay.remove_object_tracks(scene, index);
             }
-            ScenePatch::SetGeometry { object, .. }
-            | ScenePatch::SetTransform { object, .. }
-            | ScenePatch::SetStyle { object, .. } => {
+            ScenePatch::SetGeometry { object, .. } => {
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_property_patch(patch).map_err(map_object_state_error)?;
+                overlay.objects.insert(
+                    *object,
+                    ObjectOverlay::Present {
+                        index,
+                        is_text: false,
+                    },
+                );
+            }
+            ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => {
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
@@ -224,6 +251,7 @@ pub(super) fn preflight_transaction(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                reject_geometry_track_on_text(scene, &mut overlay, track)?;
                 let shadow = TrackShadow::from_definition(track, object_index);
                 overlay.set_track(track.id, Some(shadow));
                 if shadow.property == Property::Presence {
@@ -238,6 +266,7 @@ pub(super) fn preflight_transaction(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                reject_geometry_track_on_text(scene, &mut overlay, track)?;
                 let replacement = TrackShadow::from_definition(track, object_index);
                 overlay.set_track(track.id, Some(replacement));
                 if old.property == Property::Presence {
@@ -269,6 +298,22 @@ pub(super) fn preflight_transaction(
         mutations_preflighted: transaction.mutations().len(),
         staged_compiled_scene_clones: 0,
     })
+}
+
+fn reject_geometry_track_on_text(
+    scene: &CompiledScene,
+    overlay: &mut PreflightOverlay,
+    track: &TrackDefinition,
+) -> Result<(), CompilePatchError> {
+    if matches!(track.property, Property::Transform | Property::Morph)
+        && overlay.object_is_text(scene, track.object) == Some(true)
+    {
+        return Err(CompilePatchError::GeometryTrackTargetsText {
+            track: track.id,
+            property: track.property,
+        });
+    }
+    Ok(())
 }
 
 fn validate_track(track: &TrackDefinition) -> Result<(), CompilePatchError> {

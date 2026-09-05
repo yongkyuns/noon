@@ -1,13 +1,15 @@
 //! Retained native Text / Typst / MathTypst authoring over Noon's text resource model.
 //!
-//! This module is deliberately separate from the legacy geometry-only `Scene`.
-//! Text-backed objects enter the retained compiler as `ObjectContentRef::Text` and
+//! The remaining authoring adapter is owned for deletion by #959. Its text
+//! objects now enter the shared compiler/runtime as `ObjectContentRef::Text` and
 //! keep shaped glyph/vector resources in explicit arenas; no placeholder geometry,
 //! SVG payload, or frontend-owned glyph state is introduced at the authoring boundary.
 
+mod semantic;
+
 use std::sync::Arc;
 
-use noon_compile::{RetainedCompileError, RetainedCompiledScene};
+use noon_compile::{CompileError, CompiledScene};
 use noon_core::{
     Color, FontResourceArena, FontResourceError, GeometryResource, GeometryResourceArena, ObjectId,
     RetainedObjectDefinition, SceneDefinition, Style, TextResource, TextResourceArena,
@@ -316,11 +318,18 @@ impl Text {
     }
 
     fn compile_artifact(&self) -> Result<NativeTextResourceArtifact, TextAuthoringError> {
+        self.compile_artifact_with_fill(Some(self.presentation.color))
+    }
+
+    fn compile_artifact_with_fill(
+        &self,
+        fill: Option<Color>,
+    ) -> Result<NativeTextResourceArtifact, TextAuthoringError> {
         self.validate()?;
         let font = bundled_native_font(self.font_family.as_ref())?;
         let mut options = NativeTextOptions::new(self.font_size);
         options.line_spacing = self.line_spacing;
-        options.fill = Some(self.presentation.color);
+        options.fill = fill;
         let mut compiler = NativeTextCompiler::new();
         let artifact = compiler.compile_plain(self.source.as_ref(), &font, &options)?;
         debug_assert_eq!(artifact.resource.kind, TextSourceKind::Plain);
@@ -396,7 +405,8 @@ pub enum TextAuthoringError {
     Typst(TypstBackendError),
     Font(FontResourceError),
     Text(TextResourceValidationError),
-    Compile(RetainedCompileError),
+    Compile(CompileError),
+    Semantic(String),
 }
 
 impl std::fmt::Display for TextAuthoringError {
@@ -434,6 +444,7 @@ impl std::fmt::Display for TextAuthoringError {
             Self::Font(error) => error.fmt(formatter),
             Self::Text(error) => error.fmt(formatter),
             Self::Compile(error) => error.fmt(formatter),
+            Self::Semantic(error) => error.fmt(formatter),
         }
     }
 }
@@ -464,9 +475,20 @@ impl From<TextResourceValidationError> for TextAuthoringError {
     }
 }
 
-impl From<RetainedCompileError> for TextAuthoringError {
-    fn from(value: RetainedCompileError) -> Self {
+impl From<CompileError> for TextAuthoringError {
+    fn from(value: CompileError) -> Self {
         Self::Compile(value)
+    }
+}
+
+impl From<&str> for Text {
+    fn from(source: &str) -> Self {
+        Self::new(source)
+    }
+}
+impl From<String> for Text {
+    fn from(source: String) -> Self {
+        Self::new(source)
     }
 }
 
@@ -580,8 +602,20 @@ impl RetainedScene {
         &self.fonts
     }
 
-    pub fn compile(&self) -> Result<RetainedCompiledScene, TextAuthoringError> {
-        Ok(RetainedCompiledScene::compile(&self.objects, &self.tracks)?)
+    pub fn compile(&self) -> Result<CompiledScene, TextAuthoringError> {
+        let objects = self
+            .objects
+            .iter()
+            .map(|object| {
+                noon_compile::CompiledObject::new(
+                    object.id,
+                    object.content.clone(),
+                    object.transform,
+                    object.style,
+                )
+            })
+            .collect();
+        Ok(CompiledScene::compile_objects(objects, &self.tracks)?)
     }
 
     fn insert_text_at<F>(

@@ -210,9 +210,29 @@ fn geometry_layout_bounds(
 }
 pub(super) fn layout_for_content(
     store: &SemanticStore,
-    geometry: StoredGeometry,
+    content: SemanticObjectContent,
     transform: SemanticTransform2_5D,
 ) -> Result<Option<Bounds2D64>, String> {
+    let geometry = match content {
+        SemanticObjectContent::Geometry(geometry) => geometry,
+        SemanticObjectContent::Text(handle) => {
+            let local = store
+                .text_resources()
+                .get(handle)
+                .ok_or("unknown or stale text resource")?
+                .bounds;
+            let mut bounds = None;
+            for point in [
+                local.min,
+                Vec2::new(local.min.x, local.max.y),
+                local.max,
+                Vec2::new(local.max.x, local.min.y),
+            ] {
+                include_layout_point(&mut bounds, transform_layout_point(transform, point));
+            }
+            return Ok(bounds);
+        }
+    };
     Ok(match geometry {
         StoredGeometry::Circle { radius } => {
             geometry_layout_bounds(&GeometryRef::circle(radius), transform)

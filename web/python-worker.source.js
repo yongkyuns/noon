@@ -89,6 +89,8 @@ async function initializePyodide() {
     authoringStore.createManimRectangle(width, height);
   self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
     authoringStore.createManimLine(startX, startY, endX, endY);
+  self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
+    authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
   self.noonCreateAuthoringFamilyMemberHandle = () =>
     authoringStore.createFamilyMember();
@@ -424,10 +426,22 @@ if isinstance(__noon_result, Scene):
         __noon_retained = None
         __noon_identities = None
     else:
-        _manim_canonical_scene.materialize_legacy_geometry(__noon_result)
+        if __noon_callbacks and getattr(__noon_result, "_semantic_text_handles", {}):
+            raise RuntimeError(
+                "native Text with Python callbacks is not supported by the retained "
+                "renderer path yet; callback lowering must migrate to the shared session"
+            )
+        # A native Text timeline/export remains in the canonical context so its
+        # temporary #959 codec is derived from the Rust store at finalization.
+        # Geometry-only fallback retains the existing legacy materialization.
+        if not getattr(__noon_result, "_semantic_text_handles", {}):
+            _manim_canonical_scene.materialize_legacy_geometry(__noon_result)
         __noon_scene_spec = __noon_result.to_scene_spec()
         __noon_document = __noon_result.to_document()
-        __noon_retained = __noon_result.retained_document()
+        # The canonical document already includes every text object. The old
+        # retained sidecar is not an execution input and must not ask a native
+        # semantic Text handle for a source mirror.
+        __noon_retained = None
         __noon_identities = __noon_result.identity_document()
     __noon_duration = float(__noon_result.time)
 elif isinstance(__noon_result, PatchBatch):

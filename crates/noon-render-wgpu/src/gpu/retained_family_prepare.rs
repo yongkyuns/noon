@@ -4,7 +4,8 @@ use noon_core::{RetainedFamilyAnimationPlan, TextAnimationGlyphRef};
 use noon_runtime::RetainedFamilyFrame;
 
 use super::super::{
-    retained_family_reveal_members_for_object, RetainedFamilyRevealError, RetainedFamilyRevealMember,
+    retained_family_reveal_members_for_object, RetainedFamilyRevealError,
+    RetainedFamilyRevealMember,
 };
 use super::*;
 
@@ -97,9 +98,9 @@ impl RetainedFramePreparer {
         queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPrepareError> {
         let changes = FrameChanges::all();
@@ -116,23 +117,21 @@ impl RetainedFramePreparer {
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         changes: &FrameChanges,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPrepareError> {
-        {
-            self.prepare_with_changes(
-                device,
-                queue,
-                frame.retained,
-                changes,
-                texts,
-                fonts,
-                geometries,
-                metrics,
-            )?;
-        }
+        self.prepare_canonical_mixed_baseline(
+            device,
+            queue,
+            frame.retained,
+            changes,
+            texts,
+            fonts,
+            geometries,
+            metrics,
+        )?;
 
         // The canonical generation is no longer reusable once family-local scratch
         // substitution begins. Restore validity only after the complete mixed frame is
@@ -191,6 +190,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            geometry_only: false,
             geometry,
             text_generation: self.text_generation,
             text,
@@ -203,8 +203,8 @@ impl RetainedFramePreparer {
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyPrepareError> {
         let baseline_sources = mem::take(&mut self.sources);
         self.sources.reserve(baseline_sources.len());
@@ -227,9 +227,10 @@ impl RetainedFramePreparer {
                         let scratch_index = usize::try_from(scratch_id.get()).map_err(|_| {
                             RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
                         })?;
-                        let target = self.scratch.reveals.get_mut(scratch_index).ok_or(
-                            RetainedFamilyPrepareError::MissingScratchObject(scratch_id),
-                        )?;
+                        let target =
+                            self.scratch.reveals.get_mut(scratch_index).ok_or(
+                                RetainedFamilyPrepareError::MissingScratchObject(scratch_id),
+                            )?;
                         *target = reveal;
                     }
                     self.sources.push(SourceItem::Geometry {
@@ -290,9 +291,7 @@ impl RetainedFramePreparer {
         match member? {
             RetainedFamilyRevealMember::Geometry { reveal, .. } => {
                 if members.next().is_some() {
-                    return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(
-                        object,
-                    ));
+                    return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(object));
                 }
                 Ok(Some(reveal))
             }
@@ -323,9 +322,7 @@ impl RetainedFramePreparer {
                 }
                 RetainedFamilyRevealMember::TextGlyph { .. } => {}
                 RetainedFamilyRevealMember::Geometry { .. } => {
-                    return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(
-                        object,
-                    ));
+                    return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(object));
                 }
             }
         }
@@ -340,12 +337,14 @@ impl RetainedFramePreparer {
         object_index: usize,
         object_id: ObjectId,
         run_index: u32,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyPrepareError> {
-        let object = frame.retained.objects.get(object_index).ok_or(
-            RetainedFamilyPrepareError::MissingSourceObject(object_id),
-        )?;
+        let object = frame
+            .retained
+            .objects
+            .get(object_index)
+            .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
         let text = object
             .text()
             .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
@@ -377,8 +376,7 @@ impl RetainedFramePreparer {
                             glyph,
                         },
                     )?;
-                    let (_, outline) =
-                        self.outlines.outline(fonts, run, positioned.glyph_id)?;
+                    let (_, outline) = self.outlines.outline(fonts, run, positioned.glyph_id)?;
                     let path = append_transformed_path(
                         VectorPath::new(),
                         outline.as_ref(),
@@ -429,7 +427,7 @@ mod tests {
         RetainedObjectDefinition, SemanticStore, TextAffineTransform, TextClusterIdentity,
         TextDirection, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan,
     };
-    use noon_runtime::{RetainedFrameObjectState, RetainedFrameState};
+    use noon_runtime::{FrameObjectState, FrameState};
 
     use super::*;
 
@@ -446,7 +444,7 @@ mod tests {
 
     fn geometry_fixture() -> (
         RetainedFamilyAnimationPlan,
-        RetainedFrameState,
+        FrameState,
         Vec<Option<FamilyAnimationState>>,
     ) {
         let mut store = SemanticStore::new();
@@ -464,19 +462,21 @@ mod tests {
         builder.accept_leaf(first, &first_object, &texts).unwrap();
         builder.accept_leaf(second, &second_object, &texts).unwrap();
         let plan = builder.finish().unwrap();
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 1.0,
             objects: vec![
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                    text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                    text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
@@ -509,7 +509,7 @@ mod tests {
         progress: f32,
     ) -> (
         RetainedFamilyAnimationPlan,
-        RetainedFrameState,
+        FrameState,
         Vec<Option<FamilyAnimationState>>,
         TextResourceArena,
     ) {
@@ -549,11 +549,12 @@ mod tests {
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, leaf).unwrap();
         builder.accept_leaf(leaf, &object, &texts).unwrap();
         let plan = builder.finish().unwrap();
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 1.0,
-            objects: vec![RetainedFrameObjectState {
+            objects: vec![FrameObjectState {
                 id: ObjectId::new(20),
                 content: ObjectContentRef::Text(text),
+                text_bounds: None,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
                 appearance: 1.0,
@@ -616,12 +617,7 @@ mod tests {
             [SourceItem::FastGlyphRun { .. }]
         ));
         preparer
-            .apply_family_reveal_to_scratch(
-                &family,
-                &plan,
-                &texts,
-                &FontResourceArena::new(),
-            )
+            .apply_family_reveal_to_scratch(&family, &plan, &texts, &FontResourceArena::new())
             .unwrap();
         assert!(preparer.sources.is_empty());
         assert!(preparer.scratch.objects.is_empty());
@@ -644,12 +640,7 @@ mod tests {
             )
             .unwrap();
         preparer
-            .apply_family_reveal_to_scratch(
-                &family,
-                &plan,
-                &texts,
-                &FontResourceArena::new(),
-            )
+            .apply_family_reveal_to_scratch(&family, &plan, &texts, &FontResourceArena::new())
             .unwrap();
         assert!(matches!(
             preparer.sources.as_slice(),

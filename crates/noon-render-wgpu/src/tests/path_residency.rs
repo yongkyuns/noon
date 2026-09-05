@@ -153,14 +153,14 @@ fn resident_replacement_never_recycles_prefix_ranges() {
     let prefix = preparer.path_vertices.clone();
     let mut current = frame(vec![styled_object(0, a)]);
     preparer.prepare(&current);
-    current.objects[0].geometry = path(100);
+    current.objects[0].content = noon_core::ObjectContentRef::Geometry(path(100));
     preparer.replace_unique_path_geometry(&current, 0).unwrap();
     assert!(preparer.path_batch_vertex_ranges[0].start as usize >= prefix.len());
     assert!(preparer
         .path_vertex_free_ranges
         .iter()
         .all(|r| r.start as usize >= prefix.len()));
-    current.objects[0].geometry = b;
+    current.objects[0].content = noon_core::ObjectContentRef::Geometry(b);
     let result = preparer.replace_unique_path_geometry(&current, 0).unwrap();
     assert_eq!(result.vertices_repacked, 0);
     assert_eq!(result.indices_repacked, 0);

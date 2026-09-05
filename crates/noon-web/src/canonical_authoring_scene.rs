@@ -1,7 +1,13 @@
 use std::collections::BTreeMap;
 
-use noon_core::{FamilyAnimationRequest, ObjectId, ObjectSnapshot, Style, TrackDefinition, Vec2};
+use noon_core::{
+    Color, FamilyAnimationRequest, ObjectId, ObjectSnapshot, SemanticObjectState, SemanticPaint,
+    SemanticStyle, SemanticTransform2_5D, Style, TextSourceKind, TrackDefinition, Transform2D,
+    Vec2,
+};
 use noon_ir::{ObjectSpec, SceneSpec, TextSpec};
+#[cfg(target_arch = "wasm32")]
+use noon_ir::{ObjectSpecContent, TextSpecKind, TextSpecOptions};
 
 use crate::{
     materialize_retained_tracks, RetainedTextAuthoringSpec, RetainedTextBackendSpec,
@@ -315,6 +321,18 @@ impl CanonicalAuthoringScene {
                 continue;
             }
             let handle = noon::Mobject::from_node(std::rc::Rc::clone(self.scene.store()), node)?;
+            let state = handle.state()?;
+            if state.content.text().is_some() {
+                objects.push(canonical_native_text_export(
+                    &self.scene.store().borrow(),
+                    *self
+                        .identities
+                        .get(&node)
+                        .ok_or("unbound semantic scene member")?,
+                    &state,
+                )?);
+                continue;
+            }
             let snapshot = noon::legacy::export_mobject_snapshot(&handle)?;
             let mut object = ObjectSpec::geometry(
                 *self
@@ -346,6 +364,147 @@ impl CanonicalAuthoringScene {
             .copied()
             .ok_or_else(|| format!("unknown canonical object {}", id.get()))
     }
+}
+
+/// Reconstruct the legacy source document only when the normal semantic session
+/// is unavailable (for example, callback/timeline execution). This #959 export
+/// seam reads immutable content and presentation from the shared store; Python
+/// wrappers never provide a parallel Text source or transform representation.
+fn canonical_native_text_export(
+    store: &noon_core::SemanticStore,
+    id: ObjectId,
+    state: &SemanticObjectState,
+) -> Result<ObjectSpec, String> {
+    let text = state
+        .content
+        .text()
+        .ok_or("canonical text export requires text content")?;
+    let resource = store
+        .text_resources()
+        .get(text)
+        .ok_or("canonical text export references an unknown text resource")?;
+    if resource.kind != TextSourceKind::Plain {
+        return Err("canonical text export supports native plain text only".into());
+    }
+    let run = resource
+        .runs
+        .first()
+        .ok_or("canonical native text resource has no shaped run")?;
+    let mut object = ObjectSpec::text(
+        id,
+        TextSpec::native_plain(
+            resource.source.as_ref(),
+            run.font.family.as_ref(),
+            run.font_size,
+            native_line_spacing(resource)?,
+        ),
+    );
+    object.transform = legacy_text_transform(state.transform)?;
+    object.style = legacy_style(&state.style)?;
+    Ok(object)
+}
+
+/// Derive the temporary #959 native-Text authoring codec from shared semantic
+/// state. This is only consumed when the normal live session cannot run; Python
+/// wrappers never retain a second text source or presentation model.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn canonical_native_text_authoring_spec(
+    store: &noon_core::SemanticStore,
+    state: &SemanticObjectState,
+) -> Result<RetainedTextAuthoringSpec, String> {
+    let object = canonical_native_text_export(store, ObjectId::new(0), state)?;
+    let ObjectSpec {
+        content: ObjectSpecContent::Text(text),
+        transform,
+        style,
+        ..
+    } = object
+    else {
+        return Err("canonical text export produced non-text content".into());
+    };
+    let TextSpec {
+        kind: TextSpecKind::Plain,
+        source,
+        font_size,
+        options:
+            TextSpecOptions::NativePlain {
+                font_family,
+                line_spacing,
+            },
+    } = text
+    else {
+        return Err("canonical text export produced non-native content".into());
+    };
+    let mut spec = RetainedTextAuthoringSpec::native(source, font_family, font_size, line_spacing)?;
+    spec.transform = transform;
+    spec.color = style.fill.unwrap_or(noon_core::WHITE);
+    spec.opacity = style.opacity;
+    Ok(spec)
+}
+
+fn legacy_text_transform(transform: SemanticTransform2_5D) -> Result<Transform2D, String> {
+    let point_scale = f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE);
+    Ok(Transform2D {
+        translation: Vec2::new(
+            legacy_f32("text translation x", transform.translation.x)?,
+            legacy_f32("text translation y", transform.translation.y)?,
+        ),
+        scale: Vec2::new(
+            legacy_f32("text scale x", transform.scale.x / point_scale)?,
+            legacy_f32("text scale y", transform.scale.y / point_scale)?,
+        ),
+        rotation: legacy_f32("text rotation", transform.rotation_z)?,
+    })
+}
+
+fn native_line_spacing(resource: &noon_core::TextResource) -> Result<f32, String> {
+    let Some(first) = resource.runs.first() else {
+        return Err("canonical native text resource has no shaped run".into());
+    };
+    if resource.runs.len() < 2 {
+        // A single line has no observable line advance. Preserve Manim's ordinary
+        // default spelling rather than manufacturing wrapper-side metadata.
+        return Ok(-1.0);
+    }
+    let second = &resource.runs[1];
+    let advance = first.transform.ty - second.transform.ty;
+    let spacing = advance / first.font_size - 1.0;
+    if !spacing.is_finite() || spacing < -1.0 {
+        return Err("canonical native text resource has invalid line spacing".into());
+    }
+    Ok(spacing)
+}
+
+fn legacy_style(style: &SemanticStyle) -> Result<Style, String> {
+    Ok(Style {
+        fill: legacy_color(style.fill.as_ref(), style.fill_opacity)?,
+        stroke: legacy_color(style.stroke.as_ref(), style.stroke_opacity)?,
+        stroke_width: legacy_f32("text stroke width", style.stroke_width)?,
+        stroke_width_mode: style.stroke_width_mode,
+        stroke_join: style.stroke_join,
+        stroke_cap: style.stroke_cap,
+        opacity: legacy_f32("text object opacity", style.object_opacity)?,
+    })
+}
+
+fn legacy_color(paint: Option<&SemanticPaint>, opacity: f64) -> Result<Option<Color>, String> {
+    let Some(paint) = paint else {
+        return Ok(None);
+    };
+    let SemanticPaint::Solid(color) = paint else {
+        return Err("legacy text export does not support resource-backed paint".into());
+    };
+    Ok(Some(Color {
+        alpha: legacy_f32("text paint opacity", f64::from(color.alpha) * opacity)?,
+        ..*color
+    }))
+}
+
+fn legacy_f32(name: &str, value: f64) -> Result<f32, String> {
+    if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
+        return Err(format!("{name} must be a finite f32-compatible number"));
+    }
+    Ok(value as f32)
 }
 
 fn retained_scale_factor(text: &RetainedTextAuthoringSpec) -> Vec2 {
@@ -750,6 +909,36 @@ mod tests {
     }
 
     #[test]
+    fn native_semantic_text_exports_only_at_the_legacy_callback_boundary() {
+        let mut context = CanonicalAuthoringScene::default();
+        let mut label = context
+            .scene
+            .text(
+                noon::Text::new("A\nB")
+                    .with_font_size(36.0)
+                    .with_line_spacing(0.5),
+            )
+            .unwrap();
+        label.shift(2.0, -1.0).unwrap();
+        context.bind_mobject(ObjectId::new(4), &label).unwrap();
+
+        let spec = context
+            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
+            .unwrap();
+        let ObjectSpecContent::Text(text) = &spec.objects[0].content else {
+            panic!("shared native Text must derive a legacy-boundary text spec");
+        };
+        assert_eq!(text.source, "A\nB");
+        assert_eq!(text.font_size, 36.0);
+        let noon_ir::TextSpecOptions::NativePlain { line_spacing, .. } = &text.options else {
+            panic!("native Text export requires native options");
+        };
+        assert!((*line_spacing - 0.5).abs() < 1.0e-6);
+        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
+        assert_eq!(spec.objects[0].transform.scale, Vec2::ONE);
+    }
+
+    #[test]
     fn updates_preserve_slots_and_append_checkpoint_restore_reclaims_failed_binds() {
         let mut context = CanonicalAuthoringScene::default();
         let first = ObjectId::new(0);
@@ -874,7 +1063,7 @@ mod tests {
                 .x,
             2.0
         );
-        let snapshot: crate::ExecutionDeltaEnvelope =
+        let snapshot: crate::RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&handed_off.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 17);
         assert_eq!(snapshot.objects[0].transform.translation.x, 2.0);
@@ -890,7 +1079,7 @@ mod tests {
                 .x,
             2.0
         );
-        let recovery_snapshot: crate::ExecutionDeltaEnvelope =
+        let recovery_snapshot: crate::RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&recovered.initial_delta_json().unwrap()).unwrap();
         assert_eq!(recovery_snapshot.session, 18);
         assert_eq!(recovery_snapshot.objects[0].transform.translation.x, 2.0);
@@ -915,7 +1104,7 @@ mod tests {
         let mut rerun = context.take_execution_player(1.0, 18).unwrap();
         let effective = rerun.live_effective(&circle).unwrap();
         assert_eq!(effective.transform.translation, Vec2::new(3.0, -1.0));
-        let snapshot: crate::ExecutionDeltaEnvelope =
+        let snapshot: crate::RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&rerun.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 18);
         assert_eq!(snapshot.objects[0].transform.translation.x, 3.0);

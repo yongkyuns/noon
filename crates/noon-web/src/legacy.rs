@@ -493,8 +493,8 @@ mod tests {
         assert_eq!(outcome, ReconcileOutcome::Replaced);
         assert_eq!(player.frame().time, 0.75);
         assert_eq!(
-            player.frame().objects[0].geometry,
-            GeometryRef::rectangle(2.0, 1.0)
+            player.frame().objects[0].geometry(),
+            Some(&GeometryRef::rectangle(2.0, 1.0))
         );
     }
 

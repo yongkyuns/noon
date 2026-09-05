@@ -1,10 +1,10 @@
 use noon::{LoweredRetainedFamilyAnimation, RetainedScene};
-use noon_compile::{RetainedCompileError, RetainedCompiledScene};
+use noon_compile::CompileError;
 use noon_core::{
     Camera2DState, FamilyAnimationSpec, ObjectId, RetainedFamilyAnimationPlan, TrackDefinition,
 };
 use noon_runtime::{
-    RetainedFamilyPlanSetRuntimeError, RetainedFamilyPlanSetSceneInstance, RetainedFrameState,
+    FrameState, RetainedFamilyPlanSetRuntimeError, RetainedFamilyPlanSetSceneInstance,
     RetainedPlannedFamilyFrame,
 };
 
@@ -65,7 +65,7 @@ impl RetainedFamilyExecutionPlayer {
         camera_object: Option<ObjectId>,
         session: u32,
     ) -> Result<Self, RetainedFamilyExecutionPlayerError> {
-        let compiled = RetainedCompiledScene::compile(scene.objects(), tracks)?;
+        let compiled = crate::retained_resource_transport::compile_retained_scene(&scene, tracks)?;
         let render_geometries =
             crate::retained_resource_transport::compiled_render_geometries(&compiled);
         let mut bundle = RetainedResourceBundle::capture(
@@ -113,7 +113,7 @@ impl RetainedFamilyExecutionPlayer {
         &self.scene
     }
 
-    pub fn frame(&self) -> &RetainedFrameState {
+    pub fn frame(&self) -> &FrameState {
         self.runtime.inner().frame()
     }
 
@@ -207,7 +207,7 @@ impl RetainedFamilyExecutionPlayer {
 
 #[derive(Debug)]
 pub enum RetainedFamilyExecutionPlayerError {
-    Compile(RetainedCompileError),
+    Compile(CompileError),
     Resource(RetainedResourceTransportError),
     Runtime(RetainedFamilyPlanSetRuntimeError),
     Transport(RetainedFamilyExecutionEncodeError),
@@ -232,8 +232,8 @@ impl std::fmt::Display for RetainedFamilyExecutionPlayerError {
 
 impl std::error::Error for RetainedFamilyExecutionPlayerError {}
 
-impl From<RetainedCompileError> for RetainedFamilyExecutionPlayerError {
-    fn from(value: RetainedCompileError) -> Self {
+impl From<CompileError> for RetainedFamilyExecutionPlayerError {
+    fn from(value: CompileError) -> Self {
         Self::Compile(value)
     }
 }

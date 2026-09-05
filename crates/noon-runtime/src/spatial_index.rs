@@ -365,11 +365,11 @@ enum Coverage {
 
 pub fn frame_object_conservative_bounds(frame: &FrameState, object_index: usize) -> Option<Rect> {
     let object = frame.objects.get(object_index)?;
-    let geometry = frame.render_geometry(object_index);
     let render_transform = frame.render_transform(object_index);
-    let mut world = match geometry {
-        GeometryRef::Circle { radius } => circle_world_bounds(*radius, render_transform),
-        _ => transform_rect(geometry_local_bounds(geometry)?, render_transform),
+    let mut world = match frame.render_geometry(object_index) {
+        Some(GeometryRef::Circle { radius }) => circle_world_bounds(*radius, render_transform),
+        Some(geometry) => transform_rect(geometry_local_bounds(geometry)?, render_transform),
+        None => transform_rect(object.text_bounds?, render_transform),
     };
     if object.style.stroke.is_some() && object.style.stroke_width.is_finite() {
         let scale = render_transform
@@ -477,7 +477,10 @@ fn insert_sorted_unique(slots: &mut Vec<ExecutionSlotId>, slot: ExecutionSlotId)
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, ObjectId, Rect, Style, Transform2D, Vec2};
+    use noon_core::{
+        GeometryRef, ObjectContentRef, ObjectId, Rect, Style, TextResourceHandle, TextResourceId,
+        Transform2D, Vec2,
+    };
 
     use super::*;
 
@@ -490,7 +493,8 @@ mod tests {
             time: 0.0,
             objects: vec![crate::FrameObjectState {
                 id: ObjectId::new(0),
-                geometry,
+                content: ObjectContentRef::Geometry(geometry),
+                text_bounds: None,
                 transform,
                 style,
                 appearance: 1.0,
@@ -501,6 +505,39 @@ mod tests {
             render_geometries: vec![None],
             render_transforms: vec![None],
         }
+    }
+
+    #[test]
+    fn text_resource_bounds_follow_the_effective_object_transform() {
+        let local = Rect::new(Vec2::new(-1.0, -0.5), Vec2::new(2.0, 1.5));
+        let frame = FrameState {
+            time: 0.0,
+            objects: vec![crate::FrameObjectState {
+                id: ObjectId::new(0),
+                content: ObjectContentRef::Text(TextResourceHandle {
+                    id: TextResourceId::new(3),
+                    version: 0,
+                }),
+                text_bounds: Some(local),
+                transform: Transform2D {
+                    translation: Vec2::new(3.0, 4.0),
+                    rotation: 0.0,
+                    scale: Vec2::new(2.0, 0.5),
+                },
+                style: Style::default(),
+                appearance: 1.0,
+            }],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+            render_transforms: vec![None],
+        };
+
+        assert_eq!(
+            frame_object_conservative_bounds(&frame, 0),
+            Some(Rect::new(Vec2::new(1.0, 3.75), Vec2::new(7.0, 4.75)))
+        );
     }
 
     #[test]

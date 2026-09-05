@@ -3,7 +3,7 @@ mod wasm {
     use noon::{MathTypst, RetainedScene, Typst};
     use noon_core::Vec2;
     use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
-    use noon_runtime::RetainedSceneInstance;
+    use noon_runtime::SceneInstance;
     use noon_text_render_wgpu::TextDeviceMetrics;
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
@@ -39,7 +39,7 @@ mod wasm {
         canvas: OffscreenCanvas,
         config: wgpu::SurfaceConfiguration,
         scene: RetainedScene,
-        runtime: RetainedSceneInstance,
+        runtime: SceneInstance,
         preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
         text_gpu: RetainedTextGpuState,
@@ -228,7 +228,7 @@ mod wasm {
                 ));
             }
             let compiled = scene.compile().map_err(js_error)?;
-            let runtime = RetainedSceneInstance::new(compiled);
+            let runtime = SceneInstance::new(compiled);
 
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
             instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;

@@ -1,5 +1,5 @@
 use noon_compile::{CompileError, CompiledScene};
-use noon_core::{Color, ObjectSnapshot, Rect};
+use noon_core::{Color, Rect};
 use noon_ir::{decode_scene, IrError};
 use noon_runtime::{EvaluationError, FrameState, SlottedSceneInstance};
 use serde_json::{json, Value};
@@ -71,13 +71,10 @@ pub fn semantic_frame_value(frame: &FrameState) -> Value {
         .iter()
         .enumerate()
         .map(|(index, object)| {
-            let geometry = frame.render_geometry(index).clone();
-            let snapshot = ObjectSnapshot {
-                geometry: geometry.clone(),
-                transform: object.transform,
-                style: object.style,
-            };
-            let bounds = snapshot.world_bounds();
+            let geometry = frame.render_geometry(index).cloned();
+            let bounds = geometry
+                .as_ref()
+                .and_then(|geometry| geometry.world_bounds(object.transform));
             let center = bounds
                 .map(Rect::center)
                 .unwrap_or(object.transform.translation);

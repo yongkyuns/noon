@@ -1,13 +1,86 @@
 use noon::RetainedScene;
-use noon_compile::RetainedCompiledScene;
+use noon::TextAuthoringError;
+use noon_compile::CompileError;
+use noon_compile::CompiledScene;
 use noon_core::{FamilyAnimationRequest, ObjectId, SceneDefinition, TrackDefinition};
 use noon_ir::{SceneSpec, SceneSpecError};
 use serde::Deserialize;
 
+use crate::RetainedTrackMaterializationError;
+use crate::{retained_authoring_scene_spec, retained_scene_spec_runtime};
 use crate::{
-    retained_authoring_scene_spec, retained_scene_spec_runtime, MixedRetainedAuthoringError,
     RetainedAuthoringDocument, RetainedAuthoringSceneSpecError, RetainedTrackAuthoringSpec,
 };
+
+/// Errors at the one canonical compatibility-input boundary.
+///
+/// This error belongs to the compatibility-document to retained-scene compiler
+/// path. The historical split authoring lowerer is test-only and does not
+/// define a competing production error/runtime surface.
+#[derive(Debug)]
+pub enum MixedRetainedAuthoringError {
+    LegacyScene(noon_ir::IrError),
+    RetainedDocument(String),
+    Text(TextAuthoringError),
+    TrackMaterialization(RetainedTrackMaterializationError),
+    Compile(CompileError),
+    ObjectCountOverflow,
+    PainterOrderOutOfRange { order: u32, object_count: usize },
+    ObjectIdentityCollision(ObjectId),
+}
+
+impl std::fmt::Display for MixedRetainedAuthoringError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LegacyScene(error) => error.fmt(formatter),
+            Self::RetainedDocument(error) => formatter.write_str(error),
+            Self::Text(error) => error.fmt(formatter),
+            Self::TrackMaterialization(error) => error.fmt(formatter),
+            Self::Compile(error) => error.fmt(formatter),
+            Self::ObjectCountOverflow => {
+                formatter.write_str("mixed authoring object count overflow")
+            }
+            Self::PainterOrderOutOfRange {
+                order,
+                object_count,
+            } => write!(
+                formatter,
+                "text painter order {order} is outside object count {object_count}"
+            ),
+            Self::ObjectIdentityCollision(object) => write!(
+                formatter,
+                "text object {} collides with a geometry object",
+                object.get()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MixedRetainedAuthoringError {}
+
+impl From<noon_ir::IrError> for MixedRetainedAuthoringError {
+    fn from(value: noon_ir::IrError) -> Self {
+        Self::LegacyScene(value)
+    }
+}
+
+impl From<TextAuthoringError> for MixedRetainedAuthoringError {
+    fn from(value: TextAuthoringError) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<RetainedTrackMaterializationError> for MixedRetainedAuthoringError {
+    fn from(value: RetainedTrackMaterializationError) -> Self {
+        Self::TrackMaterialization(value)
+    }
+}
+
+impl From<CompileError> for MixedRetainedAuthoringError {
+    fn from(value: CompileError) -> Self {
+        Self::Compile(value)
+    }
+}
 
 /// One protocol-v2 retained payload.
 ///
@@ -100,7 +173,7 @@ impl MixedRetainedAuthoringScene {
     /// Consume the canonical mixed authoring document directly.
     ///
     /// This is the target consumer boundary for future Rust/Python/JavaScript producer
-    /// migration. Source-level text is still compiled by the existing shared Rust
+    /// migration. Source-level text is compiled by the existing shared Rust
     /// backends and enters the ordinary retained resource/runtime path.
     pub fn from_scene_spec(spec: SceneSpec) -> Result<Self, MixedRetainedAuthoringError> {
         Ok(Self {
@@ -118,7 +191,7 @@ impl MixedRetainedAuthoringScene {
         self.inner.tracks()
     }
 
-    pub fn compile(&self) -> Result<RetainedCompiledScene, MixedRetainedAuthoringError> {
+    pub fn compile(&self) -> Result<CompiledScene, MixedRetainedAuthoringError> {
         self.inner.compile()
     }
 

@@ -1,10 +1,10 @@
-use noon_compile::RetainedCompiledScene;
+use noon_compile::CompiledScene;
 use noon_core::{
     FamilyAnimationError, FamilyAnimationSpec, FamilyAnimationState, ObjectId,
     RetainedFamilyAnimationPlan,
 };
 
-use crate::{EvaluationError, FrameChanges, RetainedFamilyFrame, RetainedSceneInstance};
+use crate::{EvaluationError, FrameChanges, RetainedFamilyFrame, SceneInstance};
 
 /// Failure while binding one target-independent family animation to a prepared retained plan.
 #[derive(Clone, Debug, PartialEq)]
@@ -48,10 +48,10 @@ impl From<EvaluationError> for RetainedFamilyPlanRuntimeError {
 /// evaluates the target-independent [`FamilyAnimationSpec`] exactly once per time and
 /// projects the same resulting [`FamilyAnimationState`] onto only the retained object
 /// slots referenced by that plan. Ordinary object properties remain owned by
-/// [`RetainedSceneInstance`].
+/// [`SceneInstance`].
 #[derive(Clone, Debug)]
 pub struct RetainedFamilyPlanSceneInstance {
-    inner: RetainedSceneInstance,
+    inner: SceneInstance,
     plan: RetainedFamilyAnimationPlan,
     spec: FamilyAnimationSpec,
     leaf_indices: Vec<usize>,
@@ -62,7 +62,7 @@ pub struct RetainedFamilyPlanSceneInstance {
 
 impl RetainedFamilyPlanSceneInstance {
     pub fn new(
-        compiled: RetainedCompiledScene,
+        compiled: CompiledScene,
         plan: RetainedFamilyAnimationPlan,
         spec: FamilyAnimationSpec,
     ) -> Result<Self, RetainedFamilyPlanRuntimeError> {
@@ -86,7 +86,7 @@ impl RetainedFamilyPlanSceneInstance {
         }
 
         Ok(Self {
-            inner: RetainedSceneInstance::new(compiled),
+            inner: SceneInstance::new(compiled),
             plan,
             spec,
             leaf_indices,
@@ -154,7 +154,7 @@ impl RetainedFamilyPlanSceneInstance {
         )
     }
 
-    pub fn inner(&self) -> &RetainedSceneInstance {
+    pub fn inner(&self) -> &SceneInstance {
         &self.inner
     }
 
@@ -192,7 +192,7 @@ fn active_state_at(
 mod tests {
     use std::sync::Arc;
 
-    use noon_compile::RetainedCompiledScene;
+    use noon_compile::{CompiledObject, CompiledScene};
     use noon_core::{
         FamilyAnimationMode, FontFaceIdentity, GeometryRef, GlyphRun, ObjectId, PositionedGlyph,
         RateFunction, Rect, RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition,
@@ -248,7 +248,7 @@ mod tests {
     }
 
     fn fixture() -> (
-        RetainedCompiledScene,
+        CompiledScene,
         RetainedFamilyAnimationPlan,
         FamilyAnimationSpec,
     ) {
@@ -270,7 +270,16 @@ mod tests {
         builder.accept_leaf(text_leaf, &text, &texts).unwrap();
         builder.accept_leaf(circle_leaf, &circle, &texts).unwrap();
         let plan = builder.finish().unwrap();
-        let compiled = RetainedCompiledScene::compile(&[text, circle, unrelated], &[]).unwrap();
+        let compiled = CompiledScene::compile_objects(
+            [text, circle, unrelated]
+                .into_iter()
+                .map(|object| {
+                    CompiledObject::new(object.id, object.content, object.transform, object.style)
+                })
+                .collect(),
+            &[],
+        )
+        .unwrap();
         let spec = FamilyAnimationSpec::new(
             FamilyAnimationMode::Reveal,
             1.0,

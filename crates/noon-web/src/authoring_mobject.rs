@@ -449,6 +449,15 @@ mod wasm {
         JsValue::from_str(&error)
     }
 
+    fn text_authoring_f32(field: &str, value: f64) -> Result<f32, JsValue> {
+        let value = render_f64(field, value).map_err(js_error)?;
+        let value = value as f32;
+        if !value.is_finite() {
+            return Err(js_error(format!("{field} is outside the supported range")));
+        }
+        Ok(value)
+    }
+
     type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
 
     fn retained_native_member_id(
@@ -589,6 +598,31 @@ mod wasm {
             Mobject::manim_line(Rc::clone(&self.semantics), start_x, start_y, end_x, end_y)
                 .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(js_error)
+        }
+
+        /// Shape native text into the same semantic store as geometry handles.
+        #[wasm_bindgen(js_name = createManimText)]
+        pub fn create_manim_text(
+            &self,
+            source: &str,
+            font_family: &str,
+            font_size: f64,
+            line_spacing: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            let font_size = text_authoring_f32("font size", font_size)?;
+            let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
+            if line_spacing != -1.0 && line_spacing <= -1.0 {
+                return Err(js_error(
+                    "line spacing must be -1 or greater than -1".to_owned(),
+                ));
+            }
+            let text = noon::Text::new(source)
+                .with_font(font_family)
+                .with_font_size(font_size)
+                .with_line_spacing(line_spacing);
+            Mobject::from_text(Rc::clone(&self.semantics), text)
+                .map(|handle| WasmAuthoringMobjectHandle { handle })
+                .map_err(|error| js_error(error.to_string()))
         }
 
         /// Allocate stable semantic identity for a non-geometry authoring object.
@@ -1635,6 +1669,18 @@ mod wasm {
                 &noon::legacy::export_mobject_snapshot(&self.handle).map_err(js_error)?,
             )
             .map_err(|error| js_error(error.to_string()))
+        }
+
+        /// Explicit #959 export access for native Text when a legacy timeline
+        /// must be finalized. The source and presentation are reconstructed from
+        /// the one shared semantic store, never from Python wrapper state.
+        #[wasm_bindgen(js_name = textSpecJson)]
+        pub fn text_spec_json(&self) -> Result<String, JsValue> {
+            let state = self.handle.state().map_err(js_error)?;
+            let spec =
+                crate::canonical_native_text_authoring_spec(&self.handle.store().borrow(), &state)
+                    .map_err(js_error)?;
+            serde_json::to_string(&spec).map_err(|error| js_error(error.to_string()))
         }
 
         #[wasm_bindgen(getter, js_name = wireTranslationX)]

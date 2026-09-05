@@ -77,6 +77,9 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
       throw new Error("unsupported semantic execution transport");
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
+    if (typeof player.resourceBundleBytes !== "function") {
+      throw new Error("semantic execution requires retained resource bundle support");
+    }
     controlPort.addEventListener("message", ({ data: message }) => {
       if (stopped) return;
       try {
@@ -109,6 +112,11 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
       transport = new SharedExecutionDeltaWriter(mailbox);
       renderPort.postMessage({ type: "transport_setup", mode: transportMode, mailbox });
     } else transport = new TransferableExecutionDeltaSender(renderPort, { maxInFlight: 2, onWritable: drain });
+    const resources = Uint8Array.from(player.resourceBundleBytes());
+    if (resources.byteLength === 0) {
+      throw new Error("semantic execution emitted an empty retained resource bundle");
+    }
+    renderPort.postMessage({ type: "retained_resources", bytes: resources }, [resources.buffer]);
     send(player.initialDeltaJson());
     controlPort.start();
     renderPort.start();

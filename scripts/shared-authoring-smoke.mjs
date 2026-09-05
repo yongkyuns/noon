@@ -57,7 +57,8 @@ const pythonSource = `from noon import *
 class SharedAuthoringSmoke(Scene):
     def construct(self):
         circle = Circle(radius=1.0)
-        self.add(circle)
+        label = Text("Noon", font_size=48).shift(LEFT * 2)
+        self.add(circle, label)
 
         # Static style authoring completes before the live session. The live
         # facade then owns property publication and effective-value queries.
@@ -157,6 +158,37 @@ function visiblePixelStats(buffer) {
   };
 }
 
+function textPixelStats(buffer) {
+  const png = PNG.sync.read(buffer);
+  let count = 0;
+  let minX = png.width;
+  let maxX = -1;
+  let minY = png.height;
+  let maxY = -1;
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const red = png.data[offset];
+    const green = png.data[offset + 1];
+    const blue = png.data[offset + 2];
+    if (red < 160 || green < 160 || blue < 160) continue;
+    if (Math.max(red, green, blue) - Math.min(red, green, blue) > 24) continue;
+    const pixel = offset / 4;
+    const x = pixel % png.width;
+    const y = Math.floor(pixel / png.width);
+    count += 1;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  return {
+    count,
+    width: maxX >= minX ? maxX - minX + 1 : 0,
+    height: maxY >= minY ? maxY - minY + 1 : 0,
+    centerX: maxX >= minX ? (minX + maxX) / 2 : 0,
+    centerY: maxY >= minY ? (minY + maxY) / 2 : 0,
+  };
+}
+
 await new Promise((resolve, reject) => {
   server.once("error", reject);
   server.listen(port, "127.0.0.1", resolve);
@@ -232,7 +264,7 @@ try {
             latest = await execution.metrics();
             if (errors.length) throw new Error(errors.join("; "));
             if (
-              latest.metrics.objectCount === 1 &&
+              latest.metrics.objectCount === 2 &&
               latest.metrics.drawCalls > 0 &&
               latest.metrics.presentedFrames >= minimumPresentedFrames
             ) return latest;
@@ -279,15 +311,16 @@ try {
 
     assert.equal(result.ready.transportMode, transportMode);
     assert.equal(result.ready.render.transportMode, transportMode);
+    assert.equal(result.ready.render.mode, "retained");
     assert.ok(
       result.rebuilt.ready.session > result.ready.session,
       `${transportMode}: semantic rerun did not advance the execution session`,
     );
     assert.match(result.ready.render.backend, /WebGPU|WebGL2/);
     assert.equal(result.mode, "semantic");
-    assert.equal(result.first.objectCount, 1, `${transportMode}: one semantic circle expected`);
+    assert.equal(result.first.objectCount, 2, `${transportMode}: mixed Text/Circle scene expected`);
     assert.ok(result.first.drawCalls > 0, `${transportMode}: initial frame emitted no draw calls`);
-    assert.equal(result.second.objectCount, 1, `${transportMode}: rerun changed object count`);
+    assert.equal(result.second.objectCount, 2, `${transportMode}: rerun changed object count`);
     assert.ok(result.second.drawCalls > 0, `${transportMode}: rerun emitted no draw calls`);
     assert.equal(result.paused.playing, false);
     assert.ok(Math.abs(result.sought.time - 0.75) < 1e-6);
@@ -309,6 +342,7 @@ try {
 
     const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
     const pixels = visiblePixelStats(screenshot);
+    const textPixels = textPixelStats(screenshot);
     assert.ok(pixels.count > 1_000, `${transportMode}: rendered circle was blank`);
     assert.ok(pixels.width >= 100 && pixels.width <= 175, `${transportMode}: unexpected width ${pixels.width}`);
     assert.ok(pixels.height >= 30 && pixels.height <= 80, `${transportMode}: unexpected height ${pixels.height}`);
@@ -318,12 +352,15 @@ try {
       pixels.meanBlue > pixels.meanRed + 20,
       `${transportMode}: expected blue fill, got mean red=${pixels.meanRed}, blue=${pixels.meanBlue}`,
     );
+    assert.ok(textPixels.count > 100, `${transportMode}: native Text was not visible`);
+    assert.ok(textPixels.width > 20, `${transportMode}: native Text had no glyph width`);
+    assert.ok(textPixels.centerX < 360, `${transportMode}: native Text was not left of the live circle`);
 
     await page.evaluate(() => {
       window.sharedAuthoringSmoke.execution.terminate();
       window.sharedAuthoringSmoke.execution = null;
     });
-    return { backend: result.ready.render.backend, pixels };
+    return { backend: result.ready.render.backend, pixels, textPixels };
   }
 
   const transferable = await runMode("transferable", 0);

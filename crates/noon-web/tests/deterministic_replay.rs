@@ -143,7 +143,15 @@ fn normalized_snapshot_omits_execution_bookkeeping_but_preserves_render_observab
     assert_eq!(objects.len(), 3);
     for object in objects {
         assert!(object.get("id").is_some());
-        assert!(object.get("geometry").is_some());
+        let content = object
+            .get("content")
+            .and_then(serde_json::Value::as_object)
+            .expect("shared object content");
+        assert_eq!(
+            content.get("kind").and_then(serde_json::Value::as_str),
+            Some("geometry")
+        );
+        assert!(content.get("geometry").is_some());
         assert!(object.get("transform").is_some());
         assert!(object.get("style").is_some());
         assert!(object.get("appearance").is_some());

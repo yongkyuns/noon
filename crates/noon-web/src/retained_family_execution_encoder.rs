@@ -144,7 +144,7 @@ mod tests {
         RateFunction, RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticStore,
         Style, TextResourceArena, Transform2D,
     };
-    use noon_runtime::{RetainedFrameObjectState, RetainedFrameState};
+    use noon_runtime::{FrameObjectState, FrameState};
 
     use super::*;
 
@@ -161,7 +161,7 @@ mod tests {
 
     fn fixture() -> (
         RetainedFamilyAnimationPlan,
-        RetainedFrameState,
+        FrameState,
         Vec<Option<FamilyAnimationState>>,
     ) {
         let first = RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
@@ -179,22 +179,24 @@ mod tests {
         builder.accept_leaf(second_leaf, &second, &texts).unwrap();
         let plan = builder.finish().unwrap();
 
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 0.5,
             objects: vec![
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: first.id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
+                    text_bounds: None,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: second.id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
+                    text_bounds: None,
                 },
             ],
             presences: vec![true, true],

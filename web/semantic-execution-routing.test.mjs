@@ -292,7 +292,7 @@ test("semantic rerun preflights its context before switching the live renderer",
   client.terminate();
 });
 
-test("semantic to legacy rebuild keeps the render worker and retires the context", async () => {
+test("semantic to legacy switches to the ordinary renderer and retires the context", async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
   const client = new AuthoringExecutionClient(new FakeCanvas());
@@ -310,10 +310,10 @@ test("semantic to legacy rebuild keeps the render worker and retires the context
   const engine = FakeWorker.instances.findLast((worker) => worker.name === "noon-engine");
   assert.ok(engine);
   engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
-  const rebuild = await waitForRequest(render, "rebuild_engine");
+  const renderSwitch = await waitForRequest(render, "switch_engine");
   render.emitMessage(
-    envelope("noon.render", "engine_rebuilt", {
-      requestId: rebuild.requestId,
+    envelope("noon.render", "mode_switched", {
+      requestId: renderSwitch.requestId,
       mode: "legacy",
       transportMode: "transferable",
       backend: "WebGL2",
@@ -339,7 +339,7 @@ test("semantic to legacy rebuild keeps the render worker and retires the context
   client.terminate();
 });
 
-test("legacy to semantic rebuild reuses the ordinary renderer", async () => {
+test("legacy to semantic switches to the shared retained renderer", async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
   const client = new AuthoringExecutionClient(new FakeCanvas());
@@ -360,14 +360,15 @@ test("legacy to semantic rebuild reuses the ordinary renderer", async () => {
     { contextId: "semantic-4" },
     { authoringClient: authoring },
   );
-  const rebuild = await waitForRequest(render, "rebuild_engine");
-  assert.equal(rebuild.mode, "legacy");
+  const renderSwitch = await waitForRequest(render, "switch_engine");
+  assert.equal(renderSwitch.mode, "retained");
   render.emitMessage(
-    envelope("noon.render", "engine_rebuilt", {
-      requestId: rebuild.requestId,
-      mode: "legacy",
+    envelope("noon.render", "mode_switched", {
+      requestId: renderSwitch.requestId,
+      mode: "retained",
       transportMode: "transferable",
       backend: "WebGL2",
+      retained: true,
     }),
   );
   await switched;
@@ -378,7 +379,7 @@ test("legacy to semantic rebuild reuses the ordinary renderer", async () => {
   client.terminate();
 });
 
-test("retained and semantic transitions switch renderer implementations in both directions", async () => {
+test("retained and semantic transitions rebuild only their shared retained renderer", async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
   const client = new AuthoringExecutionClient(new FakeCanvas());
@@ -407,14 +408,15 @@ test("retained and semantic transitions switch renderer implementations in both 
     { contextId: "semantic-5" },
     { authoringClient: authoring },
   );
-  let renderSwitch = await waitForRequest(render, "switch_engine");
-  assert.equal(renderSwitch.mode, "legacy");
+  let renderRebuild = await waitForRequest(render, "rebuild_engine");
+  assert.equal(renderRebuild.mode, "retained");
   render.emitMessage(
-    envelope("noon.render", "mode_switched", {
-      requestId: renderSwitch.requestId,
-      mode: "legacy",
+    envelope("noon.render", "engine_rebuilt", {
+      requestId: renderRebuild.requestId,
+      mode: "retained",
       transportMode: "transferable",
       backend: "WebGL2",
+      retained: true,
     }),
   );
   await toSemantic;
@@ -427,21 +429,21 @@ test("retained and semantic transitions switch renderer implementations in both 
   retainedEngine.emitMessage(
     envelope("noon.engine", "ready", { transportMode: "transferable", retained: true }),
   );
-  const priorSwitchCount = render.messages.filter(
-    ({ message }) => message.type === "switch_engine",
+  const priorRebuildCount = render.messages.filter(
+    ({ message }) => message.type === "rebuild_engine",
   ).length;
   for (;;) {
-    const switches = render.messages.filter(({ message }) => message.type === "switch_engine");
-    if (switches.length > priorSwitchCount) {
-      renderSwitch = switches.at(-1).message;
+    const rebuilds = render.messages.filter(({ message }) => message.type === "rebuild_engine");
+    if (rebuilds.length > priorRebuildCount) {
+      renderRebuild = rebuilds.at(-1).message;
       break;
     }
     await Promise.resolve();
   }
-  assert.equal(renderSwitch.mode, "retained");
+  assert.equal(renderRebuild.mode, "retained");
   render.emitMessage(
-    envelope("noon.render", "mode_switched", {
-      requestId: renderSwitch.requestId,
+    envelope("noon.render", "engine_rebuilt", {
+      requestId: renderRebuild.requestId,
       mode: "retained",
       transportMode: "transferable",
       backend: "WebGL2",
@@ -548,7 +550,7 @@ test("terminating semantic to legacy transition retires the hidden old endpoint"
   const transition = client.reconcileScene(sceneJson);
   const engine = FakeWorker.instances.findLast((worker) => worker.name === "noon-engine");
   engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
-  await waitForRequest(render, "rebuild_engine");
+  await waitForRequest(render, "switch_engine");
   client.terminate();
   await assert.rejects(transition, /terminated during an asynchronous operation/);
   await Promise.resolve();

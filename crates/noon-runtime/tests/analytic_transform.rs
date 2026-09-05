@@ -92,26 +92,38 @@ fn analytic_transform_has_exact_endpoints_and_midpoints() {
     let mut instance = SceneInstance::new(CompiledScene::compile(&build_scene()).unwrap());
     let frame = instance.seek(1.0).unwrap();
 
-    assert_eq!(frame.objects[0].geometry, GeometryRef::circle(2.0));
+    assert_eq!(frame.objects[0].geometry(), Some(&GeometryRef::circle(2.0)));
     assert_eq!(frame.objects[0].transform.translation, Vec2::new(2.0, -1.0));
     assert_eq!(frame.objects[0].transform.rotation, 0.4);
     assert_eq!(frame.objects[0].transform.scale, Vec2::new(1.5, 0.75));
     assert!((frame.objects[0].style.opacity - 0.75).abs() < 1.0e-6);
 
-    assert_eq!(frame.objects[1].geometry, GeometryRef::rectangle(4.0, 6.0));
     assert_eq!(
-        frame.objects[2].geometry,
-        GeometryRef::line(Vec2::new(-0.5, -1.0), Vec2::new(0.5, 1.0))
+        frame.objects[1].geometry(),
+        Some(&GeometryRef::rectangle(4.0, 6.0))
+    );
+    assert_eq!(
+        frame.objects[2].geometry(),
+        Some(&GeometryRef::line(
+            Vec2::new(-0.5, -1.0),
+            Vec2::new(0.5, 1.0)
+        ))
     );
     assert!(frame.render_geometries.iter().all(Option::is_none));
     assert!(frame.morphs.iter().all(|value| *value == 0.0));
 
     let end = instance.seek(2.0).unwrap();
-    assert_eq!(end.objects[0].geometry, GeometryRef::circle(3.0));
-    assert_eq!(end.objects[1].geometry, GeometryRef::rectangle(6.0, 8.0));
+    assert_eq!(end.objects[0].geometry(), Some(&GeometryRef::circle(3.0)));
     assert_eq!(
-        end.objects[2].geometry,
-        GeometryRef::line(Vec2::new(0.0, -2.0), Vec2::new(0.0, 2.0))
+        end.objects[1].geometry(),
+        Some(&GeometryRef::rectangle(6.0, 8.0))
+    );
+    assert_eq!(
+        end.objects[2].geometry(),
+        Some(&GeometryRef::line(
+            Vec2::new(0.0, -2.0),
+            Vec2::new(0.0, 2.0)
+        ))
     );
 }
 
@@ -151,11 +163,11 @@ fn sequential_circle_transforms_are_continuous_at_boundary() {
 
     let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
     assert_eq!(
-        instance.seek(1.0).unwrap().objects[0].geometry,
-        GeometryRef::circle(3.0)
+        instance.seek(1.0).unwrap().objects[0].geometry(),
+        Some(&GeometryRef::circle(3.0))
     );
     assert_eq!(
-        instance.seek(1.5).unwrap().objects[0].geometry,
-        GeometryRef::circle(4.0)
+        instance.seek(1.5).unwrap().objects[0].geometry(),
+        Some(&GeometryRef::circle(4.0))
     );
 }

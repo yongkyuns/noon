@@ -1,7 +1,5 @@
 use noon_core::{Camera2DState, ObjectContentRef, RetainedFamilyAnimationPlan};
-use noon_runtime::{
-    FrameChanges, RetainedFamilyFrame, RetainedFrameState, RetainedPlannedFamilyFrame,
-};
+use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
 use crate::{
     InstalledRetainedFamilyExecutionState, InstalledRetainedResources,
@@ -22,7 +20,7 @@ use crate::{
 pub struct InstalledRetainedExecutionMirror {
     wire: RetainedExecutionFrameMirror,
     resources: InstalledRetainedResources,
-    resolved: Option<RetainedFrameState>,
+    resolved: Option<FrameState>,
     family: InstalledRetainedFamilyExecutionState,
 }
 
@@ -44,7 +42,7 @@ impl InstalledRetainedExecutionMirror {
         &self.resources
     }
 
-    pub fn frame(&self) -> Option<&RetainedFrameState> {
+    pub fn frame(&self) -> Option<&FrameState> {
         self.resolved.as_ref()
     }
 
@@ -180,7 +178,7 @@ impl InstalledRetainedExecutionMirror {
     fn preview_resolved_snapshot(
         &self,
         delta: &RetainedExecutionDeltaEnvelope,
-    ) -> Result<RetainedFrameState, InstalledExecutionError> {
+    ) -> Result<FrameState, InstalledExecutionError> {
         let mut wire = self.wire.clone();
         let (outcome, _) = wire.apply(delta.clone())?;
         debug_assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
@@ -199,10 +197,7 @@ impl InstalledRetainedExecutionMirror {
         Ok(())
     }
 
-    fn resolve_wire_frame(
-        &self,
-        wire: &RetainedFrameState,
-    ) -> Result<RetainedFrameState, InstalledExecutionError> {
+    fn resolve_wire_frame(&self, wire: &FrameState) -> Result<FrameState, InstalledExecutionError> {
         let mut resolved = wire.clone();
         for object in &mut resolved.objects {
             if let ObjectContentRef::Text(wire_handle) = object.content {

@@ -1,9 +1,7 @@
 use std::collections::HashSet;
 
 use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceArena};
-use noon_runtime::{
-    FrameChanges, RetainedFamilyFrame, RetainedFrameState, RetainedPlannedFamilyFrame,
-};
+use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -246,7 +244,7 @@ impl InstalledRetainedFamilyExecutionState {
     pub fn apply(
         &mut self,
         delta: &RetainedFamilyExecutionDeltaEnvelope,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         texts: &TextResourceArena,
     ) -> Result<(), RetainedFamilyExecutionTransportError> {
         delta.validate()?;
@@ -291,7 +289,7 @@ impl InstalledRetainedFamilyExecutionState {
 
     pub fn frame<'a>(
         &'a self,
-        retained: &'a RetainedFrameState,
+        retained: &'a FrameState,
     ) -> Result<RetainedFamilyFrame<'a>, RetainedFamilyExecutionTransportError> {
         self.validate_frame_shape(retained)?;
         Ok(RetainedFamilyFrame {
@@ -302,7 +300,7 @@ impl InstalledRetainedFamilyExecutionState {
 
     pub fn planned_frame<'a>(
         &'a self,
-        retained: &'a RetainedFrameState,
+        retained: &'a FrameState,
     ) -> Result<RetainedPlannedFamilyFrame<'a>, RetainedFamilyExecutionTransportError> {
         self.validate_frame_shape(retained)?;
         Ok(RetainedPlannedFamilyFrame {
@@ -331,7 +329,7 @@ impl InstalledRetainedFamilyExecutionState {
 
     fn validate_frame_shape(
         &self,
-        retained: &RetainedFrameState,
+        retained: &FrameState,
     ) -> Result<(), RetainedFamilyExecutionTransportError> {
         if !self.initialized {
             return Err(RetainedFamilyExecutionTransportError::MissingSnapshot);
@@ -346,7 +344,7 @@ impl InstalledRetainedFamilyExecutionState {
 }
 
 fn validated_state_updates(
-    frame: &RetainedFrameState,
+    frame: &FrameState,
     plans: &[RetainedFamilyAnimationPlan],
     entries: &[RetainedFamilyExecutionObjectState],
 ) -> Result<Vec<ValidatedFamilyStateUpdate>, RetainedFamilyExecutionTransportError> {
@@ -507,7 +505,7 @@ mod tests {
         Camera2DState, FamilyAnimationMode, GeometryRef, ObjectContentRef, RateFunction, Style,
         Transform2D,
     };
-    use noon_runtime::RetainedFrameObjectState;
+    use noon_runtime::FrameObjectState;
 
     use super::*;
     use crate::{
@@ -526,15 +524,16 @@ mod tests {
         }
     }
 
-    fn frame() -> RetainedFrameState {
-        RetainedFrameState {
+    fn frame() -> FrameState {
+        FrameState {
             time: 0.0,
-            objects: vec![RetainedFrameObjectState {
+            objects: vec![FrameObjectState {
                 id: ObjectId::new(7),
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
                 appearance: 1.0,
+                text_bounds: None,
             }],
             presences: vec![true],
             reveals: vec![1.0],
@@ -566,6 +565,7 @@ mod tests {
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
                 appearance: 1.0,
+                text_bounds: None,
                 presence: true,
                 reveal: 1.0,
                 morph: 0.0,

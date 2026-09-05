@@ -1,6 +1,6 @@
 use super::super::{
-    retained_family_draw_border_then_fill_members_for_object,
-    RetainedDrawBorderThenFillPhase, RetainedFamilyDrawBorderThenFillError,
+    retained_family_draw_border_then_fill_members_for_object, RetainedDrawBorderThenFillPhase,
+    RetainedFamilyDrawBorderThenFillError,
 };
 
 /// ManimCE Cairo's default `DrawBorderThenFill(stroke_width=2)` in Noon's
@@ -89,9 +89,9 @@ impl RetainedFramePreparer {
         queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyDrawBorderPrepareError> {
         let changes = FrameChanges::all();
@@ -108,12 +108,12 @@ impl RetainedFramePreparer {
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         changes: &FrameChanges,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyDrawBorderPrepareError> {
-        self.prepare_with_changes(
+        self.prepare_canonical_mixed_baseline(
             device,
             queue,
             frame.retained,
@@ -181,6 +181,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            geometry_only: false,
             geometry,
             text_generation: self.text_generation,
             text,
@@ -193,8 +194,8 @@ impl RetainedFramePreparer {
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyDrawBorderPrepareError> {
         let baseline_sources = mem::take(&mut self.sources);
         self.sources.reserve(baseline_sources.len());
@@ -278,11 +279,8 @@ impl RetainedFramePreparer {
         object: ObjectId,
         run_index: u32,
     ) -> Result<bool, RetainedFamilyDrawBorderPrepareError> {
-        let Some(members) = retained_family_draw_border_then_fill_members_for_object(
-            frame,
-            plan,
-            object_index,
-        )?
+        let Some(members) =
+            retained_family_draw_border_then_fill_members_for_object(frame, plan, object_index)?
         else {
             return Ok(false);
         };
@@ -292,9 +290,7 @@ impl RetainedFramePreparer {
                 return Ok(true);
             }
             if member.object != object {
-                return Err(RetainedFamilyDrawBorderPrepareError::UnexpectedGeometryMember(
-                    object,
-                ));
+                return Err(RetainedFamilyDrawBorderPrepareError::UnexpectedGeometryMember(object));
             }
         }
         Ok(false)
@@ -308,15 +304,18 @@ impl RetainedFramePreparer {
         object_index: usize,
         object_id: ObjectId,
         run_index: u32,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyDrawBorderPrepareError> {
         let object = frame.retained.objects.get(object_index).ok_or(
             RetainedFamilyDrawBorderPrepareError::MissingSourceObject(object_id),
         )?;
-        let text = object
-            .text()
-            .ok_or(RetainedFamilyDrawBorderPrepareError::MissingSourceObject(object_id))?;
+        let text =
+            object
+                .text()
+                .ok_or(RetainedFamilyDrawBorderPrepareError::MissingSourceObject(
+                    object_id,
+                ))?;
         let resource = texts
             .get(text)
             .ok_or(RetainedPrepareError::MissingTextResource)?;
@@ -327,11 +326,8 @@ impl RetainedFramePreparer {
             },
         )?;
 
-        let Some(members) = retained_family_draw_border_then_fill_members_for_object(
-            frame,
-            plan,
-            object_index,
-        )?
+        let Some(members) =
+            retained_family_draw_border_then_fill_members_for_object(frame, plan, object_index)?
         else {
             return Ok(());
         };
@@ -478,7 +474,7 @@ mod draw_border_tests {
         RetainedObjectDefinition, SemanticStore, TextAffineTransform, TextClusterIdentity,
         TextDirection, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan,
     };
-    use noon_runtime::{RetainedFrameObjectState, RetainedFrameState};
+    use noon_runtime::{FrameObjectState, FrameState};
 
     use super::*;
 
@@ -532,7 +528,7 @@ mod draw_border_tests {
         progress: f32,
     ) -> (
         RetainedFamilyAnimationPlan,
-        RetainedFrameState,
+        FrameState,
         Vec<Option<FamilyAnimationState>>,
         TextResourceArena,
     ) {
@@ -555,11 +551,12 @@ mod draw_border_tests {
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, leaf).unwrap();
         builder.accept_leaf(leaf, &object, &texts).unwrap();
         let plan = builder.finish().unwrap();
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 1.0,
-            objects: vec![RetainedFrameObjectState {
+            objects: vec![FrameObjectState {
                 id: ObjectId::new(20),
                 content: ObjectContentRef::Text(text),
+                text_bounds: None,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
                 appearance: 1.0,

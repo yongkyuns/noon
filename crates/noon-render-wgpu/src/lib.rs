@@ -550,11 +550,13 @@ impl FramePreparer {
         }
         matches!(
             frame.render_geometry(object_index),
-            GeometryRef::Circle { .. }
-                | GeometryRef::Rectangle { .. }
-                | GeometryRef::Line { .. }
-                | GeometryRef::VectorPath(_)
-                | GeometryRef::External(_)
+            Some(
+                GeometryRef::Circle { .. }
+                    | GeometryRef::Rectangle { .. }
+                    | GeometryRef::Line { .. }
+                    | GeometryRef::VectorPath(_)
+                    | GeometryRef::External(_)
+            )
         )
     }
 
@@ -565,7 +567,10 @@ impl FramePreparer {
     ) -> StructuralAppendStats {
         debug_assert_eq!(object_index, self.slots.len());
         let object = &frame.objects[object_index];
-        let render_geometry = frame.render_geometry(object_index);
+        let Some(render_geometry) = frame.render_geometry(object_index) else {
+            self.slots.push(PreparedSlot::Absent);
+            return StructuralAppendStats::default();
+        };
         let reveal = frame.reveal(object_index);
         let temporary_reveal = temporary_reveal_path(render_geometry, reveal);
         let path = temporary_reveal
@@ -842,7 +847,9 @@ impl FramePreparer {
         let Some(path_batch) = self.path_batches.get(*batch) else {
             return false;
         };
-        let render_geometry = frame.render_geometry(object_index);
+        let Some(render_geometry) = frame.render_geometry(object_index) else {
+            return false;
+        };
         let reveal = frame.reveal(object_index);
         let has_replacement_path = temporary_reveal_path(render_geometry, reveal).is_some()
             || matches!(render_geometry, GeometryRef::VectorPath(_));
@@ -857,7 +864,9 @@ impl FramePreparer {
         object_index: usize,
     ) -> Result<PathReplacementStats, noon_geometry::GeometryError> {
         let object = &frame.objects[object_index];
-        let render_geometry = frame.render_geometry(object_index);
+        let render_geometry = frame
+            .render_geometry(object_index)
+            .expect("unique path replacement preflight requires renderable geometry");
         let reveal = frame.reveal(object_index);
         let temporary_reveal = temporary_reveal_path(render_geometry, reveal);
         let path = temporary_reveal
@@ -1004,7 +1013,10 @@ impl FramePreparer {
                 self.slots.push(PreparedSlot::Absent);
                 continue;
             }
-            let render_geometry = frame.render_geometry(object_index);
+            let Some(render_geometry) = frame.render_geometry(object_index) else {
+                self.slots.push(PreparedSlot::Absent);
+                continue;
+            };
             let temporary_reveal =
                 temporary_reveal_path(render_geometry, frame.reveal(object_index));
             let path = temporary_reveal
@@ -1368,7 +1380,9 @@ impl FramePreparer {
         if matches!(slot, PreparedSlot::Absent) {
             return false;
         }
-        let render_geometry = frame.render_geometry(object_index);
+        let Some(render_geometry) = frame.render_geometry(object_index) else {
+            return false;
+        };
         match slot {
             PreparedSlot::Absent => false,
             PreparedSlot::Circle(index) => {
@@ -1569,7 +1583,10 @@ impl FramePreparer {
         if frame.objects.iter().enumerate().any(|(object_index, _)| {
             frame.is_present(object_index)
                 && frame.reveal(object_index) < 1.0
-                && analytic_reveal_key(frame.render_geometry(object_index)).is_some()
+                && frame
+                    .render_geometry(object_index)
+                    .and_then(analytic_reveal_key)
+                    .is_some()
         }) {
             return;
         }
@@ -1583,7 +1600,7 @@ impl FramePreparer {
             if !frame.is_present(object_index) {
                 continue;
             }
-            let GeometryRef::VectorPath(path) = frame.render_geometry(object_index) else {
+            let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(object_index) else {
                 continue;
             };
             let stroke_transform =
@@ -1853,7 +1870,7 @@ fn pack_style(object: &FrameObjectState) -> PackedStyle {
 }
 
 fn pack_circle(object: &FrameObjectState, reveal: f32) -> CircleInstance {
-    let GeometryRef::Circle { radius } = &object.geometry else {
+    let Some(GeometryRef::Circle { radius }) = object.geometry() else {
         unreachable!("circle slot must retain circle geometry")
     };
     CircleInstance {
@@ -1865,7 +1882,7 @@ fn pack_circle(object: &FrameObjectState, reveal: f32) -> CircleInstance {
 }
 
 fn pack_rectangle(object: &FrameObjectState) -> RectangleInstance {
-    let GeometryRef::Rectangle { size } = &object.geometry else {
+    let Some(GeometryRef::Rectangle { size }) = object.geometry() else {
         unreachable!("rectangle slot must retain rectangle geometry")
     };
     RectangleInstance {
@@ -1877,7 +1894,7 @@ fn pack_rectangle(object: &FrameObjectState) -> RectangleInstance {
 }
 
 fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
-    let GeometryRef::Line { start, end } = &object.geometry else {
+    let Some(GeometryRef::Line { start, end }) = object.geometry() else {
         unreachable!("line slot must retain line geometry")
     };
     let mut transform: PackedTransform = object.transform.into();
@@ -2024,7 +2041,8 @@ mod tests {
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
             id: ObjectId::new(id),
-            geometry,
+            content: noon_core::ObjectContentRef::Geometry(geometry),
+            text_bounds: None,
             transform: Transform2D::IDENTITY,
             style: Style::default(),
             appearance: 1.0,
@@ -2735,7 +2753,8 @@ mod tests {
         let mut frame = frame(vec![object(1, GeometryRef::circle(1.0))]);
         let mut preparer = FramePreparer::new();
         preparer.prepare(&frame);
-        frame.objects[0].geometry = GeometryRef::rectangle(2.0, 3.0);
+        frame.objects[0].content =
+            noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 3.0));
 
         let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
 
@@ -3021,7 +3040,7 @@ mod tests {
         let original_vertex_count = preparer.path_vertices.len();
         let original_index_count = preparer.path_indices.len();
 
-        frame.objects[REPLACED].geometry = GeometryRef::path(
+        frame.objects[REPLACED].content = noon_core::ObjectContentRef::Geometry(GeometryRef::path(
             VectorPath::new()
                 .move_to(Vec2::new(-0.5, 1.0))
                 .cubic_to(
@@ -3034,7 +3053,7 @@ mod tests {
                     Vec2::new(-0.5, 0.0),
                     Vec2::new(-0.5, 1.0),
                 ),
-        );
+        ));
         let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![REPLACED]));
 
         assert_eq!(prepared.path_vertex_dirty_ranges.len(), 1);
@@ -3112,23 +3131,24 @@ mod tests {
         let mut preparer = FramePreparer::new();
         preparer.prepare(&frame);
 
-        frame.objects[1].geometry =
-            GeometryRef::path(VectorPath::new().move_to(Vec2::new(-1.0, 0.5)).cubic_to(
+        frame.objects[1].content = noon_core::ObjectContentRef::Geometry(GeometryRef::path(
+            VectorPath::new().move_to(Vec2::new(-1.0, 0.5)).cubic_to(
                 Vec2::new(-0.5, 1.5),
                 Vec2::new(0.5, -0.5),
                 Vec2::new(1.0, 0.5),
-            ));
+            ),
+        ));
         preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
         assert!(!preparer.path_vertex_free_ranges.is_empty());
         assert!(!preparer.path_index_free_ranges.is_empty());
         let arena_vertices_after_growth = preparer.path_vertices.len();
         let arena_indices_after_growth = preparer.path_indices.len();
 
-        frame.objects[0].geometry = GeometryRef::path(
+        frame.objects[0].content = noon_core::ObjectContentRef::Geometry(GeometryRef::path(
             VectorPath::new()
                 .move_to(Vec2::new(-0.25, 0.0))
                 .line_to(Vec2::new(0.25, 0.0)),
-        );
+        ));
         preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
 
         assert_eq!(preparer.path_vertices.len(), arena_vertices_after_growth);
@@ -3186,7 +3206,7 @@ mod tests {
 
         // If a packed mesh actually disappears, cache compaction must invalidate
         // packed reuse even when all remaining geometry is already cached.
-        active.objects[0].geometry = active.objects[1].geometry.clone();
+        active.objects[0].content = active.objects[1].content.clone();
         let changed = preparer.prepare(&active);
         assert_eq!(changed.stats.geometry_cache_misses, 0);
         assert!(changed.stats.path_vertices_repacked > 0);
@@ -3254,7 +3274,8 @@ mod structural_execution_delta_tests {
     fn circle(id: u64) -> FrameObjectState {
         FrameObjectState {
             id: ObjectId::new(id),
-            geometry: GeometryRef::circle(0.1),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.1)),
+            text_bounds: None,
             transform: Transform2D::IDENTITY,
             style: Style::default(),
             appearance: 1.0,

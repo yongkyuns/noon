@@ -55,8 +55,8 @@ fn replacement_transform_has_exact_stable_identity_handoff() {
     assert!(middle.is_present(0));
     assert!(!middle.is_present(1));
     assert_eq!(
-        middle.objects[0].geometry,
-        GeometryRef::circle(2.0),
+        middle.objects[0].geometry(),
+        Some(&GeometryRef::circle(2.0)),
         "source identity carries interpolated replacement geometry"
     );
     assert_eq!(
@@ -69,7 +69,10 @@ fn replacement_transform_has_exact_stable_identity_handoff() {
     assert!(handoff.is_present(1));
     assert_eq!(handoff.objects[0].id, source);
     assert_eq!(handoff.objects[1].id, target);
-    assert_eq!(handoff.objects[1].geometry, GeometryRef::circle(3.0));
+    assert_eq!(
+        handoff.objects[1].geometry(),
+        Some(&GeometryRef::circle(3.0))
+    );
     assert_eq!(
         handoff.objects[1].transform.translation,
         Vec2::new(4.0, -2.0)

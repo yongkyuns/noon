@@ -74,15 +74,15 @@ fn generic_transform_has_exact_semantic_endpoints_and_detached_render_geometry()
     let start = instance.seek(0.0).unwrap().clone();
     assert_eq!(start.objects.len(), 1);
     assert_eq!(start.objects[0].id, object);
-    assert_eq!(start.objects[0].geometry, from.geometry);
+    assert_eq!(start.objects[0].geometry(), Some(&from.geometry));
     assert_eq!(start.objects[0].transform, from.transform);
     assert_eq!(start.objects[0].style, from.style);
     assert_eq!(start.morph(0), 0.0);
-    assert_ne!(start.render_geometry(0), &start.objects[0].geometry);
+    assert_ne!(start.render_geometry(0), start.objects[0].geometry());
 
     let midpoint = instance.seek(1.0).unwrap().clone();
     assert_eq!(midpoint.objects[0].id, object);
-    assert_eq!(midpoint.objects[0].geometry, from.geometry);
+    assert_eq!(midpoint.objects[0].geometry(), Some(&from.geometry));
     assert_eq!(
         midpoint.objects[0].transform.translation,
         Vec2::new(2.0, -1.0)
@@ -95,11 +95,11 @@ fn generic_transform_has_exact_semantic_endpoints_and_detached_render_geometry()
     let end = instance.seek(2.0).unwrap().clone();
     assert_eq!(end.objects.len(), 1);
     assert_eq!(end.objects[0].id, object);
-    assert_eq!(end.objects[0].geometry, to.geometry);
+    assert_eq!(end.objects[0].geometry(), Some(&to.geometry));
     assert_eq!(end.objects[0].transform, to.transform);
     assert_eq!(end.objects[0].style, to.style);
     assert_eq!(end.morph(0), 1.0);
-    assert_ne!(end.render_geometry(0), &end.objects[0].geometry);
+    assert_ne!(end.render_geometry(0), end.objects[0].geometry());
 }
 
 fn path_command_buffers(
@@ -109,10 +109,10 @@ fn path_command_buffers(
     *const noon_core::PathCommand,
     *const noon_core::PathCommand,
 ) {
-    let GeometryRef::VectorPath(semantic) = &frame.objects[0].geometry else {
+    let Some(GeometryRef::VectorPath(semantic)) = frame.objects[0].geometry() else {
         panic!("expected semantic path");
     };
-    let GeometryRef::VectorPath(render) = frame.render_geometry(0) else {
+    let Some(GeometryRef::VectorPath(render)) = frame.render_geometry(0) else {
         panic!("expected prepared render path");
     };
     let target = render
@@ -229,7 +229,7 @@ fn sequential_transforms_are_continuous_and_choose_new_pair_at_boundary() {
     let compiled = CompiledScene::compile(&scene).unwrap();
     let mut direct = SceneInstance::new(compiled.clone());
     let boundary = direct.seek(1.0).unwrap().clone();
-    assert_eq!(boundary.objects[0].geometry, b.geometry);
+    assert_eq!(boundary.objects[0].geometry(), Some(&b.geometry));
     assert_eq!(boundary.objects[0].transform, b.transform);
     assert_eq!(boundary.objects[0].style, b.style);
     assert_eq!(boundary.morph(0), 0.0);

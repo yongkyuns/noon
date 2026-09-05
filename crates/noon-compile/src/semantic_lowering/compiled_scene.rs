@@ -1,16 +1,17 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceHandle, SemanticNodeId,
-    SemanticObjectContent, StoredGeometry, TextResourceHandle,
+    GeometryRef, GeometryResource, GeometryResourceHandle, ObjectContentRef, Rect, SemanticNodeId,
+    SemanticObjectContent, SemanticStore, StoredGeometry,
 };
 
-use crate::{CompiledObject, CompiledScene, DynamicProperties};
+use crate::{
+    CompiledObject, CompiledResourceError, CompiledResources, CompiledScene, DynamicProperties,
+};
 
 use super::SemanticExecutionProjection;
 
-/// Failure while materializing the object-value projection into the current
-/// geometry-backed compiled execution representation.
+/// Failure while materializing the object-value projection into compiled slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticCompiledSceneError {
     TooManyObjects(usize),
@@ -25,9 +26,9 @@ pub enum SemanticCompiledSceneError {
         node: SemanticNodeId,
         resource: GeometryResourceHandle,
     },
-    UnsupportedText {
+    Resource {
         node: SemanticNodeId,
-        text: TextResourceHandle,
+        error: CompiledResourceError,
     },
 }
 
@@ -57,13 +58,11 @@ impl std::fmt::Display for SemanticCompiledSceneError {
                 resource.id.get(),
                 resource.version
             ),
-            Self::UnsupportedText { node, text } => write!(
+            Self::Resource { node, error } => write!(
                 formatter,
-                "semantic object {}:{} uses text resource {}@{} before text payloads enter the stable compiled slot path",
+                "semantic object {}:{} has invalid execution resources: {error}",
                 node.slot(),
-                node.generation(),
-                text.id.get(),
-                text.version
+                node.generation()
             ),
         }
     }
@@ -91,16 +90,16 @@ impl CompiledScene {
     /// bindings by opting into this path directly.
     pub(crate) fn from_semantic_projection_after_reactive_lowering(
         projection: &SemanticExecutionProjection,
-        resources: &GeometryResourceArena,
+        store: &SemanticStore,
     ) -> Result<Self, SemanticCompiledSceneError> {
-        materialize_semantic_projection(projection, true, Some(resources))
+        materialize_semantic_projection(projection, true, Some(store))
     }
 }
 
 fn materialize_semantic_projection(
     projection: &SemanticExecutionProjection,
     reactive_bindings_lowered: bool,
-    resources: Option<&GeometryResourceArena>,
+    store: Option<&SemanticStore>,
 ) -> Result<CompiledScene, SemanticCompiledSceneError> {
     let mut ordered = projection.objects().iter().collect::<Vec<_>>();
     ordered.sort_by_key(|object| object.presentation.order_key());
@@ -112,6 +111,7 @@ fn materialize_semantic_projection(
 
     let mut objects = Vec::with_capacity(count);
     let mut object_indices = BTreeMap::new();
+    let mut resources = CompiledResources::default();
 
     for (index, object) in ordered.into_iter().enumerate() {
         if !reactive_bindings_lowered && !object.signal_bindings.is_empty() {
@@ -123,10 +123,12 @@ fn materialize_semantic_projection(
 
         let object_index =
             u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
-        let geometry = lower_geometry(object.semantic_id, object.content, resources)?;
+        let (content, text_bounds) =
+            lower_content(object.semantic_id, object.content, store, &mut resources)?;
         objects.push(CompiledObject {
             id: object.execution_id,
-            geometry,
+            content,
+            text_bounds,
             base_transform: object.base_transform,
             base_style: object.base_style,
             dynamic: DynamicProperties::default(),
@@ -142,26 +144,34 @@ fn materialize_semantic_projection(
         track_count: 0,
         object_indices,
         track_locators: BTreeMap::new(),
+        resources,
     })
 }
 
-fn lower_geometry(
+fn lower_content(
     node: SemanticNodeId,
     content: SemanticObjectContent,
-    resources: Option<&GeometryResourceArena>,
-) -> Result<GeometryRef, SemanticCompiledSceneError> {
+    store: Option<&SemanticStore>,
+    resources: &mut CompiledResources,
+) -> Result<(ObjectContentRef, Option<Rect>), SemanticCompiledSceneError> {
     match content {
         SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) => {
             if !radius.is_finite() {
                 return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
             }
-            Ok(GeometryRef::circle(radius))
+            Ok((
+                ObjectContentRef::Geometry(GeometryRef::circle(radius)),
+                None,
+            ))
         }
         SemanticObjectContent::Geometry(StoredGeometry::Rectangle { size }) => {
             if !size.x.is_finite() || !size.y.is_finite() {
                 return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
             }
-            Ok(GeometryRef::Rectangle { size })
+            Ok((
+                ObjectContentRef::Geometry(GeometryRef::Rectangle { size }),
+                None,
+            ))
         }
         SemanticObjectContent::Geometry(StoredGeometry::Line { start, end }) => {
             if !start.x.is_finite()
@@ -171,20 +181,31 @@ fn lower_geometry(
             {
                 return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
             }
-            Ok(GeometryRef::line(start, end))
+            Ok((
+                ObjectContentRef::Geometry(GeometryRef::line(start, end)),
+                None,
+            ))
         }
         SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) => {
-            match resources.and_then(|arena| arena.get(resource)) {
-                Some(GeometryResource::VectorPath(path)) => {
-                    Ok(GeometryRef::path(path.as_ref().clone()))
-                }
+            match store.and_then(|store| store.geometry_resources().get(resource)) {
+                Some(GeometryResource::VectorPath(path)) => Ok((
+                    ObjectContentRef::Geometry(GeometryRef::path(path.as_ref().clone())),
+                    None,
+                )),
                 None => {
                     Err(SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource })
                 }
             }
         }
         SemanticObjectContent::Text(text) => {
-            Err(SemanticCompiledSceneError::UnsupportedText { node, text })
+            let store = store.ok_or(SemanticCompiledSceneError::Resource {
+                node,
+                error: CompiledResourceError::MissingText(text),
+            })?;
+            let bounds = resources
+                .capture_text(store, text)
+                .map_err(|error| SemanticCompiledSceneError::Resource { node, error })?;
+            Ok((ObjectContentRef::Text(text), Some(bounds)))
         }
     }
 }
@@ -193,7 +214,7 @@ fn lower_geometry(
 mod tests {
     use noon_core::{
         Color, GeometryId, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
-        SemanticStore, SemanticVec3, TextResourceId, Vec2,
+        SemanticStore, SemanticVec3, TextResourceHandle, TextResourceId, Vec2,
     };
 
     use super::*;
@@ -211,8 +232,8 @@ mod tests {
         let mut index = SemanticExecutionIndex::new();
         let lowered = crate::lower_semantic_execution(&store, &mut index).unwrap();
         assert_eq!(
-            lowered.compiled().objects()[0].geometry,
-            GeometryRef::path(path)
+            lowered.compiled().objects()[0].geometry(),
+            Some(&GeometryRef::path(path))
         );
         let mut foreign = SemanticStore::new();
         foreign.insert_geometry_path(VectorPath::new()).unwrap();
@@ -348,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn text_waits_for_the_stable_compiled_text_payload_path() {
+    fn standalone_projection_rejects_text_without_its_owning_resource_scope() {
         let mut store = SemanticStore::new();
         let text = TextResourceHandle {
             id: TextResourceId::new(11),
@@ -360,8 +381,11 @@ mod tests {
         let mut index = SemanticExecutionIndex::new();
         let projection = index.lower_scene(&store).unwrap();
         assert_eq!(
-            CompiledScene::from_semantic_projection(&projection).unwrap_err(),
-            SemanticCompiledSceneError::UnsupportedText { node, text }
+            CompiledScene::from_semantic_projection(&projection),
+            Err(SemanticCompiledSceneError::Resource {
+                node,
+                error: CompiledResourceError::MissingText(text),
+            })
         );
     }
 }

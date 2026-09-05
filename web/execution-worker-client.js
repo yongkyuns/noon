@@ -231,7 +231,7 @@ export class ExecutionWorkerClient {
         {
           port: render.port2,
           transportMode: this.#transportMode,
-          mode: EXECUTION_MODE_LEGACY,
+          mode: EXECUTION_MODE_RETAINED,
         },
         [render.port2],
       );
@@ -577,7 +577,7 @@ export class ExecutionWorkerClient {
     return this.#transitionSemanticExecution(contextId, authoringClient, {
       loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
       renderCommand:
-        this.#mode === EXECUTION_MODE_RETAINED ? "switch_engine" : "rebuild_engine",
+        this.#mode === EXECUTION_MODE_LEGACY ? "switch_engine" : "rebuild_engine",
     });
   }
 
@@ -646,7 +646,7 @@ export class ExecutionWorkerClient {
         {
           port: render.port2,
           transportMode: this.#transportMode,
-          mode: EXECUTION_MODE_LEGACY,
+          mode: EXECUTION_MODE_RETAINED,
         },
         [render.port2],
       ).catch((error) => {
@@ -721,8 +721,7 @@ export class ExecutionWorkerClient {
       loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
       callbacks,
       authoringClient,
-      renderCommand:
-        this.#mode === EXECUTION_MODE_SEMANTIC ? "rebuild_engine" : "switch_engine",
+      renderCommand: "switch_engine",
     });
   }
 
@@ -750,7 +749,8 @@ export class ExecutionWorkerClient {
     if (
       renderCommand === "rebuild_engine" &&
       nextMode !== this.#mode &&
-      !(this.#mode === EXECUTION_MODE_SEMANTIC && nextMode === EXECUTION_MODE_LEGACY)
+      !(this.#mode === EXECUTION_MODE_SEMANTIC &&
+        (nextMode === EXECUTION_MODE_LEGACY || nextMode === EXECUTION_MODE_RETAINED))
     ) {
       throw new Error(
         `execution renderer rebuild mode ${nextMode} does not match active mode ${this.#mode}`,
