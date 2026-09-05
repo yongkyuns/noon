@@ -364,6 +364,63 @@ try {
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonManimCompat.ready());
 
+  // #958/#61 prerequisite: every geometry wrapper has store-scoped identity,
+  // including independent copies/targets after the JS store wrapper is released.
+  const handleOwnership = await page.evaluate(async () => {
+    const wasm = await import("./pkg/noon_web.js");
+    await wasm.default();
+    const store = new wasm.WasmAuthoringStore();
+    const otherStore = new wasm.WasmAuthoringStore();
+    const circle = store.createManimCircle(0.6);
+    const foreign = otherStore.createManimCircle(0.6);
+    const family = store.createFamily();
+    const copy = circle.cloneHandle();
+    const target = circle.targetEditor();
+    const identity = (handle) => `${handle.semanticSlot}:${handle.semanticGeneration}`;
+    const rejectsForeign = (operation) => {
+      try { operation(); } catch (error) {
+        return /different authoring stores/.test(String(error));
+      }
+      return false;
+    };
+    const sameNumericId = identity(circle) === identity(foreign);
+    const foreignAddRejected = rejectsForeign(() => family.addMobject(foreign));
+    for (const handle of [circle, copy, target]) family.addMobject(handle);
+    const layout = family.layoutSession();
+    const foreignLayoutRejected = rejectsForeign(() => layout.includeMobject(foreign));
+    for (const handle of [circle, copy, target]) layout.includeMobject(handle);
+    const translation = layout.shiftBy(1, 0);
+    const foreignTranslationRejected = rejectsForeign(() => translation.applyMobject(foreign));
+    store.free();
+    otherStore.free();
+    // Handles keep the authoritative identity owner alive, independent of JS roots.
+    for (const handle of [circle, copy, target]) translation.applyMobject(handle);
+    translation.finish();
+    const memberCount = family.memberCount;
+    for (const handle of [translation, layout, family]) handle.free();
+    // Only mobject wrappers now retain the store; copy/target mutation still works.
+    copy.shift(2, 0);
+    target.shift(-1, 0);
+    const result = {
+      sameNumericId,
+      foreignAddRejected,
+      foreignLayoutRejected,
+      foreignTranslationRejected,
+      identities: [circle, copy, target].map(identity),
+      centers: [circle.centerX, copy.centerX, target.centerX],
+      memberCount,
+    };
+    for (const handle of [circle, copy, target, foreign]) handle.free();
+    return result;
+  });
+  assert.equal(handleOwnership.sameNumericId, true, "independent stores may reuse numeric IDs");
+  assert.equal(handleOwnership.foreignAddRejected, true);
+  assert.equal(handleOwnership.foreignLayoutRejected, true);
+  assert.equal(handleOwnership.foreignTranslationRejected, true);
+  assert.equal(new Set(handleOwnership.identities).size, 3, "copy/target allocate fresh identities");
+  assert.deepEqual(handleOwnership.centers, [1, 3, 0], "copies/targets retain independent state");
+  assert.equal(handleOwnership.memberCount, 3, "failed cross-store operations leave membership intact");
+
   const foundation = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),
     foundationSource,

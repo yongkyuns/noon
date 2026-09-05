@@ -188,7 +188,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.layout.include_mobject(member)?;
             let semantic_leaf =
-                SemanticNodeId::new(member.semantic_slot()?, member.semantic_generation()?);
+                SemanticNodeId::new(member.semantic_slot(), member.semantic_generation());
             let next_count = self
                 .member_count
                 .checked_add(1)

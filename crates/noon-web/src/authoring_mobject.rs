@@ -1575,7 +1575,11 @@ mod wasm {
     impl WasmAuthoringStore {
         fn attach_handle(&self, handle: FrontendMobjectHandle) -> WasmAuthoringMobjectHandle {
             let id = self.semantics.borrow_mut().insert_authoring_object();
-            WasmAuthoringMobjectHandle(handle, Some(Rc::clone(&self.semantics)), Some(id))
+            WasmAuthoringMobjectHandle {
+                handle,
+                semantics: Rc::clone(&self.semantics),
+                id,
+            }
         }
     }
 
@@ -1731,19 +1735,7 @@ mod wasm {
             &self,
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<SemanticNodeId, JsValue> {
-            let store = member.1.as_ref().ok_or_else(|| {
-                JsValue::from_str(
-                    "family arrange member is not attached to a shared authoring store",
-                )
-            })?;
-            if !Rc::ptr_eq(&self.semantics, store) {
-                return Err(JsValue::from_str(
-                    "family arrange and mobject belong to different authoring stores",
-                ));
-            }
-            member
-                .2
-                .ok_or_else(|| JsValue::from_str("family arrange mobject has no semantic identity"))
+            member.id_in_store(&self.semantics, "family arrange")
         }
     }
 
@@ -1756,7 +1748,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let id = self.mobject_member_id(member)?;
             self.plan
-                .accept_member_bounds(id, member.0.layout_bounds())
+                .accept_member_bounds(id, member.handle.layout_bounds())
                 .map_err(js_error)
         }
 
@@ -1894,22 +1886,9 @@ mod wasm {
             &self,
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
-            let store = member.1.as_ref().ok_or_else(|| {
-                JsValue::from_str(
-                    "family placement target is not attached to a shared authoring store",
-                )
-            })?;
-            if !Rc::ptr_eq(&self.semantics, store) {
-                return Err(JsValue::from_str(
-                    "family placement source and target belong to different authoring stores",
-                ));
-            }
-            if member.2.is_none() {
-                return Err(JsValue::from_str(
-                    "family placement target has no semantic identity",
-                ));
-            }
-            Ok(())
+            member
+                .id_in_store(&self.semantics, "family placement")
+                .map(|_| ())
         }
     }
 
@@ -1920,20 +1899,8 @@ mod wasm {
             &mut self,
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
-            let store = member.1.as_ref().ok_or_else(|| {
-                JsValue::from_str(
-                    "family layout member is not attached to a shared authoring store",
-                )
-            })?;
-            if !Rc::ptr_eq(&self.semantics, store) {
-                return Err(JsValue::from_str(
-                    "family layout and mobject belong to different authoring stores",
-                ));
-            }
-            let id = member.2.ok_or_else(|| {
-                JsValue::from_str("family layout member has no semantic identity")
-            })?;
-            self.include_leaf_bounds(id, member.0.layout_bounds())
+            let id = member.id_in_store(&self.semantics, "family layout")?;
+            self.include_leaf_bounds(id, member.handle.layout_bounds())
         }
 
         #[wasm_bindgen(js_name = includeRetainedNativeText)]
@@ -2016,7 +1983,7 @@ mod wasm {
             let mask = semantic_xy_f64(mask_x, mask_y).map_err(js_error)?;
             let source_x = self.critical_x(edge.x, edge.y)?;
             let source_y = self.critical_y(edge.x, edge.y)?;
-            let target_point = target.0.critical_point(edge.x, edge.y);
+            let target_point = target.handle.critical_point(edge.x, edge.y);
             self.translation(
                 (target_point.0 - source_x) * mask.x,
                 (target_point.1 - source_y) * mask.y,
@@ -2133,7 +2100,7 @@ mod wasm {
                 self.critical_y(edge.x - direction.x, edge.y - direction.y)?,
             );
             let target_point = target
-                .0
+                .handle
                 .critical_point(edge.x + direction.x, edge.y + direction.y);
             let delta = manim_family_next_to_delta(
                 source,
@@ -2262,7 +2229,7 @@ mod wasm {
                 self.critical_x(axis.x, axis.y)?,
                 self.critical_y(axis.x, axis.y)?,
             );
-            let target_point = target.0.critical_point(axis.x, axis.y);
+            let target_point = target.handle.critical_point(axis.x, axis.y);
             let delta = manim_family_align_to_delta(source, target_point, (axis.x, axis.y))
                 .map_err(js_error)?;
             self.translation(delta.0, delta.1)
@@ -2364,17 +2331,7 @@ mod wasm {
             &self,
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<SemanticNodeId, JsValue> {
-            let store = member.1.as_ref().ok_or_else(|| {
-                JsValue::from_str("mobject is not attached to a shared authoring store")
-            })?;
-            if !Rc::ptr_eq(&self.semantics, store) {
-                return Err(JsValue::from_str(
-                    "family target editor and mobject belong to different authoring stores",
-                ));
-            }
-            member
-                .2
-                .ok_or_else(|| JsValue::from_str("mobject has no semantic identity"))
+            member.id_in_store(&self.semantics, "family target editor")
         }
 
         fn identity_member_id(
@@ -2457,17 +2414,7 @@ mod wasm {
             &self,
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<SemanticNodeId, JsValue> {
-            let store = member.1.as_ref().ok_or_else(|| {
-                JsValue::from_str("mobject is not attached to a shared authoring store")
-            })?;
-            if !Rc::ptr_eq(&self.semantics, store) {
-                return Err(JsValue::from_str(
-                    "family and mobject belong to different authoring stores",
-                ));
-            }
-            member
-                .2
-                .ok_or_else(|| JsValue::from_str("mobject has no semantic identity"))
+            member.id_in_store(&self.semantics, "family")
         }
 
         fn identity_member_id(
@@ -2518,20 +2465,10 @@ mod wasm {
             &mut self,
             member: &mut WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
-            let store = member.1.as_ref().ok_or_else(|| {
-                JsValue::from_str(
-                    "family translation member is not attached to a shared authoring store",
-                )
-            })?;
-            if !Rc::ptr_eq(&self.semantics, store) {
-                return Err(JsValue::from_str(
-                    "family translation and mobject belong to different authoring stores",
-                ));
-            }
-            let id = member.2.ok_or_else(|| {
-                JsValue::from_str("family translation member has no semantic identity")
-            })?;
-            self.translation.apply(id, &mut member.0).map_err(js_error)
+            let id = member.id_in_store(&self.semantics, "family translation")?;
+            self.translation
+                .apply(id, &mut member.handle)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = applyRetainedNativeText)]
@@ -2691,48 +2628,57 @@ mod wasm {
         }
     }
 
+    /// Store-scoped geometry handle. Construction belongs to `WasmAuthoringStore`;
+    /// clones and target editors retain that store and receive fresh semantic IDs.
+    ///
+    /// #958/#61 still own replacing the frontend presentation payload with real
+    /// node-owned `SemanticObjectState`; there is no unscoped construction fallback.
     #[wasm_bindgen]
-    pub struct WasmAuthoringMobjectHandle(
-        FrontendMobjectHandle,
-        Option<SharedSemanticStore>,
-        Option<SemanticNodeId>,
-    );
+    pub struct WasmAuthoringMobjectHandle {
+        handle: FrontendMobjectHandle,
+        semantics: SharedSemanticStore,
+        id: SemanticNodeId,
+    }
+
+    impl WasmAuthoringMobjectHandle {
+        fn id_in_store(
+            &self,
+            semantics: &SharedSemanticStore,
+            context: &str,
+        ) -> Result<SemanticNodeId, JsValue> {
+            if !Rc::ptr_eq(semantics, &self.semantics) {
+                return Err(js_error(format!(
+                    "{context} and mobject belong to different authoring stores"
+                )));
+            }
+            Ok(self.id)
+        }
+
+        fn clone_with_handle(&self, handle: FrontendMobjectHandle) -> Self {
+            let id = self.semantics.borrow_mut().insert_authoring_object();
+            Self {
+                handle,
+                semantics: Rc::clone(&self.semantics),
+                id,
+            }
+        }
+    }
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
-        #[wasm_bindgen(constructor)]
-        pub fn new(snapshot_json: &str) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            FrontendMobjectHandle::from_json(snapshot_json)
-                .map(|handle| WasmAuthoringMobjectHandle(handle, None, None))
-                .map_err(js_error)
-        }
-
-        fn clone_with_handle(&self, handle: FrontendMobjectHandle) -> WasmAuthoringMobjectHandle {
-            if let Some(store) = &self.1 {
-                let id = store.borrow_mut().insert_authoring_object();
-                WasmAuthoringMobjectHandle(handle, Some(Rc::clone(store)), Some(id))
-            } else {
-                WasmAuthoringMobjectHandle(handle, None, None)
-            }
-        }
-
         #[wasm_bindgen(getter, js_name = semanticSlot)]
-        pub fn semantic_slot(&self) -> Result<u32, JsValue> {
-            self.2
-                .map(SemanticNodeId::slot)
-                .ok_or_else(|| JsValue::from_str("mobject has no shared semantic identity"))
+        pub fn semantic_slot(&self) -> u32 {
+            self.id.slot()
         }
 
         #[wasm_bindgen(getter, js_name = semanticGeneration)]
-        pub fn semantic_generation(&self) -> Result<u32, JsValue> {
-            self.2
-                .map(SemanticNodeId::generation)
-                .ok_or_else(|| JsValue::from_str("mobject has no shared semantic identity"))
+        pub fn semantic_generation(&self) -> u32 {
+            self.id.generation()
         }
 
         #[wasm_bindgen(js_name = cloneHandle)]
         pub fn clone_handle(&self) -> WasmAuthoringMobjectHandle {
-            self.clone_with_handle(self.0.clone())
+            self.clone_with_handle(self.handle.clone())
         }
 
         /// Start a detached target-state edit from this handle without crossing
@@ -2740,176 +2686,176 @@ mod wasm {
         /// is the editor; this alias makes that ownership explicit to frontends.
         #[wasm_bindgen(js_name = targetEditor)]
         pub fn target_editor(&self) -> WasmAuthoringMobjectHandle {
-            self.clone_with_handle(self.0.target_editor())
+            self.clone_with_handle(self.handle.target_editor())
         }
 
         #[wasm_bindgen(js_name = snapshotJson)]
         pub fn snapshot_json(&self) -> Result<String, JsValue> {
-            self.0.snapshot_json().map_err(js_error)
+            self.handle.snapshot_json().map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = wireTranslationX)]
         pub fn wire_translation_x(&self) -> f64 {
-            self.0.wire_translation().0
+            self.handle.wire_translation().0
         }
 
         #[wasm_bindgen(getter, js_name = wireTranslationY)]
         pub fn wire_translation_y(&self) -> f64 {
-            self.0.wire_translation().1
+            self.handle.wire_translation().1
         }
 
         #[wasm_bindgen(getter, js_name = wireScaleX)]
         pub fn wire_scale_x(&self) -> f64 {
-            self.0.wire_scale().0
+            self.handle.wire_scale().0
         }
 
         #[wasm_bindgen(getter, js_name = wireScaleY)]
         pub fn wire_scale_y(&self) -> f64 {
-            self.0.wire_scale().1
+            self.handle.wire_scale().1
         }
 
         #[wasm_bindgen(getter, js_name = wireRotation)]
         pub fn wire_rotation(&self) -> f64 {
-            self.0.wire_rotation()
+            self.handle.wire_rotation()
         }
 
         #[wasm_bindgen(getter, js_name = wireHasFill)]
         pub fn wire_has_fill(&self) -> bool {
-            self.0.wire_fill().is_some()
+            self.handle.wire_fill().is_some()
         }
 
         #[wasm_bindgen(getter, js_name = wireFillRed)]
         pub fn wire_fill_red(&self) -> f64 {
-            self.0.wire_fill().map_or(0.0, |value| value.0)
+            self.handle.wire_fill().map_or(0.0, |value| value.0)
         }
 
         #[wasm_bindgen(getter, js_name = wireFillGreen)]
         pub fn wire_fill_green(&self) -> f64 {
-            self.0.wire_fill().map_or(0.0, |value| value.1)
+            self.handle.wire_fill().map_or(0.0, |value| value.1)
         }
 
         #[wasm_bindgen(getter, js_name = wireFillBlue)]
         pub fn wire_fill_blue(&self) -> f64 {
-            self.0.wire_fill().map_or(0.0, |value| value.2)
+            self.handle.wire_fill().map_or(0.0, |value| value.2)
         }
 
         #[wasm_bindgen(getter, js_name = wireFillAlpha)]
         pub fn wire_fill_alpha(&self) -> f64 {
-            self.0.wire_fill().map_or(0.0, |value| value.3)
+            self.handle.wire_fill().map_or(0.0, |value| value.3)
         }
 
         #[wasm_bindgen(getter, js_name = wireHasStroke)]
         pub fn wire_has_stroke(&self) -> bool {
-            self.0.wire_stroke().is_some()
+            self.handle.wire_stroke().is_some()
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeRed)]
         pub fn wire_stroke_red(&self) -> f64 {
-            self.0.wire_stroke().map_or(0.0, |value| value.0)
+            self.handle.wire_stroke().map_or(0.0, |value| value.0)
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeGreen)]
         pub fn wire_stroke_green(&self) -> f64 {
-            self.0.wire_stroke().map_or(0.0, |value| value.1)
+            self.handle.wire_stroke().map_or(0.0, |value| value.1)
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeBlue)]
         pub fn wire_stroke_blue(&self) -> f64 {
-            self.0.wire_stroke().map_or(0.0, |value| value.2)
+            self.handle.wire_stroke().map_or(0.0, |value| value.2)
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeAlpha)]
         pub fn wire_stroke_alpha(&self) -> f64 {
-            self.0.wire_stroke().map_or(0.0, |value| value.3)
+            self.handle.wire_stroke().map_or(0.0, |value| value.3)
         }
 
         #[wasm_bindgen(getter, js_name = wireStrokeWidth)]
         pub fn wire_stroke_width(&self) -> f64 {
-            self.0.wire_stroke_width()
+            self.handle.wire_stroke_width()
         }
 
         #[wasm_bindgen(getter, js_name = wireObjectOpacity)]
         pub fn wire_object_opacity(&self) -> f64 {
-            self.0.wire_object_opacity()
+            self.handle.wire_object_opacity()
         }
 
         #[wasm_bindgen(js_name = replaceSnapshotJson)]
         pub fn replace_snapshot_json(&mut self, snapshot_json: &str) -> Result<(), JsValue> {
-            self.0.replace_json(snapshot_json).map_err(js_error)
+            self.handle.replace_json(snapshot_json).map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = centerX)]
         pub fn center_x(&self) -> f64 {
-            self.0.center().0
+            self.handle.center().0
         }
 
         #[wasm_bindgen(getter, js_name = centerY)]
         pub fn center_y(&self) -> f64 {
-            self.0.center().1
+            self.handle.center().1
         }
 
         #[wasm_bindgen(getter)]
         pub fn width(&self) -> f64 {
-            self.0.width()
+            self.handle.width()
         }
 
         #[wasm_bindgen(getter)]
         pub fn height(&self) -> f64 {
-            self.0.height()
+            self.handle.height()
         }
 
         #[wasm_bindgen(js_name = criticalX)]
         pub fn critical_x(&self, direction_x: f64, direction_y: f64) -> f64 {
-            self.0.critical_point(direction_x, direction_y).0
+            self.handle.critical_point(direction_x, direction_y).0
         }
 
         #[wasm_bindgen(js_name = criticalY)]
         pub fn critical_y(&self, direction_x: f64, direction_y: f64) -> f64 {
-            self.0.critical_point(direction_x, direction_y).1
+            self.handle.critical_point(direction_x, direction_y).1
         }
 
         pub fn shift(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.0.shift(x, y).map_err(js_error)
+            self.handle.shift(x, y).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = moveTo)]
         pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.0.move_to(x, y).map_err(js_error)
+            self.handle.move_to(x, y).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setTranslation)]
         pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.0.set_translation(x, y).map_err(js_error)
+            self.handle.set_translation(x, y).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setScale)]
         pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.0.set_scale(x, y).map_err(js_error)
+            self.handle.set_scale(x, y).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setRotation)]
         pub fn set_rotation(&mut self, angle: f64) -> Result<(), JsValue> {
-            self.0.set_rotation(angle).map_err(js_error)
+            self.handle.set_rotation(angle).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStrokeWidthMode)]
         pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), JsValue> {
-            self.0.set_stroke_width_mode(mode).map_err(js_error)
+            self.handle.set_stroke_width_mode(mode).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStrokeJoin)]
         pub fn set_stroke_join(&mut self, join: &str) -> Result<(), JsValue> {
-            self.0.set_stroke_join(join).map_err(js_error)
+            self.handle.set_stroke_join(join).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStrokeCap)]
         pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), JsValue> {
-            self.0.set_stroke_cap(cap).map_err(js_error)
+            self.handle.set_stroke_cap(cap).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setObjectOpacity)]
         pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
-            self.0.set_object_opacity(opacity).map_err(js_error)
+            self.handle.set_object_opacity(opacity).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = manimMoveToHandle)]
@@ -2921,8 +2867,14 @@ mod wasm {
             mask_x: f64,
             mask_y: f64,
         ) -> Result<(), JsValue> {
-            self.0
-                .manim_move_to_handle(&other.0, aligned_edge_x, aligned_edge_y, mask_x, mask_y)
+            self.handle
+                .manim_move_to_handle(
+                    &other.handle,
+                    aligned_edge_x,
+                    aligned_edge_y,
+                    mask_x,
+                    mask_y,
+                )
                 .map_err(js_error)
         }
 
@@ -2936,7 +2888,7 @@ mod wasm {
             mask_x: f64,
             mask_y: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .manim_move_to_point(
                     point_x,
                     point_y,
@@ -2960,9 +2912,9 @@ mod wasm {
             mask_x: f64,
             mask_y: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .manim_next_to_handle(
-                    &other.0,
+                    &other.handle,
                     ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
@@ -2986,7 +2938,7 @@ mod wasm {
             mask_x: f64,
             mask_y: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .manim_next_to_point(
                     point_x,
                     point_y,
@@ -3001,11 +2953,11 @@ mod wasm {
         }
 
         pub fn scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.0.scale(x, y).map_err(js_error)
+            self.handle.scale(x, y).map_err(js_error)
         }
 
         pub fn rotate(&mut self, angle: f64) -> Result<(), JsValue> {
-            self.0.rotate(angle).map_err(js_error)
+            self.handle.rotate(angle).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = rotateAboutPoint)]
@@ -3015,7 +2967,7 @@ mod wasm {
             point_x: f64,
             point_y: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .rotate_about_point(angle, point_x, point_y)
                 .map_err(js_error)
         }
@@ -3028,12 +2980,14 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            self.0.set_color(red, green, blue, alpha).map_err(js_error)
+            self.handle
+                .set_color(red, green, blue, alpha)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = disableFill)]
         pub fn disable_fill(&mut self) {
-            self.0.disable_fill();
+            self.handle.disable_fill();
         }
 
         #[wasm_bindgen(js_name = setFillColor)]
@@ -3044,14 +2998,14 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .set_fill_color(red, green, blue, alpha)
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setFillOpacity)]
         pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
-            self.0.set_fill_opacity(opacity).map_err(js_error)
+            self.handle.set_fill_opacity(opacity).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setFill)]
@@ -3062,17 +3016,19 @@ mod wasm {
             blue: f64,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            self.0.set_fill(red, green, blue, opacity).map_err(js_error)
+            self.handle
+                .set_fill(red, green, blue, opacity)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = fillOpacity)]
         pub fn fill_opacity(&self) -> f64 {
-            self.0.fill_opacity()
+            self.handle.fill_opacity()
         }
 
         #[wasm_bindgen(js_name = disableStroke)]
         pub fn disable_stroke(&mut self) {
-            self.0.disable_stroke();
+            self.handle.disable_stroke();
         }
 
         #[wasm_bindgen(js_name = setStrokeColor)]
@@ -3083,34 +3039,34 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .set_stroke_color(red, green, blue, alpha)
                 .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStrokeWidth)]
         pub fn set_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
-            self.0.set_stroke_width(width).map_err(js_error)
+            self.handle.set_stroke_width(width).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStrokeOpacity)]
         pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
-            self.0.set_stroke_opacity(opacity).map_err(js_error)
+            self.handle.set_stroke_opacity(opacity).map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = strokeOpacity)]
         pub fn stroke_opacity(&self) -> f64 {
-            self.0.stroke_opacity()
+            self.handle.stroke_opacity()
         }
 
         #[wasm_bindgen(js_name = setOpacity)]
         pub fn set_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
-            self.0.set_opacity(opacity).map_err(js_error)
+            self.handle.set_opacity(opacity).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = becomeHandle)]
         pub fn become_handle(&mut self, other: &WasmAuthoringMobjectHandle) {
-            self.0.become_handle(&other.0);
+            self.handle.become_handle(&other.handle);
         }
 
         #[wasm_bindgen(js_name = replaceHandle)]
@@ -3120,8 +3076,8 @@ mod wasm {
             dim_to_match: u32,
             stretch: bool,
         ) -> Result<(), JsValue> {
-            self.0
-                .replace_handle(&other.0, dim_to_match, stretch)
+            self.handle
+                .replace_handle(&other.handle, dim_to_match, stretch)
                 .map_err(js_error)
         }
 
@@ -3133,8 +3089,8 @@ mod wasm {
             direction_y: f64,
             buff: f64,
         ) -> Result<(), JsValue> {
-            self.0
-                .next_to_handle(&other.0, direction_x, direction_y, buff)
+            self.handle
+                .next_to_handle(&other.handle, direction_x, direction_y, buff)
                 .map_err(js_error)
         }
 
@@ -3147,7 +3103,7 @@ mod wasm {
             direction_y: f64,
             buff: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .next_to_point(point_x, point_y, direction_x, direction_y, buff)
                 .map_err(js_error)
         }
@@ -3159,8 +3115,8 @@ mod wasm {
             direction_x: f64,
             direction_y: f64,
         ) -> Result<(), JsValue> {
-            self.0
-                .align_to_handle(&other.0, direction_x, direction_y)
+            self.handle
+                .align_to_handle(&other.handle, direction_x, direction_y)
                 .map_err(js_error)
         }
 
@@ -3172,7 +3128,7 @@ mod wasm {
             direction_x: f64,
             direction_y: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .align_to_point(point_x, point_y, direction_x, direction_y)
                 .map_err(js_error)
         }
@@ -3184,7 +3140,7 @@ mod wasm {
             direction_y: f64,
             buff: f64,
         ) -> Result<(), JsValue> {
-            self.0
+            self.handle
                 .align_on_frame(direction_x, direction_y, buff)
                 .map_err(js_error)
         }
