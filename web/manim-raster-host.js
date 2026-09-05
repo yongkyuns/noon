@@ -53,7 +53,10 @@ async function load(source, loopDurationSeconds) {
     throw new Error("host raster page supports one authored scene per page");
   }
 
-  const result = await client.run(source);
+  // This #959-owned codec/renderer diagnostic explicitly consumes a scene
+  // document. Canonical callback execution is qualified by the shared-authoring
+  // and direct Rust/WASM proofs without this legacy document adapter.
+  const result = await client.run(source, {}, { exportDocument: true });
   if (result.kind !== "scene_document") {
     throw new Error("host raster harness requires a scene document");
   }
