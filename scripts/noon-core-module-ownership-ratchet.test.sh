@@ -31,6 +31,12 @@ expect_rejected() {
   fi
 }
 
+# A failed scanner must not be interpreted as an empty/valid source tree.
+mkdir -p "$TMP/failing-tools"
+printf '#!/usr/bin/env bash\nexit 2\n' > "$TMP/failing-tools/grep"
+chmod +x "$TMP/failing-tools/grep"
+PATH="$TMP/failing-tools:$PATH" expect_rejected 'source scanner failure'
+
 printf '#[path = "hidden_impl.rs"]\nmod hidden_impl;\n' > crates/noon-core/src/hidden.rs
 printf 'pub fn hidden_impl() {}\n' > crates/noon-core/src/hidden_impl.rs
 expect_rejected 'additional #[path] indirection'

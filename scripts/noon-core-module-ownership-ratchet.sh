@@ -9,12 +9,22 @@ cd "$ROOT"
 # a reviewed normalization may remove it, but no additional `#[path]` or
 # `include!` indirection is allowed.
 temporary_owner='crates/noon-core/src/reactive.rs'
-temporary_target='semantic_store.rs'
-module_indirections="$(
-  rg -n --glob '*.rs' \
+# Use the same baseline grep dependency as the other architecture guards.
+# Scan the working tree (including untracked Rust files), and distinguish an
+# empty match set from a tool/read failure so the guard cannot pass unchecked.
+if module_indirections="$(
+  grep -rnE --include='*.rs' \
     '^[[:space:]]*#\[[[:space:]]*path[[:space:]]*=|(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)' \
-    crates/noon-core/src || true
-)"
+    crates/noon-core/src
+)"; then
+  :
+else
+  scan_status=$?
+  if (( scan_status != 1 )); then
+    echo "noon-core module ownership ratchet: source scan failed" >&2
+    exit "$scan_status"
+  fi
+fi
 
 unexpected=0
 while IFS= read -r reference; do
