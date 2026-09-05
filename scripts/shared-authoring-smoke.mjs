@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -366,6 +366,38 @@ try {
   const transferable = await runMode("transferable", 0);
   const shared = await runMode("shared", 1);
 
+  // Execute the published paired example itself, so wrapper regressions cannot
+  // hide behind a separate smoke-only Python program.
+  const membershipSource = await readFile(
+    path.join(repoRoot, "web/python/examples/live_semantic_scene.py"), "utf8",
+  );
+  const membership = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const authored = await harness.authoring.run(source, {});
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    try {
+      await execution.startSemanticExecution(authored.semanticExecution, {
+        authoringClient: harness.authoring,
+        transportMode: "transferable",
+      });
+      let latest;
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        latest = (await execution.metrics()).metrics;
+        if (latest.objectCount === 3 && latest.presentedFrames > 0) return latest;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`live membership example did not render: ${JSON.stringify(latest)}`);
+    } finally {
+      execution.terminate();
+    }
+  }, membershipSource);
+  assert.equal(membership.objectCount, 3);
+  assert.ok(membership.drawCalls > 0, "live membership example emitted no draw calls");
+
   const persisted = await page.evaluate(
     async ({ persistedSceneSource, reusePersistedSceneSource }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -458,7 +490,7 @@ try {
   });
   console.log(
     `✓ shared authoring semantic execution rendered transferable/${transferable.backend} ` +
-      `and shared/${shared.backend}; persisted Scene reuse rendered ${persisted.backend}`,
+      `and shared/${shared.backend}; paired live membership and persisted Scene reuse rendered`,
   );
 } finally {
   await browser?.close();

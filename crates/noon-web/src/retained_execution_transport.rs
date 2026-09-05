@@ -227,6 +227,8 @@ pub struct RetainedExecutionDeltaEncoder {
     session: u32,
     next_sequence: u64,
     initialized: bool,
+    // Explicit worker-boundary projection: runtime tombstones have no wire row.
+    snapshot_orders: Vec<Option<u32>>,
     // Retain the Arcs so pointer keys cannot be recycled during this encoder's lifetime.
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
     render_geometry_indices: Option<HashMap<usize, u32>>,
@@ -238,6 +240,7 @@ impl RetainedExecutionDeltaEncoder {
             session,
             next_sequence: 0,
             initialized: false,
+            snapshot_orders: Vec::new(),
             render_geometries: None,
             render_geometry_indices: None,
         }
@@ -301,13 +304,38 @@ impl RetainedExecutionDeltaEncoder {
         frame: &FrameState,
         camera: Camera2DState,
     ) -> Result<RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError> {
+        self.encode_snapshot_indices(frame, camera, 0..frame.objects.len())
+    }
+
+    /// Encode live runtime rows without copying or compacting the engine frame.
+    /// Indices are supplied in painter order; subsequent deltas retain their
+    /// original runtime slot and use the dense order established here.
+    pub fn encode_snapshot_indices(
+        &mut self,
+        frame: &FrameState,
+        camera: Camera2DState,
+        indices: impl IntoIterator<Item = usize>,
+    ) -> Result<RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError> {
         validate_frame_shape(frame)?;
         validate_time(frame.time)?;
-        let objects = (0..frame.objects.len())
-            .map(|index| self.transport_object(frame, index))
+        let mut orders = vec![None; frame.objects.len()];
+        let objects = indices
+            .into_iter()
+            .enumerate()
+            .map(|(order, index)| {
+                let mut object = self.transport_object(frame, index)?;
+                if orders[index].is_some() {
+                    return Err(RetainedExecutionTransportError::DuplicateSlot(object.slot));
+                }
+                object.order = u32::try_from(order)
+                    .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
+                orders[index] = Some(object.order);
+                Ok(object)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
         self.initialized = true;
+        self.snapshot_orders = orders;
         Ok(RetainedExecutionDeltaEnvelope {
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
@@ -335,7 +363,15 @@ impl RetainedExecutionDeltaEncoder {
             return Err(RetainedExecutionTransportError::StructuralChangeRequiresSnapshot);
         }
         if changes.is_all() {
-            return self.encode_snapshot(frame, camera).map(Some);
+            let indices = self
+                .snapshot_orders
+                .iter()
+                .enumerate()
+                .filter_map(|(index, order)| order.map(|_| index))
+                .collect::<Vec<_>>();
+            return self
+                .encode_snapshot_indices(frame, camera, indices)
+                .map(Some);
         }
         if changes.is_empty() {
             return Ok(None);
@@ -344,7 +380,16 @@ impl RetainedExecutionDeltaEncoder {
             .object_indices()
             .iter()
             .copied()
-            .map(|index| self.transport_object(frame, index))
+            .map(|index| {
+                let mut object = self.transport_object(frame, index)?;
+                object.order = self
+                    .snapshot_orders
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(RetainedExecutionTransportError::UnknownSlot(object.slot))?;
+                Ok(object)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
         Ok(Some(RetainedExecutionDeltaEnvelope {

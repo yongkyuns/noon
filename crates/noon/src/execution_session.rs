@@ -289,6 +289,9 @@ impl ExecutionSession {
         &self,
         index: usize,
     ) -> Option<noon_runtime::ExecutionSlotId> {
+        if !self.runtime.object_slot_is_live(index) {
+            return None;
+        }
         let object = self.frame().objects.get(index)?;
         self.slots.slot_for_object(object.id)
     }

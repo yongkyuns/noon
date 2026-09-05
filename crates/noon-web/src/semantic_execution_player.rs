@@ -247,10 +247,18 @@ impl SemanticExecutionPlayer {
     fn delta(&mut self, snapshot: bool) -> Result<Option<RetainedExecutionDeltaEnvelope>, String> {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
-        if snapshot || changes.is_all() || !self.snapshot_sent {
+        if snapshot || changes.is_all() || changes.is_structural() || !self.snapshot_sent {
             let delta = self
                 .encoder
-                .encode_snapshot(self.session.frame(), camera)
+                .encode_snapshot_indices(
+                    self.session.frame(),
+                    camera,
+                    (0..self.session.frame().objects.len()).filter(|index| {
+                        self.session
+                            .execution_slot_for_frame_index(*index)
+                            .is_some()
+                    }),
+                )
                 .map_err(|e| e.to_string())?;
             self.snapshot_sent = true;
             Ok(Some(delta))
@@ -325,6 +333,45 @@ mod tests {
     use super::*;
     use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
     use noon_core::{AnimationOptions, RateFunction};
+
+    #[test]
+    fn membership_snapshot_omits_retired_rows_and_preserves_incremental_order() {
+        let mut scene = noon::Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let toggled = scene.circle(1.0).unwrap();
+        scene.add(&anchor).unwrap();
+        scene.add(&toggled).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            1.0,
+            1,
+        )
+        .unwrap();
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        mirror.apply(player.delta(true).unwrap().unwrap()).unwrap();
+        player.live_remove(&toggled).unwrap();
+        player.live_add(&toggled).unwrap();
+        assert!(player.session.execution_slot_for_frame_index(1).is_none());
+        let snapshot = player.delta(false).unwrap().unwrap();
+        assert!(snapshot.snapshot);
+        assert_eq!(snapshot.objects.len(), 2);
+        assert_eq!(snapshot.objects[1].slot.slot, 2);
+        assert_eq!(snapshot.objects[1].order, 1);
+        mirror.apply(snapshot).unwrap();
+        player.live_set_translation(&toggled, 2.0, -1.0).unwrap();
+        let delta = player.delta(false).unwrap().unwrap();
+        assert!(!delta.snapshot);
+        assert_eq!(delta.objects.len(), 1);
+        assert_eq!(delta.objects[0].order, 1);
+        mirror.apply(delta).unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[1].transform.translation,
+            noon_core::Vec2::new(2.0, -1.0)
+        );
+    }
 
     fn animated_player() -> SemanticExecutionPlayer {
         let mut scene = noon::Scene::new();
