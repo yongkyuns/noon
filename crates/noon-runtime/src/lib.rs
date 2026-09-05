@@ -1139,11 +1139,19 @@ impl SceneInstance {
         for property in properties {
             let channel = CompiledChannelKey::new(object_index as u32, *property);
             let tracks = self.compiled.channel_tracks(channel);
+            let object = &self.compiled.objects()[object_index];
             let Some(group) = self.groups.get_mut(&channel) else {
                 continue;
             };
             group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
-            apply_group(&mut self.frame, tracks, group, time);
+            apply_group(
+                &mut self.frame,
+                tracks,
+                group,
+                time,
+                object.base_transform,
+                object.base_style,
+            );
             stats.groups_evaluated += 1;
         }
         self.last_stats = stats;
@@ -1154,11 +1162,19 @@ impl SceneInstance {
         for property in PROPERTY_ORDER {
             let channel = CompiledChannelKey::new(object_index as u32, property);
             let tracks = self.compiled.channel_tracks(channel);
+            let object = &self.compiled.objects()[object_index];
             let Some(group) = self.groups.get_mut(&channel) else {
                 continue;
             };
             group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
-            apply_group(&mut self.frame, tracks, group, time);
+            apply_group(
+                &mut self.frame,
+                tracks,
+                group,
+                time,
+                object.base_transform,
+                object.base_style,
+            );
             stats.groups_evaluated += 1;
         }
     }
@@ -1171,8 +1187,16 @@ impl SceneInstance {
 
         for group in self.groups.values_mut() {
             let tracks = self.compiled.channel_tracks(group.channel);
+            let object = &self.compiled.objects()[group.channel.object_index as usize];
             group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
-            apply_group(&mut self.frame, tracks, group, time);
+            apply_group(
+                &mut self.frame,
+                tracks,
+                group,
+                time,
+                object.base_transform,
+                object.base_style,
+            );
             stats.groups_evaluated += 1;
         }
         self.timeline_scheduler.seek(time);
@@ -1202,6 +1226,7 @@ impl SceneInstance {
         for request_index in 0..requested_count {
             let channel = self.timeline_scheduler.requested()[request_index];
             let tracks = self.compiled.channel_tracks(channel);
+            let object = &self.compiled.objects()[channel.object_index as usize];
             let Some(group) = self.groups.get_mut(&channel) else {
                 continue;
             };
@@ -1209,7 +1234,14 @@ impl SceneInstance {
                 group.cursor += 1;
                 stats.tracks_advanced += 1;
             }
-            if apply_group(&mut self.frame, tracks, group, time) {
+            if apply_group(
+                &mut self.frame,
+                tracks,
+                group,
+                time,
+                object.base_transform,
+                object.base_style,
+            ) {
                 self.mark_changed(channel.object_index as usize);
             }
             stats.groups_evaluated += 1;
@@ -1505,9 +1537,18 @@ fn apply_group(
     tracks: &[CompiledTrack],
     group: &TrackGroup,
     time: f64,
+    base_transform: Transform2D,
+    base_style: Style,
 ) -> bool {
     let object_index = group.channel.object_index as usize;
-    apply_group_to_row(frame_row_mut(frame, object_index), tracks, group, time)
+    apply_group_to_row(
+        frame_row_mut(frame, object_index),
+        tracks,
+        group,
+        time,
+        base_transform,
+        base_style,
+    )
 }
 
 fn apply_group_to_row(
@@ -1515,6 +1556,8 @@ fn apply_group_to_row(
     tracks: &[CompiledTrack],
     group: &TrackGroup,
     time: f64,
+    base_transform: Transform2D,
+    base_style: Style,
 ) -> bool {
     if group.cursor == 0 {
         return false;
@@ -1541,11 +1584,18 @@ fn apply_group_to_row(
     let Some((track, progress)) = selected else {
         return false;
     };
-    if track.reconciled
-        && group.cursor == tracks.len()
-        && time >= track.timing.start_time + track.timing.duration
-    {
-        return false;
+    if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+        let base = match group.channel.property {
+            Property::Position => Some(EvaluatedValue::Vec2(base_transform.translation)),
+            Property::Rotation => Some(EvaluatedValue::Scalar(base_transform.rotation)),
+            Property::Scale => Some(EvaluatedValue::Vec2(base_transform.scale)),
+            Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
+            Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
+            Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
+            Property::Presence | Property::Transform => None,
+        };
+        return base
+            .is_some_and(|value| apply_evaluated_value(&mut row, group.channel.property, value));
     }
 
     if group.channel.property == Property::Transform {

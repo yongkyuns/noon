@@ -264,7 +264,7 @@ mod tests {
     use noon_core::{
         AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
         SemanticObjectProperty, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry,
-        Transform2D, Vec2,
+        TrackTiming, Transform2D, Vec2,
     };
 
     use super::*;
@@ -328,6 +328,70 @@ mod tests {
         assert!(session.segment_state(segment).is_complete());
         session.seek(2.0).unwrap();
         assert_eq!(session.frame().objects[0].transform.translation.x, 9.0);
+    }
+
+    #[test]
+    fn scalar_timeline_preserves_forward_seek_after_released_affine_history() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let mut scalar_track = SemanticMutationTransaction::new();
+        scalar_track.add_scalar_signal_track(
+            tracker,
+            0.0,
+            2.0,
+            TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        );
+        scalar_track.apply(&mut store).unwrap();
+
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        session.advance_segment_to(segment, 1.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+
+        let mut set_after_play = SemanticMutationTransaction::new();
+        set_after_play.set_property(
+            object,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(9.0, 0.0, 0.0),
+        );
+        session
+            .apply_semantic_transaction(&mut store, set_after_play)
+            .unwrap();
+        session.advance_to(2.0).unwrap();
+
+        session.seek(0.5).unwrap();
+        assert_eq!(session.frame().objects[0].transform.translation.x, 2.0);
+        assert_eq!(session.frame().objects[0].transform.rotation, 0.5);
+        session.seek(2.0).unwrap();
+        let explicit_seek = session.frame().objects[0].clone();
+        assert_eq!(explicit_seek.transform.translation.x, 9.0);
+        assert_eq!(explicit_seek.transform.rotation, 2.0);
+
+        session.seek(0.5).unwrap();
+        session.advance_to(2.0).unwrap();
+        assert_eq!(session.frame().objects[0], explicit_seek);
     }
 
     #[test]
