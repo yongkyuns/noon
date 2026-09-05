@@ -114,7 +114,10 @@ impl ExecutionSession {
         if token.is_some_and(|token| self.segment_was_completed(token)) {
             return Ok(self.frame());
         }
-        if token.is_none() && actual_time >= segment.end_time() {
+        if token.is_none()
+            && actual_time >= segment.end_time()
+            && self.callback_progression_is_coherent_at(actual_time)
+        {
             return Ok(self.frame());
         }
         if actual_time != segment.end_time() {
@@ -350,6 +353,39 @@ mod tests {
             Err(ExecutionSegmentCompletionError::ForeignSegment { .. })
         ));
         assert_eq!(clone.frame(), &before);
+    }
+
+    #[test]
+    fn zero_length_wait_cannot_complete_before_its_required_callback() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut updater = SemanticMutationTransaction::new();
+        updater.add_updater(object, HostCallbackId::new(1), 0.0, None);
+        updater.apply(&mut store).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let wait = session.wait_segment(0.0).unwrap();
+
+        assert_eq!(
+            session.complete_segment(&mut store, wait).unwrap_err(),
+            ExecutionSegmentCompletionError::CallbackNotCoherent,
+        );
+        let overlay = match session.advance_to_callback_barrier(0.0).unwrap() {
+            crate::CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            crate::CallbackAdvance::Ready(_) => panic!("time-zero callback phase is required"),
+        };
+        assert_eq!(
+            session.complete_segment(&mut store, wait).unwrap_err(),
+            ExecutionSegmentCompletionError::RequiredCallbackPending,
+        );
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        session.complete_segment(&mut store, wait).unwrap();
+        assert!(session.segment_state(wait).is_complete());
     }
 
     #[test]

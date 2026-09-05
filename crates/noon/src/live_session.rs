@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn live_query_observes_the_active_driver_while_authored_edits_remain_explicit() {
+    fn live_query_observes_the_active_driver_while_conflicting_edits_wait_for_completion() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let mut target = circle.target_editor().unwrap();
@@ -391,14 +391,27 @@ mod tests {
         let mut live = scene.live(&mut session);
         let segment = live.play_animation(&animation).unwrap();
         live.advance_segment_to(segment, 1.0).unwrap();
-        live.set_translation(&circle, 100.0, 0.0).unwrap();
+        assert!(matches!(
+            live.set_translation(&circle, 100.0, 0.0),
+            Err(LiveSessionError::Publication(
+                ExecutionSessionPublicationError::SegmentCompletionPending
+            ))
+        ));
         assert_eq!(
             live.authored(&circle).unwrap().transform.translation,
-            SemanticVec3::new(100.0, 0.0, 0.0)
+            SemanticVec3::new(0.0, 0.0, 0.0)
         );
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation.x,
             2.0
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        live.set_translation(&circle, 100.0, 0.0).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            100.0
         );
     }
 
