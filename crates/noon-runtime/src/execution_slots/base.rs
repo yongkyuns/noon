@@ -1297,10 +1297,18 @@ mod tests {
 
     #[test]
     fn slotted_transaction_publishes_once_for_multiple_changed_objects() {
-        let mut definition = SceneDefinition::new();
-        let first = definition.add(GeometryRef::circle(1.0));
-        let second = definition.add(GeometryRef::circle(2.0));
-        let mut live = SlottedSceneInstance::new(CompiledScene::compile(&definition).unwrap());
+        let mut store = noon_core::SemanticStore::new();
+        let nodes = [1.0, 2.0].map(|radius| {
+            let object = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+                noon_core::StoredGeometry::Circle { radius },
+            ));
+            store.attach_to_scene(object).unwrap();
+            object
+        });
+        let mut index = noon_compile::SemanticExecutionIndex::new();
+        let lowered = noon_compile::lower_semantic_execution(&store, &mut index).unwrap();
+        let [first, second] = nodes.map(|object| index.execution_object_id(object).unwrap());
+        let mut live = SlottedSceneInstance::new(lowered.into_parts().0);
         let before = live.inner.publication_context();
         let transaction = MutationTransaction::from_mutations([first, second].map(|object| {
             ScenePatch::SetTransform {

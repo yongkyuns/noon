@@ -83,18 +83,25 @@ mod tests {
 
     use super::*;
 
-    fn semantic_instance() -> (SceneInstance, ObjectId) {
+    fn semantic_instances<const N: usize>(radii: [f32; N]) -> (SceneInstance, [ObjectId; N]) {
         let mut store = SemanticStore::new();
-        let semantic_object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(semantic_object).unwrap();
-
+        let semantic_objects = radii.map(|radius| {
+            let object =
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius,
+                }));
+            store.attach_to_scene(object).unwrap();
+            object
+        });
         let mut index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(&store, &mut index).unwrap();
-        let object = index.execution_object_id(semantic_object).unwrap();
-        (SceneInstance::from_semantic_execution(lowered), object)
+        let objects = semantic_objects.map(|object| index.execution_object_id(object).unwrap());
+        (SceneInstance::from_semantic_execution(lowered), objects)
+    }
+
+    fn semantic_instance() -> (SceneInstance, ObjectId) {
+        let (instance, [object]) = semantic_instances([1.0]);
+        (instance, object)
     }
 
     #[test]
@@ -288,16 +295,7 @@ mod tests {
 
     #[test]
     fn effective_lookup_rejects_removed_slots_and_preserves_later_objects() {
-        let (mut instance, first) = semantic_instance();
-        let later = ObjectId::new(10);
-        instance
-            .apply_patch(&ScenePatch::CreateObject(noon_core::ObjectDefinition {
-                id: later,
-                geometry: noon_core::GeometryRef::circle(2.0),
-                transform: Transform2D::IDENTITY,
-                style: Style::default(),
-            }))
-            .unwrap();
+        let (mut instance, [first, later]) = semantic_instances([1.0, 2.0]);
         let expected = instance.effective_object(later).unwrap().clone();
         instance
             .apply_patch(&ScenePatch::RemoveObject(first))
