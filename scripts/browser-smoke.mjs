@@ -323,6 +323,30 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM completion remained at the intervening x=3 setter",
   );
   assert.equal(
+    direct.metrics.ordinaryAffinePlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary affine play did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffinePlay?.authoredTime,
+    4,
+    "direct Rust/WASM ordinary affine play did not preserve the shared session time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffinePlay?.objectCount,
+    1,
+    "direct Rust/WASM ordinary affine scene did not retain its Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffinePlay?.endpointLuma >= 250,
+    "direct Rust/WASM ordinary affine play did not render the x=5 endpoint",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffinePlay?.firstEndpointLuma <= 60 &&
+      direct.metrics.ordinaryAffinePlay?.shiftedLuma <= 60,
+    "direct Rust/WASM ordinary affine play retained an earlier barrier position",
+  );
+  assert.equal(
     direct.metrics.valueTracker?.backend,
     expectedBackend,
     "direct Rust/WASM ValueTracker did not use the selected renderer backend",

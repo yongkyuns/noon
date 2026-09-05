@@ -107,6 +107,16 @@ pub async fn create_direct_affine_completion_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Browser proof that sequential ordinary affine plays, waits, and authored
+/// edits use the same target-neutral Rust session as the native example.
+#[wasm_bindgen(js_name = createDirectOrdinaryAffinePlaySmokeRenderer)]
+pub async fn create_direct_ordinary_affine_play_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::ordinary_affine_play().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Browser proof that the target-neutral Rust scalar tracker example executes
 /// and renders through the typed direct single-context WASM path.
 #[wasm_bindgen(js_name = createDirectValueTrackerSmokeRenderer)]

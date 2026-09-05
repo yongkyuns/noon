@@ -423,6 +423,13 @@ try {
       expectedFinalCenter: [5, -2],
     },
     {
+      filename: "ordinary_affine_play.py",
+      objectCount: 1,
+      expectedDuration: 4,
+      endpointTime: null,
+      expectedFinalCenter: [5, -1],
+    },
+    {
       filename: "live_value_tracker.py",
       objectCount: 1,
       expectedDuration: 2,

@@ -152,6 +152,65 @@ pub fn live_affine_completion() -> Result<ExecutionSession, Box<dyn Error>> {
     Ok(session)
 }
 
+/// Execute the paired ordinary affine-play example on one live runtime.
+///
+/// Targets are authored before execution. Each play is declared and activated
+/// atomically against the current effective state, while the intervening wait
+/// and authored shift publish through the same continuation/session authority.
+pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.4)?;
+    circle.set_fill(0.0, 0.4, 1.0, 1.0)?;
+    scene.add(&circle)?;
+
+    let mut first_target = circle.target_editor()?;
+    first_target.set_translation(2.0, -1.0)?;
+    let mut second_target = circle.target_editor()?;
+    second_target.set_translation(5.0, -1.0)?;
+    let linear = |duration| {
+        AnimationOptions::new()
+            .run_time(duration)
+            .rate_func(RateFunction::Linear)
+    };
+
+    let mut session = scene.execution_session()?;
+    {
+        let mut live = scene.live(&mut session);
+        let first = live.declare_and_activate_transform_to(&circle, &first_target, linear(2.0))?;
+        assert_eq!((first.start_time(), first.end_time()), (0.0, 2.0));
+        live.advance_segment_to(first, first.end_time())?;
+        live.complete_segment(first)?;
+        assert_eq!(live.effective_layout(&circle)?.center, (2.0, -1.0));
+    }
+    assert_eq!(session.frame().time, 2.0);
+
+    {
+        let mut live = scene.live(&mut session);
+        let wait = live.wait_segment(1.0)?;
+        assert_eq!((wait.start_time(), wait.end_time()), (2.0, 3.0));
+        live.advance_segment_to(wait, wait.end_time())?;
+        live.complete_segment(wait)?;
+        assert_eq!(live.effective_layout(&circle)?.center, (2.0, -1.0));
+        live.shift(&circle, 1.0, 0.0)?;
+        assert_eq!(live.effective_layout(&circle)?.center, (3.0, -1.0));
+    }
+    assert_eq!(session.frame().time, 3.0);
+
+    {
+        let mut live = scene.live(&mut session);
+        let second =
+            live.declare_and_activate_transform_to(&circle, &second_target, linear(1.0))?;
+        assert_eq!((second.start_time(), second.end_time()), (3.0, 4.0));
+        live.advance_segment_to(second, second.end_time())?;
+        live.complete_segment(second)?;
+        assert_eq!(live.effective_layout(&circle)?.center, (5.0, -1.0));
+        let authored = live.authored(&circle)?.transform.translation;
+        assert_eq!((authored.x, authored.y), (5.0, -1.0));
+    }
+    assert_eq!(session.frame().time, 4.0);
+    Ok(session)
+}
+
 /// Build and settle the paired canonical scalar `ValueTracker` example.
 ///
 /// Signal-track scheduling, interpolation, binding evaluation, and direct-write

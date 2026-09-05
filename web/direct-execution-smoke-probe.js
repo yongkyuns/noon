@@ -3,6 +3,7 @@ import {
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
   createDirectNativeSignalsSmokeRenderer,
+  createDirectOrdinaryAffinePlaySmokeRenderer,
   createDirectValueTrackerSmokeRenderer,
 } from "./pkg/noon_web.js";
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
@@ -219,6 +220,49 @@ async function directAffineCompletionProof(expectedBackend) {
   return metrics;
 }
 
+async function directOrdinaryAffinePlayProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryAffinePlaySmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow) {
+    throw new Error("direct ordinary affine session did not expose its settled publication");
+  }
+  await presentDirectFrame(renderer);
+
+  // The shared Rust builder asserts each coherent center/time barrier. The
+  // browser checks that the exact returned runtime presents only its final x=5
+  // endpoint, rather than the first endpoint or intervening authored shift.
+  const endpointLuma = await sampleRenderedNeighborhood(canvas, 5, -1);
+  const firstEndpointLuma = await sampleRenderedNeighborhood(canvas, 2, -1);
+  const shiftedLuma = await sampleRenderedNeighborhood(canvas, 3, -1);
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    endpointLuma,
+    firstEndpointLuma,
+    shiftedLuma,
+  };
+  if (metrics.backend !== expectedBackend) {
+    throw new Error(
+      `direct ordinary affine renderer selected ${metrics.backend}; expected ${expectedBackend}`,
+    );
+  }
+  if (metrics.authoredTime !== 4) {
+    throw new Error(`direct ordinary affine authored time is ${metrics.authoredTime}; expected 4`);
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
+    throw new Error(`direct ordinary affine produced invalid metrics ${JSON.stringify(metrics)}`);
+  }
+  if (endpointLuma < 250 || firstEndpointLuma > 60 || shiftedLuma > 60) {
+    throw new Error(`direct ordinary affine did not render its x=5 endpoint ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
 async function directValueTrackerProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectValueTrackerSmokeRenderer(canvas);
@@ -406,6 +450,7 @@ async function start() {
 
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
+  metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.valueTracker = await directValueTrackerProof(expectedBackend);
   metrics.nativeSignals = await directNativeSignalsProof(expectedBackend);
 
