@@ -398,6 +398,7 @@ pub struct SemanticStore {
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
     last_mutation: SemanticMutationStats,
+    scene_revision: crate::SceneRevision,
 }
 
 impl SemanticStore {
@@ -784,9 +785,9 @@ impl SemanticStore {
             self.node_mut(replacement)
                 .expect("scene-root splice replacement validated above")
                 .scene_membership = SemanticSceneMembership::Attached {
-                previous: replacement_previous,
-                next: replacement_next,
-            };
+                    previous: replacement_previous,
+                    next: replacement_next,
+                };
         }
 
         self.node_mut(root)
@@ -917,7 +918,7 @@ impl SemanticStore {
     ///
     /// `Some(anchor)` moves `member` immediately before the anchor. `None` moves
     /// the member to the tail. Identity validation and link rewiring are O(1) and
-    /// only the family semantic slot is mutated.
+    /// only the family's authoritative order is mutated.
     pub fn reorder_member(
         &mut self,
         family: SemanticNodeId,
@@ -1052,6 +1053,15 @@ impl SemanticStore {
         self.slots.len()
     }
 
+    /// Revision of the last coherently published authoritative semantic transaction.
+    ///
+    /// Direct storage-building helpers intentionally do not advance this clock;
+    /// `SemanticMutationTransaction::apply` is the publication boundary and calls
+    /// `set_last_mutation_writes` once after complete preflight/commit.
+    pub const fn scene_revision(&self) -> crate::SceneRevision {
+        self.scene_revision
+    }
+
     pub const fn last_mutation_stats(&self) -> SemanticMutationStats {
         self.last_mutation
     }
@@ -1061,6 +1071,12 @@ impl SemanticStore {
             slots_written,
             cycle_nodes_visited: 0,
         };
+        if slots_written > 0 {
+            self.scene_revision = self
+                .scene_revision
+                .checked_next()
+                .expect("Noon scene revision space exhausted");
+        }
     }
 }
 

@@ -8,7 +8,8 @@ use noon_compile::{
 use noon_core::{
     AnimationOptions, Camera2DState, MutationTransaction, NativeEventOccurrence,
     NativeInputRuntimeError, NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId,
-    ReactiveError, ReactiveValue, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
+    PublicationContext, ReactiveError, ReactiveValue, ScenePatch, SemanticNodeId, SemanticStore,
+    TrackId,
 };
 use noon_runtime::{EvaluationError, FrameChanges, FrameState, RuntimeWakeState, SceneInstance};
 
@@ -192,6 +193,11 @@ impl ExecutionSession {
     /// Current renderer-facing runtime frame.
     pub fn frame(&self) -> &FrameState {
         self.runtime.frame()
+    }
+
+    /// Exact authored/executable/effective revision context of the current session view.
+    pub const fn publication_context(&self) -> PublicationContext {
+        self.runtime.publication_context()
     }
 
     /// Current canonical 2D camera derived from the effective runtime frame object.
@@ -456,10 +462,28 @@ mod tests {
         assert_eq!(session.camera().unwrap(), Camera2DState::default());
 
         session.take_frame_changes();
+        let publication_before = session.publication_context();
         session.set_reactive_input(signal, 0.7_f32).unwrap();
+        let publication_after = session.publication_context();
 
         assert_eq!(session.frame().objects[0].style.opacity, 0.7);
+        assert_eq!(
+            publication_after.scene_revision(),
+            publication_before.scene_revision()
+        );
+        assert_eq!(
+            publication_after.execution_revision(),
+            publication_before.execution_revision()
+        );
+        assert_eq!(
+            publication_after.frame_epoch(),
+            publication_before.frame_epoch().checked_next().unwrap()
+        );
         assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+
+        session.set_reactive_input(signal, 0.7_f32).unwrap();
+        assert_eq!(session.publication_context(), publication_after);
+        assert!(session.take_frame_changes().is_empty());
 
         session.seek(1.25).unwrap();
         assert_eq!(session.frame().time, 1.25);

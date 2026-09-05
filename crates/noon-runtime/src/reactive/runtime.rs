@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use noon_compile::{CompileError, CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
-    ComputeProgram, ComputeState, ObjectId, Property, ReactiveBinding, ReactiveError,
-    ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene, SignalId,
+    ComputeProgram, ComputeState, ExecutionRevision, ObjectId, Property, PublicationContext,
+    ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveProgram, ReactiveValue,
+    SemanticScene, SignalId,
 };
 
 use crate::{FrameState, SceneInstance};
@@ -151,10 +152,12 @@ impl SceneInstance {
     /// indices and instantiates the existing compute VM. No authored scene is
     /// reconstructed or recompiled at this boundary.
     pub fn from_semantic_execution(lowered: SemanticExecutionLoweringOutput) -> Self {
+        let publication = lowered.publication_context();
         let (compiled, reactive_projection, program) = lowered.into_execution_parts();
         let reactive =
             ReactiveRuntime::new(&compiled, reactive_projection.graph().bindings(), program);
         let mut instance = Self::new(compiled);
+        instance.publication = publication;
         instance.reactive = Some(reactive);
         instance.reapply_reactive();
         instance
@@ -189,6 +192,42 @@ impl SceneInstance {
         instance.reactive = Some(reactive);
         instance.reapply_reactive();
         Ok(instance)
+    }
+
+    /// Exact authored/executable/effective publication context of this runtime view.
+    pub const fn publication_context(&self) -> PublicationContext {
+        self.publication
+    }
+
+    /// Publish a coherent effective-only frame change.
+    pub(crate) fn publish_effective_change(&mut self) {
+        let next = self
+            .publication
+            .frame_epoch()
+            .checked_next()
+            .expect("Noon frame epoch space exhausted");
+        self.publication = self.publication.with_frame_epoch(next);
+    }
+
+    /// Publish one coherent executable-projection change and the corresponding new
+    /// effective frame context. Authored scene revision remains pinned to the
+    /// semantic snapshot from which this session was built.
+    pub(crate) fn publish_execution_change(&mut self) {
+        let execution = self
+            .publication
+            .execution_revision()
+            .checked_next()
+            .expect("Noon execution revision space exhausted");
+        let frame = self
+            .publication
+            .frame_epoch()
+            .checked_next()
+            .expect("Noon frame epoch space exhausted");
+        self.publication = PublicationContext::new(
+            self.publication.scene_revision(),
+            execution,
+            frame,
+        );
     }
 
     pub const fn last_reactive_stats(&self) -> ReactiveRuntimeStats {
@@ -241,6 +280,9 @@ impl SceneInstance {
         }
 
         self.last_reactive_stats = runtime_stats(evaluation, applied_targets, changed_targets);
+        if changed_targets > 0 {
+            self.publish_effective_change();
+        }
         Ok(&self.frame)
     }
 
