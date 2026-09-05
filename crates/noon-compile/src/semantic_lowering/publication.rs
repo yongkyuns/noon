@@ -387,7 +387,7 @@ fn collect_existing_exit_leaves(
         }
         SemanticNodeKind::Family => {
             for member in semantic.members() {
-                collect_existing_exit_leaves(store, *member, reachability, seen, leaves)?;
+                collect_existing_exit_leaves(store, member, reachability, seen, leaves)?;
             }
         }
         SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}

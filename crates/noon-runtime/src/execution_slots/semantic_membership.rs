@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn conservative_exits_are_not_credited_toward_entry_capacity() {
-        let Some(max_capacity) = usize::try_from(u64::from(u32::MAX) + 1).ok() else {
+        let Ok(max_capacity) = usize::try_from(u64::from(u32::MAX) + 1) else {
             return;
         };
         assert_eq!(
