@@ -118,6 +118,25 @@ impl Default for SemanticStyle {
 }
 
 impl SemanticStyle {
+    /// Validate all numeric paint and style fields before publishing authored state.
+    pub fn is_finite(&self) -> bool {
+        let paint = |paint: Option<&SemanticPaint>| match paint {
+            Some(SemanticPaint::Solid(color)) => {
+                color.red.is_finite()
+                    && color.green.is_finite()
+                    && color.blue.is_finite()
+                    && color.alpha.is_finite()
+            }
+            Some(SemanticPaint::Resource(_)) | None => true,
+        };
+        paint(self.fill.as_ref())
+            && paint(self.stroke.as_ref())
+            && self.fill_opacity.is_finite()
+            && self.stroke_opacity.is_finite()
+            && self.stroke_width.is_finite()
+            && self.object_opacity.is_finite()
+    }
+
     /// Compatibility adapter. Legacy `Style::opacity` becomes overall object
     /// opacity; existing color alpha remains part of each solid paint.
     pub fn from_legacy(style: Style) -> Self {

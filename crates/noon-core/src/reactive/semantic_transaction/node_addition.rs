@@ -91,10 +91,7 @@ pub(super) fn preflight_add_node(
     if !state.transform.translation.is_finite()
         || !state.transform.scale.is_finite()
         || !state.transform.rotation_z.is_finite()
-        || !state.style.fill_opacity.is_finite()
-        || !state.style.stroke_opacity.is_finite()
-        || !state.style.stroke_width.is_finite()
-        || !state.style.object_opacity.is_finite()
+        || !state.style.is_finite()
     {
         return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
     }

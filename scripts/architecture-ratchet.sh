@@ -19,13 +19,18 @@ if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
   exit 2
 fi
 
-range="${base}...HEAD"
+# Local gates inspect staged and unstaged code as well as committed changes.
+# Exact #959 relocation permissions are validated before the growth scan.
+relocation_permissions="$(python3 scripts/architecture_migration_relocations.py "$base")"
+range="$base"
 fixture_path='crates/noon-compile/src/transaction_preflight/tests.rs'
 if [[ -f "$fixture_path" ]] && [[ "$(sed -n '1p' "$fixture_path")" != '#![cfg(test)]' ]]; then
   echo "architecture ratchet: transaction preflight fixtures must remain test-only" >&2
   exit 1
 fi
 forbidden='SceneDefinition|SceneSpec|SceneDocument|ObjectDefinition|ObjectSnapshot|from_legacy|noon::legacy|_manim_canonical_scene|scene_document|noon-ir'
+path_indirection_pattern='^[[:space:]]*#\[[[:space:]]*path[[:space:]]*='
+include_indirection_pattern='(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)'
 
 migration_found=0
 module_indirection_found=0
@@ -36,8 +41,14 @@ while IFS= read -r line; do
     "+++ b/"*)
       current_file="${line#+++ b/}"
       fixture_payload_allowed=0
+      current_relocation_tokens=""
+      while IFS=$'\t' read -r allowed_path allowed_token; do
+        if [[ "$allowed_path" == "$current_file" ]]; then
+          current_relocation_tokens+=" $allowed_token"
+        fi
+      done <<< "$relocation_permissions"
       if [[ "$current_file" == 'crates/noon-compile/src/transaction_preflight/tests.rs' ]] &&
-         [[ "$(git show "HEAD:$current_file" | sed -n '1p')" == '#![cfg(test)]' ]]; then
+         [[ "$(sed -n '1p' "$current_file")" == '#![cfg(test)]' ]]; then
         fixture_payload_allowed=1
       fi
       ;;
@@ -52,18 +63,29 @@ while IFS= read -r line; do
       if (( fixture_payload_allowed != 0 )); then
         migration_checked="$(printf '%s\n' "$migration_checked" | sed -E 's/(^|[^[:alnum:]_])ObjectDefinition([^[:alnum:]_]|$)/\1\2/g')"
       fi
-      if printf '%s\n' "$migration_checked" | grep -Eq "$forbidden"; then
+      # The checker is tooling, not an engine consumer: its own enforcement
+      # vocabulary necessarily names the forbidden types it checks. No product
+      # path receives this exemption.
+      if [[ "$current_file" == 'scripts/architecture_migration_relocations.py' ]]; then
+        migration_checked=""
+      fi
+      # Each permission is bounded by a full-working-tree count and an exact
+      # reviewed file/symbol inventory; it cannot authorize new consumer paths.
+      for token in $current_relocation_tokens; do
+        migration_checked="${migration_checked//"$token"/}"
+      done
+      if [[ "$migration_checked" =~ $forbidden ]]; then
         printf 'architecture ratchet: %s: +%s\n' "${current_file:-unknown}" "$added" >&2
         migration_found=1
       fi
 
       case "$current_file" in
         *.rs)
-          if printf '%s\n' "$added" | grep -Eq '^[[:space:]]*#\[[[:space:]]*path[[:space:]]*='; then
+          if [[ "$added" =~ $path_indirection_pattern ]]; then
             printf 'architecture ratchet: new hidden Rust module ownership: %s: +%s\n' "$current_file" "$added" >&2
             module_indirection_found=1
           fi
-          if printf '%s\n' "$added" | grep -Eq '(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)'; then
+          if [[ "$added" =~ $include_indirection_pattern ]]; then
             printf 'architecture ratchet: new hidden Rust module ownership: %s: +%s\n' "$current_file" "$added" >&2
             module_indirection_found=1
           fi
@@ -75,6 +97,9 @@ done < <(
   git diff --no-color --unified=0 "$range" -- \
     '*.rs' '*.py' '*.js' '*.mjs' '*.ts' '*.tsx' \
     'Cargo.toml' '*/Cargo.toml' 'crates/*/Cargo.toml'
+  while IFS= read -r -d '' untracked; do
+    git diff --no-color --unified=0 --no-index /dev/null "$untracked" || [[ "$?" == 1 ]]
+  done < <(git ls-files --others --exclude-standard -z -- '*.rs' '*.py' '*.js' '*.mjs' '*.ts' '*.tsx' 'Cargo.toml' '*/Cargo.toml' 'crates/*/Cargo.toml')
 )
 
 if (( migration_found != 0 )); then

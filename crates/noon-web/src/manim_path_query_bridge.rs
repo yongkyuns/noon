@@ -73,7 +73,7 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon::{Arc, IntoSnapshot};
+    use noon::legacy::{Arc, IntoSnapshot};
     use noon_core::{GeometryRef, ObjectSnapshot, Vec2, VectorPath};
 
     use super::*;

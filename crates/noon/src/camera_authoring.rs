@@ -2,7 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use noon_core::{SceneDefinition, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH};
 
-use crate::{AuthoringError, Mobject, Rectangle, Scene};
+use crate::legacy::{AuthoringError, Mobject, Rectangle, Scene};
 
 /// Rust authoring facade for a scene with a shared semantic 2D camera frame.
 ///

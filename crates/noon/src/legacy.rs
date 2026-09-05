@@ -7,6 +7,11 @@
 
 #![forbid(unsafe_code)]
 
+mod semantic_snapshot;
+pub use semantic_snapshot::{
+    export_mobject_snapshot, import_mobject_snapshot, replace_mobject_snapshot,
+};
+
 use std::collections::BTreeMap;
 
 pub use noon_core;
@@ -17,10 +22,15 @@ pub use composition_authoring::{AnimationGroup, LaggedStart, Succession};
 
 /// Common imports for normal Noon authoring.
 pub mod prelude {
-    pub use crate::{
+    pub use super::{
         Animate, AnimationGroup, AuthoringError, Circle, Create, FadeIn, FadeOut, LaggedStart,
         Line, Mobject, MobjectEditor, Path, Rectangle, Rotate, Scene, Square, Succession,
         Transform,
+    };
+    pub use crate::legacy::*;
+    pub use crate::{
+        ExecutionSession, ReactiveScene, ReactiveTimelineScene, RetainedScene, ValueTracker,
+        VectorSignal,
     };
     pub use noon_core::{
         Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, RateFunction, Style, Vec2,
@@ -839,6 +849,18 @@ impl Play<'_> {
         }
     }
 }
+
+pub use crate::analytic_geometry_authoring::*;
+pub use crate::arc_authoring::*;
+pub use crate::camera_authoring::*;
+pub use crate::dashed_line_authoring::*;
+pub use crate::elbow_authoring::*;
+pub use crate::geometry_authoring::*;
+pub use crate::line_matcher_authoring::*;
+pub use crate::polygram_authoring::*;
+pub use crate::rounded_rectangle_authoring::*;
+pub use crate::sector_authoring::*;
+pub use crate::shape_matcher_authoring::*;
 
 #[cfg(test)]
 mod tests {

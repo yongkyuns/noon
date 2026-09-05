@@ -1,11 +1,11 @@
 //! Shared Rust authoring semantics for Manim-compatible annular geometry.
 //!
 //! `AnnularSector`, `Sector`, and `Annulus` reuse the retained cubic-arc semantics
-//! from [`crate::Arc`] and compose them into closed [`VectorPath`] contours. No
+//! from [`crate::legacy::Arc`] and compose them into closed [`VectorPath`] contours. No
 //! renderer primitive or frontend-owned geometry is introduced.
 
+use crate::legacy::{Arc, ArcAuthoringError};
 use crate::legacy::{IntoSnapshot, Path};
-use crate::{Arc, ArcAuthoringError};
 use noon_core::{Color, GeometryRef, ObjectSnapshot, PathCommand, Vec2, VectorPath, TAU, WHITE};
 
 macro_rules! define_sector_shape {

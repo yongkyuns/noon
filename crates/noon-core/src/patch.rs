@@ -2,9 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::{
-    validate_track_definition, Color, GeometryRef, ObjectDefinition, ObjectId, PathCommand,
-    SceneDefinition, Style, TimelineError, TrackDefinition, TrackId, Transform2D, Vec2, VectorPath,
+    validate_track_definition, Color, GeometryRef, ObjectDefinition, ObjectId, SceneDefinition,
+    Style, TimelineError, TrackDefinition, TrackId, Transform2D, Vec2,
 };
+
+#[cfg(test)]
+use crate::VectorPath;
 
 mod transaction_preflight;
 pub use transaction_preflight::*;
@@ -159,13 +162,7 @@ pub(super) fn validate_geometry(
     object: ObjectId,
     geometry: &GeometryRef,
 ) -> Result<(), PatchError> {
-    let valid = match geometry {
-        GeometryRef::Circle { radius } => radius.is_finite(),
-        GeometryRef::Rectangle { size } => vec2_is_finite(*size),
-        GeometryRef::Line { start, end } => vec2_is_finite(*start) && vec2_is_finite(*end),
-        GeometryRef::VectorPath(path) => vector_path_is_finite(path),
-        GeometryRef::External(_) => true,
-    };
+    let valid = geometry.is_finite();
     valid.then_some(()).ok_or(PatchError::InvalidObjectState {
         object,
         field: ObjectStateField::Geometry,
@@ -205,19 +202,6 @@ fn color_is_finite(color: Color) -> bool {
         && color.green.is_finite()
         && color.blue.is_finite()
         && color.alpha.is_finite()
-}
-
-fn vector_path_is_finite(path: &VectorPath) -> bool {
-    path.commands().iter().all(|command| match *command {
-        PathCommand::MoveTo { to } | PathCommand::LineTo { to } => vec2_is_finite(to),
-        PathCommand::QuadraticTo { control, to } => vec2_is_finite(control) && vec2_is_finite(to),
-        PathCommand::CubicTo {
-            control1,
-            control2,
-            to,
-        } => vec2_is_finite(control1) && vec2_is_finite(control2) && vec2_is_finite(to),
-        PathCommand::Close => true,
-    }) && path.morph_target().is_none_or(vector_path_is_finite)
 }
 
 /// Validates renderer-independent state carried by an object-property patch.

@@ -12,6 +12,7 @@ import {
   validateSceneDocument,
   validateSceneDuration,
   validateSceneIdentities,
+  validateSemanticExecutionDescriptor,
 } from "./authoring-client.js";
 
 class FakeWorker {
@@ -89,6 +90,7 @@ test("correlates a Python request with a validated PatchBatch response", async (
     requestId: 0,
     source: "result = batch",
     context: { sequence: 4 },
+    exportDocument: false,
   });
 
   const batch = { version: 1, sequence: 4, patches: [] };
@@ -100,6 +102,38 @@ test("correlates a Python request with a validated PatchBatch response", async (
     }),
   );
   assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
+});
+
+test("requests legacy Scene export only through an explicit boolean option", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+
+  const resultPromise = client.run("result = scene", {}, { exportDocument: true });
+  await Promise.resolve();
+  assert.equal(worker.messages[0].type, "run");
+  assert.equal(worker.messages[0].exportDocument, true);
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 0,
+      resultJson: JSON.stringify({
+        kind: "scene_document",
+        document: { version: 1, objects: [], tracks: [] },
+        retained_document: null,
+        scene_spec: { version: 1, objects: [], tracks: [], camera_object: null },
+        duration: 0,
+        identities: { objects: [], tracks: [] },
+        callbacks: null,
+      }),
+    }),
+  );
+  await resultPromise;
+
+  await assert.rejects(
+    client.run("result = scene", {}, { exportDocument: "yes" }),
+    /exportDocument must be a boolean/,
+  );
 });
 
 test("correlates a Python request with Scene callback, retained, and duration metadata", async () => {
@@ -164,6 +198,73 @@ test("scene results without canonical SceneSpec are rejected at the current prot
       ),
     /must include canonical SceneSpec/,
   );
+});
+
+test("semantic execution descriptor bypasses legacy document and SceneSpec validation", () => {
+  const result = parseAuthoringResult(
+    JSON.stringify({
+      kind: "scene_document",
+      semantic_execution: { context_id: "semantic-7" },
+      duration: 2,
+      document: "not a legacy scene",
+      scene_spec: { version: -1 },
+    }),
+  );
+  assert.deepEqual(result, {
+    kind: "scene_document",
+    semanticExecution: { contextId: "semantic-7" },
+    duration: 2,
+  });
+  assert.deepEqual(validateSemanticExecutionDescriptor({ context_id: "semantic-8" }), {
+    contextId: "semantic-8",
+  });
+  assert.throws(
+    () => validateSemanticExecutionDescriptor({ context_id: "" }),
+    /non-empty string/,
+  );
+});
+
+test("semantic execution attachment transfers distinct control and render ports", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  const control = new MessageChannel();
+  const render = new MessageChannel();
+  const result = client.attachSemanticExecution(
+    "semantic-9",
+    control.port1,
+    render.port1,
+    {
+      transportMode: "transferable",
+      sharedSlotCapacity: 1024,
+      loopDurationSeconds: 3,
+      session: 4,
+    },
+  );
+  await Promise.resolve();
+  const request = worker.messages[0];
+  assert.equal(request.type, "attach_semantic_execution");
+  assert.equal(request.contextId, "semantic-9");
+  assert.equal(request.controlPort, control.port1);
+  assert.equal(request.renderPort, render.port1);
+  assert.equal(request.session, 4);
+  worker.emit(
+    "message",
+    workerMessage("semantic_execution_attached", { requestId: request.requestId }),
+  );
+  await result;
+  const released = client.releaseSemanticExecution("semantic-9");
+  await Promise.resolve();
+  assert.equal(worker.messages[1].type, "release_semantic_execution");
+  worker.emit(
+    "message",
+    workerMessage("semantic_execution_released", {
+      requestId: worker.messages[1].requestId,
+    }),
+  );
+  await released;
+  control.port2.close();
+  render.port2.close();
 });
 
 test("validates retained native/Typst authoring documents and JS-safe identities", () => {

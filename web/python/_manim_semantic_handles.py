@@ -497,14 +497,16 @@ def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
 
 
 def _current_raw(self: _base.Mobject) -> _ir.Mobject:
-    handle = _detached_handle_for(self)
+    handle = (_handle_for(self) if not getattr(self._scene, "_legacy_geometry_materialized", False)
+              else _detached_handle_for(self))
     if handle is not None:
         return _raw_from_json(str(handle.snapshotJson()))
     return _ORIGINAL_CURRENT_RAW(self)
 
 
 def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
-    handle = _detached_handle_for(self)
+    handle = (_handle_for(self) if not getattr(self._scene, "_legacy_geometry_materialized", False)
+              else _detached_handle_for(self))
     if handle is not None:
         handle.replaceSnapshotJson(_snapshot_json(raw))
         return self
@@ -641,7 +643,9 @@ def _mutation_handle_for(value: _base.Mobject):
 
 
 def _sync_bound_transform(value: _base.Mobject, handle: object) -> None:
-    if not _is_bound(value):
+    if (not _is_bound(value) or
+            hasattr(value._scene, "_semantic_geometry_handles") and
+            not getattr(value._scene, "_legacy_geometry_materialized", False)):
         return
     scene = value._scene
     obj = value._object
@@ -666,7 +670,9 @@ def _wire_color(handle: object, prefix: str) -> dict[str, float] | None:
 
 
 def _sync_bound_style(value: _base.Mobject, handle: object) -> None:
-    if not _is_bound(value):
+    if (not _is_bound(value) or
+            hasattr(value._scene, "_semantic_geometry_handles") and
+            not getattr(value._scene, "_legacy_geometry_materialized", False)):
         return
     scene = value._scene
     obj = value._object

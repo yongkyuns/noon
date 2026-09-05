@@ -1,5 +1,4 @@
 import initNoonWeb, {
-  CanonicalAuthoringSceneContext,
   RetainedNativeTextAuthoringHandle,
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
@@ -19,17 +18,20 @@ import initNoonWeb, {
   resolveUniformCompositionSchedule,
   validatePresenceTransition,
 } from "./pkg/noon_web.js";
+import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 5;
+const AUTHORING_PROTOCOL_VERSION = 6;
 const HOST_CHANNEL = "noon.host-callback";
 const HOST_PROTOCOL_VERSION = 1;
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
 let engineHostPort = null;
+const semanticContexts = new Map();
+let nextSemanticContext = 0;
 
 pyodidePromise
   .then(() => post("ready"))
@@ -51,7 +53,12 @@ async function initializePyodide() {
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
   const authoringStore = new WasmAuthoringStore();
   self.noonCreateCanonicalAuthoringSceneContext = () =>
-    new CanonicalAuthoringSceneContext();
+    authoringStore.createSceneContext();
+  self.noonRegisterSemanticExecution = (context) => {
+    const token = `semantic-${nextSemanticContext++}`;
+    semanticContexts.set(token, { context, endpoints: new Set(), released: false });
+    return token;
+  };
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
@@ -270,8 +277,30 @@ async function handleRequest(request) {
         pyodide,
         request.source,
         request.context,
+        request.exportDocument ?? false,
       );
       post("result", { requestId, resultJson });
+      return;
+    }
+    if (request.type === "attach_semantic_execution") {
+      const entry = semanticContexts.get(request.contextId);
+      if (!entry || entry.released) throw new Error("unknown or retired semantic execution context");
+      let endpoint;
+      endpoint = attachSemanticEngine(entry.context, request, () => {
+        entry.endpoints.delete(endpoint);
+        retireSemanticContext(request.contextId, entry);
+      });
+      entry.endpoints.add(endpoint);
+      post("semantic_execution_attached", { requestId });
+      return;
+    }
+    if (request.type === "release_semantic_execution") {
+      const entry = semanticContexts.get(request.contextId);
+      if (entry) {
+        entry.released = true;
+        retireSemanticContext(request.contextId, entry);
+      }
+      post("semantic_execution_released", { requestId });
       return;
     }
     if (request.type === "callback_phase") {
@@ -296,7 +325,19 @@ async function handleRequest(request) {
     }
     throw new Error(`Unsupported Python authoring request: ${request.type}`);
   } catch (error) {
+    if (request?.type === "attach_semantic_execution") {
+      request.controlPort?.close?.();
+      request.renderPort?.close?.();
+    }
     postError(requestId, error);
+  }
+}
+
+function retireSemanticContext(token, entry) {
+  if (entry.released && entry.endpoints.size === 0) {
+    semanticContexts.delete(token);
+    // Python may still retain this same wrapper on a reusable Scene. Dropping
+    // our registry reference lets wasm-bindgen finalize it after all owners leave.
   }
 }
 
@@ -315,12 +356,13 @@ async function handleHostRequest(request) {
   }
 }
 
-async function runAuthoringSource(pyodide, source, context) {
+async function runAuthoringSource(pyodide, source, context, exportDocument = false) {
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
   dictConstructor.destroy();
   globals.set("__noon_source", source);
   globals.set("__noon_context_json", JSON.stringify(context));
+  globals.set("__noon_export_document", exportDocument);
 
   try {
     const resultJson = await pyodide.runPythonAsync(
@@ -365,13 +407,27 @@ else:
 
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
-    __noon_scene_spec = __noon_result.to_scene_spec()
-    __noon_document = __noon_result.to_document()
-    __noon_retained = __noon_result.retained_document()
-    __noon_duration = float(__noon_result.time)
-    __noon_identities = __noon_result.identity_document()
+    import _manim_canonical_scene
+    from js import noonRegisterSemanticExecution
     __noon_callbacks = _manim_updaters.register_scene(__noon_result)
+    __noon_context = (None if __noon_export_document else
+        _manim_canonical_scene.execution_context(__noon_result, __noon_callbacks))
+    __noon_semantic = None
+    if __noon_context is not None:
+        __noon_semantic = {"context_id": str(noonRegisterSemanticExecution(__noon_context))}
+        __noon_scene_spec = None
+        __noon_document = None
+        __noon_retained = None
+        __noon_identities = None
+    else:
+        _manim_canonical_scene.materialize_legacy_geometry(__noon_result)
+        __noon_scene_spec = __noon_result.to_scene_spec()
+        __noon_document = __noon_result.to_document()
+        __noon_retained = __noon_result.retained_document()
+        __noon_identities = __noon_result.identity_document()
+    __noon_duration = float(__noon_result.time)
 elif isinstance(__noon_result, PatchBatch):
+    __noon_semantic = None
     __noon_kind = "patch_batch"
     __noon_scene_spec = None
     __noon_document = __noon_result.to_document()
@@ -384,6 +440,7 @@ else:
 json.dumps(
     {
         "kind": __noon_kind,
+        "semantic_execution": __noon_semantic,
         "document": __noon_document,
         "retained_document": __noon_retained,
         "scene_spec": __noon_scene_spec,
@@ -441,6 +498,10 @@ function validateRequest(request) {
     throw new Error("Python authoring request has an invalid request ID");
   }
   if (request.type === "run") {
+    if (request.exportDocument !== undefined && typeof request.exportDocument !== "boolean") {
+      throw new Error("exportDocument must be boolean");
+    }
+
     if (typeof request.source !== "string" || request.source.trim() === "") {
       throw new Error("Python authoring source must be a non-empty string");
     }
@@ -458,6 +519,17 @@ function validateRequest(request) {
     }
     if (!isRecord(request.frame)) {
       throw new Error("Python callback request must contain a frame object");
+    }
+    return;
+  }
+  if (request.type === "release_semantic_execution") {
+    if (typeof request.contextId !== "string" || !request.contextId) throw new Error("invalid semantic context token");
+    return;
+  }
+  if (request.type === "attach_semantic_execution") {
+    if (typeof request.contextId !== "string" || !request.contextId ||
+        !(request.controlPort instanceof MessagePort) || !(request.renderPort instanceof MessagePort)) {
+      throw new Error("semantic attachment requires a context and two ports");
     }
     return;
   }

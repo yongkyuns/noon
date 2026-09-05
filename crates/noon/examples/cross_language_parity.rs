@@ -1,4 +1,4 @@
-use noon::prelude::*;
+use noon::legacy::prelude::*;
 use noon_ir::{encode_scene, encode_timed_semantic_scene};
 
 fn emit(name: &str, document: String) {

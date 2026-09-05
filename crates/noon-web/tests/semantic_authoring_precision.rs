@@ -1,8 +1,11 @@
-use noon_web::FrontendMobjectHandle;
+use noon_web::Mobject;
 
 #[test]
 fn sub_f32_authoring_shifts_accumulate_in_semantic_space() {
-    let mut handle = FrontendMobjectHandle::manim_square(1.0).expect("valid square");
+    let authoring_store =
+        std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+    let mut handle =
+        Mobject::manim_square(std::rc::Rc::clone(&authoring_store), 1.0).expect("valid square");
     handle
         .set_translation(2.0, -1.0)
         .expect("valid initial translation");
@@ -19,7 +22,7 @@ fn sub_f32_authoring_shifts_accumulate_in_semantic_space() {
 
     let expected_x = 2.0 + DELTA * EDITS as f64;
     let expected_y = -1.0 - DELTA * EDITS as f64;
-    let center = handle.center();
+    let center = handle.center().unwrap();
     assert!(
         (center.0 - expected_x).abs() < 1.0e-12,
         "semantic x must retain accumulated sub-f32 edits: {center:?}"
@@ -29,19 +32,22 @@ fn sub_f32_authoring_shifts_accumulate_in_semantic_space() {
         "semantic y must retain accumulated sub-f32 edits: {center:?}"
     );
 
-    let wire = handle.wire_translation();
+    let wire = handle.wire_translation().unwrap();
     assert_eq!(wire.0, f64::from(expected_x as f32));
     assert_eq!(wire.1, f64::from(expected_y as f32));
 }
 
 #[test]
 fn failed_semantic_lowering_does_not_partially_mutate_authoring_state() {
-    let mut handle = FrontendMobjectHandle::manim_square(1.0).expect("valid square");
+    let authoring_store =
+        std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+    let mut handle =
+        Mobject::manim_square(std::rc::Rc::clone(&authoring_store), 1.0).expect("valid square");
     handle
         .set_translation(3.25, -2.5)
         .expect("valid initial translation");
-    let before_center = handle.center();
-    let before_wire = handle.wire_translation();
+    let before_center = handle.center().unwrap();
+    let before_wire = handle.wire_translation().unwrap();
 
     let too_large = f64::from(f32::MAX) * 2.0;
     assert!(
@@ -49,13 +55,13 @@ fn failed_semantic_lowering_does_not_partially_mutate_authoring_state() {
         "out-of-range semantic coordinates must not lower into runtime state"
     );
 
-    assert_eq!(handle.center(), before_center);
-    assert_eq!(handle.wire_translation(), before_wire);
+    assert_eq!(handle.center().unwrap(), before_center);
+    assert_eq!(handle.wire_translation().unwrap(), before_wire);
 
     assert!(
         handle.shift(f64::NAN, 0.0).is_err(),
         "non-finite semantic edits must be rejected"
     );
-    assert_eq!(handle.center(), before_center);
-    assert_eq!(handle.wire_translation(), before_wire);
+    assert_eq!(handle.center().unwrap(), before_center);
+    assert_eq!(handle.wire_translation().unwrap(), before_wire);
 }

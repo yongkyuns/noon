@@ -1,4 +1,4 @@
-use noon::prelude::*;
+use noon::legacy::prelude::*;
 use noon_core::{Camera2DState, GeometryRef, Transform2D};
 use noon_ir::{decode_scene, encode_scene};
 use noon_web::{scene_snapshot_json, EngineScenePlayer, ExecutionDeltaEnvelope};

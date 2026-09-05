@@ -1,4 +1,4 @@
-use noon::{IntoSnapshot, Rectangle, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY};
+use noon::legacy::{IntoSnapshot, Rectangle, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY};
 use noon_core::{ObjectSnapshot, Vec2, BLACK};
 use noon_web::{
     manim_background_rectangle_snapshots_json, manim_surrounding_rectangle_snapshot_json,

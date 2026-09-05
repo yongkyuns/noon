@@ -28,7 +28,7 @@ assert.ok(runtimeStart > authoring, "execution startup must not serialize source
 
 assert.match(
   runScene,
-  /const startRetained = sceneSpecJson !== null;/u,
+  /const startRetained = semanticExecution === null && sceneSpecJson !== null;/u,
   "the authored canonical SceneSpec must select retained startup",
 );
 assert.match(
@@ -38,13 +38,18 @@ assert.match(
 );
 
 const retainedBranch = runtimeReady.match(
-  /const ready = startRetained\s*\?([\s\S]*?)\s*:\s*await nextPlayer\.start\(sceneJson/u,
+  /: startRetained\s*\?([\s\S]*?)\s*:\s*await nextPlayer\.start\(sceneJson/u,
 );
 assert.ok(retainedBranch, "runtime startup must branch between retained and legacy modes");
 assert.match(
   retainedBranch[1],
   /await nextPlayer\.startRetainedCanonical\(sceneSpecJson,/u,
   "a retained first run must start the retained engine directly from the canonical SceneSpec",
+);
+assert.match(
+  runtimeReady,
+  /semanticExecution !== null[\s\S]*await nextPlayer\.startSemanticExecution\(semanticExecution,/u,
+  "semantic results must start their context-held engine before inspecting compatibility documents",
 );
 assert.doesNotMatch(
   retainedBranch[1],

@@ -14,6 +14,7 @@
       import { ExecutionWorkerClient } from "./execution-worker-client.js";
 
       const client = new PythonAuthoringClient();
+      const runForExport = (source) => client.run(source, {}, { exportDocument: true });
       const wasmReady = init();
       const familyCreateSource = `
 from noon import *
@@ -261,7 +262,7 @@ class RetainedSequentialFamilySmoke(Scene):
           readyPromise = (async () => {
             await Promise.all([client.ready(), wasmReady]);
 
-            const create = await client.run(familyCreateSource);
+            const create = await runForExport(familyCreateSource);
             if (create.document.objects.length !== 1) {
               throw new Error(
                 `family Create smoke expected one geometry leaf, got ${create.document.objects.length}`,
@@ -272,7 +273,7 @@ class RetainedSequentialFamilySmoke(Scene):
               throw new Error(`family Create authored unexpected mode ${createRequest.spec.mode}`);
             }
 
-            writeResult = await client.run(familyWriteSource);
+            writeResult = await runForExport(familyWriteSource);
             const writeRequest = oneFamilyRequest(writeResult, "family Write");
             if (writeRequest.spec.mode !== "draw_border_then_fill") {
               throw new Error(`family Write authored unexpected mode ${writeRequest.spec.mode}`);
@@ -295,7 +296,7 @@ class RetainedSequentialFamilySmoke(Scene):
               throw new Error(`family Write scene cursor did not use Rust-resolved duration: ${writeResult.duration}`);
             }
 
-            const unwrite = await client.run(familyUnwriteSource);
+            const unwrite = await runForExport(familyUnwriteSource);
             const unwriteRequest = oneFamilyRequest(unwrite, "family Unwrite");
             if (unwriteRequest.spec.mode !== "draw_border_then_fill") {
               throw new Error(`family Unwrite authored unexpected mode ${unwriteRequest.spec.mode}`);
@@ -304,7 +305,7 @@ class RetainedSequentialFamilySmoke(Scene):
               throw new Error("default Unwrite must reverse both per-member rate and semantic member order");
             }
 
-            sequentialResult = await client.run(sequentialFamilySource);
+            sequentialResult = await runForExport(sequentialFamilySource);
             const sequential = sequentialFamilyRequests(sequentialResult);
             if (Math.abs(Number(sequential[0].spec.start_time) - 0.0) > 1e-12 || Math.abs(Number(sequential[0].spec.duration) - 1.0) > 1e-12) {
               throw new Error("sequential Write did not retain its [0, 1] canonical interval");
@@ -330,7 +331,7 @@ class RetainedSequentialFamilySmoke(Scene):
               throw new Error(`stress source fetch failed with HTTP ${stressResponse.status}`);
             }
             const stressSource = await stressResponse.text();
-            stressResult = await client.run(stressSource);
+            stressResult = await runForExport(stressSource);
             if (stressResult.kind !== "scene_document") {
               throw new Error(`stress smoke returned ${stressResult.kind}`);
             }
@@ -390,7 +391,7 @@ class RetainedSequentialFamilySmoke(Scene):
           await ready();
           return stressRenderResult;
         },
-        run: (source) => client.run(source),
+        run: runForExport,
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };
     </script>

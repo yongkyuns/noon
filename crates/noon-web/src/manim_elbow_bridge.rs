@@ -1,4 +1,4 @@
-use noon::{Elbow, IntoSnapshot};
+use noon::legacy::{Elbow, IntoSnapshot};
 use noon_core::ObjectSnapshot;
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {

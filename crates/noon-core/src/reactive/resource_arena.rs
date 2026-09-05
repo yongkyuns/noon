@@ -57,6 +57,17 @@ pub enum StoredGeometry {
 }
 
 impl StoredGeometry {
+    /// Inline numeric validity; resource liveness is checked against its owning store.
+    pub fn is_finite(self) -> bool {
+        let point = |p: Vec2| p.x.is_finite() && p.y.is_finite();
+        match self {
+            Self::Circle { radius } => radius.is_finite(),
+            Self::Rectangle { size } => point(size),
+            Self::Line { start, end } => point(start) && point(end),
+            Self::Resource(_) => true,
+        }
+    }
+
     pub const fn resource_handle(self) -> Option<GeometryResourceHandle> {
         match self {
             Self::Resource(handle) => Some(handle),

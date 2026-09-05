@@ -1,0 +1,574 @@
+//! Shared geometry authoring over store-owned semantic object state.
+//!
+//! Handles retain only their originating store and generational identity. All
+//! durable edits use the canonical transaction vocabulary; snapshots are explicit
+//! migration/export adapters owned for deletion by #958/#959.
+use noon_core::{
+    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticMutationImpact,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty,
+    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
+    SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath,
+};
+use std::{cell::RefCell, rc::Rc};
+mod bounds;
+mod layout;
+mod style;
+use bounds::layout_for_content;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ManimNextToArgs {
+    pub direction: (f64, f64),
+    pub buff: f64,
+    pub aligned_edge: (f64, f64),
+    pub mask: (f64, f64),
+}
+
+/// An aliasing handle to one node. Use `copy_handle` for an independent object.
+#[derive(Clone, Debug)]
+pub struct Mobject {
+    store: Rc<RefCell<SemanticStore>>,
+    id: SemanticNodeId,
+}
+
+impl PartialEq for Mobject {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.store, &other.store) && self.id == other.id
+    }
+}
+
+impl Mobject {
+    pub fn new(
+        store: Rc<RefCell<SemanticStore>>,
+        state: SemanticObjectState,
+    ) -> Result<Self, String> {
+        state
+            .content
+            .geometry()
+            .ok_or("mobject does not contain geometry")?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(SemanticNodeCreation::object(state));
+        let result = transaction
+            .apply(&mut store.borrow_mut())
+            .map_err(|error| error.to_string())?;
+        let [SemanticMutationImpact::NodeAdded { node: id }] = result.impacts() else {
+            unreachable!("one object creation produces one identity")
+        };
+        Ok(Self { store, id: *id })
+    }
+
+    pub fn from_node(
+        store: Rc<RefCell<SemanticStore>>,
+        id: SemanticNodeId,
+    ) -> Result<Self, String> {
+        let handle = Self { store, id };
+        handle.validate()?;
+        Ok(handle)
+    }
+
+    pub fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+        &self.store
+    }
+    pub fn node_id(&self) -> SemanticNodeId {
+        self.id
+    }
+    pub fn state(&self) -> Result<SemanticObjectState, String> {
+        self.validate()?;
+        self.store
+            .borrow()
+            .semantic_object_state_checked(self.id)
+            .cloned()
+            .map_err(|error| error.to_string())
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(|error| error.to_string())?;
+        let geometry = state
+            .content
+            .geometry()
+            .ok_or("mobject does not contain geometry")?;
+        if let StoredGeometry::Resource(handle) = geometry {
+            store
+                .geometry_resources()
+                .get(handle)
+                .ok_or("unknown or stale geometry resource")?;
+        }
+        Ok(())
+    }
+    pub fn require_same_store(&self, other: &Self) -> Result<(), String> {
+        if !Rc::ptr_eq(&self.store, &other.store) {
+            return Err("mobjects belong to different authoring stores".into());
+        }
+        self.validate()?;
+        other.validate()
+    }
+
+    /// Commit presentation changes atomically while retaining node-owned identity,
+    /// source/painter metadata, role, bindings, and family membership.
+    pub fn commit_state(&mut self, state: SemanticObjectState) -> Result<(), String> {
+        state
+            .content
+            .geometry()
+            .ok_or("mobject does not contain geometry")?;
+        let previous = self.state()?;
+        let mut transaction = SemanticMutationTransaction::new();
+        if previous.content != state.content {
+            transaction.replace_content(self.id, state.content);
+        }
+        if previous.transform.translation != state.transform.translation {
+            transaction.set_property(
+                self.id,
+                SemanticObjectProperty::Translation,
+                state.transform.translation,
+            );
+        }
+        if previous.transform.scale != state.transform.scale {
+            transaction.set_property(
+                self.id,
+                SemanticObjectProperty::Scale,
+                state.transform.scale,
+            );
+        }
+        if previous.transform.rotation_z != state.transform.rotation_z {
+            transaction.set_property(
+                self.id,
+                SemanticObjectProperty::RotationZ,
+                state.transform.rotation_z,
+            );
+        }
+        if previous.style != state.style {
+            transaction.replace_style(self.id, state.style);
+        }
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn copy_handle(&self) -> Result<Self, String> {
+        Self::new(Rc::clone(&self.store), self.state()?)
+    }
+    pub fn target_editor(&self) -> Result<Self, String> {
+        self.copy_handle()
+    }
+
+    pub fn from_geometry(
+        store: Rc<RefCell<SemanticStore>>,
+        geometry: GeometryRef,
+        style: SemanticStyle,
+    ) -> Result<Self, String> {
+        if !geometry.is_finite() || !style.is_finite() {
+            return Err("geometry and style must be finite".into());
+        }
+        let content = import_geometry(&mut store.borrow_mut(), geometry)?;
+        let mut state = SemanticObjectState::new(content);
+        state.style = style;
+        Self::new(store, state)
+    }
+    pub fn manim_circle(store: Rc<RefCell<SemanticStore>>, radius: f64) -> Result<Self, String> {
+        Self::from_geometry(
+            store,
+            GeometryRef::circle(positive_f32("radius", radius)?),
+            manim_style(Color::RED),
+        )
+    }
+    pub fn manim_square(store: Rc<RefCell<SemanticStore>>, side: f64) -> Result<Self, String> {
+        Self::manim_rectangle(store, side, side)
+    }
+    pub fn manim_rectangle(
+        store: Rc<RefCell<SemanticStore>>,
+        width: f64,
+        height: f64,
+    ) -> Result<Self, String> {
+        Self::from_geometry(
+            store,
+            GeometryRef::rectangle(
+                positive_f32("width", width)?,
+                positive_f32("height", height)?,
+            ),
+            manim_style(Color::WHITE),
+        )
+    }
+    pub fn manim_line(
+        store: Rc<RefCell<SemanticStore>>,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    ) -> Result<Self, String> {
+        Self::from_geometry(
+            store,
+            GeometryRef::line(semantic_xy(x1, y1)?, semantic_xy(x2, y2)?),
+            manim_style(Color::WHITE),
+        )
+    }
+
+    pub fn wire_translation(&self) -> Result<(f64, f64), String> {
+        let t = self
+            .state()?
+            .transform
+            .translation
+            .lower_xy_f32()
+            .map_err(|e| e.to_string())?;
+        Ok((t.x as f64, t.y as f64))
+    }
+    pub fn wire_scale(&self) -> Result<(f64, f64), String> {
+        let t = self
+            .state()?
+            .transform
+            .scale
+            .lower_xy_f32()
+            .map_err(|e| e.to_string())?;
+        Ok((t.x as f64, t.y as f64))
+    }
+    pub fn wire_rotation(&self) -> Result<f64, String> {
+        Ok(finite_f32("rotation", self.state()?.transform.rotation_z)? as f64)
+    }
+    pub fn wire_fill(&self) -> Result<Option<(f64, f64, f64, f64)>, String> {
+        let s = self.state()?.style;
+        Ok(legacy_solid_color(s.fill.as_ref(), s.fill_opacity).map(color_tuple))
+    }
+    pub fn wire_stroke(&self) -> Result<Option<(f64, f64, f64, f64)>, String> {
+        let s = self.state()?.style;
+        Ok(legacy_solid_color(s.stroke.as_ref(), s.stroke_opacity).map(color_tuple))
+    }
+    pub fn wire_stroke_width(&self) -> Result<f64, String> {
+        Ok(finite_f32("stroke width", self.state()?.style.stroke_width)? as f64)
+    }
+    pub fn wire_object_opacity(&self) -> Result<f64, String> {
+        Ok(self.state()?.style.object_opacity as f32 as f64)
+    }
+    pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, String> {
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(|e| e.to_string())?;
+        layout_for_content(
+            &store,
+            state
+                .content
+                .geometry()
+                .ok_or("mobject does not contain geometry")?,
+            state.transform,
+        )
+    }
+    pub fn center(&self) -> Result<(f64, f64), String> {
+        if let Some(b) = self.layout_bounds()? {
+            Ok(((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
+        } else {
+            let t = self.state()?.transform.translation;
+            Ok((t.x, t.y))
+        }
+    }
+    pub fn width(&self) -> Result<f64, String> {
+        Ok(self.layout_bounds()?.map_or(0.0, Bounds2D64::width))
+    }
+    pub fn height(&self) -> Result<f64, String> {
+        Ok(self.layout_bounds()?.map_or(0.0, Bounds2D64::height))
+    }
+
+    pub fn become_handle(&mut self, other: &Self) -> Result<(), String> {
+        self.require_same_store(other)?;
+        self.commit_state(other.state()?)
+    }
+    pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.validate()?;
+        let center = self.center()?;
+        self.scale_about_center(x, y, center)
+    }
+    fn scale_about_center(&mut self, x: f64, y: f64, center: (f64, f64)) -> Result<(), String> {
+        let mut state = self.state()?;
+        state.transform.scale.x *= authoring_render_f64("scale.x", x)?;
+        state.transform.scale.y *= authoring_render_f64("scale.y", y)?;
+        state
+            .transform
+            .scale
+            .lower_xy_f32()
+            .map_err(|e| e.to_string())?;
+        let bounds = layout_for_content(
+            &self.store.borrow(),
+            state
+                .content
+                .geometry()
+                .ok_or("geometry mobject required")?,
+            state.transform,
+        )?;
+        let scaled_center = bounds
+            .map(|b| ((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
+            .unwrap_or((state.transform.translation.x, state.transform.translation.y));
+        state.transform.translation.x += center.0 - scaled_center.0;
+        state.transform.translation.y += center.1 - scaled_center.1;
+        state
+            .transform
+            .translation
+            .lower_xy_f32()
+            .map_err(|e| e.to_string())?;
+        self.commit_state(state)
+    }
+    pub fn replace_handle(
+        &mut self,
+        other: &Self,
+        dim_to_match: u32,
+        stretch: bool,
+    ) -> Result<(), String> {
+        self.require_same_store(other)?;
+        if dim_to_match > 1 {
+            return Err("replace supports width (0) or height (1)".into());
+        }
+        let (w, h) = (self.width()?, self.height()?);
+        let (tw, th) = (other.width()?, other.height()?);
+        let (x, y) = if stretch {
+            if w == 0.0 || h == 0.0 {
+                return Err("cannot stretch-replace an object with zero width or height".into());
+            }
+            (tw / w, th / h)
+        } else {
+            let (a, b) = if dim_to_match == 0 { (w, tw) } else { (h, th) };
+            if a == 0.0 {
+                return Err("cannot replace along a zero-length dimension".into());
+            }
+            (b / a, b / a)
+        };
+        self.scale_about_center(x, y, other.center()?)
+    }
+    pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.validate()?;
+        semantic_xy(x, y)?;
+        let center = self.center()?;
+        self.shift(x - center.0, y - center.1)
+    }
+
+    pub fn critical_point(&self, direction_x: f64, direction_y: f64) -> Result<(f64, f64), String> {
+        let Some(bounds) = self.layout_bounds()? else {
+            return self.center();
+        };
+        let center = self.center()?;
+        Ok((
+            if direction_x < 0.0 {
+                bounds.min_x
+            } else if direction_x > 0.0 {
+                bounds.max_x
+            } else {
+                center.0
+            },
+            if direction_y < 0.0 {
+                bounds.min_y
+            } else if direction_y > 0.0 {
+                bounds.max_y
+            } else {
+                center.1
+            },
+        ))
+    }
+
+    pub fn shift(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.validate()?;
+        let mut state = self.state()?;
+        let offset = authoring_xy_f64(x, y)?;
+        let translation = SemanticVec3::new(
+            state.transform.translation.x + offset.x,
+            state.transform.translation.y + offset.y,
+            state.transform.translation.z,
+        );
+        translation
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+        state.transform.translation = translation;
+        self.commit_state(state)
+    }
+
+    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.validate()?;
+        let mut state = self.state()?;
+        let value = authoring_xy_f64(x, y)?;
+        state.transform.translation.x = value.x;
+        state.transform.translation.y = value.y;
+        self.commit_state(state)
+    }
+
+    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.validate()?;
+        let mut state = self.state()?;
+        let value = authoring_xy_f64(x, y)?;
+        state.transform.scale.x = value.x;
+        state.transform.scale.y = value.y;
+        self.commit_state(state)
+    }
+
+    pub fn set_rotation(&mut self, angle: f64) -> Result<(), String> {
+        self.validate()?;
+        let mut state = self.state()?;
+        state.transform.rotation_z = authoring_render_f64("rotation", angle)?;
+        self.commit_state(state)
+    }
+
+    pub fn scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.validate()?;
+        let mut state = self.state()?;
+        let x = authoring_render_f64("scale.x", x)?;
+        let y = authoring_render_f64("scale.y", y)?;
+        let scale = SemanticVec3::new(
+            state.transform.scale.x * x,
+            state.transform.scale.y * y,
+            state.transform.scale.z,
+        );
+        scale.lower_xy_f32().map_err(|error| error.to_string())?;
+        state.transform.scale = scale;
+        self.commit_state(state)
+    }
+
+    pub fn rotate(&mut self, angle: f64) -> Result<(), String> {
+        self.validate()?;
+        let mut state = self.state()?;
+        let angle = authoring_render_f64("rotation", angle)?;
+        let rotation = state.transform.rotation_z + angle;
+        finite_f32("rotation result", rotation)?;
+        state.transform.rotation_z = rotation;
+        self.commit_state(state)
+    }
+
+    pub fn rotate_about_point(
+        &mut self,
+        angle: f64,
+        point_x: f64,
+        point_y: f64,
+    ) -> Result<(), String> {
+        self.validate()?;
+        let mut state = self.state()?;
+        let angle = authoring_render_f64("rotation", angle)?;
+        let pivot = authoring_xy_f64(point_x, point_y)?;
+        let rotation = state.transform.rotation_z + angle;
+        finite_f32("rotation result", rotation)?;
+
+        let translation = state.transform.translation;
+        let relative_x = translation.x - pivot.x;
+        let relative_y = translation.y - pivot.y;
+        let cosine = angle.cos();
+        let sine = angle.sin();
+        let next_translation = SemanticVec3::new(
+            pivot.x + relative_x * cosine - relative_y * sine,
+            pivot.y + relative_x * sine + relative_y * cosine,
+            translation.z,
+        );
+        next_translation
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+        state.transform.translation = next_translation;
+        state.transform.rotation_z = rotation;
+        self.commit_state(state)
+    }
+}
+
+fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
+    authoring_render_f64(name, value).map(|value| value as f32)
+}
+
+pub fn authoring_render_f64(name: &str, value: f64) -> Result<f64, String> {
+    if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
+        return Err(format!("{name} must be a finite f32-compatible number"));
+    }
+    Ok(value)
+}
+
+fn unit_opacity(name: &str, value: f64) -> Result<f64, String> {
+    let value = authoring_render_f64(name, value)?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(format!("{name} must be between 0 and 1"));
+    }
+    Ok(value)
+}
+
+fn opaque_color(name: &str, red: f64, green: f64, blue: f64) -> Result<Color, String> {
+    Ok(Color::rgba(
+        finite_f32(&format!("{name}.red"), red)?,
+        finite_f32(&format!("{name}.green"), green)?,
+        finite_f32(&format!("{name}.blue"), blue)?,
+        1.0,
+    ))
+}
+
+pub(crate) fn legacy_solid_color(paint: Option<&SemanticPaint>, opacity: f64) -> Option<Color> {
+    let SemanticPaint::Solid(color) = paint? else {
+        return None;
+    };
+    Some(Color {
+        alpha: (f64::from(color.alpha) * opacity) as f32,
+        ..*color
+    })
+}
+
+fn semantic_xy(x: f64, y: f64) -> Result<Vec2, String> {
+    authoring_xy_f64(x, y)?
+        .lower_xy_f32()
+        .map_err(|error| error.to_string())
+}
+
+pub fn authoring_xy_f64(x: f64, y: f64) -> Result<SemanticVec3, String> {
+    let value = SemanticVec3::new(x, y, 0.0);
+    value.lower_xy_f32().map_err(|error| error.to_string())?;
+    Ok(value)
+}
+
+fn normalized_direction(x: f64, y: f64) -> Result<(f64, f64), String> {
+    if !x.is_finite() || !y.is_finite() {
+        return Err("direction must be finite".to_owned());
+    }
+    let length = x.hypot(y);
+    if length == 0.0 {
+        return Err("direction must be non-zero".to_owned());
+    }
+    Ok((x / length, y / length))
+}
+
+fn positive_f32(name: &str, value: f64) -> Result<f32, String> {
+    let value = finite_f32(name, value)?;
+    if value <= 0.0 {
+        return Err(format!("{name} must be positive"));
+    }
+    Ok(value)
+}
+fn manim_style(color: Color) -> SemanticStyle {
+    SemanticStyle {
+        fill: Some(SemanticPaint::Solid(color)),
+        fill_opacity: 0.0,
+        stroke: Some(SemanticPaint::Solid(color)),
+        stroke_opacity: 1.0,
+        stroke_width: 0.04,
+        stroke_width_mode: StrokeWidthMode::ScreenSpace,
+        stroke_join: StrokeJoin::Miter,
+        stroke_cap: StrokeCap::Butt,
+        object_opacity: 1.0,
+    }
+}
+fn color_tuple(color: Color) -> (f64, f64, f64, f64) {
+    (
+        color.red as f64,
+        color.green as f64,
+        color.blue as f64,
+        color.alpha as f64,
+    )
+}
+
+pub(crate) fn import_geometry(
+    store: &mut SemanticStore,
+    geometry: GeometryRef,
+) -> Result<StoredGeometry, String> {
+    if !geometry.is_finite() {
+        return Err("geometry must be finite".into());
+    }
+    match geometry {
+        GeometryRef::Circle { radius } => Ok(StoredGeometry::Circle { radius }),
+        GeometryRef::Rectangle { size } => Ok(StoredGeometry::Rectangle { size }),
+        GeometryRef::Line { start, end } => Ok(StoredGeometry::Line { start, end }),
+        GeometryRef::VectorPath(path) => {
+            Ok(StoredGeometry::Resource(store.insert_geometry_path(path)?))
+        }
+        GeometryRef::External(_) => {
+            Err("external geometry must resolve to an immutable semantic resource".into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

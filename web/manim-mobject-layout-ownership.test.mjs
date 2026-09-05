@@ -7,7 +7,7 @@ const semanticHandlesSource = readFileSync(
   "utf8",
 );
 const rustHandleSource = readFileSync(
-  new URL("../crates/noon-web/src/authoring_mobject.rs", import.meta.url),
+  new URL("../crates/noon/src/semantic_mobject.rs", import.meta.url),
   "utf8",
 );
 
@@ -53,13 +53,13 @@ test("detached Mobject layout queries stay owned by the shared semantic handle",
 });
 
 test("Rust semantic handle remains the layout-query source of truth", () => {
-  assert.match(rustHandleSource, /pub fn layout_bounds\(&self\) -> Option<Bounds2D64>/);
-  assert.match(rustHandleSource, /pub fn center\(&self\) -> \(f64, f64\)/);
-  assert.match(rustHandleSource, /pub fn width\(&self\) -> f64/);
-  assert.match(rustHandleSource, /pub fn height\(&self\) -> f64/);
+  assert.match(rustHandleSource, /pub fn layout_bounds\(&self\) -> Result<Option<Bounds2D64>, String>/);
+  assert.match(rustHandleSource, /pub fn center\(&self\) -> Result<\(f64, f64\), String>/);
+  assert.match(rustHandleSource, /pub fn width\(&self\) -> Result<f64, String>/);
+  assert.match(rustHandleSource, /pub fn height\(&self\) -> Result<f64, String>/);
   assert.match(
     rustHandleSource,
-    /pub fn critical_point\(&self, direction_x: f64, direction_y: f64\) -> \(f64, f64\)/,
+    /pub fn critical_point\([\s\S]*?\) -> Result<\(f64, f64\), String>/,
   );
 
   const centerStart = rustHandleSource.indexOf("pub fn center(&self)");

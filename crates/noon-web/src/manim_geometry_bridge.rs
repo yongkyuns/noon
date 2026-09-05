@@ -1,4 +1,4 @@
-use noon::{
+use noon::legacy::{
     arc_center_from_snapshot, arc_end_from_snapshot, arc_start_from_snapshot,
     arc_stop_angle_from_snapshot, Arc, ArcBetweenPoints, ArcMetadata, Dot, IntoSnapshot,
     RoundedRectangle, Triangle,
@@ -331,7 +331,7 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon::{arc_center_from_snapshot, arc_end_from_snapshot, arc_start_from_snapshot};
+    use noon::legacy::{arc_center_from_snapshot, arc_end_from_snapshot, arc_start_from_snapshot};
     use noon_core::{GeometryRef, PathCommand, BLUE, TAU, WHITE};
 
     use super::*;

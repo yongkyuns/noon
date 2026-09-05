@@ -6,7 +6,7 @@
 //! and renderers do not need matcher-specific primitives.
 
 use crate::legacy::IntoSnapshot;
-use crate::{RoundedRectangle, RoundedRectangleAuthoringError};
+use crate::legacy::{RoundedRectangle, RoundedRectangleAuthoringError};
 use noon_core::{Color, ObjectSnapshot, Rect, Vec2, BLACK, SMALL_BUFF};
 
 /// ManimCE's `PURE_YELLOW` default for `SurroundingRectangle`.

@@ -261,8 +261,25 @@ impl ExecutionDeltaEncoder {
         frame: &FrameState,
         live_objects: &[(ExecutionSlotId, usize)],
     ) -> Result<ExecutionDeltaEnvelope, ExecutionTransportError> {
-        self.validate_time(frame.time)?;
         let camera = self.camera_state(frame)?;
+        self.encode_snapshot_with_camera(frame, live_objects, camera)
+    }
+
+    /// Encode with the canonical session's indexed camera query.
+    pub fn encode_snapshot_with_camera(
+        &mut self,
+        frame: &FrameState,
+        live_objects: &[(ExecutionSlotId, usize)],
+        camera: Camera2DState,
+    ) -> Result<ExecutionDeltaEnvelope, ExecutionTransportError> {
+        self.validate_time(frame.time)?;
+        if !camera.center.x.is_finite()
+            || !camera.center.y.is_finite()
+            || !camera.height.is_finite()
+            || camera.height <= 0.0
+        {
+            return Err(ExecutionTransportError::InvalidCameraState);
+        }
         self.slot_orders.clear();
         self.next_order = 0;
         let mut objects = Vec::with_capacity(live_objects.len());
@@ -311,7 +328,38 @@ impl ExecutionDeltaEncoder {
             return Ok(None);
         }
         let camera = self.camera_state(frame)?;
+        self.encode_incremental_with_camera(
+            frame,
+            dirty_objects,
+            added_objects,
+            removed_slots,
+            camera,
+        )
+    }
 
+    /// Encode dirty rows without searching the frame for an authored camera.
+    pub fn encode_incremental_with_camera(
+        &mut self,
+        frame: &FrameState,
+        dirty_objects: &[(ExecutionSlotId, usize)],
+        added_objects: &[(ExecutionSlotId, usize)],
+        removed_slots: &[ExecutionSlotId],
+        camera: Camera2DState,
+    ) -> Result<Option<ExecutionDeltaEnvelope>, ExecutionTransportError> {
+        self.validate_time(frame.time)?;
+        if !camera.center.x.is_finite()
+            || !camera.center.y.is_finite()
+            || !camera.height.is_finite()
+            || camera.height <= 0.0
+        {
+            return Err(ExecutionTransportError::InvalidCameraState);
+        }
+        if !self.initialized {
+            return Err(ExecutionTransportError::StructuralDeltaRequiresSnapshot);
+        }
+        if dirty_objects.is_empty() && added_objects.is_empty() && removed_slots.is_empty() {
+            return Ok(None);
+        }
         let mut removed = Vec::with_capacity(removed_slots.len());
         let mut seen_removed = HashSet::with_capacity(removed_slots.len());
         for &slot in removed_slots {
@@ -1132,6 +1180,45 @@ mod tests {
         assert_eq!(outcome, TransportApplyOutcome::Applied);
         assert_eq!(changes.object_indices(), &[0]);
         assert_eq!(mirror.frame().unwrap(), player.frame());
+    }
+
+    #[test]
+    fn invalid_camera_override_preserves_encoder_publication_state() {
+        let mut player = ScenePlayer::from_scene_json(&scene_json()).unwrap();
+        let mut encoder = ExecutionDeltaEncoder::new(7);
+        encode_current(&mut encoder, &mut player);
+        for camera in [
+            Camera2DState {
+                center: Vec2::new(f32::NAN, 0.0),
+                ..Default::default()
+            },
+            Camera2DState {
+                height: f32::INFINITY,
+                ..Default::default()
+            },
+            Camera2DState {
+                height: 0.0,
+                ..Default::default()
+            },
+            Camera2DState {
+                height: -1.0,
+                ..Default::default()
+            },
+        ] {
+            let before = encoder.clone();
+            assert!(matches!(
+                encoder.encode_snapshot_with_camera(player.frame(), &[], camera),
+                Err(ExecutionTransportError::InvalidCameraState)
+            ));
+            assert!(matches!(
+                encoder.encode_incremental_with_camera(player.frame(), &[], &[], &[], camera),
+                Err(ExecutionTransportError::InvalidCameraState)
+            ));
+            assert_eq!(encoder.next_sequence, before.next_sequence);
+            assert_eq!(encoder.slot_orders, before.slot_orders);
+            assert_eq!(encoder.next_order, before.next_order);
+            assert_eq!(encoder.initialized, before.initialized);
+        }
     }
 
     #[test]

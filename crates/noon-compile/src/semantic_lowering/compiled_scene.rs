@@ -204,7 +204,7 @@ mod tests {
         use noon_core::VectorPath;
         let mut store = SemanticStore::new();
         let path = VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE);
-        let resource = store.insert_geometry_path(path.clone());
+        let resource = store.insert_geometry_path(path.clone()).unwrap();
         let node = store
             .insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
         store.attach_to_scene(node).unwrap();
@@ -215,7 +215,7 @@ mod tests {
             GeometryRef::path(path)
         );
         let mut foreign = SemanticStore::new();
-        foreign.insert_geometry_path(VectorPath::new());
+        foreign.insert_geometry_path(VectorPath::new()).unwrap();
         let node = foreign
             .insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
         foreign.attach_to_scene(node).unwrap();

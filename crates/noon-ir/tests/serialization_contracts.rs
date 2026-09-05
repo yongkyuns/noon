@@ -24,7 +24,7 @@ fn contract_manifest_inventories_current_cross_language_boundaries() {
     assert_eq!(manifest["noon_ir_version"], 1);
     assert_eq!(manifest["scene_spec_version"], 1);
     assert_eq!(manifest["authoring_protocol"]["channel"], "noon.authoring");
-    assert_eq!(manifest["authoring_protocol"]["version"], 5);
+    assert_eq!(manifest["authoring_protocol"]["version"], 6);
     let names = manifest["contracts"]
         .as_array()
         .expect("contracts array")

@@ -1,4 +1,4 @@
-use noon::prelude::*;
+use noon::legacy::prelude::*;
 use noon_core::{Property, RateFunction};
 
 #[test]
