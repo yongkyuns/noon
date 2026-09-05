@@ -395,7 +395,14 @@ try {
   const shared = await runMode("shared", 1);
 
   // Run the published examples through the same authoring and rendering harness.
-  for (const { filename, objectCount, expectedDuration, endpointTime, expectText = false } of [
+  for (const {
+    filename,
+    objectCount,
+    expectedDuration,
+    endpointTime,
+    expectText = false,
+    expectedFinalCenter = null,
+  } of [
     {
       filename: "live_semantic_scene.py",
       objectCount: 3,
@@ -409,6 +416,13 @@ try {
       endpointTime: 2,
     },
     {
+      filename: "live_affine_completion.py",
+      objectCount: 1,
+      expectedDuration: 4.25,
+      endpointTime: null,
+      expectedFinalCenter: [5, -2],
+    },
+    {
       filename: "live_content_switch.py",
       objectCount: 2,
       expectedDuration: null,
@@ -417,7 +431,14 @@ try {
     },
   ]) {
     const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
-    const result = await page.evaluate(async ({ source, objectCount, expectedDuration, endpointTime, expectText, filename }) => {
+    const result = await page.evaluate(async ({
+      source,
+      objectCount,
+      endpointTime,
+      expectText,
+      expectedFinalCenter,
+      filename,
+    }) => {
       const harness = window.sharedAuthoringSmoke;
       const authored = await harness.authoring.run(source, {});
       const canvas = document.createElement("canvas");
@@ -432,7 +453,7 @@ try {
           authoringClient: harness.authoring,
           transportMode: "transferable",
         };
-        if (expectedDuration !== null) options.loopDurationSeconds = authored.duration;
+        if (endpointTime !== null) options.loopDurationSeconds = authored.duration;
         await execution.startSemanticExecution(authored.semanticExecution, options);
 
         async function waitForFrame(afterPresentedFrames = 0) {
@@ -458,17 +479,19 @@ try {
           const rendered = await waitForFrame(initial.presentedFrames);
           endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
         }
-        retainForInspection = endpointTime !== null || expectText;
+        retainForInspection = endpointTime !== null || expectText || expectedFinalCenter !== null;
         if (retainForInspection) harness.liveExampleExecution = execution;
         return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, expectedDuration, endpointTime, expectText, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     assert.ok(result.metrics.drawCalls > 0, `${filename}: no draw calls`);
     if (expectedDuration !== null) {
       assert.equal(result.duration, expectedDuration, `${filename}: canonical live duration`);
+    }
+    if (endpointTime !== null) {
       assert.ok(
         Math.abs(result.endpoint.time - endpointTime) < 1e-6,
         `${filename}: endpoint seek`,
@@ -484,13 +507,24 @@ try {
       assert.ok(endpointPixels.centerX > 420, `${filename}: endpoint did not retain x=4`);
       assert.ok(endpointPixels.centerY > 220, `${filename}: endpoint did not retain y=-2`);
     }
+    if (expectedFinalCenter !== null) {
+      const finalPixels = visiblePixelStats(
+        await page.locator(`#${result.canvasId}`).screenshot(),
+        (red, green, blue) => Math.max(red, green, blue) > 80,
+      );
+      const expectedX = 320 + expectedFinalCenter[0] * 45;
+      const expectedY = 180 - expectedFinalCenter[1] * 45;
+      assert.ok(finalPixels.count > 100, `${filename}: completed circle was not visible`);
+      assert.ok(Math.abs(finalPixels.centerX - expectedX) < 4, `${filename}: completed x endpoint`);
+      assert.ok(Math.abs(finalPixels.centerY - expectedY) < 4, `${filename}: completed y endpoint`);
+    }
     if (expectText) {
       const pixels = textPixelStats(await page.locator(`#${result.canvasId}`).screenshot());
       assert.ok(pixels.count > 100, `${filename}: replacement glyphs were not rendered`);
       assert.ok(pixels.width > 50, `${filename}: replacement text has no glyph extent`);
       assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
     }
-    if (endpointTime !== null || expectText) {
+    if (endpointTime !== null || expectText || expectedFinalCenter !== null) {
       await page.evaluate(() => {
         window.sharedAuthoringSmoke.liveExampleExecution.terminate();
         window.sharedAuthoringSmoke.liveExampleExecution = null;

@@ -299,6 +299,29 @@ async function directExecutionProof(page, expectedBackend) {
     direct.metrics.affineCallbacks?.bootstrapVacatedLuma <= 60,
     "direct Rust/WASM time-zero callback did not publish before the first renderer frame",
   );
+  assert.equal(
+    direct.metrics.affineCompletion?.backend,
+    expectedBackend,
+    "direct Rust/WASM completion did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.affineCompletion?.authoredTime,
+    4.25,
+    "direct Rust/WASM completion did not preserve the typed authored sequence",
+  );
+  assert.equal(
+    direct.metrics.affineCompletion?.objectCount,
+    1,
+    "direct Rust/WASM completion scene did not retain its Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.affineCompletion?.endpointLuma >= 150,
+    "direct Rust/WASM completion did not render the x=5 endpoint",
+  );
+  assert.ok(
+    direct.metrics.affineCompletion?.priorSetterLuma <= 60,
+    "direct Rust/WASM completion remained at the intervening x=3 setter",
+  );
   return direct.metrics;
 }
 

@@ -40,6 +40,7 @@ for (const required of [
   "Mobject::from_text",
   "Text::new(\"Noon\")",
   "example_scenes::live_affine_callbacks",
+  "example_scenes::live_affine_completion",
   "create_from_execution_session_with_callbacks",
 ]) {
   assert.ok(rustHarness.includes(required), `direct Rust/WASM proof must contain ${required}`);
@@ -120,9 +121,12 @@ for (const required of [
   "renderer.time() >= 0.1",
   "textDrawCalls",
   "createDirectAffineCallbackSmokeRenderer",
+  "createDirectAffineCompletionSmokeRenderer",
   "canvas.convertToBlob",
   "sourceLuma",
   "driftLuma",
+  "endpointLuma",
+  "priorSetterLuma",
 ]) {
   assert.ok(browserProbe.includes(required), `browser direct-execution proof must contain ${required}`);
 }
@@ -155,6 +159,8 @@ for (const required of [
   "window.noonDirectExecutionSmoke?.ready === true",
   "direct Rust/WASM execution proof failed",
   "direct.metrics.backend",
+  "direct.metrics.affineCompletion?.authoredTime",
+  "direct.metrics.affineCompletion?.endpointLuma",
   "direct Rust/WASM execution did not present",
 ]) {
   assert.ok(

@@ -1,5 +1,6 @@
 import {
   createDirectAffineCallbackSmokeRenderer,
+  createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
 } from "./pkg/noon_web.js";
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
@@ -70,7 +71,7 @@ async function sampleRenderedPixel(canvas, worldX, worldY) {
   const pixels = new OffscreenCanvas(canvas.width, canvas.height);
   const context = pixels.getContext("2d", { willReadFrequently: true });
   if (!context) {
-    throw new Error("direct affine callback proof could not create its pixel reader");
+    throw new Error("direct Rust/WASM proof could not create its pixel reader");
   }
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
@@ -81,6 +82,32 @@ async function sampleRenderedPixel(canvas, worldX, worldY) {
   const y = Math.round(((worldHeight / 2 - worldY) / worldHeight) * (canvas.height - 1));
   const data = context.getImageData(x, y, 1, 1).data;
   return data[0] + data[1] + data[2];
+}
+
+async function sampleRenderedNeighborhood(canvas, worldX, worldY, radius = 4) {
+  const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
+  const pixels = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = pixels.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("direct Rust/WASM proof could not create its pixel reader");
+  }
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const worldHeight = 8;
+  const worldWidth = worldHeight * (canvas.width / canvas.height);
+  const centerX = Math.round(((worldX + worldWidth / 2) / worldWidth) * (canvas.width - 1));
+  const centerY = Math.round(((worldHeight / 2 - worldY) / worldHeight) * (canvas.height - 1));
+  const x = Math.max(0, centerX - radius);
+  const y = Math.max(0, centerY - radius);
+  const width = Math.min(canvas.width - x, radius * 2 + 1);
+  const height = Math.min(canvas.height - y, radius * 2 + 1);
+  const data = context.getImageData(x, y, width, height).data;
+  let brightest = 0;
+  for (let offset = 0; offset < data.length; offset += 4) {
+    brightest = Math.max(brightest, data[offset] + data[offset + 1] + data[offset + 2]);
+  }
+  return brightest;
 }
 
 async function directAffineCallbackProof(expectedBackend) {
@@ -145,6 +172,47 @@ async function directAffineCallbackProof(expectedBackend) {
     backgroundLuma > 60
   ) {
     throw new Error(`direct affine callback pixels do not match the Rust scene ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
+async function directAffineCompletionProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectAffineCompletionSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow) {
+    throw new Error("direct affine completion session did not expose its settled publication");
+  }
+  await presentDirectFrame(renderer);
+
+  // The target-neutral Rust builder has already asserted the complete authored
+  // and effective sequence. Pixels at the final top edge distinguish x=5 from
+  // the intervening authored setter at x=3 without exporting scene state to JS.
+  const endpointLuma = await sampleRenderedNeighborhood(canvas, 5, -1);
+  const priorSetterLuma = await sampleRenderedNeighborhood(canvas, 3, -1);
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    endpointLuma,
+    priorSetterLuma,
+  };
+  if (metrics.backend !== expectedBackend) {
+    throw new Error(
+      `direct affine completion renderer selected ${metrics.backend}; expected ${expectedBackend}`,
+    );
+  }
+  if (metrics.authoredTime !== 4.25) {
+    throw new Error(`direct affine completion authored time is ${metrics.authoredTime}; expected 4.25`);
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
+    throw new Error(`direct affine completion produced invalid metrics ${JSON.stringify(metrics)}`);
+  }
+  if (endpointLuma < 150 || priorSetterLuma > 60) {
+    throw new Error(`direct affine completion did not render its x=5 endpoint ${JSON.stringify(metrics)}`);
   }
   return metrics;
 }
@@ -218,6 +286,7 @@ async function start() {
   }
 
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
+  metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
 
   state.metrics = metrics;
   state.ready = true;

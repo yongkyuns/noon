@@ -96,6 +96,16 @@ pub async fn create_direct_affine_callback_smoke_renderer(
     .await
 }
 
+/// Browser proof that the target-neutral Rust completion example preserves its
+/// authored endpoint and renders through the direct single-context WASM path.
+#[wasm_bindgen(js_name = createDirectAffineCompletionSmokeRenderer)]
+pub async fn create_direct_affine_completion_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::live_affine_completion().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 fn js_error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
