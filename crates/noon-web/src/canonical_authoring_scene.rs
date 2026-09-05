@@ -362,6 +362,22 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
+    /// Report only the Rust-owned lifecycle of this context's retained player.
+    /// Python uses this derived observation to choose its wrapper dispatch; it
+    /// never records or advances lifecycle state itself.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_execution_ownership(&self) -> &'static str {
+        if self.live_player_transferred {
+            "transferred"
+        } else if self.live_player_returned {
+            "returned"
+        } else if self.live_player.is_some() {
+            "active"
+        } else {
+            "none"
+        }
+    }
+
     /// Query one bound object's authored layout before bootstrap or its coherent
     /// effective layout while this context owns the live runtime. A transferred
     /// player must be returned before authoring can observe it again.
@@ -1595,6 +1611,11 @@ mod wasm {
             self.inner.live_handoff_duration()
         }
 
+        #[wasm_bindgen(js_name = liveExecutionOwnership)]
+        pub fn live_execution_ownership(&self) -> String {
+            self.inner.live_execution_ownership().to_owned()
+        }
+
         #[wasm_bindgen(js_name = queryMobjectLayout)]
         pub fn query_mobject_layout(
             &mut self,
@@ -2593,6 +2614,21 @@ mod tests {
             serde_json::from_str(&rerun.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 18);
         assert_eq!(snapshot.objects[0].transform.translation.x, 3.0);
+    }
+
+    #[test]
+    fn live_execution_ownership_is_derived_from_the_retained_player_lifecycle() {
+        let mut context = CanonicalAuthoringScene::default();
+        assert_eq!(context.live_execution_ownership(), "none");
+
+        context.live_player(1.0).unwrap();
+        assert_eq!(context.live_execution_ownership(), "active");
+
+        let player = context.take_execution_player(1.0, 17).unwrap();
+        assert_eq!(context.live_execution_ownership(), "transferred");
+
+        context.return_execution_player(player).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
     }
 
     #[test]
