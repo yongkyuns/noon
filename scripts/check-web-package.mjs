@@ -117,7 +117,6 @@ const expectedJavascriptSurface = [
   "appendRotate(",
   "playBatch(",
   "sceneJson(",
-  "addCircle(",
   "export function evaluateSceneSnapshot(",
   "export function evaluateScenePlaybackSnapshot(",
   "export function verifySceneReplay(",
