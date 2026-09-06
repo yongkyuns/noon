@@ -14,10 +14,6 @@ const [javascript, declarations, wasm, wasmStats] = await Promise.all([
 ]);
 
 const expectedJavascriptSurface = [
-  "export class HostScenePlayer",
-  "advanceTo(",
-  "callbackFrameJson(",
-  "commitPatchBatch(",
   "export class AuthoringSceneCore",
   "export class DetachedMobjectCore",
   "export class AnimateCore",
@@ -158,11 +154,6 @@ const expectedJavascriptSurface = [
   "export function validatePresenceTransition(",
 ];
 const expectedTypeSurface = [
-  "export class HostScenePlayer",
-  "constructor(scene_json: string, callback_slots_json: string)",
-  "advanceTo(time: number): void",
-  "callbackFrameJson(): string",
-  "commitPatchBatch(json: string): void",
   "export class AuthoringSceneCore",
   "constructor()",
   "add(object: DetachedMobjectCore): number",

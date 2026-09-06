@@ -85,7 +85,7 @@ async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
       kind: "semantic_execution",
       duration: authoredDuration,
       objectCount: metrics.objectCount,
-      rendererBackend: metrics.rendererBackend,
+      rendererBackend: metrics.backend,
     };
   }
   if (mode !== "document") throw new Error(`unsupported raster mode ${mode}`);
@@ -194,7 +194,7 @@ async function renderThrough(frameIndex, frameTimes) {
       presented: true,
       time: currentLogicalTime,
       objectCount: metrics.objectCount,
-      rendererBackend: metrics.rendererBackend,
+      rendererBackend: metrics.backend,
       drawCalls: metrics.drawCalls,
       authoredDuration,
       frameIndex: currentFrameIndex,
