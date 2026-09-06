@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     patch::{validate_geometry, validate_style, validate_transform},
-    CompositionTimeMap, CompositionTimeMapError, GeometryRef, ObjectId, ObjectSnapshot,
-    ObjectStateField, PatchError, SceneDefinition, TrackId, Transform2D, Vec2,
+    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
+    PatchError, SceneDefinition, TrackId, Vec2,
 };
 
 /// Language-neutral animation rate functions shared by every authoring frontend.
@@ -165,8 +165,8 @@ pub enum TrackValues {
     PreparedMorph {
         from: f32,
         to: f32,
-        geometry: GeometryRef,
-        render_transform: Option<Transform2D>,
+        geometry: crate::GeometryRef,
+        render_transform: Option<crate::Transform2D>,
     },
     Object {
         from: ObjectSnapshot,
