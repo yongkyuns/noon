@@ -305,76 +305,6 @@ pub fn ordinary_affine_continuation_program(
         .map_err(|error| error.to_string())
 }
 
-#[cfg(test)]
-mod continuation_tests {
-    use super::*;
-    use crate::LiveProgramStatus;
-
-    #[test]
-    fn ordinary_affine_continuation_uses_shared_segments_and_publication_admission() {
-        let mut program = ordinary_affine_continuation_program().unwrap();
-        let mut callbacks = RustHostCallbackTable::new();
-
-        assert!(matches!(
-            program.resume().unwrap(),
-            LiveProgramStatus::Awaiting(_)
-        ));
-        assert!(matches!(
-            program.drive_to(&mut callbacks, 1.0).unwrap(),
-            LiveProgramStatus::Awaiting(_)
-        ));
-        assert_eq!(
-            program.session().frame().objects[0].transform.translation,
-            Vec2::new(1.0, -0.5)
-        );
-
-        let endpoint = program.drive_to(&mut callbacks, 2.0).unwrap();
-        assert!(matches!(endpoint, LiveProgramStatus::PublicationPending(_)));
-        let publication = program.take_renderer_publication().context();
-        assert!(matches!(
-            program.admit_publication(publication).unwrap(),
-            LiveProgramStatus::ReadyToResume
-        ));
-
-        assert!(matches!(
-            program.resume().unwrap(),
-            LiveProgramStatus::Awaiting(_)
-        ));
-        assert!(matches!(
-            program.drive_to(&mut callbacks, 3.0).unwrap(),
-            LiveProgramStatus::ReadyToResume
-        ));
-        assert!(
-            !program.session().wake_state().frame_pending(),
-            "an unchanged wait endpoint must not create a synthetic renderer publication"
-        );
-
-        assert!(matches!(
-            program.resume().unwrap(),
-            LiveProgramStatus::Awaiting(_)
-        ));
-        assert!(matches!(
-            program.drive_to(&mut callbacks, 3.5).unwrap(),
-            LiveProgramStatus::Awaiting(_)
-        ));
-        assert_eq!(
-            program.session().frame().objects[0].transform.translation,
-            Vec2::new(4.0, -1.0)
-        );
-        assert!(matches!(
-            program.drive_to(&mut callbacks, 4.0).unwrap(),
-            LiveProgramStatus::PublicationPending(_)
-        ));
-        let publication = program.take_renderer_publication().context();
-        program.admit_publication(publication).unwrap();
-        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
-        assert_eq!(
-            program.session().frame().objects[0].transform.translation,
-            Vec2::new(5.0, -1.0)
-        );
-    }
-}
-
 /// Execute paired flat Parallel and Sequence compositions on one live runtime.
 ///
 /// Child intervals, root timing, transaction-local declaration identity, and
@@ -720,4 +650,74 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
     let _ = scene.control_commit_events("opacity")?;
 
     Ok(scene.execution_session()?)
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use crate::LiveProgramStatus;
+
+    #[test]
+    fn ordinary_affine_continuation_uses_shared_segments_and_publication_admission() {
+        let mut program = ordinary_affine_continuation_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[0].transform.translation,
+            Vec2::new(1.0, -0.5)
+        );
+
+        let endpoint = program.drive_to(&mut callbacks, 2.0).unwrap();
+        assert!(matches!(endpoint, LiveProgramStatus::PublicationPending(_)));
+        let publication = program.take_renderer_publication().context();
+        assert!(matches!(
+            program.admit_publication(publication).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        ));
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 3.0).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        ));
+        assert!(
+            !program.session().wake_state().frame_pending(),
+            "an unchanged wait endpoint must not create a synthetic renderer publication"
+        );
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 3.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[0].transform.translation,
+            Vec2::new(4.0, -1.0)
+        );
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 4.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert_eq!(
+            program.session().frame().objects[0].transform.translation,
+            Vec2::new(5.0, -1.0)
+        );
+    }
 }

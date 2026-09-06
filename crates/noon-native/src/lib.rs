@@ -603,7 +603,7 @@ impl ApplicationHandler for NativeApp {
             let camera = match self.execution.camera() {
                 Ok(camera) => camera,
                 Err(error) => {
-                    self.fail(event_loop, error.into());
+                    self.fail(event_loop, error);
                     return;
                 }
             };
@@ -640,7 +640,7 @@ impl ApplicationHandler for NativeApp {
                 let camera = match self.execution.camera() {
                     Ok(camera) => camera,
                     Err(error) => {
-                        self.fail(event_loop, error.into());
+                        self.fail(event_loop, error);
                         return;
                     }
                 };
