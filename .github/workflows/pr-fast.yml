@@ -266,7 +266,7 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
-      - name: Check host-updater diagnostics on WebGL and WebGPU
+      - name: Check canonical callback renderer observations on WebGL and WebGPU
         if: steps.browser-risk.outputs.host_updater_diagnostics == 'true'
         id: host-updater-diagnostics
         run: |

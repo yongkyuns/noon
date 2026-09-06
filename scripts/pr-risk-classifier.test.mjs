@@ -117,7 +117,8 @@ test("classifier normalizes diff-style paths and de-duplicates triggers", () => 
 
 test("host-updater changes escalate the backend diagnostic harness", () => {
   assert.equal(requiresHostUpdaterDiagnostic("./scripts/manim-host-updater-diagnostics.mjs"), true);
-  assert.equal(requiresHostUpdaterDiagnostic("crates/noon-render-wgpu/src/gpu_geometry.rs"), true);
+  assert.equal(requiresHostUpdaterDiagnostic("crates/noon-render-wgpu/src/gpu/retained_text.rs"), true);
+  assert.equal(requiresHostUpdaterDiagnostic("web/authoring-render-worker.js"), true);
   assert.equal(requiresHostUpdaterDiagnostic("web/main.js"), false);
 
   const risk = classifyPrRisk([
