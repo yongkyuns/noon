@@ -377,7 +377,7 @@ impl<'a> LiveSession<'a> {
         rate_func: noon_core::RateFunction,
     ) -> Result<ExecutionSegment, LiveSessionError> {
         tracker
-            .require_store(&self.store)
+            .require_store(self.store)
             .map_err(LiveSessionError::Animation)?;
         let mut store = self.store.borrow_mut();
         self.session
@@ -399,7 +399,7 @@ impl<'a> LiveSession<'a> {
         value: f64,
     ) -> Result<(), LiveSessionError> {
         tracker
-            .require_store(&self.store)
+            .require_store(self.store)
             .map_err(LiveSessionError::Animation)?;
         let mut store = self.store.borrow_mut();
         self.session
