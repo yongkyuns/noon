@@ -79,7 +79,7 @@ impl CompositionTimeMap {
                     value: step.start,
                 });
             }
-            if !step.duration.is_finite() || step.duration <= 0.0 {
+            if !step.duration.is_finite() || step.duration < 0.0 {
                 return Err(CompositionTimeMapError::InvalidDuration {
                     index,
                     value: step.duration,
@@ -207,7 +207,7 @@ impl std::fmt::Display for CompositionTimeMapError {
             ),
             Self::InvalidDuration { index, value } => write!(
                 formatter,
-                "composition time-map step {index} duration must be finite and positive, got {value}"
+                "composition time-map step {index} duration must be finite and non-negative, got {value}"
             ),
             Self::IntervalOutsideParent { index } => write!(
                 formatter,
@@ -242,6 +242,54 @@ mod tests {
         assert_eq!(map.evaluate(0.5).alpha, 0.5);
         assert_eq!(map.evaluate(0.75).alpha, 1.0);
         assert!(map.evaluate(0.9).finished);
+    }
+
+    #[test]
+    fn zero_width_interval_is_an_exact_instant_boundary() {
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.5,
+            0.0,
+            RateFunction::Linear,
+        )]);
+        assert!(map.validate().is_ok());
+        assert!(!map.evaluate(0.5 - f32::EPSILON).begun);
+        assert_eq!(
+            map.evaluate(0.5),
+            CompositionTimeSample {
+                alpha: 1.0,
+                begun: true,
+                finished: true,
+            }
+        );
+        assert_eq!(map.evaluate(0.75).alpha, 1.0);
+        assert_eq!(map.monotone_event_alpha(), Ok(0.5));
+    }
+
+    #[test]
+    fn zero_width_root_end_event_resolves_to_one() {
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            1.0,
+            0.0,
+            RateFunction::Smooth,
+        )]);
+        assert!(!map.evaluate(1.0 - f32::EPSILON).begun);
+        assert!(map.evaluate(1.0).begun);
+        assert_eq!(map.monotone_event_alpha(), Ok(1.0));
+    }
+
+    #[test]
+    fn negative_and_non_finite_widths_remain_invalid() {
+        for duration in [-f64::EPSILON, f64::NAN, f64::INFINITY] {
+            let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                0.5,
+                duration,
+                RateFunction::Linear,
+            )]);
+            assert!(matches!(
+                map.validate(),
+                Err(CompositionTimeMapError::InvalidDuration { .. })
+            ));
+        }
     }
 
     #[test]
