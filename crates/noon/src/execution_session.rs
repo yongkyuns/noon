@@ -2396,21 +2396,36 @@ mod tests {
     #[test]
     fn live_scalar_lowering_failure_leaves_semantic_runtime_and_schedule_unchanged() {
         let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
         let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let revision = store.scene_revision();
         let publication = session.publication_context();
         let frame = session.frame().clone();
 
-        assert!(session
-            .declare_and_activate_value_tracker(
+        assert_eq!(
+            session.declare_and_activate_value_tracker(
                 &mut store,
                 tracker,
                 f64::MAX,
                 1.0,
                 RateFunction::Linear,
-            )
-            .is_err());
+            ),
+            Err(ExecutionSessionAnimationError::PreparedScalarTimeline(
+                PreparedScalarSignalTimelineError::Lowering(
+                    noon_compile::SemanticReactiveLoweringError::SignalValueOutOfRange {
+                        signal: tracker,
+                    },
+                ),
+            )),
+        );
         assert_eq!(store.scene_revision(), revision);
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
