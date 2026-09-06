@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use noon_compile::{CompileError, CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
     ComputeProgram, ComputeState, ObjectId, PreparedComputeInputBatch,
-    PreparedComputeInputEnrollment, Property, PublicationContext, ReactiveBinding, ReactiveError,
-    ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene, SignalId,
+    PreparedComputeInputEnrollment, PreparedComputeInputEnrollmentBatch, Property,
+    PublicationContext, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveProgram,
+    ReactiveValue, SemanticScene, SignalId,
 };
 
 use crate::{frame_row_mut, FrameRowMut, FrameState, SceneInstance};
@@ -76,6 +77,11 @@ pub(crate) struct PreparedReactiveRuntimeUpdate {
 #[derive(Clone, Debug)]
 pub struct PreparedReactiveSignalEnrollment {
     compute: PreparedComputeInputEnrollment,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedReactiveSignalEnrollmentBatch {
+    compute: PreparedComputeInputEnrollmentBatch,
 }
 
 impl PreparedReactiveRuntimeUpdate {
@@ -183,6 +189,26 @@ impl ReactiveRuntime {
             .expect("reactive enrollment commits immediately under exclusive runtime ownership");
     }
 
+    pub(crate) fn prepare_signal_enrollment_batch(
+        &self,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<PreparedReactiveSignalEnrollmentBatch, ReactiveError> {
+        Ok(PreparedReactiveSignalEnrollmentBatch {
+            compute: self.state.prepare_input_enrollment_batch(inputs)?,
+        })
+    }
+
+    pub(crate) fn commit_signal_enrollment_batch(
+        &mut self,
+        prepared: PreparedReactiveSignalEnrollmentBatch,
+    ) {
+        self.state
+            .commit_input_enrollment_batch(prepared.compute)
+            .expect(
+                "reactive enrollment batch commits immediately under exclusive runtime ownership",
+            );
+    }
+
     pub(crate) fn commit_prepared_input_batch(
         &mut self,
         prepared: PreparedReactiveRuntimeUpdate,
@@ -254,6 +280,27 @@ impl SceneInstance {
             .as_mut()
             .expect("semantic execution sessions always install the reactive runtime")
             .commit_signal_enrollment(prepared, signal);
+    }
+
+    /// Preflight exact-ID sparse reactive input enrollment as one atomic batch.
+    pub fn prepare_reactive_signal_enrollment_batch(
+        &self,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<PreparedReactiveSignalEnrollmentBatch, ReactiveError> {
+        self.reactive
+            .as_ref()
+            .expect("semantic execution sessions always install the reactive runtime")
+            .prepare_signal_enrollment_batch(inputs)
+    }
+
+    pub fn commit_reactive_signal_enrollment_batch(
+        &mut self,
+        prepared: PreparedReactiveSignalEnrollmentBatch,
+    ) {
+        self.reactive
+            .as_mut()
+            .expect("semantic execution sessions always install the reactive runtime")
+            .commit_signal_enrollment_batch(prepared);
     }
 
     /// Build runtime state directly from the canonical semantic execution lowering

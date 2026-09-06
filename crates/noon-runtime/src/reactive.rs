@@ -2,7 +2,10 @@ mod runtime;
 pub(crate) use runtime::{
     apply_reactive_value_to_row, PreparedReactiveRuntimeUpdate, ReactiveRuntime,
 };
-pub use runtime::{PreparedReactiveSignalEnrollment, ReactiveRuntimeStats, SceneBuildError};
+pub use runtime::{
+    PreparedReactiveSignalEnrollment, PreparedReactiveSignalEnrollmentBatch, ReactiveRuntimeStats,
+    SceneBuildError,
+};
 
 mod host_policy;
 pub use host_policy::*;
