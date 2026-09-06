@@ -693,6 +693,7 @@ try {
     let execution = null;
     let registration = null;
     let settled = false;
+    let sourceError = null;
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -707,8 +708,9 @@ try {
         });
       },
     });
-    authoredPromise.then(() => { settled = true; }, () => {});
+    authoredPromise.then(() => { settled = true; }, (error) => { sourceError = String(error); });
     for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (sourceError !== null) throw new Error(sourceError);
       if (execution !== null && registration !== null) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -720,6 +722,7 @@ try {
       execution,
       registration,
       get settled() { return settled; },
+      get sourceError() { return sourceError; },
     };
     return { canvasId: canvas.id };
   }, scalarContinuationSource);
@@ -729,6 +732,7 @@ try {
       const continuation = window.sharedAuthoringSmoke.scalarContinuation;
       let latest = null;
       for (let attempt = 0; attempt < 240; attempt += 1) {
+        if (continuation.sourceError !== null) throw new Error(continuation.sourceError);
         if (continuation.settled) break;
         try {
           latest = await continuation.execution.state();
