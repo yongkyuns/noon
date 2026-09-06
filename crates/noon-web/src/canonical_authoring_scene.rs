@@ -3353,7 +3353,7 @@ mod tests {
 
         assert!(context.live_player.is_none());
         assert!(
-            context.scene.store().borrow().scene_revision() > revision,
+            context.scene.store().borrow().scene_revision().get() > revision.get(),
             "the detached authored target must be published without bootstrapping a player"
         );
         assert_eq!(

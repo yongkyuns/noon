@@ -87,6 +87,7 @@ impl PlaybackClock {
     /// renderer-worker timestamp is only admission for a wake and must never become
     /// the authored clock. Keeping `previous_ms` unchanged here also preserves normal
     /// engine/render processing latency in the next actual scene-time sample.
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn observe_wake_time(&mut self, timestamp_ms: f64) -> Result<(), ClockError> {
         self.validate_timestamp(timestamp_ms)?;
         if self.playing && self.anchor_ms.is_none() {
@@ -101,6 +102,7 @@ impl PlaybackClock {
     /// selected deadline through the existing playback anchor. `current_scene_time`
     /// is the last coherently published runtime sample and disambiguates an explicit
     /// seek to the exact loop endpoint from the first sample of the next loop.
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn timer_delay_milliseconds(
         &mut self,
         scene_deadline: f64,

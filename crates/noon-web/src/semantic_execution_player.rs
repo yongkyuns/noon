@@ -2679,7 +2679,8 @@ mod tests {
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, Some(0.5));
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
+        transaction.remove_updater(circle.node_id(), HostCallbackId::new(1), 0.5);
         transaction.apply(&mut scene.store().borrow_mut()).unwrap();
         let mut player =
             SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7)
