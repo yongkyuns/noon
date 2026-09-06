@@ -7,6 +7,7 @@ import {
 } from "./execution-transport.js";
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
+export const MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE = 128;
 
 export async function attachSemanticEngine(
   context,
@@ -84,7 +85,11 @@ export async function attachSemanticEngine(
     }
   };
   const state = (type) => ({ type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" });
-  async function publishCallbackPhase(phaseJson, { initial = false } = {}) {
+  async function publishCallbackPhase(
+    phaseJson,
+    { initial = false, emitDelta = true, onPhaseToken = null } = {},
+  ) {
+    let phaseToken = null;
     if (phaseJson !== null && phaseJson !== undefined) {
       if (runRequiredCallbackPhase === null) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve original phase error */ }
@@ -93,6 +98,11 @@ export async function attachSemanticEngine(
       let phase;
       try {
         phase = JSON.parse(phaseJson);
+        phaseToken = JSON.stringify(phase?.token);
+        if (phaseToken === undefined) {
+          throw new Error("canonical callback phase is missing its token");
+        }
+        onPhaseToken?.(phaseToken);
       } catch (error) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve parse failure */ }
         throw new Error(`canonical callback phase view was not valid JSON: ${error}`);
@@ -102,7 +112,7 @@ export async function attachSemanticEngine(
       try {
         const batchJson = await runRequiredCallbackPhase(phase);
         if (stopped || phaseGeneration !== callbackGeneration || player === null) {
-          return false;
+          return { phaseToken, publication: null, interrupted: true };
         }
         player.commitCallbackPhaseJson(batchJson);
         pendingPhaseJson = null;
@@ -115,8 +125,55 @@ export async function attachSemanticEngine(
         throw error;
       }
     }
-    if (stopped || player === null) return null;
-    return send(initial ? player.initialDeltaJson() : player.drainDeltaJson());
+    if (stopped || player === null) {
+      return { phaseToken, publication: null, interrupted: true };
+    }
+    return {
+      phaseToken,
+      publication: emitDelta
+        ? send(initial ? player.initialDeltaJson() : player.drainDeltaJson())
+        : null,
+      interrupted: false,
+    };
+  }
+
+  async function advanceToAuthoredTime(time) {
+    const phaseTokens = new Set();
+    let phaseCount = 0;
+    while (!stopped && player !== null) {
+      if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE && player.time() < time) {
+        throw new Error(
+          "forward authored-time advance reached its callback phase bound before the requested time",
+        );
+      }
+      const result = await publishCallbackPhase(
+        player.advanceForwardToCallbackPhaseJson(time),
+        {
+          emitDelta: false,
+          onPhaseToken(token) {
+            if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE) {
+              throw new Error(
+                "forward authored-time advance exceeded its callback phase bound",
+              );
+            }
+            if (phaseTokens.has(token)) {
+              throw new Error("canonical callback advance repeated a phase token");
+            }
+            phaseTokens.add(token);
+            phaseCount += 1;
+          },
+        },
+      );
+      if (result.interrupted) return null;
+      if (result.phaseToken !== null) continue;
+      if (Math.abs(player.time() - time) > 1e-9) {
+        throw new Error(
+          `forward authored-time advance stopped at ${player.time()} before requested time ${time}`,
+        );
+      }
+      return send(player.drainDeltaJson());
+    }
+    return null;
   }
 
   async function drain() {
@@ -140,9 +197,7 @@ export async function attachSemanticEngine(
               );
             }
             latestTick = null;
-            const publication = await publishCallbackPhase(
-              player.advanceForwardToCallbackPhaseJson(message.time),
-            );
+            const publication = await advanceToAuthoredTime(message.time);
             await awaitPresentation(publication);
             break;
           }
@@ -159,6 +214,7 @@ export async function attachSemanticEngine(
             break;
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
+        if (stopped || player === null) break;
         post({ requestId: message.requestId, ...state(message.type) });
       } catch (error) { fail(error, message.requestId); }
       }
