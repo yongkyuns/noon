@@ -33,6 +33,7 @@ pub enum ExecutionSegmentCompletionError {
     RequiredCallbackPending,
     CallbackNotCoherent,
     CallbackTerminated(CallbackTermination),
+    MissingLifecycleRoot(SemanticNodeId),
     /// A host-modified domain cannot be released without guessing whether it
     /// should persist. The first reconciliation slice supports only callbacks
     /// that remain active at the endpoint.
@@ -67,6 +68,12 @@ impl std::fmt::Display for ExecutionSegmentCompletionError {
             Self::CallbackTerminated(termination) => {
                 write!(formatter, "required callback progression terminated: {termination:?}")
             }
+            Self::MissingLifecycleRoot(object) => write!(
+                formatter,
+                "fade completion for semantic object {}:{} has no execution root",
+                object.slot(),
+                object.generation()
+            ),
             Self::UnsupportedHostDriverRelease(object) => write!(
                 formatter,
                 "host driver release for semantic object {}:{} is ambiguous",
@@ -182,9 +189,9 @@ impl ExecutionSession {
                     direction: SemanticFadeDirection::Out
                 }
             ) {
-                let root = pending
-                    .lifecycle_root
-                    .expect("prepared FadeOut completion retains its scene root");
+                let root = pending.lifecycle_root.ok_or(
+                    ExecutionSegmentCompletionError::MissingLifecycleRoot(entry.semantic_object),
+                )?;
                 semantic.remove_member(root, entry.semantic_object);
             }
         }

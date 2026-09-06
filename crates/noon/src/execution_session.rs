@@ -182,6 +182,7 @@ impl std::error::Error for ExecutionSessionCameraError {}
 /// Unsupported lifecycle shape for the bounded canonical leaf-fade operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionSessionFadeError {
+    RootIsNotInExecutionDomain,
     TargetIsNotDetached,
     TargetIsNotDirectRootMember,
     TargetIsAliased,
@@ -192,6 +193,9 @@ pub enum ExecutionSessionFadeError {
 impl std::fmt::Display for ExecutionSessionFadeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RootIsNotInExecutionDomain => {
+                formatter.write_str("fade root does not belong to this execution session")
+            }
             Self::TargetIsNotDetached => formatter.write_str("FadeIn target must be detached"),
             Self::TargetIsNotDirectRootMember => {
                 formatter.write_str("FadeOut target must be a direct member of this scene root")
@@ -947,6 +951,12 @@ impl ExecutionSession {
         target: SemanticNodeId,
         direction: SemanticFadeDirection,
     ) -> Result<(), ExecutionSessionAnimationError> {
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::RootIsNotInExecutionDomain,
+            });
+        }
         if !self.callback_schedule.is_empty() {
             return Err(ExecutionSessionAnimationError::FadeTarget {
                 target,
@@ -1659,6 +1669,75 @@ mod tests {
         session.complete_segment(&mut store, segment).unwrap();
         assert!(session.segment_state(segment).is_complete());
         assert_eq!(session.frame().objects[0].transform.translation.x, 6.0);
+    }
+
+    #[test]
+    fn generic_activation_rejects_predeclared_lifecycle_without_publication() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let animation = store
+            .insert_semantic_fade_animation(
+                object,
+                SemanticFadeDirection::Out,
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        assert_eq!(
+            session.activate_animation_segment(&store, animation, linear_second()),
+            Err(ExecutionSessionAnimationError::Payload(
+                SemanticAffineAnimationTrackError::UnsupportedLifecycle {
+                    animation,
+                    remover: true,
+                    introducer: false,
+                }
+            ))
+        );
+        assert_eq!(session.publication_context(), before);
+        assert!(session.pending_segment_token().is_none());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn prepared_fade_rejects_a_root_outside_the_execution_domain() {
+        let mut store = SemanticStore::new();
+        let execution_root = store.insert_family();
+        let other_root = store.insert_family();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store
+            .add_semantic_family_member(execution_root, object)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_root(&store, execution_root).unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        assert_eq!(
+            session.declare_and_activate_fade(
+                &mut store,
+                other_root,
+                object,
+                SemanticFadeDirection::Out,
+                linear_second(),
+            ),
+            Err(ExecutionSessionAnimationError::FadeTarget {
+                target: object,
+                error: ExecutionSessionFadeError::RootIsNotInExecutionDomain,
+            })
+        );
+        assert_eq!(session.publication_context(), before);
+        assert!(session.pending_segment_token().is_none());
+        assert!(session.take_frame_changes().is_empty());
+        assert_eq!(store.node(object).unwrap().parents(), &[execution_root]);
     }
 
     #[test]

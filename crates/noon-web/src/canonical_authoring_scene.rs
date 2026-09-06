@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    Color, FamilyAnimationRequest, ObjectId, ObjectSnapshot, SemanticFadeDirection,
-    SemanticObjectState, SemanticPaint, SemanticStyle, SemanticTransform2_5D, Style,
-    TextSourceKind, TrackDefinition, Transform2D, Vec2,
+    Color, FamilyAnimationRequest, ObjectId, ObjectSnapshot, SemanticObjectState, SemanticPaint,
+    SemanticStyle, SemanticTransform2_5D, Style, TextSourceKind, TrackDefinition, Transform2D,
+    Vec2,
 };
 #[cfg(any(target_arch = "wasm32", test))]
-use noon_core::{HostCallbackId, SemanticMutationTransaction, SemanticVec3};
+use noon_core::{HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction, SemanticVec3};
 use noon_ir::{ObjectSpec, SceneSpec, TextSpec};
 #[cfg(target_arch = "wasm32")]
 use noon_ir::{ObjectSpecContent, TextSpecKind, TextSpecOptions};
@@ -297,17 +297,25 @@ impl CanonicalAuthoringScene {
         if let Some(player) = self.live_player.as_mut() {
             player.set_loop_duration(duration)?;
         } else {
-            let execution = self.lower_execution()?;
-            self.live_player = Some(crate::SemanticExecutionPlayer::from_live_session(
-                execution,
-                std::rc::Rc::clone(self.scene.store()),
-                self.scene.root(),
-                duration,
-                0,
-            )?);
+            self.live_player = Some(self.build_live_player(duration, 0)?);
         }
         self.live_player_returned = false;
         Ok(self.live_player.as_mut().expect("live player initialized"))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn build_live_player(
+        &self,
+        duration: f64,
+        transport_session: u32,
+    ) -> Result<crate::SemanticExecutionPlayer, String> {
+        crate::SemanticExecutionPlayer::from_live_session(
+            self.lower_execution()?,
+            std::rc::Rc::clone(self.scene.store()),
+            self.scene.root(),
+            duration,
+            transport_session,
+        )
     }
 
     /// Refresh a dormant presentation runtime only at an explicit run or lease
@@ -685,7 +693,7 @@ impl CanonicalAuthoringScene {
     /// Rust owns lifecycle membership, appearance tracks, activation, and
     /// completion. The object ID only records this wrapper's derived binding
     /// after the shared fade has succeeded; it is never a semantic identity.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn ordinary_play_fade(
         &mut self,
         id: ObjectId,
@@ -739,17 +747,28 @@ impl CanonicalAuthoringScene {
         }
 
         // The retained player needs a valid presentation extent before activation.
-        // `active_or_bootstrap_live_player` preserves an exact returned continuation
-        // player instead of reinitializing its transport/session state on later awaits.
+        // An existing returned continuation is preserved exactly; first bootstrap
+        // remains provisional until the shared activation succeeds.
         let bootstrap_duration = self
             .live_handoff_duration()
             .unwrap_or_else(|| self.scene.time())
             .max(options.run_time.unwrap_or(1.0));
-        let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
-        // `declare_and_activate_fade` is the shared atomic preflight: required
-        // callbacks, bindings, membership, options, and lifecycle conflicts all
-        // fail before its semantic/runtime publication.
-        let end_time = player.live_declare_and_activate_fade(target, direction, options)?;
+        let end_time = if self.live_player.is_none() {
+            // Build the initial runtime provisionally. A failed shared preflight
+            // must not install a player or change context lease ownership.
+            self.prepare_local_player_for_run()?;
+            let mut player = self.build_live_player(bootstrap_duration, 0)?;
+            let end_time = player.live_declare_and_activate_fade(target, direction, options)?;
+            self.live_player = Some(player);
+            self.live_player_returned = false;
+            end_time
+        } else {
+            // `declare_and_activate_fade` is the shared atomic preflight: required
+            // callbacks, bindings, membership, options, and lifecycle conflicts all
+            // fail before its semantic/runtime publication.
+            self.active_live_player()?
+                .live_declare_and_activate_fade(target, direction, options)?
+        };
         if new_binding {
             self.bindings.insert(id, node);
             self.identities.insert(node, id);
@@ -1011,15 +1030,7 @@ impl CanonicalAuthoringScene {
             self.live_player_returned = false;
             return Ok(player);
         }
-        let execution = self.lower_execution()?;
-        let store = std::rc::Rc::clone(self.scene.store());
-        let player = crate::SemanticExecutionPlayer::from_live_session(
-            execution,
-            store,
-            self.scene.root(),
-            duration,
-            transport_session,
-        )?;
+        let player = self.build_live_player(duration, transport_session)?;
         self.live_player_transferred = true;
         self.live_player_returned = false;
         Ok(player)
@@ -3718,6 +3729,72 @@ mod tests {
         // no replacement semantic handle or second runtime is allocated.
         context.live_add_mobject(ObjectId::new(0), &circle).unwrap();
         assert!(context.live_contains_mobject(&circle).unwrap());
+    }
+
+    #[test]
+    fn failed_first_fade_does_not_install_a_player_or_derived_binding() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        let before = context.scene.store().borrow().scene_revision();
+        let id = ObjectId::new(0);
+
+        assert!(context
+            .begin_ordinary_fade(
+                id,
+                &circle,
+                SemanticFadeDirection::In,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear)
+                    .lag_ratio(0.5),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert!(!context.live_player_returned);
+        assert!(!context.live_player_transferred);
+        assert!(!context.bindings.contains_key(&id));
+        assert!(!context.identities.contains_key(&circle.node_id()));
+        assert_eq!(context.scene.store().borrow().scene_revision(), before);
+
+        // The failed provisional player did not poison the ordinary path.
+        context
+            .begin_ordinary_fade(
+                id,
+                &circle,
+                SemanticFadeDirection::In,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert!(context.live_player.is_some());
+        assert_eq!(context.bindings.get(&id), Some(&circle.node_id()));
+    }
+
+    #[test]
+    fn unsupported_first_fade_entry_keeps_context_unbootstrapped() {
+        let mut context = CanonicalAuthoringScene::default();
+        let text = context
+            .scene
+            .text(noon::Text::new("unsupported entry"))
+            .unwrap();
+        let before = context.scene.store().borrow().scene_revision();
+        let id = ObjectId::new(0);
+
+        assert!(context
+            .begin_ordinary_fade(
+                id,
+                &text,
+                SemanticFadeDirection::In,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert!(!context.bindings.contains_key(&id));
+        assert!(!context.identities.contains_key(&text.node_id()));
+        assert_eq!(context.scene.store().borrow().scene_revision(), before);
     }
 
     #[test]

@@ -425,8 +425,10 @@ where
         let target_state = match leaf.payload {
             SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
             SemanticScheduledAnimationPayload::Fade { .. } => {
-                return Err(SemanticAffineAnimationTrackError::ScheduleMismatch {
+                return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation: leaf.animation,
+                    remover: leaf.options.remover,
+                    introducer: leaf.options.introducer,
                 });
             }
         };
@@ -495,6 +497,15 @@ fn validate_leaf_matches_declaration(
                 == SemanticScheduledAnimationPayload::TransformTo {
                     target_state: *target_state,
                 } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::Fade { target, direction }
+            if *target == leaf.target
+                && leaf.payload
+                    == SemanticScheduledAnimationPayload::Fade {
+                        direction: *direction,
+                    } =>
         {
             Ok(())
         }
@@ -1283,6 +1294,33 @@ mod tests {
         assert_eq!(
             validate_leaf_matches_declaration(&store, &leaf),
             Err(SemanticAffineAnimationTrackError::ScheduleMismatch { animation })
+        );
+    }
+
+    #[test]
+    fn predeclared_fade_requires_the_prepared_lifecycle_activation_path() {
+        let mut store = SemanticStore::new();
+        let target = visible_object(&mut store);
+        let animation = store
+            .insert_semantic_fade_animation(
+                target,
+                SemanticFadeDirection::Out,
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let index = index(&store);
+
+        assert_eq!(
+            lower_semantic_affine_animation_tracks(
+                &store,
+                &schedule(&store, &index, animation),
+                |_| Some(effective(Transform2D::default())),
+            ),
+            Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
+                animation,
+                remover: true,
+                introducer: false,
+            })
         );
     }
 
