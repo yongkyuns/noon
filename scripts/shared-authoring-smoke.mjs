@@ -845,6 +845,7 @@ try {
     canvas.height = 360;
     document.body.append(canvas);
     const execution = new harness.AuthoringExecutionClient(canvas);
+    harness.externalSampleExecution = execution;
     let resolveAttached;
     let rejectAttached;
     const attached = new Promise((resolve, reject) => {
@@ -878,8 +879,9 @@ try {
       const result = await authored;
       return { initial, midpoint, crossing, endpoint, afterRejected,
         rejectedBackwards, registrations, duration: result.duration, canvasId: canvas.id };
-    } finally {
+    } catch (error) {
       execution.terminate();
+      throw error;
     }
   }, continuationSource);
   assert.equal(externalSamples.initial.time, 0);
@@ -895,6 +897,8 @@ try {
   );
   assert.ok(externalEndpointPixel.blue > 180,
     `external sample did not present its exact endpoint: ${JSON.stringify(externalEndpointPixel)}`);
+
+  await page.evaluate(() => window.sharedAuthoringSmoke.externalSampleExecution.terminate());
 
   const scalarContinuationSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_value_tracker_continuation.py"),
