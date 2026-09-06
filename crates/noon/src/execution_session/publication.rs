@@ -27,6 +27,11 @@ pub(crate) struct PreparedReactiveEnrollmentBatch {
     pub runtime_enrollment: PreparedReactiveSignalEnrollmentBatch,
 }
 
+struct PreparedScalarPublicationContract {
+    handled_signals: std::collections::HashSet<SemanticNodeId>,
+    reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionPublicationError {
     RequiredCallbackPending,
@@ -195,7 +200,6 @@ impl ExecutionSession {
             effective,
             purpose,
             None,
-            None,
         )
     }
 
@@ -213,8 +217,10 @@ impl ExecutionSession {
             execution_prefix,
             effective,
             purpose,
-            reactive_enrollment,
-            Some(handled_scalar_signals),
+            Some(PreparedScalarPublicationContract {
+                handled_signals: handled_scalar_signals,
+                reactive_enrollment,
+            }),
         )
     }
 
@@ -231,8 +237,10 @@ impl ExecutionSession {
             execution_prefix,
             effective,
             purpose,
-            None,
-            Some(handled_scalar_signals),
+            Some(PreparedScalarPublicationContract {
+                handled_signals: handled_scalar_signals,
+                reactive_enrollment: None,
+            }),
         )
     }
 
@@ -242,8 +250,7 @@ impl ExecutionSession {
         execution_prefix: Vec<ExecutionPatch>,
         effective: Option<PreparedEffectivePropertyBatch>,
         purpose: SemanticPublicationPurpose,
-        reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
-        handled_scalar_signals: Option<std::collections::HashSet<SemanticNodeId>>,
+        scalar: Option<PreparedScalarPublicationContract>,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
@@ -254,13 +261,13 @@ impl ExecutionSession {
             return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
         }
         self.require_published_store(prepared.store())?;
-        let publication = match handled_scalar_signals.as_ref() {
-            Some(signals) => prepare_semantic_publication_with_scalar_timeline(
+        let publication = match scalar.as_ref() {
+            Some(scalar) => prepare_semantic_publication_with_scalar_timeline(
                 &prepared,
                 &self.execution_index,
                 &self.reachability,
                 self.painter_order.tail(),
-                signals,
+                &scalar.handled_signals,
             ),
             None => prepare_semantic_publication(
                 &prepared,
@@ -327,7 +334,7 @@ impl ExecutionSession {
                 .chain(execution.mutations().iter().cloned())
                 .chain(execution_suffix),
         );
-        if let Some(reactive_enrollment) = reactive_enrollment {
+        if let Some(reactive_enrollment) = scalar.and_then(|scalar| scalar.reactive_enrollment) {
             for projection_enrollment in reactive_enrollment.projection_enrollments {
                 let expected = projection_enrollment.execution_signal();
                 let signal = self
