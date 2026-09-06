@@ -346,8 +346,7 @@ async function editAndRerun(page, expectedExampleId) {
   }, editMarker);
 
   const runButton = page.locator("#replace-scene");
-  await runButton.waitFor({ state: "attached" });
-  assert.equal(await runButton.isDisabled(), false, `${browserName}/${profileName}: Run stayed disabled`);
+  // click waits for the control to be enabled, including pending source loads.
   await runButton.click();
   await waitForAppliedScene(page, expectedExampleId);
 
@@ -442,10 +441,8 @@ try {
     );
   } else {
     const runButton = page.locator("#replace-scene");
-    // Gallery metadata can appear before the asynchronously selected source loads.
-    // Observe readiness before asserting or clicking the Run control.
-    await page.waitForFunction(() => !document.querySelector("#replace-scene")?.disabled);
-    assert.equal(await runButton.isDisabled(), false, `${browserName}/${profileName}: Run stayed disabled`);
+    // Source loading can disable Run after the shell appears. The locator's
+    // actionability wait observes readiness at the click, without a stale snapshot.
     await runButton.click();
     finalRuntime = await waitForAppliedScene(page, "parity-square-and-circle");
     assert.ok(
