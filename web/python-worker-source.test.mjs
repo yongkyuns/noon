@@ -52,6 +52,16 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.doesNotMatch(lane, /runPythonAsync/);
 });
 
+test("Python run results publish after source-continuation ownership is released", () => {
+  const runStart = source.indexOf('if (request.type === "run")');
+  const runEnd = source.indexOf('if (request.type === "attach_semantic_execution")', runStart);
+  assert.ok(runStart >= 0 && runEnd > runStart);
+  const run = source.slice(runStart, runEnd);
+  const cleanup = run.indexOf("if (activeAuthoringRun === run) activeAuthoringRun = null;");
+  const result = run.indexOf('post("result", { requestId, resultJson });');
+  assert.ok(cleanup >= 0 && result > cleanup);
+});
+
 test("semantic continuation delivers required callback work to its suspended source", () => {
   assert.match(source, /noonSetSemanticContinuationCallbackSession/);
   assert.match(source, /noonCompleteSemanticContinuationCallback/);

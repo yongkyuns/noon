@@ -657,8 +657,9 @@ async function handleRequest(request) {
       const run = { requestId, continuation: null, continuationCallbackSession: null };
       activeAuthoringRun = run;
       let completed = false;
+      let resultJson;
       try {
-        const resultJson = await runAuthoringSource(
+        resultJson = await runAuthoringSource(
           pyodide,
           request.source,
           request.context,
@@ -667,7 +668,6 @@ async function handleRequest(request) {
         if (run.continuation !== null) {
           await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
         }
-        post("result", { requestId, resultJson });
         completed = true;
       } finally {
         if (!completed && run.continuation !== null) {
@@ -678,6 +678,11 @@ async function handleRequest(request) {
         }
         if (activeAuthoringRun === run) activeAuthoringRun = null;
       }
+      // Publish only after activeAuthoringRun is cleared. The playground treats
+      // this result as the point where playback controls become usable; posting
+      // it earlier races the source-continuation ownership guard in the semantic
+      // endpoint.
+      post("result", { requestId, resultJson });
       return;
     }
     if (request.type === "attach_semantic_execution") {
