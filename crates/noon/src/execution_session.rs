@@ -1780,13 +1780,17 @@ impl ExecutionSession {
                 })
             }
             SemanticAffineLifecycleDirection::RemoveTo => {
-                if node.parents().len() > 1 {
+                if node
+                    .parents()
+                    .iter()
+                    .any(|parent| *parent != root && self.reachability.is_reachable(*parent))
+                {
                     return Err(ExecutionSessionAnimationError::FadeTarget {
                         target,
                         error: ExecutionSessionFadeError::TargetIsAliased,
                     });
                 }
-                if node.parents() == [root] && execution_object.is_some() {
+                if node.parents().contains(&root) && execution_object.is_some() {
                     Ok(false)
                 } else {
                     Err(ExecutionSessionAnimationError::FadeTarget {

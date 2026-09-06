@@ -1866,7 +1866,7 @@ mod tests {
     }
 
     #[test]
-    fn grow_admits_an_unmounted_family_leaf_but_rejects_an_active_alias() {
+    fn grow_then_shrink_preserves_an_unmounted_family_membership() {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let detached_family = {
@@ -1910,21 +1910,6 @@ mod tests {
         }
 
         let before = live.session.publication_context();
-        let aliased_removal = live.declare_and_activate_affine_lifecycle(
-            &square,
-            AffineLifecycleDirection::RemoveTo,
-            AffineLifecycleEndpoint::EffectiveCenter,
-            options,
-        );
-        assert!(matches!(
-            aliased_removal,
-            Err(LiveSessionError::Activation(
-                ExecutionSessionAnimationError::FadeTarget {
-                    error: ExecutionSessionFadeError::TargetIsAliased,
-                    ..
-                }
-            ))
-        ));
         let result = live.declare_and_activate_affine_lifecycle(
             &square,
             AffineLifecycleDirection::IntroduceFrom,
@@ -1953,6 +1938,58 @@ mod tests {
             Err(LiveSessionError::ForeignMobjectStore)
         ));
         assert_eq!(live.session.publication_context(), before);
+
+        let shrink = live
+            .declare_and_activate_affine_lifecycle(
+                &square,
+                AffineLifecycleDirection::RemoveTo,
+                AffineLifecycleEndpoint::EffectiveCenter,
+                options,
+            )
+            .unwrap();
+        live.advance_segment_to(shrink, shrink.end_time()).unwrap();
+        live.complete_segment(shrink).unwrap();
+        assert!(!live.contains(&square).unwrap());
+        let store = square.store().borrow();
+        let parents = store.node(square.node_id()).unwrap().parents();
+        assert_eq!(parents.len(), 1);
+        assert!(parents.contains(&detached_family));
+    }
+
+    #[test]
+    fn affine_removal_rejects_another_live_reachable_parent() {
+        let mut scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let live_family = {
+            let mut store = scene.store().borrow_mut();
+            let family = store.insert_family();
+            store.add_member(family, square.node_id()).unwrap();
+            family
+        };
+        scene.add_node(live_family).unwrap();
+        scene.add(&square).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_affine_lifecycle(
+                &square,
+                AffineLifecycleDirection::RemoveTo,
+                AffineLifecycleEndpoint::EffectiveCenter,
+                AnimationOptions::new().run_time(1.0),
+            );
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::FadeTarget {
+                    error: ExecutionSessionFadeError::TargetIsAliased,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
     }
 
     #[test]
