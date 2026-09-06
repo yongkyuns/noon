@@ -724,6 +724,81 @@ pub fn ordinary_composition_continuation_program(
         .map_err(|error| error.to_string())
 }
 
+/// The four-dot Succession tutorial with default Smooth child timing.
+pub struct OrdinarySuccession {
+    dots: Vec<Mobject>,
+    targets: Vec<Mobject>,
+    activated: bool,
+}
+
+impl LiveContinuation for OrdinarySuccession {
+    type Error = String;
+
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
+        if self.activated {
+            return Ok(crate::ContinuationStep::Finished);
+        }
+        let requests = self
+            .dots
+            .iter()
+            .zip(&self.targets)
+            .map(|(source, target)| {
+                TransformToRequest::new(source, target, AnimationOptions::new())
+            })
+            .collect::<Vec<_>>();
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &requests,
+                AnimationOptions::new()
+                    .lag_ratio(1.0)
+                    .rate_func(RateFunction::Linear),
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
+            .map_err(|error| error.to_string())?;
+        self.activated = true;
+        Ok(crate::ContinuationStep::Await(segment))
+    }
+}
+
+/// Same geometry, colors, eager target capture and timing as `manim_example_succession.py`.
+pub fn ordinary_succession_program() -> Result<LiveProgram<OrdinarySuccession>, String> {
+    let mut scene = Scene::new();
+    let positions = [(-2.0, 2.0), (-2.0, -2.0), (2.0, -2.0), (2.0, 2.0)];
+    let colors = [
+        (88.0, 196.0, 221.0),
+        (197.0, 95.0, 115.0),
+        (131.0, 193.0, 103.0),
+        (255.0, 255.0, 0.0),
+    ];
+    let mut dots = Vec::with_capacity(4);
+    let mut targets = Vec::with_capacity(4);
+    for (index, ((x, y), (red, green, blue))) in positions.iter().zip(colors).enumerate() {
+        let mut dot = scene.circle(0.16).map_err(|error| error.to_string())?;
+        dot.set_fill(red / 255.0, green / 255.0, blue / 255.0, 1.0)
+            .map_err(|error| error.to_string())?;
+        dot.set_stroke_width(0.0)
+            .map_err(|error| error.to_string())?;
+        dot.set_translation(*x, *y)
+            .map_err(|error| error.to_string())?;
+        scene.add(&dot).map_err(|error| error.to_string())?;
+        let mut target = dot.target_editor().map_err(|error| error.to_string())?;
+        let (target_x, target_y) = positions[(index + 1) % positions.len()];
+        target
+            .set_translation(target_x, target_y)
+            .map_err(|error| error.to_string())?;
+        dots.push(dot);
+        targets.push(target);
+    }
+    scene
+        .into_live_program(OrdinarySuccession {
+            dots,
+            targets,
+            activated: false,
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// One ordinary transform continuation whose effective frame is completed by
 /// two ordered host callbacks at every required phase.
 pub struct OrdinaryCallbackContinuation {
@@ -1667,6 +1742,42 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
 mod continuation_tests {
     use super::*;
     use crate::{LiveProgramStatus, TimelineWakeState};
+
+    #[test]
+    fn ordinary_succession_preserves_smooth_children_and_exact_sequence_endpoints() {
+        let mut program = ordinary_succession_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.drive_to(&mut callbacks, 0.25).unwrap();
+        let frame = program.session().frame();
+        let quarter = RateFunction::Smooth.evaluate(0.25);
+        assert!((frame.objects[0].transform.translation.y - (2.0 - 4.0 * quarter)).abs() < 1e-5);
+        assert_eq!(
+            frame.objects[1].transform.translation,
+            Vec2::new(-2.0, -2.0)
+        );
+        program.drive_to(&mut callbacks, 1.25).unwrap();
+        let frame = program.session().frame();
+        assert_eq!(
+            frame.objects[0].transform.translation,
+            Vec2::new(-2.0, -2.0)
+        );
+        assert!((frame.objects[1].transform.translation.x - (-2.0 + 4.0 * quarter)).abs() < 1e-5);
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 4.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let expected = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)];
+        for (object, (x, y)) in program.session().frame().objects.iter().zip(expected) {
+            assert_eq!(object.transform.translation, Vec2::new(x, y));
+        }
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
 
     #[test]
     fn ordinary_affine_continuation_uses_shared_segments_and_publication_admission() {

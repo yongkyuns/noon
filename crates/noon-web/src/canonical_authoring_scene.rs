@@ -1956,14 +1956,22 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
-        ) {
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
             self.children.push((
                 source.semantic_mobject().clone(),
                 target.semantic_mobject().clone(),
                 noon_core::AnimationOptions::new()
                     .run_time(child_run_time)
-                    .rate_func(noon_core::RateFunction::Linear),
+                    .rate_func(rate_function),
             ));
+            Ok(())
         }
     }
 

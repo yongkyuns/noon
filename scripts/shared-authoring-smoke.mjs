@@ -520,6 +520,13 @@ try {
       expectedFinalCenter: [0, 0],
     },
     {
+      filename: "manim_example_succession.py",
+      objectCount: 4,
+      expectedDuration: 4,
+      endpointTime: null,
+      expectedFinalCenter: [0, 0],
+    },
+    {
       filename: "manim_parity_square_and_circle.py",
       objectCount: 2,
       expectedDuration: 1,

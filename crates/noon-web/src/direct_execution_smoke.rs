@@ -183,6 +183,15 @@ pub async fn create_direct_ordinary_create_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for the shared four-dot Succession tutorial.
+#[wasm_bindgen(js_name = createDirectOrdinarySuccessionSmokeRenderer)]
+pub async fn create_direct_ordinary_succession_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_succession_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that flat Parallel Create shares one target-neutral Rust continuation.
 #[wasm_bindgen(js_name = createDirectOrdinarySquareAndCircleCreateSmokeRenderer)]
 pub async fn create_direct_ordinary_square_and_circle_create_smoke_renderer(

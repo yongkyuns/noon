@@ -1183,33 +1183,21 @@ def _canonical_linear_play_options(kwargs: dict[str, object]) -> float | None:
         rate_id = str(easing)
     elif rate_func is not None:
         rate_id = _compat._easing_from_rate_func(rate_func)
-    if rate_id != "linear":
+    if rate_id not in (None, "linear"):
         raise NotImplementedError(
-            "canonical ordinary composition currently requires an explicit linear Scene.play rate_func"
+            "canonical ordinary composition currently requires a linear root rate_func"
         )
     value = run_time if run_time is not None else duration
     return None if value is None else float(value)
 
 
-def _canonical_linear_child_options(animation: object) -> float:
-    resolved = _options.resolve(
-        builder_args=_options.builder_args(animation),
-        default_lag_ratio=0.0,
-        play_run_time=None,
-        play_easing=None,
-        play_rate_func=None,
-        play_lag_ratio=None,
-    )
-    if (
-        resolved.rate_func != "linear"
-        or resolved.lag_ratio != 0.0
-        or resolved.path_arc != 0.0
-        or resolved.reverse_rate_function
-    ):
+def _canonical_composition_child_options(animation: object, kwargs: dict[str, object]):
+    resolved = _canonical_affine_options(animation, kwargs)
+    if resolved is None or resolved.rate_func not in ("linear", "smooth"):
         raise NotImplementedError(
-            "canonical ordinary composition currently requires linear affine leaves"
+            "canonical ordinary composition currently requires linear or smooth affine leaves"
         )
-    return float(resolved.run_time)
+    return resolved
 
 
 def _build_canonical_composition_candidate(
@@ -1255,10 +1243,16 @@ def _build_canonical_composition_candidate(
         play_run_time,
     )
     for source, target, animation in present:
+        # Implicit parallel play options apply to its top-level animations;
+        # explicit Succession owns its root options and preserves child curves.
+        child = _canonical_composition_child_options(
+            animation, kwargs if group is None else {},
+        )
         candidate.appendTransformTo(
             getattr(source, "_semantic_handle"),
             getattr(target, "_semantic_handle"),
-            _canonical_linear_child_options(animation),
+            float(child.run_time),
+            str(child.rate_func),
         )
     try:
         supported = bool(context.ordinaryCanPlayComposition(candidate))

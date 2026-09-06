@@ -16,6 +16,7 @@ const {
   createDirectOrdinaryCreatePlaySmokeRenderer,
   createDirectOrdinarySquareToCircleSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
+  createDirectOrdinarySuccessionSmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
 } = await import("./pkg/noon_web.js");
@@ -578,6 +579,44 @@ async function directOrdinaryCreateProof(
       throw new Error(`direct Create reveal/fill or completion failed: ${JSON.stringify(metrics)}`);
     }
     return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directSuccessionProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinarySuccessionSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    await settleDirectPublication(renderer, 0);
+    const samples = [];
+    for (const [time, x, y, expected] of [
+      [500, -2, 0, [88, 196, 221]],
+      [1500, 0, -2, [197, 95, 115]],
+      [2500, 2, 0, [131, 193, 103]],
+      [3500, 0, 2, [255, 255, 0]],
+    ]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const color = await sampleRenderedColor(canvas, x, y);
+      const actual = [color.red, color.green, color.blue];
+      if (actual.some((channel, index) => Math.abs(channel - expected[index]) > 15)) {
+        throw new Error(`direct Succession child at ${time}ms: ${JSON.stringify(color)}`);
+      }
+      samples.push(color);
+    }
+    renderer.advanceDirectRealtime(4000);
+    const directive = await settleDirectPublication(renderer, 4000);
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 4 ||
+        renderer.objectCount() !== 4 || directive.cadence !== "idle") {
+      throw new Error("direct Succession did not complete its shared four-second schedule");
+    }
+    return { samples, time: renderer.time(), cadence: directive.cadence };
   } finally {
     renderer.free();
     if (expectedBackend === "WebGL2") {
@@ -1166,6 +1205,7 @@ async function start() {
     expectedBackend, createDirectOrdinarySquareAndCircleCreateSmokeRenderer, true,
   );
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
+  metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
