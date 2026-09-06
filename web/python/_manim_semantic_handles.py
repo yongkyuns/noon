@@ -294,11 +294,11 @@ def _live_mutation_context(value: object):
     if context is None:
         return None
     ownership = str(context.liveExecutionOwnership())
-    # A returned runtime is dormant: direct typed authoring updates the shared
-    # store, and the next explicit run boundary refreshes that stale runtime.
-    # A transferred runtime must remain non-mutable from this worker, so retain
-    # the context and let its typed live call reject before any store change.
-    return context if ownership in {"active", "transferred"} else None
+    # Returning the player keeps its runtime alive for the next source operation.
+    # Mutations and target creation must publish through that same session too.
+    # A transferred runtime retains this context so its typed call rejects before
+    # changing the shared store while another endpoint owns the player.
+    return context if ownership in {"active", "transferred", "returned"} else None
 
 
 def _has_shared_layout_queries(handle: object) -> bool:

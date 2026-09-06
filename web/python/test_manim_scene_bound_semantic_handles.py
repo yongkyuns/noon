@@ -304,6 +304,20 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 assert "running in the semantic engine" in str(error)
             else:
                 raise AssertionError("transferred live layout read returned stale authored state")
+            # A returned player remains the shared mutation authority between
+            # continuation awaits. Neither the source nor a new target may edit
+            # its handle behind the runtime's publication revision.
+            context.transferred = False
+            context.liveExecutionOwnership = lambda: "returned"
+            live_calls = []
+            context.liveShift = lambda target, x, y: live_calls.append((target, x, y))
+            context.liveTargetEditor = lambda target: FakeHandle(json.dumps(target.snapshot))
+            square.shift(RIGHT)
+            target = square.copy()
+            target.shift(RIGHT)
+            assert live_calls == [(handle, 1.0, 0.0), (target._semantic_handle, 1.0, 0.0)]
+            assert target._canonical_live_target_context is context
+            assert handle.centerX == 1.0, "returned edits must not bypass the live session"
             del scene._canonical_authoring_context
 
             square.set_fill(GREEN, opacity=0.25)

@@ -457,7 +457,7 @@ def _canonical_affine_animation(
     ownership = getattr(context, "liveExecutionOwnership", None)
     if (
         callable(ownership)
-        and str(ownership()) in {"active", "transferred"}
+        and str(ownership()) in {"active", "transferred", "returned"}
         and getattr(target, "_canonical_live_target_context", None) is not context
     ):
         raise NotImplementedError(
@@ -527,7 +527,7 @@ def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):
         )
     context = getattr(self, "_canonical_authoring_context", None)
     ownership = getattr(context, "liveExecutionOwnership", None)
-    if callable(ownership) and str(ownership()) in {"active", "transferred"}:
+    if callable(ownership) and str(ownership()) in {"active", "transferred", "returned"}:
         raise NotImplementedError(
             "an active canonical session cannot fall back to the legacy animation scheduler"
         )
