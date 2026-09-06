@@ -26,6 +26,8 @@ const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 6;
 const HOST_CHANNEL = "noon.host-callback";
 const HOST_PROTOCOL_VERSION = 1;
+const AUTHORING_STARTUP_METRICS_VERSION = 1;
+const moduleGraphReadyAt = performance.now();
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -48,15 +50,22 @@ self.addEventListener("message", (event) => {
 });
 
 async function initializePyodide() {
-  const noonWebReady = initNoonWeb();
-  const pyodideReady = loadPyodide();
-  const compatibilityBundleReady = loadCompatibilityBundle();
+  const initializeStartedAt = performance.now();
+  const resourceDurations = {};
+  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => initNoonWeb());
+  const pyodideReady = measureStartupTask(resourceDurations, "pyodideInitMs", () => loadPyodide());
+  const compatibilityBundleReady = measureStartupTask(
+    resourceDurations,
+    "compatibilityBundleMs",
+    () => loadCompatibilityBundle(),
+  );
   const startupResourcesReady = Promise.all([
     noonWebReady,
     pyodideReady,
     compatibilityBundleReady,
   ]);
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
+  const resourcesReadyAt = performance.now();
   const authoringStore = new WasmAuthoringStore();
   self.noonCreateCanonicalAuthoringSceneContext = () =>
     authoringStore.createSceneContext();
@@ -149,12 +158,14 @@ async function initializePyodide() {
   self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
   self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
   self.noonCanonicalSceneSpecJson = canonicalRetainedSceneSpecJson;
+  const bindingsReadyAt = performance.now();
 
   for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
     pyodide.FS.writeFile(descriptor.runtimePath, compatibilityModules[index].source, {
       encoding: "utf8",
     });
   }
+  const compatibilityFilesReadyAt = performance.now();
 
   pyodide.runPython(`
 import sys
@@ -206,7 +217,40 @@ _manim_camera.install()
 import _manim_canonical_scene
 _manim_canonical_scene.install()
 `);
+  const importsReadyAt = performance.now();
+  self.__noonAuthoringStartupMetrics = Object.freeze({
+    version: AUTHORING_STARTUP_METRICS_VERSION,
+    totalMs: importsReadyAt,
+    moduleGraphLoadMs: moduleGraphReadyAt,
+    initializeMs: importsReadyAt - initializeStartedAt,
+    startupResourcesMs: resourcesReadyAt - initializeStartedAt,
+    noonWebInitMs: resourceDurations.noonWebInitMs,
+    pyodideInitMs: resourceDurations.pyodideInitMs,
+    compatibilityBundleMs: resourceDurations.compatibilityBundleMs,
+    authoringBindingsMs: bindingsReadyAt - resourcesReadyAt,
+    compatibilityFsInstallMs: compatibilityFilesReadyAt - bindingsReadyAt,
+    compatibilityImportInstallMs: importsReadyAt - compatibilityFilesReadyAt,
+    compatibilityModuleCount: compatibilityModules.length,
+    compatibilitySourceChars: compatibilityModules.reduce(
+      (total, module) => total + module.source.length,
+      0,
+    ),
+  });
   return pyodide;
+}
+
+function measureStartupTask(metrics, key, task) {
+  const startedAt = performance.now();
+  let result;
+  try {
+    result = task();
+  } catch (error) {
+    throw error;
+  }
+  return Promise.resolve(result).then((value) => {
+    metrics[key] = performance.now() - startedAt;
+    return value;
+  });
 }
 
 async function loadCompatibilityBundle() {

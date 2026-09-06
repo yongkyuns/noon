@@ -59,6 +59,38 @@ class RetainedSequentialFamilySmoke(Scene):
       let stressResult = null;
       let stressRenderResult = null;
 
+      function retainedTextView(result, label = "retained text") {
+        if (result.kind !== "scene_document") {
+          throw new Error(`${label} returned ${result.kind}`);
+        }
+        if (result.retainedDocument != null) {
+          throw new Error(`${label} must export mixed content through SceneSpec only`);
+        }
+        const sceneSpec = result.sceneSpec;
+        if (!sceneSpec || sceneSpec.version !== 1 || !Array.isArray(sceneSpec.objects)) {
+          throw new Error(`${label} did not produce SceneSpec v1 objects`);
+        }
+        const textEntries = sceneSpec.objects
+          .map((object, order) => ({ object, order }))
+          .filter(({ object }) => object.content?.kind === "text");
+        if (textEntries.length === 0) return null;
+        const ids = new Set(textEntries.map(({ object }) => object.id));
+        return {
+          channel: "noon.authoring.retained",
+          protocol_version: 2,
+          objects: textEntries.map(({ object, order }) => ({
+            object: object.id,
+            order,
+            text: {
+              ...object.content.value,
+              transform: object.transform,
+              style: object.style,
+            },
+          })),
+          tracks: (sceneSpec.tracks ?? []).filter((track) => ids.has(track.object)),
+        };
+      }
+
       function oneFamilyRequest(result, label) {
         if (result.kind !== "scene_document") {
           throw new Error(`${label} smoke returned ${result.kind}`);
@@ -386,6 +418,7 @@ class RetainedSequentialFamilySmoke(Scene):
           await ready();
           return stressRenderResult;
         },
+        retainedTextView,
         run: runForExport,
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };

@@ -1,4 +1,4 @@
-import {
+const {
   createDirectAffineCallbackSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
@@ -13,7 +13,7 @@ import {
   createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
-} from "./pkg/noon_web.js";
+} = await import("./pkg/noon_web.js");
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
 
 const state = {
@@ -957,6 +957,14 @@ async function directNativeSignalsProof(expectedBackend) {
 }
 
 async function start() {
+  if (typeof createDirectExecutionSmokeRenderer !== "function") {
+    state.metrics = {
+      skipped: true,
+      reason: "debug-only direct execution proof is unavailable in this production package",
+    };
+    state.ready = true;
+    return;
+  }
   const expectedBackend = await waitForPrimaryRenderer();
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectExecutionSmokeRenderer(canvas);

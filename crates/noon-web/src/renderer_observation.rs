@@ -104,7 +104,7 @@ impl RendererObservationRequest {
     }
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
 mod retained;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
 pub use retained::*;
