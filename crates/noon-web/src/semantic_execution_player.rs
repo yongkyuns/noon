@@ -839,6 +839,35 @@ impl SemanticExecutionPlayer {
         Ok(end_time)
     }
 
+    /// Atomically introduce detached leaves through one shared flat Parallel Create segment.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_declare_and_activate_create_parallel(
+        &mut self,
+        children: &[(&noon::Mobject, noon_core::AnimationOptions)],
+        play_options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let segment = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .declare_and_activate_create_parallel(children, play_options)
+        .map_err(|error| error.to_string())?;
+        let end_time = segment.end_time();
+        self.clock = self
+            .live_clock_at(self.session.frame().time, end_time, true)
+            .expect("validated execution segment must produce a valid presentation clock");
+        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
+        self.live_wake_clock = BrowserExecutionWakeClock::default();
+        Ok(end_time)
+    }
+
     /// Query root membership from the exact shared live session. This is a
     /// derived wrapper observation, never a frontend lifecycle authority.
     #[cfg(any(target_arch = "wasm32", test))]

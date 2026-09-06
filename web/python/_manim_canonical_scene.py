@@ -92,6 +92,8 @@ def _reserve_typed_binding(
     scene: _base.Scene,
     handle: object,
     key: str | None,
+    *,
+    object_id: int | None = None,
 ) -> _TypedBindingReservation:
     if mobject._scene is not None:
         if mobject._scene is scene:
@@ -114,7 +116,7 @@ def _reserve_typed_binding(
                 prior, prior_key, None, reuse_existing_identity=True
             )
 
-    object_id = scene._next_object_id
+    object_id = scene._next_object_id if object_id is None else object_id
     authoring_key = _ir._authoring_key("key", key, f"@object:{object_id}")
     if object_id in scene._object_keys:
         raise ValueError(f"canonical wrapper object identity is already bound: {object_id}")
@@ -933,6 +935,94 @@ def _play_canonical_create(
     return self
 
 
+def _canonical_create_parallel_candidate(
+    scene: _base.Scene, args: tuple[object, ...], kwargs: dict[str, object]
+) -> tuple[object, list[tuple[_base.Mobject, object, _TypedBindingReservation]]] | None:
+    """Build one inert flat parallel Create candidate without binding Python wrappers."""
+    if len(args) < 2:
+        return None
+    classified = [_canonical_create_animation(scene, animation) for animation in args]
+    if any(target is None for target in classified):
+        return None
+    try:
+        play = _canonical_affine_options(args[0], kwargs, builder_args={})
+    except (TypeError, ValueError):
+        raise
+    if play is None:
+        return None
+
+    children: list[tuple[_base.Mobject, object]] = []
+    for animation, target in zip(args, classified, strict=True):
+        child = _canonical_create_options(animation, {})
+        if child is None:
+            return None
+        children.append((target, child))
+
+    # A top-level parallel has no implicit rate warp. Its children retain their
+    # individually resolved Manim timing (Smooth by default), so a default root
+    # must be Linear rather than applying Smooth twice.
+    root_rate = (
+        str(play.rate_func)
+        if kwargs.get("easing") is not None or kwargs.get("rate_func") is not None
+        else "linear"
+    )
+    context = _context(scene)
+    play_run_time = kwargs.get("run_time", kwargs.get("duration"))
+    candidate = context.beginOrdinaryCreateParallel(
+        None if play_run_time is None else float(play_run_time), root_rate
+    )
+    next_object_id = scene._next_object_id
+    reservations = []
+    for target, child in children:
+        handle = getattr(target, "_semantic_handle")
+        reservation = _reserve_typed_binding(
+            target, scene, handle, None, object_id=next_object_id
+        )
+        if not reservation.reuse_existing_identity:
+            next_object_id += 1
+        candidate.appendCreate(
+            str(reservation.object.id),
+            handle,
+            float(child.run_time),
+            str(child.rate_func),
+        )
+        reservations.append((target, handle, reservation))
+    return candidate, reservations
+
+
+def _play_canonical_create_parallel(
+    self: _base.Scene,
+    candidate: object,
+    reservations: list[tuple[_base.Mobject, object, _TypedBindingReservation]],
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    if _legacy_authored_time(self) != 0.0:
+        raise NotImplementedError(
+            "canonical ordinary Create cannot follow legacy Scene timing"
+        )
+    _start_default_synchronous_continuation(self)
+    context = _context(self)
+    try:
+        _require_semantic_continuation_active(self)
+        method = (
+            context.beginOrdinaryCreateParallelSegment
+            if _semantic_continuation_active(self)
+            else context.ordinaryPlayCreateParallel
+        )
+        method(candidate)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    for target, handle, reservation in reservations:
+        _commit_typed_binding(target, self, reservation, handle)
+        register = getattr(self, "_register_top_level", None)
+        if register is not None:
+            register(target)
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self)
+    if _synchronous_continuation_active(self):
+        return _synchronous_continuation_wait(self)
+    return self
+
+
 def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> object | None:
     """Keep endpoint motion/layout requests out of the basic lifecycle subset."""
     shift = getattr(animation, "_fade_shift_vector", None)
@@ -1239,9 +1329,15 @@ def _play(self, *args, **kwargs):
         if (target := _canonical_create_animation(self, argument)) is not None
     ]
     if canonical_creates:
+        if len(args) > 1 and len(canonical_creates) == len(args):
+            candidate = _canonical_create_parallel_candidate(self, args, kwargs)
+            if candidate is not None:
+                return _play_canonical_create_parallel(self, *candidate)
         if len(canonical_creates) != 1 or len(args) != 1:
             if _semantic_continuation_active(self):
-                raise NotImplementedError("realtime construct supports one canonical Create per play")
+                raise NotImplementedError(
+                    "realtime construct supports only flat parallel canonical Create leaves"
+                )
             return _play_legacy_compatibility(self, *args, **kwargs)
         if _canonical_create_options(args[0], kwargs) is None:
             if _semantic_continuation_active(self):

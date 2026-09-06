@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+#[cfg(any(target_arch = "wasm32", test))]
+use std::collections::BTreeSet;
 
 use noon_core::{
     Color, FamilyAnimationRequest, ObjectId, ObjectSnapshot, SemanticObjectState, SemanticPaint,
@@ -831,6 +833,89 @@ impl CanonicalAuthoringScene {
         };
         self.bindings.insert(id, node);
         self.identities.insert(node, id);
+        Ok(end_time)
+    }
+
+    /// Run one flat parallel Create through the retained live session.
+    #[cfg(target_arch = "wasm32")]
+    fn ordinary_play_create_parallel(
+        &mut self,
+        children: &[(ObjectId, noon::Mobject, noon_core::AnimationOptions)],
+        play_options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        let end_time = self.begin_ordinary_create_parallel(children, play_options)?;
+        let player = self.active_live_player()?;
+        player.live_advance_segment_to(end_time)?;
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
+    /// Atomically bind detached leaves and activate one flat parallel Create segment.
+    ///
+    /// Derived wrapper bindings are recorded only after the shared session accepted the
+    /// complete transaction. The candidate owns no semantic identity, timing, or runtime state.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_create_parallel(
+        &mut self,
+        children: &[(ObjectId, noon::Mobject, noon_core::AnimationOptions)],
+        play_options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        if children.is_empty() {
+            return Err("ordinary parallel Create requires at least one detached leaf".into());
+        }
+        if self.live_player.is_none() && self.scene.time() != 0.0 {
+            return Err("ordinary Create cannot follow pre-execution canonical timing".into());
+        }
+
+        let mut object_ids = BTreeSet::new();
+        let mut nodes = BTreeSet::new();
+        for (id, target, _) in children {
+            if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                return Err("ordinary Create mobject belongs to another authoring store".into());
+            }
+            target.validate()?;
+            let node = target.node_id();
+            if !object_ids.insert(*id) || !nodes.insert(node) {
+                return Err("ordinary parallel Create requires distinct detached leaves".into());
+            }
+            if self.bindings.contains_key(id) || self.identities.contains_key(&node) {
+                return Err(format!("canonical object {} is already bound", id.get()));
+            }
+        }
+
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(play_options.run_time.unwrap_or(0.0))
+            .max(
+                children
+                    .iter()
+                    .filter_map(|(_, _, options)| options.run_time)
+                    .fold(0.0, f64::max),
+            );
+        let requests = children
+            .iter()
+            .map(|(_, target, options)| (target, *options))
+            .collect::<Vec<_>>();
+        let end_time = if self.live_player.is_none() {
+            self.prepare_local_player_for_run()?;
+            let mut player = self.build_live_player(bootstrap_duration, 0)?;
+            let end_time =
+                player.live_declare_and_activate_create_parallel(&requests, play_options)?;
+            self.live_player = Some(player);
+            self.live_player_returned = false;
+            end_time
+        } else {
+            self.active_live_player()?
+                .live_declare_and_activate_create_parallel(&requests, play_options)?
+        };
+        for (id, target, _) in children {
+            let node = target.node_id();
+            self.bindings.insert(*id, node);
+            self.identities.insert(node, *id);
+        }
         Ok(end_time)
     }
 
@@ -1708,6 +1793,17 @@ mod wasm {
         play_options: noon_core::AnimationOptions,
     }
 
+    /// Consumed, inert input for one flat ordinary parallel Create request.
+    ///
+    /// It carries only wrapper-derived IDs, opaque shared handles, and unresolved
+    /// options. The shared Rust session owns admission, schedule, reveal tracks,
+    /// and execution identity when this candidate is consumed.
+    #[wasm_bindgen]
+    pub struct WasmOrdinaryCreateParallelBuilder {
+        children: Vec<(ObjectId, noon::Mobject, noon_core::AnimationOptions)>,
+        play_options: noon_core::AnimationOptions,
+    }
+
     /// Opaque Python/JS identity for one canonical scalar input signal.
     #[wasm_bindgen]
     pub struct WasmValueTrackerHandle {
@@ -1868,6 +1964,34 @@ mod wasm {
                     .run_time(child_run_time)
                     .rate_func(noon_core::RateFunction::Linear),
             ));
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmOrdinaryCreateParallelBuilder {
+        #[wasm_bindgen(js_name = appendCreate)]
+        pub fn append_create(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.children.push((
+                id,
+                target.semantic_mobject().clone(),
+                noon_core::AnimationOptions::new()
+                    .run_time(child_run_time)
+                    .rate_func(rate_function),
+            ));
+            Ok(())
         }
     }
 
@@ -2818,6 +2942,52 @@ mod wasm {
                 .rate_func(rate_function);
             self.inner
                 .begin_ordinary_fade(id, target.semantic_mobject(), direction, options)
+                .map_err(js_error)
+        }
+
+        /// Start one inert flat-parallel Create candidate. It does not mutate the
+        /// semantic store or allocate an execution player.
+        #[wasm_bindgen(js_name = beginOrdinaryCreateParallel)]
+        pub fn begin_ordinary_create_parallel(
+            &self,
+            play_run_time: Option<f64>,
+            rate_function: &str,
+        ) -> Result<WasmOrdinaryCreateParallelBuilder, JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let mut play_options = noon_core::AnimationOptions::new().rate_func(rate_function);
+            if let Some(run_time) = play_run_time {
+                play_options = play_options.run_time(run_time);
+            }
+            Ok(WasmOrdinaryCreateParallelBuilder {
+                children: Vec::new(),
+                play_options,
+            })
+        }
+
+        /// Consume, activate, run, and complete one flat-parallel Create candidate.
+        #[wasm_bindgen(js_name = ordinaryPlayCreateParallel)]
+        pub fn ordinary_play_create_parallel(
+            &mut self,
+            candidate: WasmOrdinaryCreateParallelBuilder,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .ordinary_play_create_parallel(&candidate.children, candidate.play_options)
+                .map_err(js_error)
+        }
+
+        /// Consume and activate one flat-parallel Create candidate without advancing it.
+        #[wasm_bindgen(js_name = beginOrdinaryCreateParallelSegment)]
+        pub fn begin_ordinary_create_parallel_segment(
+            &mut self,
+            candidate: WasmOrdinaryCreateParallelBuilder,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .begin_ordinary_create_parallel(&candidate.children, candidate.play_options)
                 .map_err(js_error)
         }
 
@@ -4960,6 +5130,81 @@ mod tests {
             .is_err());
         assert_eq!(context.bindings.len(), 1);
         assert_eq!(context.identities.len(), 1);
+    }
+
+    #[test]
+    fn ordinary_parallel_create_commits_bindings_only_after_shared_admission() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        let square = context.scene.square(0.8).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Smooth);
+        let end = context
+            .begin_ordinary_create_parallel(
+                &[
+                    (ObjectId::new(0), circle.clone(), options),
+                    (ObjectId::new(1), square.clone(), options),
+                ],
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        assert_eq!(end, 1.0);
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(0)),
+            Some(&circle.node_id())
+        );
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(1)),
+            Some(&square.node_id())
+        );
+        assert_eq!(
+            context.identities.get(&circle.node_id()),
+            Some(&ObjectId::new(0))
+        );
+        assert_eq!(
+            context.identities.get(&square.node_id()),
+            Some(&ObjectId::new(1))
+        );
+        let player = context.active_live_player().unwrap();
+        assert_eq!(player.time(), 0.0);
+        player.live_advance_segment_to(end).unwrap();
+        player.live_complete_segment().unwrap();
+        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.live_contains_mobject(&square).unwrap());
+    }
+
+    #[test]
+    fn failed_parallel_create_keeps_all_derived_bindings_and_first_player_absent() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        let square = context.scene.square(0.8).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+
+        assert!(context
+            .begin_ordinary_create_parallel(
+                &[
+                    (
+                        ObjectId::new(0),
+                        circle.clone(),
+                        AnimationOptions::new().run_time(1.0)
+                    ),
+                    (
+                        ObjectId::new(1),
+                        square.clone(),
+                        AnimationOptions::new().run_time(f64::NAN)
+                    ),
+                ],
+                AnimationOptions::new().run_time(1.0),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert!(context.bindings.is_empty());
+        assert!(context.identities.is_empty());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
     }
 
     #[test]

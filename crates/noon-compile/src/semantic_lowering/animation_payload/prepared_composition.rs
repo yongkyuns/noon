@@ -312,7 +312,7 @@ where
                         },
                     );
                 }
-                if !leaf.time_map.is_identity() {
+                if !leaf.time_map.is_identity() && !is_flat_parallel_time_map(&leaf.time_map) {
                     return Err(
                         PreparedSemanticAnimationLoweringError::UnsupportedCreateComposition {
                             animation: leaf.animation,
@@ -345,6 +345,16 @@ where
         run_time: schedule.run_time(),
         tracks,
     })
+}
+
+/// Create reveal tracks support one flat Parallel parent. The parent may apply
+/// any shared rate function, but every child must occupy its full interval;
+/// lagged, sequential, and nested compositions remain unavailable.
+fn is_flat_parallel_time_map(time_map: &noon_core::CompositionTimeMap) -> bool {
+    matches!(
+        time_map.steps.as_slice(),
+        [step] if step.start == 0.0 && step.duration == 1.0
+    )
 }
 
 fn capture_effective<F>(
@@ -699,6 +709,105 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn prepared_flat_parallel_create_uses_each_child_rate_once() {
+        let mut store = noon_core::SemanticStore::new();
+        let root = store.insert_family();
+        let circle =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.4,
+            }));
+        let square =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Rectangle {
+                size: Vec2::new(0.8, 0.8),
+            }));
+        let index = SemanticExecutionIndex::new();
+        let child_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Smooth);
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_member(root, circle);
+        transaction.add_member(root, square);
+        let left = transaction.create_create_animation(circle, child_options);
+        let right = transaction.create_create_animation(square, child_options);
+        let composition = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            [left, right],
+            AnimationOptions::new(),
+        );
+        let prepared = transaction.prepare(&mut store).unwrap();
+
+        let activation = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            composition,
+            0.0,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+            |_| None,
+        )
+        .unwrap();
+
+        assert_eq!(activation.len(), 2);
+        for track in activation.tracks() {
+            assert_eq!(track.property, Property::Reveal);
+            assert_eq!(track.timing.easing, RateFunction::Smooth);
+            assert_eq!(track.time_map.steps.len(), 1);
+            let step = track.time_map.steps[0];
+            assert_eq!(step.start, 0.0);
+            assert_eq!(step.duration, 1.0);
+            assert_eq!(step.rate_func, RateFunction::Linear);
+            // At a quarter of the parent interval, only the child applies Manim Smooth.
+            assert_eq!(track.time_map.evaluate(0.25).alpha, 0.25);
+            assert_eq!(
+                track.timing.easing.evaluate(0.25),
+                RateFunction::Smooth.evaluate(0.25)
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_sequential_create_remains_unavailable_before_publication() {
+        let mut store = noon_core::SemanticStore::new();
+        let root = store.insert_family();
+        let circle =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.4,
+            }));
+        let square =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Rectangle {
+                size: Vec2::new(0.8, 0.8),
+            }));
+        let index = SemanticExecutionIndex::new();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_member(root, circle);
+        transaction.add_member(root, square);
+        let left = transaction.create_create_animation(circle, AnimationOptions::new());
+        let right = transaction.create_create_animation(square, AnimationOptions::new());
+        let composition = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Sequence,
+            [left, right],
+            AnimationOptions::new(),
+        );
+        let before = store.scene_revision();
+        let prepared = transaction.prepare(&mut store).unwrap();
+
+        assert!(matches!(
+            lower_prepared_semantic_animation_composition(
+                &prepared,
+                &index,
+                composition,
+                0.0,
+                AnimationOptions::new(),
+                |_| None,
+            ),
+            Err(PreparedSemanticAnimationLoweringError::UnsupportedCreateComposition { .. })
+        ));
+        drop(prepared);
+        assert_eq!(store.scene_revision(), before);
     }
 
     #[test]
