@@ -860,7 +860,10 @@ result = scene
   assert.equal(prepared.style.fill[3], 1);
   assert.equal(prepared.style.opacity, 0.5);
   assert.equal(prepared.instance_end, prepared.instance_start + 1);
-  assert.equal(prepared.render_item_end, prepared.render_item_start + 1);
+  // The geometry fast path draws packed instances directly; it does not build
+  // the mixed text/geometry render-item table.
+  assert.equal(prepared.render_item_start, null);
+  assert.equal(prepared.render_item_end, null);
   assert.equal(prepared.render_item_count, 1);
   assert.equal(prepared.glyph_item_count, 0);
   assert.equal(prepared.full_rebuilds, 0);
