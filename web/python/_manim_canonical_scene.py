@@ -993,7 +993,7 @@ def _canonical_create_animation(
 def _canonical_uncreate_animation(
     scene: _base.Scene, animation: object
 ) -> _base.Mobject | None:
-    """Classify the literal detached single-leaf Uncreate subset."""
+    """Classify one exact detached or direct-bound single-leaf Uncreate."""
     if type(animation) is not _base.Uncreate:
         return None
     target = getattr(animation, "target", None)
@@ -1001,9 +1001,7 @@ def _canonical_uncreate_animation(
         raise NotImplementedError("canonical ordinary Uncreate target must be a Mobject")
     if getattr(target, "_semantic_handle", None) is None:
         return None
-    if target._scene is not None:
-        if target._scene is scene:
-            raise NotImplementedError("canonical Uncreate requires a detached Mobject")
+    if target._scene is not None and target._scene is not scene:
         raise ValueError("Uncreate target already belongs to another Scene")
     return target
 
@@ -1072,7 +1070,14 @@ def _play_canonical_create(
         )
     _start_default_synchronous_continuation(self)
     handle = getattr(target, "_semantic_handle")
-    reservation = _reserve_typed_binding(target, self, handle, None)
+    reservation = None
+    if target._scene is None:
+        reservation = _reserve_typed_binding(target, self, handle, None)
+        object_id = str(reservation.object.id)
+    elif remove and target._scene is self and target._object is not None:
+        object_id = str(target._object.id)
+    else:
+        raise ValueError("canonical Create target must be detached")
     context = _context(self)
     try:
         _require_semantic_continuation_active(self)
@@ -1082,17 +1087,18 @@ def _play_canonical_create(
             else (context.ordinaryPlayUncreate if remove else context.ordinaryPlayCreate)
         )
         method(
-            str(reservation.object.id),
+            object_id,
             handle,
             float(resolved.run_time),
             str(resolved.rate_func),
         )
     except Exception as error:
         raise ValueError(str(error)) from None
-    _commit_typed_binding(target, self, reservation, handle)
-    register = getattr(self, "_register_top_level", None)
-    if register is not None:
-        register(target)
+    if reservation is not None:
+        _commit_typed_binding(target, self, reservation, handle)
+        register = getattr(self, "_register_top_level", None)
+        if register is not None:
+            register(target)
 
     def completed() -> None:
         if remove:

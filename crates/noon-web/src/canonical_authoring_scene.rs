@@ -918,7 +918,7 @@ impl CanonicalAuthoringScene {
         Ok(end_time)
     }
 
-    /// Atomically bind, admit, and activate one detached leaf's reverse reveal.
+    /// Atomically activate one detached or direct-bound leaf's reverse reveal.
     #[cfg(any(target_arch = "wasm32", test))]
     fn begin_ordinary_uncreate(
         &mut self,
@@ -931,9 +931,13 @@ impl CanonicalAuthoringScene {
         }
         target.validate()?;
         let node = target.node_id();
-        if self.bindings.contains_key(&id) || self.identities.contains_key(&node) {
-            return Err(format!("canonical object {} is already bound", id.get()));
-        }
+        let new_binding = match (self.bindings.get(&id), self.identities.get(&node)) {
+            (None, None) => true,
+            (Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => {
+                false
+            }
+            _ => return Err(format!("canonical object {} is already bound", id.get())),
+        };
         if self.live_player.is_none() && self.scene.time() != 0.0 {
             return Err("ordinary Uncreate cannot follow pre-execution canonical timing".into());
         }
@@ -952,8 +956,10 @@ impl CanonicalAuthoringScene {
             self.active_live_player()?
                 .live_declare_and_activate_uncreate(target, options)?
         };
-        self.bindings.insert(id, node);
-        self.identities.insert(node, id);
+        if new_binding {
+            self.bindings.insert(id, node);
+            self.identities.insert(node, id);
+        }
         Ok(end_time)
     }
 
@@ -6689,6 +6695,32 @@ mod tests {
         assert!(!context.live_contains_mobject(&square).unwrap());
         context.live_add_mobject(id, &square).unwrap();
         assert!(context.live_contains_mobject(&square).unwrap());
+        assert_eq!(context.identities.get(&square.node_id()), Some(&id));
+    }
+
+    #[test]
+    fn ordinary_uncreate_releases_a_prebound_leaf_without_rebinding_it() {
+        let mut context = CanonicalAuthoringScene::default();
+        let square = context.scene.square(2.0).unwrap();
+        let id = ObjectId::new(0);
+        context.bind_mobject(id, &square).unwrap();
+
+        let end = context
+            .begin_ordinary_uncreate(
+                id,
+                &square,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
+        assert!(context.live_contains_mobject(&square).unwrap());
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(end).unwrap();
+        player.live_complete_segment().unwrap();
+        assert!(!context.live_contains_mobject(&square).unwrap());
+        assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
         assert_eq!(context.identities.get(&square.node_id()), Some(&id));
     }
 

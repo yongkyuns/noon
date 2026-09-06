@@ -1763,7 +1763,12 @@ impl ExecutionSession {
         )
     }
 
-    /// Atomically admit one detached leaf, reverse its reveal, and remove it at completion.
+    /// Reverse one leaf's reveal and remove it at completion.
+    ///
+    /// A detached leaf is admitted in this declaration. A leaf already mounted directly at the
+    /// execution root keeps that membership through its endpoint, then follows the same exact
+    /// reveal-lifecycle removal. Both forms therefore share one transaction, one runtime
+    /// activation, and one completion rule.
     pub fn declare_and_activate_uncreate(
         &mut self,
         store: &mut SemanticStore,
@@ -1779,10 +1784,11 @@ impl ExecutionSession {
                 error: ExecutionSessionCreateError::UnsupportedUncreateRateFunction(rate),
             });
         }
-        self.require_create_root(root, target)?;
-        self.require_create_target(store, target)?;
+        let admitted = self.require_uncreate_target(store, root, target)?;
         let mut declaration = SemanticMutationTransaction::new();
-        declaration.add_member(root, target);
+        if admitted {
+            declaration.add_member(root, target);
+        }
         let animation = declaration
             .create_create_animation(target, options.remover(true).reverse_rate_function(true));
         self.declare_and_activate_prepared_animation(
@@ -1790,7 +1796,11 @@ impl ExecutionSession {
             declaration,
             animation,
             AnimationOptions::new(),
-            Some(PreparedAnimationLifecycle::Introduce(root)),
+            Some(if admitted {
+                PreparedAnimationLifecycle::Introduce(root)
+            } else {
+                PreparedAnimationLifecycle::FadeOut(root)
+            }),
         )
     }
 
@@ -1895,6 +1905,30 @@ impl ExecutionSession {
             });
         }
         Ok(())
+    }
+
+    /// Return whether an Uncreate target needs admission at activation.
+    ///
+    /// The ordinary leaf subset deliberately accepts only the two existing lifecycle shapes:
+    /// a completely detached leaf, or one live direct member of this root. In particular, an
+    /// unmounted family edge is not silently treated as direct-leaf Uncreate support.
+    fn require_uncreate_target(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+    ) -> Result<bool, ExecutionSessionAnimationError> {
+        self.require_create_root(root, target)?;
+        let direct_root_member = store
+            .node(target)
+            .is_some_and(|node| node.parents() == [root])
+            && self.execution_index.execution_object_id(target).is_some();
+        if direct_root_member {
+            self.require_fade_target(store, root, target, SemanticFadeDirection::Out)?;
+            return Ok(false);
+        }
+        self.require_create_target(store, target)?;
+        Ok(true)
     }
 
     fn require_fade_target(

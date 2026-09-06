@@ -683,7 +683,10 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
-    /// Atomically admit one detached leaf, reverse Reveal, and remove it at completion.
+    /// Reverse one leaf's Reveal and remove it at completion.
+    ///
+    /// The shared declaration accepts either a detached leaf, which it admits atomically, or
+    /// one direct live member of this session root. In both cases completion owns removal.
     pub fn declare_and_activate_uncreate(
         &mut self,
         target: &Mobject,
@@ -2119,6 +2122,37 @@ mod tests {
         assert_eq!(session.publication_context(), before);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn uncreate_reverses_and_removes_a_direct_bound_leaf() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let semantic_id = square.node_id();
+        let authored = square.state().unwrap();
+        scene.add(&square).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_uncreate(
+                &square,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(live.effective(&square).unwrap().reveal, 1.0);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        assert_eq!(live.effective(&square).unwrap().reveal, 0.0);
+        live.complete_segment(segment).unwrap();
+        assert!(!live.contains(&square).unwrap());
+        assert_eq!(square.node_id(), semantic_id);
+        assert_eq!(square.state().unwrap(), authored);
     }
 
     #[test]
