@@ -133,6 +133,37 @@ assert abs(center.y + 1.0) < 1e-9
 result = scene
 `;
 
+const ordinaryExportBoundarySource = `from noon import *
+
+class OrdinaryExportBoundary(Scene):
+    def construct(self):
+        circle = Circle(radius=0.4)
+        self.add(circle)
+        self.play(circle.animate.shift((2.0, 0.0, 0.0)), run_time=2.0, rate_func=linear)
+        self.wait(1.0)
+`;
+
+const asyncExportBoundarySource = `from noon import *
+import builtins
+
+builtins.__noon_export_boundary_setup_count = 0
+
+class AsyncExportBoundary(Scene):
+    def setup(self):
+        builtins.__noon_export_boundary_setup_count += 1
+        return super().setup()
+
+    async def construct(self):
+        raise AssertionError("async export must reject before construct")
+`;
+
+const exportBoundarySentinelSource = `from noon import *
+import builtins
+
+assert builtins.__noon_export_boundary_setup_count == 0
+result = Scene()
+`;
+
 const browserArgs = [
   "--enable-unsafe-webgpu",
   "--enable-unsafe-swiftshader",
@@ -630,6 +661,60 @@ try {
       });
     }
   }
+
+  // `exportDocument` is the explicit #959 codec boundary. It still runs the
+  // shared endpoint authoring operations, but it must never lease a renderer
+  // continuation from a normal def construct. Async source cannot satisfy that
+  // boundary and rejects before `Scene.setup` mutates the worker-resident scene.
+  const exportBoundary = await page.evaluate(async ({
+    ordinarySource,
+    asyncSource,
+    sentinelSource,
+  }) => {
+    const harness = window.sharedAuthoringSmoke;
+    let continuationRegistrations = 0;
+    const ordinary = await harness.authoring.run(ordinarySource, {}, {
+      exportDocument: true,
+      onSemanticContinuation() {
+        continuationRegistrations += 1;
+        throw new Error("document export must not register a continuation");
+      },
+    });
+    let asyncError = null;
+    try {
+      await harness.authoring.run(asyncSource, {}, { exportDocument: true });
+    } catch (error) {
+      asyncError = String(error);
+    }
+    const sentinel = await harness.authoring.run(sentinelSource, {}, { exportDocument: true });
+    return {
+      ordinary: {
+        kind: ordinary.kind,
+        duration: ordinary.duration,
+        objectCount: ordinary.document.objects.length,
+        trackCount: ordinary.sceneSpec.tracks.length,
+        hasSemanticExecution: Object.hasOwn(ordinary, "semanticExecution"),
+      },
+      continuationRegistrations,
+      asyncError,
+      sentinelObjectCount: sentinel.document.objects.length,
+    };
+  }, {
+    ordinarySource: ordinaryExportBoundarySource,
+    asyncSource: asyncExportBoundarySource,
+    sentinelSource: exportBoundarySentinelSource,
+  });
+  assert.equal(exportBoundary.ordinary.kind, "scene_document");
+  assert.equal(exportBoundary.ordinary.duration, 3);
+  assert.equal(exportBoundary.ordinary.objectCount, 1);
+  assert.ok(exportBoundary.ordinary.trackCount > 0, "export did not retain the affine endpoint track");
+  assert.equal(exportBoundary.ordinary.hasSemanticExecution, false);
+  assert.equal(exportBoundary.continuationRegistrations, 0);
+  assert.match(
+    exportBoundary.asyncError ?? "",
+    /exportDocument cannot run an async Scene construct/,
+  );
+  assert.equal(exportBoundary.sentinelObjectCount, 0);
 
   // Async Python construct suspends on the worker-owned semantic endpoint. The
   // early descriptor starts the existing execution client while runPythonAsync

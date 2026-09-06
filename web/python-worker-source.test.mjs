@@ -111,3 +111,11 @@ test("explicit document export bypasses continuation leasing before construct mu
     /def _start_default_synchronous_continuation\(scene: _base\.Scene\)[\s\S]*?getattr\(scene, _EXPORT_DOCUMENT_CONSTRUCT, False\)[\s\S]*?return/,
   );
 });
+
+test("default canonical continuation rejects unsupported JSPI before activation", () => {
+  assert.match(
+    canonicalScene,
+    /def _start_default_synchronous_continuation\(scene: _base\.Scene\)[\s\S]*?from pyodide\.ffi import can_run_sync[\s\S]*?if not can_run_sync\(\):[\s\S]*?raise RuntimeError\(/,
+  );
+  assert.match(canonicalScene, /ordinary synchronous canonical play\/wait requires Pyodide JS Promise/);
+});
