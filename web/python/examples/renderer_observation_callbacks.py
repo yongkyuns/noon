@@ -27,8 +27,8 @@ class RendererObservationCallbacks(Scene):
             center = mobject.get_center()
             mobject.move_to((center.x, 1.0, 0.0))
 
-        def move_label(mobject, _dt):
-            mobject.move_to((1.0, -2.0, 0.0))
+        def move_label(mobject, dt):
+            mobject.shift((dt, 0.0, 0.0))
 
         if context.get("observation_target") == "geometry":
             animated.add_updater(lift)
