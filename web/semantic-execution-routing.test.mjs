@@ -338,6 +338,42 @@ test("semantic rerun preflights its context before switching the live renderer",
   client.terminate();
 });
 
+test("a replacement source continuation keeps its generation and starts despite a paused prior scene", async () => {
+  FakeWorker.instances.length = 0;
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new AuthoringExecutionClient(new FakeCanvas());
+  const render = await prepare(client);
+  const initial = client.startSemanticExecution(
+    { contextId: "semantic-paused" },
+    { authoringClient: authoring, initiallyPaused: true },
+  );
+  await Promise.resolve();
+  replyRender(render, "start_engine", "engine_started", { mode: "legacy" });
+  await initial;
+
+  const replacement = client.reconcileSemanticExecution(
+    { contextId: "semantic-continuation", continuationGeneration: 2 },
+    { authoringClient: authoring },
+  );
+  const rebuild = await waitForRequest(render, "rebuild_engine");
+  render.emitMessage(
+    envelope("noon.render", "engine_rebuilt", {
+      requestId: rebuild.requestId,
+      mode: "retained",
+      transportMode: "transferable",
+      backend: "WebGL2",
+    }),
+  );
+  await replacement;
+
+  const attachment = authoring.attachments.at(-1);
+  assert.equal(attachment.contextId, "semantic-continuation");
+  assert.equal(attachment.options.session, 2);
+  assert.equal(attachment.options.continuationGeneration, 2);
+  assert.equal(attachment.options.initiallyPaused, false);
+  client.terminate();
+});
+
 test("semantic to legacy switches to the ordinary renderer and retires the context", async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();

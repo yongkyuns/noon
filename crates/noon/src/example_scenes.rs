@@ -4,10 +4,10 @@ use std::{error::Error, rc::Rc};
 
 use crate::{
     AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    LiveSession, MathTypst, Mobject, RateFunction, RustHostCallbackTable, Scene,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
     SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, TransformToRequest,
-    ValueTracker, Vec2,
+    Typst, ValueTracker, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -283,6 +283,32 @@ pub fn live_line_match_callback(
         callbacks.add_updater(&mut store, line.node_id(), MATCH_LINE_ENDPOINTS, 0.0, None)?;
     }
     Ok((scene.execution_session()?, callbacks))
+}
+
+/// Build the static Typst reference scene through the shared semantic text resource path.
+pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let label = scene.typst(
+        Typst::new("*Hello* from _Typst!_")
+            .with_font_size(72.0)
+            .color(Color::rgba(
+                247.0 / 255.0,
+                217.0 / 255.0,
+                111.0 / 255.0,
+                1.0,
+            )),
+    )?;
+    scene.add(&label)?;
+    Ok(scene.execution_session()?)
+}
+
+/// Build the static MathTypst reference scene through the shared semantic text resource path.
+pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let equation = scene
+        .math_typst(MathTypst::new("sum_(k=1)^n k = frac(n(n + 1), 2)").with_font_size(72.0))?;
+    scene.add(&equation)?;
+    Ok(scene.execution_session()?)
 }
 
 /// Execute the paired affine-completion example and return its settled session.
@@ -724,6 +750,81 @@ pub fn ordinary_composition_continuation_program(
         .map_err(|error| error.to_string())
 }
 
+/// The four-dot Succession tutorial with default Smooth child timing.
+pub struct OrdinarySuccession {
+    dots: Vec<Mobject>,
+    targets: Vec<Mobject>,
+    activated: bool,
+}
+
+impl LiveContinuation for OrdinarySuccession {
+    type Error = String;
+
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
+        if self.activated {
+            return Ok(crate::ContinuationStep::Finished);
+        }
+        let requests = self
+            .dots
+            .iter()
+            .zip(&self.targets)
+            .map(|(source, target)| {
+                TransformToRequest::new(source, target, AnimationOptions::new())
+            })
+            .collect::<Vec<_>>();
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &requests,
+                AnimationOptions::new()
+                    .lag_ratio(1.0)
+                    .rate_func(RateFunction::Linear),
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
+            .map_err(|error| error.to_string())?;
+        self.activated = true;
+        Ok(crate::ContinuationStep::Await(segment))
+    }
+}
+
+/// Same geometry, colors, eager target capture and timing as `manim_example_succession.py`.
+pub fn ordinary_succession_program() -> Result<LiveProgram<OrdinarySuccession>, String> {
+    let mut scene = Scene::new();
+    let positions = [(-2.0, 2.0), (-2.0, -2.0), (2.0, -2.0), (2.0, 2.0)];
+    let colors = [
+        (88.0, 196.0, 221.0),
+        (197.0, 95.0, 115.0),
+        (131.0, 193.0, 103.0),
+        (247.0, 217.0, 111.0),
+    ];
+    let mut dots = Vec::with_capacity(4);
+    let mut targets = Vec::with_capacity(4);
+    for (index, ((x, y), (red, green, blue))) in positions.iter().zip(colors).enumerate() {
+        let mut dot = scene.circle(0.16).map_err(|error| error.to_string())?;
+        dot.set_fill(red / 255.0, green / 255.0, blue / 255.0, 1.0)
+            .map_err(|error| error.to_string())?;
+        dot.set_stroke_width(0.0)
+            .map_err(|error| error.to_string())?;
+        dot.set_translation(*x, *y)
+            .map_err(|error| error.to_string())?;
+        scene.add(&dot).map_err(|error| error.to_string())?;
+        let mut target = dot.target_editor().map_err(|error| error.to_string())?;
+        let (target_x, target_y) = positions[(index + 1) % positions.len()];
+        target
+            .set_translation(target_x, target_y)
+            .map_err(|error| error.to_string())?;
+        dots.push(dot);
+        targets.push(target);
+    }
+    scene
+        .into_live_program(OrdinarySuccession {
+            dots,
+            targets,
+            activated: false,
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// One ordinary transform continuation whose effective frame is completed by
 /// two ordered host callbacks at every required phase.
 pub struct OrdinaryCallbackContinuation {
@@ -1155,6 +1256,68 @@ pub fn ordinary_create_continuation_program(
             circle,
             semantic_id,
             authored_style,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Literal `Uncreate(Square())` continuation shared by native and direct Rust/WASM hosts.
+pub struct OrdinaryUncreateContinuation {
+    square: Mobject,
+    semantic_id: SemanticNodeId,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryUncreateContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                if live
+                    .contains(&self.square)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err("Uncreate example target must begin detached".into());
+                }
+                self.stage = 1;
+                live.declare_and_activate_uncreate(
+                    &self.square,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Smooth),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                if self.square.node_id() != self.semantic_id
+                    || live
+                        .contains(&self.square)
+                        .map_err(|error| error.to_string())?
+                {
+                    return Err("Uncreate did not remove its exact shared target".into());
+                }
+                self.stage = 2;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary Uncreate continuation resumed after it finished".into()),
+        }
+    }
+}
+
+pub fn ordinary_uncreate_continuation_program(
+) -> Result<LiveProgram<OrdinaryUncreateContinuation>, String> {
+    let scene = Scene::new();
+    let square = scene.square(2.0).map_err(|error| error.to_string())?;
+    let semantic_id = square.node_id();
+    scene
+        .into_live_program(OrdinaryUncreateContinuation {
+            square,
+            semantic_id,
             stage: 0,
         })
         .map_err(|error| error.to_string())
@@ -1669,6 +1832,42 @@ mod continuation_tests {
     use crate::{LiveProgramStatus, TimelineWakeState};
 
     #[test]
+    fn ordinary_succession_preserves_smooth_children_and_exact_sequence_endpoints() {
+        let mut program = ordinary_succession_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.drive_to(&mut callbacks, 0.25).unwrap();
+        let frame = program.session().frame();
+        let quarter = RateFunction::Smooth.evaluate(0.25);
+        assert!((frame.objects[0].transform.translation.y - (2.0 - 4.0 * quarter)).abs() < 1e-5);
+        assert_eq!(
+            frame.objects[1].transform.translation,
+            Vec2::new(-2.0, -2.0)
+        );
+        program.drive_to(&mut callbacks, 1.25).unwrap();
+        let frame = program.session().frame();
+        assert_eq!(
+            frame.objects[0].transform.translation,
+            Vec2::new(-2.0, -2.0)
+        );
+        assert!((frame.objects[1].transform.translation.x - (-2.0 + 4.0 * quarter)).abs() < 1e-5);
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 4.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let expected = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)];
+        for (object, (x, y)) in program.session().frame().objects.iter().zip(expected) {
+            assert_eq!(object.transform.translation, Vec2::new(x, y));
+        }
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[test]
     fn ordinary_affine_continuation_uses_shared_segments_and_publication_admission() {
         let mut program = ordinary_affine_continuation_program().unwrap();
         let mut callbacks = RustHostCallbackTable::new();
@@ -1925,6 +2124,39 @@ mod continuation_tests {
         let publication = program.take_renderer_publication().context();
         program.admit_publication(publication).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[test]
+    fn ordinary_uncreate_admits_reverses_and_removes_one_detached_square() {
+        let mut program = ordinary_uncreate_continuation_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(program.session().frame().is_present(0));
+        assert_eq!(program.session().frame().reveal(0), 1.0);
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!((program.session().frame().reveal(0) - 0.5).abs() < 1e-6);
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        assert!(!program.session().frame().is_present(0));
+        // Completion releases the reveal driver back to its authored default so a
+        // later re-add of this same semantic object is fully visible.
+        assert_eq!(program.session().frame().reveal(0), 1.0);
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert!(!program.session().frame().is_present(0));
     }
 
     #[test]

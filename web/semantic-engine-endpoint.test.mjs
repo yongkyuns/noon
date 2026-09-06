@@ -655,6 +655,68 @@ test("continuation sends coherent intermediate publications before its endpoint"
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("initial continuation attachment drives its first wake through presentation and completion", async () => {
+  const completions = [];
+  const f = fixture("transferable", null, {
+    generation: 26,
+    onComplete: (generation) => completions.push(generation),
+    onError: (_generation, error) => { throw error; },
+  });
+  let endpoint;
+  const acknowledge = (publication) => {
+    f.render.port2.postMessage({
+      type: "execution_ack", session: publication.session, sequence: publication.sequence,
+    });
+    f.render.port2.postMessage({
+      type: "execution_presented", session: publication.session, sequence: publication.sequence,
+    });
+  };
+  try {
+    // The initial attachment must use the same renderer wake path as a resumed
+    // segment.  It has no later `startContinuation` call to kick progress.
+    f.player.drainDeltaJson = () => f.player.seekDeltaJson(f.player.time());
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    const initialWake = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_wake",
+    );
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    const wake = await initialWake;
+    assert.equal(wake.cadence, "animation_frame");
+    acknowledge(initialDelta);
+
+    const endpointPublication = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta" && message.sequence !== initialDelta.sequence,
+    );
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    const atEndpoint = await endpointPublication;
+    assert.equal(f.stats().continuationDriveTimes.length, 1);
+    assert.ok(Number.isFinite(f.stats().continuationDriveTimes[0]));
+    assert.equal(f.stats().completedSegments, 0);
+    assert.deepEqual(completions, []);
+
+    const completionPublication = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta" && message.sequence !== atEndpoint.sequence,
+    );
+    acknowledge(atEndpoint);
+    const completed = await completionPublication;
+    assert.equal(f.stats().completedSegments, 1);
+    assert.deepEqual(completions, []);
+    acknowledge(completed);
+    await turn();
+    await turn();
+
+    assert.deepEqual(completions, [26]);
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().returnedPlayer, f.player);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("continuation presents admitted native input before completing and returning its lease", async () => {
   const completions = [];
   const f = fixture("transferable", null, {

@@ -797,6 +797,23 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
     }
 
+    /// Run one ordinary single-leaf Uncreate through the retained live session.
+    #[cfg(target_arch = "wasm32")]
+    fn ordinary_play_uncreate(
+        &mut self,
+        id: ObjectId,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        let end_time = self.begin_ordinary_uncreate(id, target, options)?;
+        let player = self.active_live_player()?;
+        player.live_advance_segment_to(end_time)?;
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
     /// Atomically bind, introduce, and activate one detached leaf's Create reveal.
     #[cfg(any(target_arch = "wasm32", test))]
     fn begin_ordinary_create(
@@ -830,6 +847,45 @@ impl CanonicalAuthoringScene {
         } else {
             self.active_live_player()?
                 .live_declare_and_activate_create(target, options)?
+        };
+        self.bindings.insert(id, node);
+        self.identities.insert(node, id);
+        Ok(end_time)
+    }
+
+    /// Atomically bind, admit, and activate one detached leaf's reverse reveal.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_uncreate(
+        &mut self,
+        id: ObjectId,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+            return Err("ordinary Uncreate mobject belongs to another authoring store".into());
+        }
+        target.validate()?;
+        let node = target.node_id();
+        if self.bindings.contains_key(&id) || self.identities.contains_key(&node) {
+            return Err(format!("canonical object {} is already bound", id.get()));
+        }
+        if self.live_player.is_none() && self.scene.time() != 0.0 {
+            return Err("ordinary Uncreate cannot follow pre-execution canonical timing".into());
+        }
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(options.run_time.unwrap_or(1.0));
+        let end_time = if self.live_player.is_none() {
+            self.prepare_local_player_for_run()?;
+            let mut player = self.build_live_player(bootstrap_duration, 0)?;
+            let end_time = player.live_declare_and_activate_uncreate(target, options)?;
+            self.live_player = Some(player);
+            self.live_player_returned = false;
+            end_time
+        } else {
+            self.active_live_player()?
+                .live_declare_and_activate_uncreate(target, options)?
         };
         self.bindings.insert(id, node);
         self.identities.insert(node, id);
@@ -1402,7 +1458,7 @@ impl CanonicalAuthoringScene {
             let handle = noon::Mobject::from_node(std::rc::Rc::clone(self.scene.store()), node)?;
             let state = handle.state()?;
             if state.content.text().is_some() {
-                objects.push(canonical_native_text_export(
+                objects.push(canonical_text_export(
                     &self.scene.store().borrow(),
                     *self
                         .identities
@@ -1463,7 +1519,7 @@ fn authored_mobject_layout(handle: &noon::Mobject) -> Result<(f64, f64, f64, f64
 /// is unavailable (for example, callback/timeline execution). This #959 export
 /// seam reads immutable content and presentation from the shared store; Python
 /// wrappers never provide a parallel Text source or transform representation.
-fn canonical_native_text_export(
+fn canonical_text_export(
     store: &noon_core::SemanticStore,
     id: ObjectId,
     state: &SemanticObjectState,
@@ -1476,36 +1532,60 @@ fn canonical_native_text_export(
         .text_resources()
         .get(text)
         .ok_or("canonical text export references an unknown text resource")?;
-    if resource.kind != TextSourceKind::Plain {
-        return Err("canonical text export supports native plain text only".into());
-    }
-    let run = resource
-        .runs
-        .first()
-        .ok_or("canonical native text resource has no shaped run")?;
-    let mut object = ObjectSpec::text(
-        id,
-        TextSpec::native_plain(
-            resource.source.as_ref(),
-            run.font.family.as_ref(),
-            run.font_size,
-            native_line_spacing(resource)?,
+    let (text, transform) = match resource.kind {
+        TextSourceKind::Plain => {
+            let run = resource
+                .runs
+                .first()
+                .ok_or("canonical native text resource has no shaped run")?;
+            (
+                TextSpec::native_plain(
+                    resource.source.as_ref(),
+                    run.font.family.as_ref(),
+                    run.font_size,
+                    native_line_spacing(resource)?,
+                ),
+                text_export_transform(
+                    state.transform,
+                    f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE),
+                )?,
+            )
+        }
+        TextSourceKind::Typst => (
+            TextSpec::typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
+            text_export_transform(
+                state.transform,
+                f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT),
+            )?,
         ),
-    );
-    object.transform = legacy_text_transform(state.transform)?;
+        TextSourceKind::MathTypst => (
+            TextSpec::math_typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
+            text_export_transform(
+                state.transform,
+                f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT),
+            )?,
+        ),
+        kind => {
+            return Err(format!(
+                "canonical text export does not support {kind:?} source"
+            ))
+        }
+    };
+    let mut object = ObjectSpec::text(id, text);
+    object.transform = transform;
     object.style = legacy_style(&state.style)?;
     Ok(object)
 }
 
-/// Derive the temporary #959 native-Text authoring codec from shared semantic
+/// Derive the temporary #959 Text authoring codec from shared semantic
 /// state. This is only consumed when the normal live session cannot run; Python
 /// wrappers never retain a second text source or presentation model.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn canonical_native_text_authoring_spec(
+pub(crate) fn canonical_text_authoring_spec(
     store: &noon_core::SemanticStore,
     state: &SemanticObjectState,
 ) -> Result<RetainedTextAuthoringSpec, String> {
-    let object = canonical_native_text_export(store, ObjectId::new(0), state)?;
+    let object = canonical_text_export(store, ObjectId::new(0), state)?;
     let ObjectSpec {
         content: ObjectSpecContent::Text(text),
         transform,
@@ -1516,27 +1596,41 @@ pub(crate) fn canonical_native_text_authoring_spec(
         return Err("canonical text export produced non-text content".into());
     };
     let TextSpec {
-        kind: TextSpecKind::Plain,
+        kind,
         source,
         font_size,
-        options:
+        options,
+    } = text;
+    let mut spec = match (kind, options) {
+        (
+            TextSpecKind::Plain,
             TextSpecOptions::NativePlain {
                 font_family,
                 line_spacing,
             },
-    } = text
-    else {
-        return Err("canonical text export produced non-native content".into());
+        ) => RetainedTextAuthoringSpec::native(source, font_family, font_size, line_spacing)?,
+        (TextSpecKind::Typst, TextSpecOptions::Default) => {
+            RetainedTextAuthoringSpec::new(source, false, font_size)?
+        }
+        (TextSpecKind::MathTypst, TextSpecOptions::Default) => {
+            RetainedTextAuthoringSpec::new(source, true, font_size)?
+        }
+        (kind, _) => {
+            return Err(format!(
+                "canonical text export produced unsupported {kind:?} retained content"
+            ));
+        }
     };
-    let mut spec = RetainedTextAuthoringSpec::native(source, font_family, font_size, line_spacing)?;
     spec.transform = transform;
     spec.color = style.fill.unwrap_or(noon_core::WHITE);
     spec.opacity = style.opacity;
     Ok(spec)
 }
 
-fn legacy_text_transform(transform: SemanticTransform2_5D) -> Result<Transform2D, String> {
-    let point_scale = f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE);
+fn text_export_transform(
+    transform: SemanticTransform2_5D,
+    point_scale: f64,
+) -> Result<Transform2D, String> {
     Ok(Transform2D {
         translation: Vec2::new(
             legacy_f32("text translation x", transform.translation.x)?,
@@ -1956,14 +2050,22 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
-        ) {
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
             self.children.push((
                 source.semantic_mobject().clone(),
                 target.semantic_mobject().clone(),
                 noon_core::AnimationOptions::new()
                     .run_time(child_run_time)
-                    .rate_func(noon_core::RateFunction::Linear),
+                    .rate_func(rate_function),
             ));
+            Ok(())
         }
     }
 
@@ -3041,6 +3143,56 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Atomically declare, activate, run, and complete one single-leaf Uncreate.
+        #[wasm_bindgen(js_name = ordinaryPlayUncreate)]
+        pub fn ordinary_play_uncreate(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            target.id_in_store(self.inner.scene.store(), "ordinary Uncreate animation")?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .ordinary_play_uncreate(id, target.semantic_mobject(), options)
+                .map_err(js_error)
+        }
+
+        /// Begin one Uncreate for the existing async/synchronous continuation player.
+        #[wasm_bindgen(js_name = beginOrdinaryUncreate)]
+        pub fn begin_ordinary_uncreate(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            target.id_in_store(self.inner.scene.store(), "ordinary Uncreate animation")?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .begin_ordinary_uncreate(id, target.semantic_mobject(), options)
+                .map_err(js_error)
+        }
+
         /// Query shared root membership after an exact fade completion. Python
         /// uses it only to attach/detach its derived wrapper identity.
         #[wasm_bindgen(js_name = liveContainsMobject)]
@@ -3801,6 +3953,54 @@ mod tests {
         assert!((*line_spacing - 0.5).abs() < 1.0e-6);
         assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
         assert_eq!(spec.objects[0].transform.scale, Vec2::ONE);
+    }
+
+    #[test]
+    fn typst_and_math_typst_export_source_kind_and_effective_presentation() {
+        let mut context = CanonicalAuthoringScene::default();
+        let label = context
+            .scene
+            .typst(
+                noon::Typst::new("*Noon*")
+                    .with_font_size(72.0)
+                    .color(noon_core::YELLOW)
+                    .shift(Vec2::new(2.0, -1.0)),
+            )
+            .unwrap();
+        let equation = context
+            .scene
+            .math_typst(
+                noon::MathTypst::new("frac(x, 2)")
+                    .set_opacity(0.5)
+                    .shift(Vec2::new(-1.0, 0.5)),
+            )
+            .unwrap();
+        context.bind_mobject(ObjectId::new(4), &label).unwrap();
+        context.bind_mobject(ObjectId::new(5), &equation).unwrap();
+
+        let spec = context
+            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
+            .unwrap();
+        let ObjectSpecContent::Text(label) = &spec.objects[0].content else {
+            panic!("Typst export must remain source-level text");
+        };
+        assert_eq!(label.kind, TextSpecKind::Typst);
+        assert_eq!(label.source, "*Noon*");
+        assert_eq!(label.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
+        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
+        let scale = spec.objects[0].transform.scale;
+        assert!((scale.x - 1.5).abs() < 1.0e-6 && (scale.y - 1.5).abs() < 1.0e-6);
+        assert_eq!(spec.objects[0].style.fill, Some(noon_core::YELLOW));
+
+        let ObjectSpecContent::Text(equation) = &spec.objects[1].content else {
+            panic!("MathTypst export must remain source-level text");
+        };
+        assert_eq!(equation.kind, TextSpecKind::MathTypst);
+        assert_eq!(equation.source, "frac(x, 2)");
+        assert_eq!(equation.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
+        assert_eq!(spec.objects[1].transform.translation, Vec2::new(-1.0, 0.5));
+        assert_eq!(spec.objects[1].transform.scale, Vec2::ONE);
+        assert_eq!(spec.objects[1].style.opacity, 0.5);
     }
 
     #[test]
@@ -5130,6 +5330,25 @@ mod tests {
             .is_err());
         assert_eq!(context.bindings.len(), 1);
         assert_eq!(context.identities.len(), 1);
+    }
+
+    #[test]
+    fn ordinary_uncreate_releases_membership_and_preserves_same_handle_reentry() {
+        let mut context = CanonicalAuthoringScene::default();
+        let square = context.scene.square(2.0).unwrap();
+        let id = ObjectId::new(0);
+        let end = context
+            .begin_ordinary_uncreate(id, &square, AnimationOptions::new())
+            .unwrap();
+        assert_eq!(end, 1.0);
+        assert!(context.live_contains_mobject(&square).unwrap());
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(end).unwrap();
+        player.live_complete_segment().unwrap();
+        assert!(!context.live_contains_mobject(&square).unwrap());
+        context.live_add_mobject(id, &square).unwrap();
+        assert!(context.live_contains_mobject(&square).unwrap());
+        assert_eq!(context.identities.get(&square.node_id()), Some(&id));
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
     validate_track_definition, AnimationOptions, ObjectId, PreparedSemanticMutationTransaction,
-    Property, SemanticFadeDirection, SemanticLoweringError, SemanticObjectProperty,
+    Property, RateFunction, SemanticFadeDirection, SemanticLoweringError, SemanticObjectProperty,
     SemanticTransactionNodeRef, SemanticTransactionReadError, TimelineError, TrackDefinition,
     TrackId, TrackTiming, TrackValues,
 };
@@ -304,7 +304,11 @@ where
             PreparedSemanticScheduledAnimationPayload::Create => {
                 if leaf.options.lag_ratio != 0.0
                     || leaf.options.path_arc != 0.0
-                    || leaf.options.reverse_rate_function
+                    || (leaf.options.reverse_rate_function
+                        && !matches!(
+                            leaf.options.rate_func,
+                            RateFunction::Linear | RateFunction::Smooth
+                        ))
                 {
                     return Err(
                         PreparedSemanticAnimationLoweringError::UnsupportedCreateOptions {
@@ -328,11 +332,17 @@ where
                         },
                     );
                 }
+                let remove = leaf.options.remover;
+                // Reversal controls reveal direction; removal independently controls membership.
+                let reverse = leaf.options.reverse_rate_function;
                 super::affine::LoweredAffineChannel {
                     property: Property::Reveal,
                     conflict_property: SemanticObjectProperty::Presence,
-                    completion: SemanticAnimationCompletion::Create,
-                    values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+                    completion: SemanticAnimationCompletion::RevealLifecycle { remove },
+                    values: TrackValues::Scalar {
+                        from: if reverse { 1.0 } else { 0.0 },
+                        to: if reverse { 0.0 } else { 1.0 },
+                    },
                 }
             }
         };
@@ -776,6 +786,50 @@ mod tests {
                 track.timing.easing.evaluate(0.25),
                 RateFunction::Smooth.evaluate(0.25)
             );
+        }
+    }
+
+    #[test]
+    fn reveal_direction_is_independent_of_cleanup() {
+        for reverse in [false, true] {
+            for remove in [false, true] {
+                let mut store = noon_core::SemanticStore::new();
+                let root = store.insert_family();
+                let circle = store.insert_semantic_object(SemanticObjectState::new(
+                    StoredGeometry::Circle { radius: 0.4 },
+                ));
+                let index = SemanticExecutionIndex::new();
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.add_member(root, circle);
+                let animation = transaction.create_create_animation(
+                    circle,
+                    AnimationOptions::new()
+                        .reverse_rate_function(reverse)
+                        .remover(remove),
+                );
+                let prepared = transaction.prepare(&mut store).unwrap();
+                let activation = lower_prepared_semantic_animation_composition(
+                    &prepared,
+                    &index,
+                    animation,
+                    0.0,
+                    AnimationOptions::new(),
+                    |_| None,
+                )
+                .unwrap();
+                let track = &activation.tracks()[0];
+                assert_eq!(
+                    track.completion,
+                    SemanticAnimationCompletion::RevealLifecycle { remove }
+                );
+                assert_eq!(
+                    track.values,
+                    TrackValues::Scalar {
+                        from: if reverse { 1.0 } else { 0.0 },
+                        to: if reverse { 0.0 } else { 1.0 },
+                    }
+                );
+            }
         }
     }
 

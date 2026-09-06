@@ -553,6 +553,19 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Atomically admit one detached leaf, reverse Reveal, and remove it at completion.
+    pub fn declare_and_activate_uncreate(
+        &mut self,
+        target: &Mobject,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(target)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_uncreate(&mut store, self.root, target.node_id(), options)
+            .map_err(Into::into)
+    }
+
     /// Atomically introduce detached leaves through one flat Parallel Create segment.
     ///
     /// The shared execution session validates every handle before staging membership,
@@ -1371,6 +1384,57 @@ mod tests {
         ));
         assert_eq!(session.publication_context(), before);
         assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn uncreate_rejects_foreign_detached_target_without_publication() {
+        let scene = Scene::new();
+        let foreign = Scene::new().square(1.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_uncreate(&foreign, AnimationOptions::new().run_time(1.0));
+
+        assert!(matches!(result, Err(LiveSessionError::ForeignMobjectStore)));
+        assert_eq!(session.publication_context(), before);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn uncreate_rejects_asymmetric_rate_before_admission() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let before_nodes = square.store().borrow().len();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let result = scene.live(&mut session).declare_and_activate_uncreate(
+            &square,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::RushInto),
+        );
+
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::CreateTarget {
+                    error: ExecutionSessionCreateError::UnsupportedUncreateRateFunction(
+                        RateFunction::RushInto
+                    ),
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(square.store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }

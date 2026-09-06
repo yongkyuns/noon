@@ -11,6 +11,24 @@ use web_sys::OffscreenCanvas;
 
 use crate::WasmExecutionCanvasRenderer;
 
+/// Browser proof that static Typst uses the same direct semantic text-resource path.
+#[wasm_bindgen(js_name = createDirectTypstTextSmokeRenderer)]
+pub async fn create_direct_typst_text_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::typst_text_reference().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Browser proof that static MathTypst uses the same direct semantic text-resource path.
+#[wasm_bindgen(js_name = createDirectMathTypstTextSmokeRenderer)]
+pub async fn create_direct_math_typst_text_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::math_typst_text_reference().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Browser proof that typed Rust semantic animation, camera, and canonical text
 /// reach the direct mixed renderer without a scene document or execution mirror.
 #[wasm_bindgen(js_name = createDirectExecutionSmokeRenderer)]
@@ -180,6 +198,25 @@ pub async fn create_direct_ordinary_create_play_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let program = noon::example_scenes::ordinary_create_continuation_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Direct host for the shared four-dot Succession tutorial.
+#[wasm_bindgen(js_name = createDirectOrdinarySuccessionSmokeRenderer)]
+pub async fn create_direct_ordinary_succession_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_succession_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Browser proof that literal detached Uncreate shares the native Rust continuation.
+#[wasm_bindgen(js_name = createDirectOrdinaryUncreatePlaySmokeRenderer)]
+pub async fn create_direct_ordinary_uncreate_play_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::example_scenes::ordinary_uncreate_continuation_program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 

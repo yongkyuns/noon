@@ -781,17 +781,24 @@ where
             })
         }
         AnimationDeclarationIntent::Create { target } => {
-            let options = resolve_animation_options(
+            // Reveal lowering owns reversal; the generic option validator deliberately
+            // rejects it for animation kinds without a reversed realization.
+            let reverse = play_options
+                .reverse_rate_function
+                .or(state.options.reverse_rate_function)
+                .unwrap_or(false);
+            let mut options = resolve_animation_options(
                 AnimationDefaults {
                     introducer: true,
                     remover: false,
                     ..AnimationDefaults::MANIM
                 },
                 state.options,
-                play_options,
+                play_options.reverse_rate_function(false),
             )
             .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
-            if !options.introducer || options.remover {
+            options.reverse_rate_function = reverse;
+            if !options.introducer {
                 return Err(
                     AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
                         animation,

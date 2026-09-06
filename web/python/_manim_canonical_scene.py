@@ -858,6 +858,24 @@ def _canonical_create_animation(
     return target
 
 
+def _canonical_uncreate_animation(
+    scene: _base.Scene, animation: object
+) -> _base.Mobject | None:
+    """Classify the literal detached single-leaf Uncreate subset."""
+    if type(animation) is not _base.Uncreate:
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary Uncreate target must be a Mobject")
+    if getattr(target, "_semantic_handle", None) is None:
+        return None
+    if target._scene is not None:
+        if target._scene is scene:
+            raise NotImplementedError("canonical Uncreate requires a detached Mobject")
+        raise ValueError("Uncreate target already belongs to another Scene")
+    return target
+
+
 def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> object | None:
     args = dict(getattr(animation, "anim_args", {}))
     if "introducer" in args and args.pop("introducer") is not True:
@@ -867,10 +885,23 @@ def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> o
     return _canonical_affine_options(animation, kwargs, builder_args=args)
 
 
+def _canonical_uncreate_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    if getattr(animation, "reverse_rate_function", None) is not True:
+        return None
+    if getattr(animation, "remover", None) is not True:
+        return None
+    resolved = _canonical_affine_options(animation, kwargs)
+    if resolved is None or resolved.rate_func not in {"linear", "smooth"}:
+        return None
+    return resolved
+
+
 def _play_canonical_create(
     self: _base.Scene,
     target: _base.Mobject,
     animation: object,
+    *,
+    remove: bool = False,
     **kwargs: object,
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     duration = kwargs.pop("duration", None)
@@ -890,16 +921,18 @@ def _play_canonical_create(
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
     if _legacy_authored_time(self) != 0.0:
         raise NotImplementedError("canonical ordinary Create cannot follow legacy Scene timing")
-    resolved = _canonical_create_options(
-        animation,
-        {
-            "duration": duration,
-            "run_time": run_time,
-            "start_time": start_time,
-            "easing": easing,
-            "rate_func": rate_func,
-            "lag_ratio": lag_ratio,
-        },
+    option_kwargs = {
+        "duration": duration,
+        "run_time": run_time,
+        "start_time": start_time,
+        "easing": easing,
+        "rate_func": rate_func,
+        "lag_ratio": lag_ratio,
+    }
+    resolved = (
+        _canonical_uncreate_options(animation, option_kwargs)
+        if remove
+        else _canonical_create_options(animation, option_kwargs)
     )
     if resolved is None:
         raise NotImplementedError(
@@ -912,9 +945,9 @@ def _play_canonical_create(
     try:
         _require_semantic_continuation_active(self)
         method = (
-            context.beginOrdinaryCreate
+            (context.beginOrdinaryUncreate if remove else context.beginOrdinaryCreate)
             if _semantic_continuation_active(self)
-            else context.ordinaryPlayCreate
+            else (context.ordinaryPlayUncreate if remove else context.ordinaryPlayCreate)
         )
         method(
             str(reservation.object.id),
@@ -928,10 +961,18 @@ def _play_canonical_create(
     register = getattr(self, "_register_top_level", None)
     if register is not None:
         register(target)
+
+    def completed() -> None:
+        if remove:
+            _reconcile_fade_membership(self, target, "out")
+
     if _async_continuation_active(self):
-        return _continuation_awaitable(self)
+        return _continuation_awaitable(self, completed)
     if _synchronous_continuation_active(self):
-        return _synchronous_continuation_wait(self)
+        _synchronous_continuation_wait(self)
+        completed()
+        return self
+    completed()
     return self
 
 
@@ -1183,33 +1224,21 @@ def _canonical_linear_play_options(kwargs: dict[str, object]) -> float | None:
         rate_id = str(easing)
     elif rate_func is not None:
         rate_id = _compat._easing_from_rate_func(rate_func)
-    if rate_id != "linear":
+    if rate_id not in (None, "linear"):
         raise NotImplementedError(
-            "canonical ordinary composition currently requires an explicit linear Scene.play rate_func"
+            "canonical ordinary composition currently requires a linear root rate_func"
         )
     value = run_time if run_time is not None else duration
     return None if value is None else float(value)
 
 
-def _canonical_linear_child_options(animation: object) -> float:
-    resolved = _options.resolve(
-        builder_args=_options.builder_args(animation),
-        default_lag_ratio=0.0,
-        play_run_time=None,
-        play_easing=None,
-        play_rate_func=None,
-        play_lag_ratio=None,
-    )
-    if (
-        resolved.rate_func != "linear"
-        or resolved.lag_ratio != 0.0
-        or resolved.path_arc != 0.0
-        or resolved.reverse_rate_function
-    ):
+def _canonical_composition_child_options(animation: object, kwargs: dict[str, object]):
+    resolved = _canonical_affine_options(animation, kwargs)
+    if resolved is None or resolved.rate_func not in ("linear", "smooth"):
         raise NotImplementedError(
-            "canonical ordinary composition currently requires linear affine leaves"
+            "canonical ordinary composition currently requires linear or smooth affine leaves"
         )
-    return float(resolved.run_time)
+    return resolved
 
 
 def _build_canonical_composition_candidate(
@@ -1255,10 +1284,16 @@ def _build_canonical_composition_candidate(
         play_run_time,
     )
     for source, target, animation in present:
+        # Implicit parallel play options apply to its top-level animations;
+        # explicit Succession owns its root options and preserves child curves.
+        child = _canonical_composition_child_options(
+            animation, kwargs if group is None else {},
+        )
         candidate.appendTransformTo(
             getattr(source, "_semantic_handle"),
             getattr(target, "_semantic_handle"),
-            _canonical_linear_child_options(animation),
+            float(child.run_time),
+            str(child.rate_func),
         )
     try:
         supported = bool(context.ordinaryCanPlayComposition(candidate))
@@ -1313,6 +1348,28 @@ def _play(self, *args, **kwargs):
                 "realtime construct supports only canonical affine Scene.play and Scene.wait"
             )
         return _play_legacy_compatibility(self, *args, **kwargs)
+
+    canonical_uncreates = [
+        target
+        for argument in args
+        if (target := _canonical_uncreate_animation(self, argument)) is not None
+    ]
+    if canonical_uncreates:
+        if len(canonical_uncreates) != 1 or len(args) != 1:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError(
+                    "realtime construct supports one canonical Uncreate per play"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        if _canonical_uncreate_options(args[0], kwargs) is None:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError(
+                    "realtime construct Uncreate is outside the canonical leaf subset"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        return _play_canonical_create(
+            self, canonical_uncreates[0], args[0], remove=True, **kwargs
+        )
 
     canonical_creates = [
         target
@@ -2073,9 +2130,9 @@ def _bind_retained_text(
 ) -> object:
     if self._scene is scene and self._object is not None:
         return self._object
-    # Native Text now owns an ordinary shared semantic Mobject handle. Bind it
-    # through the same scene operation as geometry; the retained source adapter
-    # remains only for Typst until that backend reaches this resource path.
+    # Native Text, Typst, and MathTypst own ordinary shared semantic Mobject
+    # handles. Bind them through the same scene operation as geometry. The
+    # retained source branch below remains only for explicit export consumers.
     if getattr(self, "_semantic_handle", None) is not None:
         obj = _bind_mobject(self, scene, key=key)
         self._retained_object_id = int(obj.id)

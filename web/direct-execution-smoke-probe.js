@@ -16,6 +16,10 @@ const {
   createDirectOrdinaryCreatePlaySmokeRenderer,
   createDirectOrdinarySquareToCircleSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
+  createDirectOrdinarySuccessionSmokeRenderer,
+  createDirectOrdinaryUncreatePlaySmokeRenderer,
+  createDirectTypstTextSmokeRenderer,
+  createDirectMathTypstTextSmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
 } = await import("./pkg/noon_web.js");
@@ -578,6 +582,101 @@ async function directOrdinaryCreateProof(
       throw new Error(`direct Create reveal/fill or completion failed: ${JSON.stringify(metrics)}`);
     }
     return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directUncreateProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryUncreatePlaySmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    await settleDirectPublication(renderer, 0);
+    const initial = await sampleRenderedColor(canvas, 1, 0);
+    if (renderer.objectCount() !== 1 || initial.red < 100) {
+      throw new Error(`direct Uncreate did not admit its visible detached square: ${JSON.stringify(initial)}`);
+    }
+    renderer.advanceDirectRealtime(1000);
+    const directive = await settleDirectPublication(renderer, 1000);
+    const removed = await sampleRenderedColor(canvas, 1, 0);
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 0 ||
+        renderer.lastDrawCalls() !== 0 || removed.red > 20 || directive.cadence !== "idle") {
+      throw new Error("direct Uncreate did not remove the completed shared object");
+    }
+    return { initial, removed, time: renderer.time(), cadence: directive.cadence };
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directTypstProof(expectedBackend, factory, yellow) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await factory(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
+    const pixels = new OffscreenCanvas(canvas.width, canvas.height);
+    const context = pixels.getContext("2d");
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const data = context.getImageData(0, 0, pixels.width, pixels.height).data;
+    let coloredPixels = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (yellow ? data[i] > 180 && data[i + 1] > 140 && data[i] > data[i + 2] + 40 && data[i + 1] > data[i + 2] + 30
+        : Math.min(data[i], data[i + 1], data[i + 2]) > 100) coloredPixels += 1;
+    }
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 1 ||
+        renderer.lastTextDrawCalls() === 0 || coloredPixels < 100) {
+      throw new Error(`direct semantic Typst resource failed: pixels=${coloredPixels}`);
+    }
+    return { coloredPixels, textDrawCalls: renderer.lastTextDrawCalls() };
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directSuccessionProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinarySuccessionSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    await settleDirectPublication(renderer, 0);
+    const samples = [];
+    for (const [time, x, y, expected] of [
+      [500, -2, 0, [88, 196, 221]],
+      [1500, 0, -2, [197, 95, 115]],
+      [2500, 2, 0, [131, 193, 103]],
+      [3500, 0, 2, [247, 217, 111]],
+    ]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const color = await sampleRenderedColor(canvas, x, y);
+      const actual = [color.red, color.green, color.blue];
+      if (actual.some((channel, index) => Math.abs(channel - expected[index]) > 15)) {
+        throw new Error(`direct Succession child at ${time}ms: ${JSON.stringify(color)}`);
+      }
+      samples.push(color);
+    }
+    renderer.advanceDirectRealtime(4000);
+    const directive = await settleDirectPublication(renderer, 4000);
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 4 ||
+        renderer.objectCount() !== 4 || directive.cadence !== "idle") {
+      throw new Error("direct Succession did not complete its shared four-second schedule");
+    }
+    return { samples, time: renderer.time(), cadence: directive.cadence };
   } finally {
     renderer.free();
     if (expectedBackend === "WebGL2") {
@@ -1166,6 +1265,10 @@ async function start() {
     expectedBackend, createDirectOrdinarySquareAndCircleCreateSmokeRenderer, true,
   );
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
+  metrics.succession = await directSuccessionProof(expectedBackend);
+  metrics.uncreate = await directUncreateProof(expectedBackend);
+  metrics.typst = await directTypstProof(expectedBackend, createDirectTypstTextSmokeRenderer, true);
+  metrics.mathTypst = await directTypstProof(expectedBackend, createDirectMathTypstTextSmokeRenderer, false);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
