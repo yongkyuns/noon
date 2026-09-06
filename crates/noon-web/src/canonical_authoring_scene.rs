@@ -1092,7 +1092,11 @@ impl CanonicalAuthoringScene {
             return Err("mobject belongs to another authoring store".into());
         }
         source.validate()?;
-        self.active_live_player()?.live_target_editor(source)
+        if self.live_player.is_some() {
+            self.active_live_player()?.live_target_editor(source)
+        } else {
+            source.target_editor()
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3330,6 +3334,30 @@ mod tests {
                 .translation
                 .x,
             100.0,
+        );
+    }
+
+    #[test]
+    fn callback_registration_keeps_target_editor_authored_before_player_bootstrap() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context
+            .add_updater(&circle, HostCallbackId::new(9), 0.0, None)
+            .unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+
+        let mut target = context.live_target_editor(&circle).unwrap();
+        target.set_translation(2.0, -1.0).unwrap();
+
+        assert!(context.live_player.is_none());
+        assert!(
+            context.scene.store().borrow().scene_revision() > revision,
+            "the detached authored target must be published without bootstrapping a player"
+        );
+        assert_eq!(
+            target.state().unwrap().transform.translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
         );
     }
 

@@ -642,10 +642,6 @@ pub fn ordinary_callback_continuation_program() -> Result<
         .set_fill(0.0, 0.4, 1.0, 1.0)
         .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
-    let mut target = circle.target_editor().map_err(|error| error.to_string())?;
-    target
-        .set_translation(2.0, 0.0)
-        .map_err(|error| error.to_string())?;
 
     let callbacks = ordered_affine_callbacks().map_err(|error| error.to_string())?;
     {
@@ -657,6 +653,13 @@ pub fn ordinary_callback_continuation_program() -> Result<
             .add_updater(&mut store, circle.node_id(), SET_OPACITY, 0.0, None)
             .map_err(|error| error.to_string())?;
     }
+    // The paired Python proof creates its target after callback registration too.
+    // Before bootstrap, this remains an authored detached target with no runtime
+    // copy or callback-table duplication.
+    let mut target = circle.target_editor().map_err(|error| error.to_string())?;
+    target
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
 
     let program = scene
         .into_live_program(OrdinaryCallbackContinuation {

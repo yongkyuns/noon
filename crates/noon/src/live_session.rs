@@ -262,7 +262,51 @@ impl<'a> LiveSession<'a> {
     /// without resetting or relowering the active runtime.
     pub fn target_editor(&mut self, source: &Mobject) -> Result<Mobject, LiveSessionError> {
         self.require_mobject(source)?;
-        let state = source.state().map_err(LiveSessionError::Mobject)?;
+        if self.session.pending_callback_token().is_some() {
+            return Err(LiveSessionError::Mobject(
+                "cannot create a target while a required callback phase is pending".into(),
+            ));
+        }
+        if self.session.callback_termination().is_some() {
+            return Err(LiveSessionError::Mobject(
+                "cannot create a target from a terminated callback session".into(),
+            ));
+        }
+
+        // A target created after bootstrap must start from the coherent effective row,
+        // rather than the authored base that an active driver or callback may have
+        // superseded. Immutable content remains authored. This subset intentionally
+        // rejects render-content and appearance overrides because SemanticObjectState
+        // has no exact authored representation for them.
+        let mut state = source.state().map_err(LiveSessionError::Mobject)?;
+        if !state.signal_bindings().is_empty() {
+            return Err(LiveSessionError::Mobject(
+                "target editor cannot capture a reactive binding into a detached target".into(),
+            ));
+        }
+        let store = self.store.borrow();
+        let observed = self
+            .session
+            .effective_semantic_object(&store, source.node_id())?;
+        if !observed.authored_content_layout_applicable() {
+            return Err(LiveSessionError::Mobject(
+                "target editor requires effective authored content without reveal or morph overrides"
+                    .into(),
+            ));
+        }
+        if observed.object.appearance != 1.0 {
+            return Err(LiveSessionError::Mobject(
+                "target editor cannot represent a non-unit effective appearance".into(),
+            ));
+        }
+        state.transform.translation.x = f64::from(observed.object.transform.translation.x);
+        state.transform.translation.y = f64::from(observed.object.transform.translation.y);
+        state.transform.scale.x = f64::from(observed.object.transform.scale.x);
+        state.transform.scale.y = f64::from(observed.object.transform.scale.y);
+        state.transform.rotation_z = f64::from(observed.object.transform.rotation);
+        state.style = SemanticStyle::from_legacy(observed.object.style);
+        drop(store);
+
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(noon_core::SemanticNodeCreation::object(state));
         let result = self.apply(transaction)?;
@@ -774,8 +818,10 @@ impl<'a> LiveSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Scene;
-    use noon_core::{AnimationOptions, Color, RateFunction, SemanticPaint, SemanticVec3};
+    use crate::{CallbackAdvance, Scene};
+    use noon_core::{
+        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
+    };
 
     #[test]
     fn live_property_edits_publish_once_and_queries_are_effective_not_authored_aliases() {
@@ -854,6 +900,67 @@ mod tests {
         assert_eq!(style.fill_opacity, 0.5);
         assert_eq!(style.stroke_opacity, 0.5);
         assert_eq!(style.object_opacity, 0.5);
+    }
+
+    #[test]
+    fn target_editor_captures_a_committed_callback_effective_row_without_frame_work() {
+        let mut scene = Scene::new();
+        let mut circle = scene.circle(1.0).unwrap();
+        circle.set_fill(0.0, 0.4, 1.0, 1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(circle.node_id(), HostCallbackId::new(9), 0.0, None);
+        callbacks.apply(&mut scene.store().borrow_mut()).unwrap();
+
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let revision = live.session.publication_context().scene_revision();
+        let mut overlay = match live.session.advance_to_callback_barrier(0.0).unwrap() {
+            CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            CallbackAdvance::Ready(_) => panic!("time-zero callback phase must be required"),
+        };
+        assert!(matches!(
+            live.target_editor(&circle),
+            Err(LiveSessionError::Mobject(_))
+        ));
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            revision
+        );
+
+        let mut transform = overlay.object(circle.node_id()).unwrap().transform;
+        transform.translation.x = 2.0;
+        transform.translation.y = -1.0;
+        transform.scale.x = 1.5;
+        transform.rotation = 0.25;
+        overlay.set_transform(circle.node_id(), transform).unwrap();
+        let mut style = overlay.object(circle.node_id()).unwrap().style;
+        style.fill = Some(Color::rgb(1.0, 0.0, 0.0));
+        style.opacity = 0.5;
+        overlay.set_style(circle.node_id(), style).unwrap();
+        live.session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+
+        live.session.take_frame_changes();
+        let target = live.target_editor(&circle).unwrap();
+        let target_state = live.authored(&target).unwrap();
+        assert_eq!(
+            target_state.transform.translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+        assert_eq!(
+            target_state.transform.scale,
+            SemanticVec3::new(1.5, 1.0, 1.0)
+        );
+        assert_eq!(target_state.transform.rotation_z, 0.25);
+        assert_eq!(target_state.style, SemanticStyle::from_legacy(style));
+        assert!(live.session.take_frame_changes().is_empty());
+        // The source's authored base remains distinct from the callback effect.
+        assert_eq!(
+            live.authored(&circle).unwrap().transform.translation,
+            SemanticVec3::default()
+        );
     }
 
     #[test]
