@@ -1420,6 +1420,7 @@ def _build_canonical_composition_candidate(
     )
     candidate.setPlayRateFunction(_canonical_composition_rate_id(kwargs))
     reservations: list[tuple[_base.Mobject, object]] = []
+    removals: list[_base.Mobject] = []
     next_object_id = self._next_object_id
 
     def reserve(target: _base.Mobject):
@@ -1470,6 +1471,8 @@ def _build_canonical_composition_candidate(
                 color = getattr(lifecycle_animation, "point_color", None)
             rgba = (None, None, None, None) if color is None else tuple(float(getattr(color, name)) for name in ("red", "green", "blue", "alpha"))
             reservation = reserve(target) if target._scene is None else None
+            if direction == "remove-to":
+                removals.append(target)
             object_id = str(reservation.object.id) if reservation is not None else ""
             builder.appendAffineLifecycle(object_id, getattr(target, "_semantic_handle"), direction, endpoint, x, y, rotation_offset, *rgba, float(child.run_time), str(child.rate_func))
             return
@@ -1484,6 +1487,7 @@ def _build_canonical_composition_candidate(
                 object_id = str(reservation.object.id)
             else:
                 object_id = ""
+                removals.append(target)
             builder.appendFade(object_id, getattr(target, "_semantic_handle"), direction, float(child.run_time), str(child.rate_func))
             return
         created = _canonical_create_animation(self, animation)
@@ -1545,11 +1549,14 @@ def _build_canonical_composition_candidate(
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:
         raise ValueError(str(error)) from None
-    return (candidate, reservations) if supported else False
+    return (candidate, reservations, removals) if supported else False
 
 
 def _play_canonical_composition(
-    self: _base.Scene, candidate: object, reservations: list[tuple[_base.Mobject, object]]
+    self: _base.Scene,
+    candidate: object,
+    reservations: list[tuple[_base.Mobject, object]],
+    removals: list[_base.Mobject],
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     if getattr(self, "_legacy_geometry_materialized", False):
         raise NotImplementedError(
@@ -1576,10 +1583,17 @@ def _play_canonical_composition(
         register = getattr(self, "_register_top_level", None)
         if register is not None:
             register(source)
+    def completed() -> None:
+        for target in removals:
+            _reconcile_fade_membership(self, target, "out")
+
     if _async_continuation_active(self):
-        return _continuation_awaitable(self)
+        return _continuation_awaitable(self, completed)
     if _synchronous_continuation_active(self):
-        return _synchronous_continuation_wait(self)
+        _synchronous_continuation_wait(self)
+        completed()
+        return self
+    completed()
     return self
 
 
@@ -1736,8 +1750,8 @@ def _play(self, *args, **kwargs):
                 )
             return _play_legacy_compatibility(self, *args, **kwargs)
         if candidate is not None:
-            candidate, reservations = candidate
-            return _play_canonical_composition(self, candidate, reservations)
+            candidate, reservations, removals = candidate
+            return _play_canonical_composition(self, candidate, reservations, removals)
 
     canonical_affine = [
         classified
