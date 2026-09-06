@@ -172,6 +172,7 @@ function attachEngine(message) {
     reconnectResourceBundlePending = true;
   }
   attachRenderPort(message.port);
+  scheduleFrame();
   respond(message.requestId, {
     type: "engine_port_attached",
     mode,

@@ -281,3 +281,23 @@ test("replacement cancels an obsolete continuation deadline before it can tick t
   timer.callback();
   assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
 });
+
+
+test("reconnecting a non-wake engine restores one frame request on its replacement port", async () => {
+  const harness = await createManagedWakeHarness();
+  const replacement = new FakePort();
+  harness.context.replacementPort = replacement;
+  vm.runInContext(`
+    attachEngine({port:replacementPort, transportMode, requestId:8, mode:MODE_RETAINED});
+    handleRetainedResources({bytes:new Uint8Array([1])});
+    consumeDelta("reconnected", {session:13, sequence:0});
+  `, harness.context);
+  assert.equal(harness.animationFrames.length, 1);
+  harness.animationFrames.shift()(10);
+  assert.equal(replacement.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.animationFrames.length, 1);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
+  for (const callback of harness.animationFrames.splice(0)) callback(20);
+  assert.equal(replacement.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.animationFrames.length, 0);
+});
