@@ -1214,13 +1214,31 @@ def _play_canonical_fade(
     return self
 
 
-def _canonical_composition_shape(args: tuple[object, ...]):
+def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
     """Return one flat Rust composition request shape without scheduling it."""
     if len(args) == 1 and isinstance(args[0], _composition.Succession):
         group = args[0]
         return "sequence", tuple(group.animations), group
     if len(args) > 1:
         return "parallel", args, None
+    if len(args) == 1:
+        import _manim_rotate as _rotate
+
+        animation = args[0]
+        if type(animation) is _rotate.Rotate:
+            return "parallel", args, None
+        affine = _canonical_affine_animation(scene, animation)
+        if affine is not None and type(animation) in (
+            _base._AnimationBuilder,
+            _compat._CompatAnimationBuilder,
+        ):
+            source, target, _ = affine
+            if not math.isclose(
+                float(getattr(source, "_semantic_handle").wireRotation),
+                float(getattr(target, "_semantic_handle").wireRotation),
+                abs_tol=1e-12,
+            ):
+                return "parallel", args, None
     return None
 
 
@@ -1301,8 +1319,8 @@ def _build_canonical_composition_candidate(
             if not isinstance(target, _base.Mobject) or getattr(target, "_semantic_handle", None) is None:
                 classified.append(None)
                 continue
-            if target._scene is not None:
-                raise NotImplementedError("canonical Rotate composition requires a detached leaf")
+            if target._scene not in (None, self):
+                raise NotImplementedError("canonical Rotate target belongs to another Scene")
             center = target.get_center()
             pivot = _compat._as_vec2(animation.about_point)
             if not (math.isclose(center.x, pivot.x, abs_tol=1e-9) and math.isclose(center.y, pivot.y, abs_tol=1e-9)):
@@ -1384,16 +1402,24 @@ def _build_canonical_composition_candidate(
                     str(child.rate_func),
                 )
         else:
-            reservation = _reserve_typed_binding(source, self, getattr(source, "_semantic_handle"), None, object_id=next_object_id)
-            reservations.append((source, reservation))
-            next_object_id += 1
-            candidate.appendRotate(
-                str(reservation.object.id),
-                getattr(source, "_semantic_handle"),
-                float(target),
-                float(child.run_time),
-                str(child.rate_func),
-            )
+            if source._scene is None:
+                reservation = _reserve_typed_binding(source, self, getattr(source, "_semantic_handle"), None, object_id=next_object_id)
+                reservations.append((source, reservation))
+                next_object_id += 1
+                candidate.appendRotate(
+                    str(reservation.object.id),
+                    getattr(source, "_semantic_handle"),
+                    float(target),
+                    float(child.run_time),
+                    str(child.rate_func),
+                )
+            else:
+                candidate.appendBoundRotate(
+                    getattr(source, "_semantic_handle"),
+                    float(target),
+                    float(child.run_time),
+                    str(child.rate_func),
+                )
     try:
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:
@@ -1543,7 +1569,7 @@ def _play(self, *args, **kwargs):
             kwargs=kwargs,
         )
 
-    if (shape := _canonical_composition_shape(args)) is not None:
+    if (shape := _canonical_composition_shape(self, args)) is not None:
         kind, animations, group = shape
         try:
             candidate = _build_canonical_composition_candidate(

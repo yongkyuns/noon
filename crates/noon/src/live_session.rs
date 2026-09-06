@@ -1933,6 +1933,59 @@ mod tests {
     }
 
     #[test]
+    fn mixed_sequence_preserves_rotate_before_transform_order() {
+        let mut scene = Scene::new();
+        let rotating = scene.square(1.0).unwrap();
+        let moving = scene.square(1.0).unwrap();
+        let mut moving_target = moving.target_editor().unwrap();
+        moving_target.set_translation(2.0, 0.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &[
+                    AnimationCompositionRequest::Rotate {
+                        target: &rotating,
+                        angle: std::f64::consts::PI,
+                        options,
+                    },
+                    AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                        &moving,
+                        &moving_target,
+                        options,
+                    )),
+                ],
+                AnimationOptions::new().lag_ratio(1.0),
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+        let mut live = scene.live(&mut session);
+        live.advance_segment_to(segment, 0.5).unwrap();
+        assert!(
+            (live.effective(&rotating).unwrap().transform.rotation - std::f32::consts::FRAC_PI_2)
+                .abs()
+                < 1e-5
+        );
+        assert_eq!(
+            live.effective(&moving).unwrap().transform.translation,
+            noon_core::Vec2::ZERO
+        );
+        live.advance_segment_to(segment, 1.5).unwrap();
+        assert!(
+            (live.effective(&rotating).unwrap().transform.rotation - std::f32::consts::PI).abs()
+                < 1e-5
+        );
+        assert_eq!(
+            live.effective(&moving).unwrap().transform.translation,
+            noon_core::Vec2::new(1.0, 0.0)
+        );
+    }
+
+    #[test]
     fn invalid_or_conflicting_post_bootstrap_activation_does_not_publish() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();

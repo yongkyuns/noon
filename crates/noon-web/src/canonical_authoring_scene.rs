@@ -18,6 +18,24 @@ use crate::{
     RetainedTrackAuthoringSpec,
 };
 
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone)]
+enum OrdinaryCompositionChild {
+    TransformTo {
+        entering_id: Option<ObjectId>,
+        source: noon::Mobject,
+        target: noon::Mobject,
+        interpolation: noon_core::SemanticTransformInterpolation,
+        options: noon_core::AnimationOptions,
+    },
+    Rotate {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        angle: f64,
+        options: noon_core::AnimationOptions,
+    },
+}
+
 /// One scene family in the worker's shared semantic store.
 /// Geometry bindings retain identity only. Source-level text remains a deletion-owned
 /// export adapter (#959); it cannot enter geometry-only typed execution silently.
@@ -1172,26 +1190,13 @@ impl CanonicalAuthoringScene {
     fn ordinary_play_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
-        transforms: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
-        point_transforms: &BTreeSet<usize>,
-        entering_transforms: &[(
-            ObjectId,
-            noon::Mobject,
-            noon::Mobject,
-            noon_core::AnimationOptions,
-        )],
-        point_entering_transforms: &BTreeSet<usize>,
-        rotations: &[(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)],
+        children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
         let end = self.activate_ordinary_mixed_composition(
             kind,
-            transforms,
-            point_transforms,
-            entering_transforms,
-            point_entering_transforms,
-            rotations,
+            children,
             composition_options,
             play_options,
             false,
@@ -1208,26 +1213,13 @@ impl CanonicalAuthoringScene {
     fn begin_ordinary_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
-        transforms: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
-        point_transforms: &BTreeSet<usize>,
-        entering_transforms: &[(
-            ObjectId,
-            noon::Mobject,
-            noon::Mobject,
-            noon_core::AnimationOptions,
-        )],
-        point_entering_transforms: &BTreeSet<usize>,
-        rotations: &[(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)],
+        children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
         self.activate_ordinary_mixed_composition(
             kind,
-            transforms,
-            point_transforms,
-            entering_transforms,
-            point_entering_transforms,
-            rotations,
+            children,
             composition_options,
             play_options,
             true,
@@ -1238,31 +1230,12 @@ impl CanonicalAuthoringScene {
     fn activate_ordinary_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
-        transforms: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
-        point_transforms: &BTreeSet<usize>,
-        entering_transforms: &[(
-            ObjectId,
-            noon::Mobject,
-            noon::Mobject,
-            noon_core::AnimationOptions,
-        )],
-        point_entering_transforms: &BTreeSet<usize>,
-        rotations: &[(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)],
+        children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
         allow_required_callbacks: bool,
     ) -> Result<f64, String> {
-        if !self.can_ordinary_mixed_composition(
-            transforms,
-            point_transforms,
-            entering_transforms,
-            point_entering_transforms,
-            rotations,
-            composition_options,
-            play_options,
-        )? {
-            return Err("ordinary mixed composition payload is not yet supported".into());
-        }
+        self.validate_ordinary_mixed_composition(children, composition_options, play_options)?;
         let bootstrap_duration = self
             .live_handoff_duration()
             .unwrap_or_else(|| self.scene.time())
@@ -1272,34 +1245,37 @@ impl CanonicalAuthoringScene {
                     .or(composition_options.run_time)
                     .unwrap_or(1.0),
             );
-        let requests = transforms
+        let requests = children
             .iter()
-            .enumerate()
-            .map(|(index, (source, target, options))| {
-                let request = if point_transforms.contains(&index) {
-                    noon::TransformToRequest::point_correspondence(source, target, *options)
-                } else {
-                    noon::TransformToRequest::new(source, target, *options)
-                };
-                noon::AnimationCompositionRequest::TransformTo(request)
-            })
-            .chain(entering_transforms.iter().enumerate().map(
-                |(index, (_, source, target, options))| {
-                    let request = if point_entering_transforms.contains(&index) {
-                        noon::TransformToRequest::point_correspondence(source, target, *options)
-                    } else {
-                        noon::TransformToRequest::new(source, target, *options)
+            .map(|child| match child {
+                OrdinaryCompositionChild::TransformTo {
+                    source,
+                    target,
+                    interpolation,
+                    options,
+                    ..
+                } => {
+                    let request = match interpolation {
+                        noon_core::SemanticTransformInterpolation::Affine => {
+                            noon::TransformToRequest::new(source, target, *options)
+                        }
+                        noon_core::SemanticTransformInterpolation::PointCorrespondence => {
+                            noon::TransformToRequest::point_correspondence(source, target, *options)
+                        }
                     };
                     noon::AnimationCompositionRequest::TransformTo(request)
-                },
-            ))
-            .chain(rotations.iter().map(|(_, target, angle, options)| {
-                noon::AnimationCompositionRequest::Rotate {
+                }
+                OrdinaryCompositionChild::Rotate {
+                    target,
+                    angle,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::Rotate {
                     target,
                     angle: *angle,
                     options: *options,
-                }
-            }))
+                },
+            })
             .collect::<Vec<_>>();
         let end = if self.live_player.is_none() {
             self.prepare_local_player_for_run()?;
@@ -1328,13 +1304,23 @@ impl CanonicalAuthoringScene {
                 play_options,
             )?
         };
-        for (id, target, _, _) in rotations {
-            self.bindings.insert(*id, target.node_id());
-            self.identities.insert(target.node_id(), *id);
-        }
-        for (id, source, _, _) in entering_transforms {
-            self.bindings.insert(*id, source.node_id());
-            self.identities.insert(source.node_id(), *id);
+        for child in children {
+            let (Some(id), target) = (match child {
+                OrdinaryCompositionChild::TransformTo {
+                    entering_id,
+                    source,
+                    ..
+                } => (*entering_id, source),
+                OrdinaryCompositionChild::Rotate {
+                    entering_id,
+                    target,
+                    ..
+                } => (*entering_id, target),
+            }) else {
+                continue;
+            };
+            self.bindings.insert(id, target.node_id());
+            self.identities.insert(target.node_id(), id);
         }
         Ok(end)
     }
@@ -1483,32 +1469,14 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn can_ordinary_mixed_composition(
+    fn validate_ordinary_mixed_composition(
         &self,
-        transforms: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
-        point_transforms: &BTreeSet<usize>,
-        entering_transforms: &[(
-            ObjectId,
-            noon::Mobject,
-            noon::Mobject,
-            noon_core::AnimationOptions,
-        )],
-        point_entering_transforms: &BTreeSet<usize>,
-        rotations: &[(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)],
+        children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
-    ) -> Result<bool, String> {
-        if transforms.is_empty() && entering_transforms.is_empty() && rotations.is_empty() {
+    ) -> Result<(), String> {
+        if children.is_empty() {
             return Err("ordinary composition requires at least one child".into());
-        }
-        if point_transforms
-            .iter()
-            .any(|index| *index >= transforms.len())
-            || point_entering_transforms
-                .iter()
-                .any(|index| *index >= entering_transforms.len())
-        {
-            return Err("ordinary composition point-transform index is out of bounds".into());
         }
         noon_core::resolve_animation_options(
             noon_core::AnimationDefaults::MANIM,
@@ -1517,63 +1485,70 @@ impl CanonicalAuthoringScene {
         )
         .map_err(|error| error.to_string())?;
         let mut ids = BTreeSet::new();
-        let mut nodes = BTreeSet::new();
-        for (id, target, angle, options) in rotations {
+        let mut entering_nodes = BTreeSet::new();
+        for child in children {
+            let (entering_id, target, options) = match child {
+                OrdinaryCompositionChild::TransformTo {
+                    entering_id,
+                    source,
+                    target,
+                    options,
+                    ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                        return Err(
+                            "ordinary composition target belongs to another authoring store".into(),
+                        );
+                    }
+                    target.validate()?;
+                    if self.identities.contains_key(&target.node_id()) {
+                        return Err(
+                            "ordinary composition TransformTo target state must be detached".into(),
+                        );
+                    }
+                    (*entering_id, source, *options)
+                }
+                OrdinaryCompositionChild::Rotate {
+                    entering_id,
+                    target,
+                    angle,
+                    options,
+                } => {
+                    if !angle.is_finite() {
+                        return Err("ordinary Rotate angle must be finite".into());
+                    }
+                    (*entering_id, target, *options)
+                }
+            };
             if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
-                return Err("ordinary Rotate target belongs to another authoring store".into());
-            }
-            target.validate()?;
-            if !angle.is_finite()
-                || self.bindings.contains_key(id)
-                || self.identities.contains_key(&target.node_id())
-                || !ids.insert(*id)
-                || !nodes.insert(target.node_id())
-            {
                 return Err(
-                    "ordinary Rotate requires unique detached targets and wrapper identities"
-                        .into(),
+                    "ordinary composition target belongs to another authoring store".into(),
                 );
             }
+            target.validate()?;
             noon_core::resolve_animation_options(
                 noon_core::AnimationDefaults::MANIM,
-                *options,
+                options,
                 noon_core::AnimationOptions::new(),
             )
             .map_err(|error| error.to_string())?;
-        }
-        // This first mixed slice admits every source atomically. Bound transform
-        // sources remain handled by the existing transform-only composition path.
-        for (source, target, options) in transforms {
-            if !self.can_ordinary_transform_to(source, target, *options)? {
-                return Ok(false);
+            match entering_id {
+                Some(id) => {
+                    if self.bindings.contains_key(&id)
+                        || self.identities.contains_key(&target.node_id())
+                        || !ids.insert(id)
+                        || !entering_nodes.insert(target.node_id())
+                    {
+                        return Err("ordinary composition requires unique detached targets and wrapper identities".into());
+                    }
+                }
+                None if !self.identities.contains_key(&target.node_id()) => {
+                    return Err("ordinary composition bound target has no wrapper identity".into());
+                }
+                None => {}
             }
         }
-        for (id, source, target, options) in entering_transforms {
-            if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
-                || !std::rc::Rc::ptr_eq(self.scene.store(), target.store())
-            {
-                return Err(
-                    "ordinary composition mobjects belong to another authoring store".into(),
-                );
-            }
-            source.validate()?;
-            target.validate()?;
-            if self.identities.contains_key(&source.node_id())
-                || self.identities.contains_key(&target.node_id())
-                || self.bindings.contains_key(id)
-                || !ids.insert(*id)
-                || !nodes.insert(source.node_id())
-            {
-                return Err("ordinary mixed composition requires unique detached sources, targets, and wrapper identities".into());
-            }
-            noon_core::resolve_animation_options(
-                noon_core::AnimationDefaults::MANIM,
-                *options,
-                noon_core::AnimationOptions::new(),
-            )
-            .map_err(|error| error.to_string())?;
-        }
-        Ok(true)
+        Ok(())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2163,16 +2138,7 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmOrdinaryTransformCompositionBuilder {
         kind: noon_core::SemanticAnimationCompositionKind,
-        children: Vec<(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)>,
-        point_transforms: BTreeSet<usize>,
-        entering_transforms: Vec<(
-            ObjectId,
-            noon::Mobject,
-            noon::Mobject,
-            noon_core::AnimationOptions,
-        )>,
-        point_entering_transforms: BTreeSet<usize>,
-        rotations: Vec<(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)>,
+        children: Vec<OrdinaryCompositionChild>,
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     }
@@ -2332,6 +2298,63 @@ mod wasm {
         }
     }
 
+    impl WasmOrdinaryTransformCompositionBuilder {
+        fn push_transform(
+            &mut self,
+            entering_id: Option<ObjectId>,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            interpolation: noon_core::SemanticTransformInterpolation,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.children.push(OrdinaryCompositionChild::TransformTo {
+                entering_id,
+                source: source.semantic_mobject().clone(),
+                target: target.semantic_mobject().clone(),
+                interpolation,
+                options: noon_core::AnimationOptions::new()
+                    .run_time(child_run_time)
+                    .rate_func(rate_function),
+            });
+            Ok(())
+        }
+
+        fn push_rotate(
+            &mut self,
+            entering_id: Option<ObjectId>,
+            target: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            if !angle.is_finite() {
+                return Err(js_error("rotation angle must be finite"));
+            }
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.children.push(OrdinaryCompositionChild::Rotate {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                angle,
+                options: noon_core::AnimationOptions::new()
+                    .run_time(child_run_time)
+                    .rate_func(rate_function),
+            });
+            Ok(())
+        }
+    }
+
     #[wasm_bindgen]
     impl WasmOrdinaryTransformCompositionBuilder {
         #[wasm_bindgen(js_name = appendTransformTo)]
@@ -2342,20 +2365,14 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            self.children.push((
-                source.semantic_mobject().clone(),
-                target.semantic_mobject().clone(),
-                noon_core::AnimationOptions::new()
-                    .run_time(child_run_time)
-                    .rate_func(rate_function),
-            ));
-            Ok(())
+            self.push_transform(
+                None,
+                source,
+                target,
+                noon_core::SemanticTransformInterpolation::Affine,
+                child_run_time,
+                rate_function,
+            )
         }
 
         #[wasm_bindgen(js_name = appendPointTransformTo)]
@@ -2366,10 +2383,14 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
-            let index = self.children.len();
-            self.append_transform_to(source, target, child_run_time, rate_function)?;
-            self.point_transforms.insert(index);
-            Ok(())
+            self.push_transform(
+                None,
+                source,
+                target,
+                noon_core::SemanticTransformInterpolation::PointCorrespondence,
+                child_run_time,
+                rate_function,
+            )
         }
 
         #[wasm_bindgen(js_name = appendEnteringTransformTo)]
@@ -2381,22 +2402,14 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            self.entering_transforms.push((
-                id,
-                source.semantic_mobject().clone(),
-                target.semantic_mobject().clone(),
-                noon_core::AnimationOptions::new()
-                    .run_time(child_run_time)
-                    .rate_func(rate_function),
-            ));
-            Ok(())
+            self.push_transform(
+                Some(parse_object_id("object ID", object_id)?),
+                source,
+                target,
+                noon_core::SemanticTransformInterpolation::Affine,
+                child_run_time,
+                rate_function,
+            )
         }
 
         #[wasm_bindgen(js_name = appendEnteringPointTransformTo)]
@@ -2408,16 +2421,14 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
-            let index = self.entering_transforms.len();
-            self.append_entering_transform_to(
-                object_id,
+            self.push_transform(
+                Some(parse_object_id("object ID", object_id)?),
                 source,
                 target,
+                noon_core::SemanticTransformInterpolation::PointCorrespondence,
                 child_run_time,
                 rate_function,
-            )?;
-            self.point_entering_transforms.insert(index);
-            Ok(())
+            )
         }
 
         #[wasm_bindgen(js_name = appendRotate)]
@@ -2429,25 +2440,24 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            if !angle.is_finite() {
-                return Err(js_error("rotation angle must be finite"));
-            }
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            self.rotations.push((
-                id,
-                target.semantic_mobject().clone(),
+            self.push_rotate(
+                Some(parse_object_id("object ID", object_id)?),
+                target,
                 angle,
-                noon_core::AnimationOptions::new()
-                    .run_time(child_run_time)
-                    .rate_func(rate_function),
-            ));
-            Ok(())
+                child_run_time,
+                rate_function,
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendBoundRotate)]
+        pub fn append_bound_rotate(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            self.push_rotate(None, target, angle, child_run_time, rate_function)
         }
     }
 
@@ -3151,10 +3161,6 @@ mod wasm {
             Ok(WasmOrdinaryTransformCompositionBuilder {
                 kind,
                 children: Vec::new(),
-                point_transforms: BTreeSet::new(),
-                entering_transforms: Vec::new(),
-                point_entering_transforms: BTreeSet::new(),
-                rotations: Vec::new(),
                 composition_options,
                 play_options,
             })
@@ -3165,29 +3171,13 @@ mod wasm {
             &self,
             candidate: &WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<bool, JsValue> {
-            if candidate.point_transforms.is_empty()
-                && candidate.entering_transforms.is_empty()
-                && candidate.rotations.is_empty()
-            {
-                return self
-                    .inner
-                    .can_ordinary_transform_composition(
-                        &candidate.children,
-                        candidate.composition_options,
-                        candidate.play_options,
-                    )
-                    .map_err(js_error);
-            }
             self.inner
-                .can_ordinary_mixed_composition(
+                .validate_ordinary_mixed_composition(
                     &candidate.children,
-                    &candidate.point_transforms,
-                    &candidate.entering_transforms,
-                    &candidate.point_entering_transforms,
-                    &candidate.rotations,
                     candidate.composition_options,
                     candidate.play_options,
                 )
+                .map(|()| true)
                 .map_err(js_error)
         }
 
@@ -3196,28 +3186,10 @@ mod wasm {
             &mut self,
             candidate: WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<f64, JsValue> {
-            if candidate.point_transforms.is_empty()
-                && candidate.entering_transforms.is_empty()
-                && candidate.rotations.is_empty()
-            {
-                return self
-                    .inner
-                    .ordinary_play_transform_composition(
-                        candidate.kind,
-                        &candidate.children,
-                        candidate.composition_options,
-                        candidate.play_options,
-                    )
-                    .map_err(js_error);
-            }
             self.inner
                 .ordinary_play_mixed_composition(
                     candidate.kind,
                     &candidate.children,
-                    &candidate.point_transforms,
-                    &candidate.entering_transforms,
-                    &candidate.point_entering_transforms,
-                    &candidate.rotations,
                     candidate.composition_options,
                     candidate.play_options,
                 )
@@ -3232,28 +3204,10 @@ mod wasm {
             &mut self,
             candidate: WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<f64, JsValue> {
-            if candidate.point_transforms.is_empty()
-                && candidate.entering_transforms.is_empty()
-                && candidate.rotations.is_empty()
-            {
-                return self
-                    .inner
-                    .begin_ordinary_composition(
-                        candidate.kind,
-                        &candidate.children,
-                        candidate.composition_options,
-                        candidate.play_options,
-                    )
-                    .map_err(js_error);
-            }
             self.inner
                 .begin_ordinary_mixed_composition(
                     candidate.kind,
                     &candidate.children,
-                    &candidate.point_transforms,
-                    &candidate.entering_transforms,
-                    &candidate.point_entering_transforms,
-                    &candidate.rotations,
                     candidate.composition_options,
                     candidate.play_options,
                 )
