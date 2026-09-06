@@ -7,9 +7,9 @@
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    RateFunction, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty,
-    SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue, SemanticStore, SemanticVec3,
-    TrackTiming,
+    RateFunction, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
+    SemanticObjectProperty, SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue,
+    SemanticStore, SemanticVec3, TrackTiming,
 };
 
 use crate::{Mobject, Scene};
@@ -115,6 +115,16 @@ impl ValueTrackerPlay<'_> {
             return Err("ValueTracker track end time must be finite".into());
         }
         self.tracker.require_store(self.scene.store())?;
+        if !self
+            .scene
+            .store()
+            .borrow()
+            .semantic_scoped_signals(self.scene.root())
+            .map_err(|error| error.to_string())?
+            .contains(&self.tracker.node)
+        {
+            return Err("ValueTracker is not associated with this Scene".into());
+        }
         let from = tracker_track_endpoint(&self.tracker)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_scalar_signal_track(
@@ -136,17 +146,34 @@ impl ValueTrackerPlay<'_> {
 }
 
 impl Scene {
-    /// Create a scalar input signal in this scene's shared semantic store.
+    /// Create and scope a scalar input signal to this Scene in one semantic transaction.
     pub fn value_tracker(&self, initial: f64) -> Result<ValueTracker, String> {
-        let node = self
-            .store()
-            .borrow_mut()
-            .insert_semantic_input_signal(initial)
+        let creation =
+            SemanticNodeCreation::input_signal(initial).map_err(|error| error.to_string())?;
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(creation);
+        transaction.scope_signal(self.root(), pending);
+        let result = transaction
+            .apply(&mut self.store().borrow_mut())
             .map_err(|error| error.to_string())?;
+        let node = result
+            .resolve(pending)
+            .expect("committed tracker creation resolves its transaction-local token");
         Ok(ValueTracker {
             store: Rc::clone(self.store()),
             node,
         })
+    }
+
+    /// Associate an existing detached signal with this Scene's execution scope.
+    pub fn associate_value_tracker(&self, tracker: &ValueTracker) -> Result<(), String> {
+        tracker.require_store(self.store())?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.scope_signal(self.root(), tracker.node_id());
+        transaction
+            .apply(&mut self.store().borrow_mut())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     /// Build the first supported tracker expression, `offset + tracker * direction`.
@@ -296,6 +323,112 @@ mod tests {
         assert_eq!(track.timing().easing, RateFunction::Linear);
         assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 4.0);
         assert!(scene.set_value(&tracker, 1.0).is_err());
+    }
+
+    #[test]
+    fn scoped_tracker_lowers_before_first_play_and_live_creation_enrolls_one_input() {
+        let scene = Scene::new();
+        let tracker = scene.value_tracker(1.5).unwrap();
+        let session = scene.execution_session().unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker.node_id()),
+            Some(&noon_core::ReactiveValue::Scalar(1.5))
+        );
+
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let live_tracker = scene.live(&mut session).value_tracker(2.25).unwrap();
+        assert_eq!(
+            session.effective_signal_value(live_tracker.node_id()),
+            Some(&noon_core::ReactiveValue::Scalar(2.25))
+        );
+        assert_eq!(session.frame().objects.len(), 0);
+        assert_eq!(
+            session.publication_context().scene_revision().get(),
+            before.scene_revision().get() + 1
+        );
+        assert!(scene
+            .store()
+            .borrow()
+            .semantic_scoped_signals(scene.root())
+            .unwrap()
+            .contains(&live_tracker.node_id()));
+    }
+
+    #[test]
+    fn live_tracker_creation_failure_leaves_store_and_runtime_unchanged() {
+        let scene = Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        let revision = scene.store().borrow().scene_revision();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+        assert!(scene.live(&mut session).value_tracker(f64::MAX).is_err());
+        assert_eq!(scene.store().borrow().scene_revision(), revision);
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+    }
+
+    #[test]
+    fn existing_detached_tracker_requires_explicit_live_association() {
+        let scene = Scene::new();
+        let detached = scene
+            .store()
+            .borrow_mut()
+            .insert_semantic_input_signal(4.0_f64)
+            .unwrap();
+        let tracker = ValueTracker::from_semantic_node(Rc::clone(scene.store()), detached);
+        let mut session = scene.execution_session().unwrap();
+        assert!(session.effective_signal_value(detached).is_none());
+        assert!(
+            scene
+                .live(&mut session)
+                .declare_and_activate_value_tracker(
+                    &tracker,
+                    5.0,
+                    1.0,
+                    noon_core::RateFunction::Linear,
+                )
+                .is_err()
+        );
+
+        scene
+            .live(&mut session)
+            .associate_value_tracker(&tracker)
+            .unwrap();
+        assert_eq!(
+            session.effective_signal_value(detached),
+            Some(&noon_core::ReactiveValue::Scalar(4.0))
+        );
+    }
+
+    #[test]
+    fn invalid_detached_tracker_association_rolls_back_scope_and_runtime() {
+        let scene = Scene::new();
+        let detached = scene
+            .store()
+            .borrow_mut()
+            .insert_semantic_input_signal(f64::MAX)
+            .unwrap();
+        let tracker = ValueTracker::from_semantic_node(Rc::clone(scene.store()), detached);
+        let mut session = scene.execution_session().unwrap();
+        let revision = scene.store().borrow().scene_revision();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+
+        assert!(scene
+            .live(&mut session)
+            .associate_value_tracker(&tracker)
+            .is_err());
+
+        let store = scene.store().borrow();
+        assert_eq!(store.scene_revision(), revision);
+        assert!(!store
+            .semantic_scoped_signals(scene.root())
+            .unwrap()
+            .contains(&detached));
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+        assert!(session.effective_signal_value(detached).is_none());
     }
 
     #[test]

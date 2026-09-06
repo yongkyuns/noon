@@ -150,6 +150,32 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
+    /// Create and sparsely enroll one scalar tracker in this already-live Scene.
+    pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        let node = self
+            .session
+            .create_scoped_value_tracker(&mut store, self.root, initial)?;
+        Ok(ValueTracker::from_semantic_node(
+            Rc::clone(self.store),
+            node,
+        ))
+    }
+
+    /// Associate one existing detached tracker with this live Scene root.
+    pub fn associate_value_tracker(
+        &mut self,
+        tracker: &ValueTracker,
+    ) -> Result<(), LiveSessionError> {
+        tracker
+            .require_store(self.store)
+            .map_err(LiveSessionError::Animation)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .associate_value_tracker(&mut store, self.root, tracker.node_id())
+            .map_err(Into::into)
+    }
+
     /// Bind a facade to the supplied store and existing execution session.
     /// Provenance and revision are checked by every publish/query operation.
     pub fn new(
@@ -379,6 +405,17 @@ impl<'a> LiveSession<'a> {
         tracker
             .require_store(self.store)
             .map_err(LiveSessionError::Animation)?;
+        if !self
+            .store
+            .borrow()
+            .semantic_scoped_signals(self.root)
+            .map_err(|error| LiveSessionError::Animation(error.to_string()))?
+            .contains(&tracker.node_id())
+        {
+            return Err(LiveSessionError::Animation(
+                "ValueTracker is not associated with this Scene".into(),
+            ));
+        }
         let mut store = self.store.borrow_mut();
         self.session
             .declare_and_activate_value_tracker(

@@ -162,7 +162,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 .map_err(SemanticTransactionReadError::Existing),
             SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
                 Some(SemanticNodeCreation::Object { state, .. }) => Ok(state),
-                Some(SemanticNodeCreation::Family { .. }) => {
+                Some(SemanticNodeCreation::Family { .. } | SemanticNodeCreation::Signal { .. }) => {
                     Err(SemanticTransactionReadError::NotObject(object))
                 }
                 None if self.preflight.pending_animations.contains_key(&token) => {
@@ -274,7 +274,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .into_iter()
                     .filter(|member| !self.is_removed_ref(*member))
                     .collect()),
-                Some(SemanticNodeCreation::Object { .. }) => {
+                Some(SemanticNodeCreation::Object { .. } | SemanticNodeCreation::Signal { .. }) => {
                     Err(SemanticTransactionReadError::NotFamily(family))
                 }
                 None if self.preflight.pending_animations.contains_key(&token) => {
@@ -283,6 +283,59 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
             },
         }
+    }
+
+    /// Read final signal associations for one family root through the staged view.
+    pub fn scoped_signals(
+        &self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Vec<SemanticTransactionNodeRef>, SemanticTransactionReadError> {
+        let scope = scope.into();
+        match scope {
+            SemanticTransactionNodeRef::Existing(node)
+                if self.preflight.removed_existing.contains(&node) =>
+            {
+                return Err(SemanticTransactionReadError::RemovedExistingNode(node));
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_read_token(token)?;
+                if self.preflight.removed_pending.contains(&token) {
+                    return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+                }
+            }
+            _ => {}
+        }
+        let mut scoped = match scope {
+            SemanticTransactionNodeRef::Existing(scope) => {
+                let node = self
+                    .store
+                    .node(scope)
+                    .ok_or(SemanticTransactionReadError::UnknownExistingNode(scope))?;
+                if !matches!(node.kind(), SemanticNodeKind::Family) {
+                    return Err(SemanticTransactionReadError::NotFamily(scope.into()));
+                }
+                node.scoped_signals()
+                    .iter()
+                    .copied()
+                    .map(Into::into)
+                    .collect()
+            }
+            SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
+                Some(SemanticNodeCreation::Family { .. }) => Vec::new(),
+                Some(_) => return Err(SemanticTransactionReadError::NotFamily(scope)),
+                None => return Err(SemanticTransactionReadError::UnknownPendingNode(token)),
+            },
+        };
+        scoped.extend(
+            self.preflight
+                .staged_signal_scope_additions
+                .iter()
+                .filter_map(|(candidate_scope, signal)| {
+                    (*candidate_scope == scope).then_some(*signal)
+                }),
+        );
+        scoped.retain(|signal| !self.is_removed_ref(*signal));
+        Ok(scoped)
     }
 
     fn validate_read_token(
@@ -471,6 +524,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     debug_assert!(closed);
                     written_slots.insert(target);
                     impacts.push(SemanticMutationImpact::UpdaterRegistrations { target });
+                }
+                SemanticMutation::ScopeSignal { scope, signal } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    let signal = resolve_node_ref(signal, &committed_nodes);
+                    let scoped = store
+                        .scope_semantic_signal(scope, signal)
+                        .expect("preflighted signal scope remains valid");
+                    debug_assert!(scoped);
+                    written_slots.insert(scope);
+                    impacts.push(SemanticMutationImpact::SignalScoped { scope, signal });
                 }
                 SemanticMutation::AddMember { family, member } => {
                     let family = resolve_node_ref(family, &committed_nodes);

@@ -6,8 +6,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    NativeEventSource, NativeStateSource, SemanticNativeInputSource, SemanticNodeId,
-    SemanticObjectProperty, SemanticSignalValue, SemanticStore, SemanticVec3,
+    NativeEventSource, NativeStateSource, SemanticMutationTransaction, SemanticNativeInputSource,
+    SemanticNodeId, SemanticObjectProperty, SemanticSignalValue, SemanticStore, SemanticVec3,
 };
 
 use crate::{Mobject, Scene, ValueTracker};
@@ -203,6 +203,11 @@ impl Scene {
         semantic
             .set_semantic_native_input(node, Some(source))
             .expect("fresh type-matched input accepts one native owner");
+        let mut scope = SemanticMutationTransaction::new();
+        scope.scope_signal(self.root(), node);
+        scope
+            .apply(&mut semantic)
+            .map_err(|error| error.to_string())?;
         drop(semantic);
         Ok((store, node))
     }

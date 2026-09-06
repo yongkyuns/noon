@@ -2,7 +2,7 @@ mod runtime;
 pub(crate) use runtime::{
     apply_reactive_value_to_row, PreparedReactiveRuntimeUpdate, ReactiveRuntime,
 };
-pub use runtime::{ReactiveRuntimeStats, SceneBuildError};
+pub use runtime::{PreparedReactiveSignalEnrollment, ReactiveRuntimeStats, SceneBuildError};
 
 mod host_callbacks;
 pub use host_callbacks::*;

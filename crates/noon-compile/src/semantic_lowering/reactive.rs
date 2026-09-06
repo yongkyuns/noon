@@ -187,6 +187,22 @@ impl SemanticReactiveProjection {
     pub fn is_empty(&self) -> bool {
         self.signal_ids.is_empty() && self.graph.bindings().is_empty()
     }
+
+    /// Install one already-validated input-only semantic signal after sparse live
+    /// enrollment. The execution key is derived from semantic identity.
+    pub fn install_input_signal(
+        &mut self,
+        semantic: SemanticNodeId,
+        value: ReactiveValue,
+    ) -> Result<SignalId, ReactiveError> {
+        if let Some(existing) = self.execution_signal_id(semantic) {
+            return Ok(existing);
+        }
+        let execution = semantic_execution_signal_id(semantic);
+        self.graph.add_input_with_id(execution, value)?;
+        self.signal_ids.insert(semantic, execution);
+        Ok(execution)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,6 +365,16 @@ pub fn lower_semantic_reactive_projection(
     store: &SemanticStore,
     projection: &SemanticExecutionProjection,
 ) -> Result<SemanticReactiveProjection, SemanticReactiveLoweringError> {
+    lower_semantic_reactive_projection_for_roots(store, projection, &[])
+}
+
+/// Lower visible object dependencies plus signals explicitly scoped to the
+/// selected semantic roots. Scoped signals consume no painter/object slots.
+pub fn lower_semantic_reactive_projection_for_roots(
+    store: &SemanticStore,
+    projection: &SemanticExecutionProjection,
+    roots: &[SemanticNodeId],
+) -> Result<SemanticReactiveProjection, SemanticReactiveLoweringError> {
     let mut lowerer = ReactiveLowerer {
         store,
         definitions: Vec::new(),
@@ -369,6 +395,15 @@ pub fn lower_semantic_reactive_projection(
                 object: object.execution_id,
                 property,
             });
+        }
+    }
+
+    for root in roots {
+        for signal in store
+            .semantic_scoped_signals(*root)
+            .expect("execution lowering roots were validated as live families")
+        {
+            lowerer.lower_signal(*signal)?;
         }
     }
 
@@ -449,7 +484,7 @@ impl ReactiveLowerer<'_> {
         let state = self.store.semantic_signal_state(semantic_id)?;
         let source = state.source().clone();
         let native_input = state.native_input().cloned();
-        let signal = compatibility_signal_id(semantic_id);
+        let signal = semantic_execution_signal_id(semantic_id);
         let source = self.lower_source(semantic_id, &source)?;
         self.visiting.remove(&semantic_id);
         self.signal_ids.insert(semantic_id, signal);
@@ -613,7 +648,7 @@ fn lower_property(
 
 /// One-to-one compatibility encoding for semantic signal identity at the execution
 /// boundary. It introduces no allocator and cannot alias another live generation.
-fn compatibility_signal_id(id: SemanticNodeId) -> SignalId {
+pub fn semantic_execution_signal_id(id: SemanticNodeId) -> SignalId {
     let raw = (u64::from(id.generation()) << 32) | u64::from(id.slot());
     SignalId::new(raw)
 }

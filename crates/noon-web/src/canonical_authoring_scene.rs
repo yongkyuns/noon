@@ -1674,6 +1674,19 @@ mod wasm {
         }
     }
 
+    #[wasm_bindgen]
+    impl WasmValueTrackerHandle {
+        #[wasm_bindgen(getter, js_name = semanticSlot)]
+        pub fn semantic_slot(&self) -> u32 {
+            self.tracker.node_id().slot()
+        }
+
+        #[wasm_bindgen(getter, js_name = semanticGeneration)]
+        pub fn semantic_generation(&self) -> u32 {
+            self.tracker.node_id().generation()
+        }
+    }
+
     impl WasmDeclaredAnimationHandle {
         fn declaration_in(
             &self,

@@ -235,6 +235,7 @@ pub enum ExecutionSessionAnimationError {
     PreparedScalarTimeline(PreparedScalarSignalTimelineError),
     ScalarTimeline(SignalTimelineAppendError),
     ScalarQuery(SemanticScalarSignalQueryError),
+    ReactiveEnrollment(ReactiveError),
     ScalarEffectiveValue {
         signal: SemanticNodeId,
         authored: f32,
@@ -291,6 +292,7 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
             Self::PreparedScalarTimeline(error) => error.fmt(formatter),
             Self::ScalarTimeline(error) => error.fmt(formatter),
             Self::ScalarQuery(error) => error.fmt(formatter),
+            Self::ReactiveEnrollment(error) => error.fmt(formatter),
             Self::ScalarEffectiveValue {
                 signal,
                 authored,
@@ -379,6 +381,12 @@ impl From<SignalTimelineAppendError> for ExecutionSessionAnimationError {
 impl From<SemanticScalarSignalQueryError> for ExecutionSessionAnimationError {
     fn from(value: SemanticScalarSignalQueryError) -> Self {
         Self::ScalarQuery(value)
+    }
+}
+
+impl From<ReactiveError> for ExecutionSessionAnimationError {
+    fn from(value: ReactiveError) -> Self {
+        Self::ReactiveEnrollment(value)
     }
 }
 
@@ -940,6 +948,156 @@ impl ExecutionSession {
             AnimationOptions::new(),
             None,
         )
+    }
+
+    /// Atomically create and enroll one input-only scalar in this live root.
+    pub fn create_scoped_value_tracker(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        initial: f64,
+    ) -> Result<SemanticNodeId, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::UnknownObject(root),
+            ));
+        }
+        let runtime_value = lower_live_scalar_value(initial)?;
+        let creation = SemanticNodeCreation::input_signal(initial).map_err(|error| {
+            ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::Semantic(
+                    noon_core::SemanticMutationTransactionError::Signal { index: 0, error },
+                ),
+            )
+        })?;
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(creation);
+        transaction.scope_signal(root, pending);
+        let prepared = transaction.prepare(store).map_err(|error| {
+            ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::Semantic(error),
+            )
+        })?;
+        let runtime_enrollment = self
+            .runtime
+            .prepare_reactive_signal_enrollment(None, ReactiveValue::Scalar(runtime_value))?;
+        let runtime_publication = self
+            .runtime
+            .prepare_authored_plan_change(
+                self.publication_context(),
+                prepared.proposed_scene_revision(),
+            )
+            .map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Runtime(error),
+                )
+            })?;
+        let (result, store) = prepared.commit_with_store();
+        let signal = result
+            .resolve(pending)
+            .expect("committed signal creation resolves its transaction-local token");
+        let execution = self
+            .reactive_projection
+            .install_input_signal(signal, ReactiveValue::Scalar(runtime_value))
+            .expect("fresh semantic signal maps to one fresh derived execution identity");
+        self.runtime
+            .commit_reactive_signal_enrollment(runtime_enrollment, execution);
+        self.runtime
+            .apply_prepared_authored_plan_change(runtime_publication)
+            .expect("signal enrollment publication was preflighted under exclusive ownership");
+        debug_assert_eq!(
+            store.scene_revision(),
+            self.publication_context().scene_revision()
+        );
+        Ok(signal)
+    }
+
+    /// Atomically associate and, when necessary, sparsely enroll one existing
+    /// detached scalar signal in this execution root.
+    pub fn associate_value_tracker(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        signal: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::UnknownObject(root),
+            ));
+        }
+        let initial = match store
+            .semantic_signal_state(signal)
+            .map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Semantic(
+                        noon_core::SemanticMutationTransactionError::Signal { index: 0, error },
+                    ),
+                )
+            })?
+            .source()
+        {
+            noon_core::SemanticSignalSource::Input(noon_core::SemanticSignalValue::Scalar(
+                value,
+            )) => lower_live_scalar_value(*value)?,
+            _ => {
+                return Err(ReactiveError::NotInputSignal(
+                    noon_compile::semantic_execution_signal_id(signal),
+                )
+                .into())
+            }
+        };
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.scope_signal(root, signal);
+        let prepared = transaction.prepare(store).map_err(|error| {
+            ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::Semantic(error),
+            )
+        })?;
+        if prepared.candidate_mutations().next().is_none() {
+            return Ok(());
+        }
+        let execution = noon_compile::semantic_execution_signal_id(signal);
+        let needs_enrollment = self
+            .reactive_projection
+            .execution_signal_id(signal)
+            .is_none();
+        let runtime_enrollment = needs_enrollment
+            .then(|| {
+                self.runtime.prepare_reactive_signal_enrollment(
+                    Some(execution),
+                    ReactiveValue::Scalar(initial),
+                )
+            })
+            .transpose()?;
+        let runtime_publication = self
+            .runtime
+            .prepare_authored_plan_change(
+                self.publication_context(),
+                prepared.proposed_scene_revision(),
+            )
+            .map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Runtime(error),
+                )
+            })?;
+        let (_result, store) = prepared.commit_with_store();
+        if let Some(runtime_enrollment) = runtime_enrollment {
+            self.reactive_projection
+                .install_input_signal(signal, ReactiveValue::Scalar(initial))
+                .expect("preflighted detached scalar enrollment remains valid");
+            self.runtime
+                .commit_reactive_signal_enrollment(runtime_enrollment, execution);
+        }
+        self.runtime
+            .apply_prepared_authored_plan_change(runtime_publication)
+            .expect("signal scope publication was preflighted under exclusive ownership");
+        debug_assert_eq!(
+            store.scene_revision(),
+            self.publication_context().scene_revision()
+        );
+        Ok(())
     }
 
     /// Atomically append and activate one scalar ValueTracker timeline interval.
@@ -1533,6 +1691,15 @@ impl ExecutionSession {
         }
         Ok(self.runtime.frame())
     }
+}
+
+fn lower_live_scalar_value(value: f64) -> Result<f32, ExecutionSessionAnimationError> {
+    if !value.is_finite() || value.abs() > f32::MAX as f64 {
+        return Err(ExecutionSessionAnimationError::ReactiveEnrollment(
+            ReactiveError::NonFiniteValue(noon_core::SignalId::new(0)),
+        ));
+    }
+    Ok(value as f32)
 }
 
 fn semantic_painter_order(

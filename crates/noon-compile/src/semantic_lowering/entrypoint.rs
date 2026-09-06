@@ -6,9 +6,10 @@ use noon_core::{
 use crate::CompiledScene;
 
 use super::{
-    lower_semantic_host_callbacks, lower_semantic_reactive_projection, SemanticCompiledSceneError,
-    SemanticExecutionIndex, SemanticExecutionProjection, SemanticHostCallbackPlan,
-    SemanticLoweringError, SemanticReactiveLoweringError, SemanticReactiveProjection,
+    lower_semantic_host_callbacks, lower_semantic_reactive_projection_for_roots,
+    SemanticCompiledSceneError, SemanticExecutionIndex, SemanticExecutionProjection,
+    SemanticHostCallbackPlan, SemanticLoweringError, SemanticReactiveLoweringError,
+    SemanticReactiveProjection,
 };
 
 /// One typed compiler handoff from the authoritative semantic scene into Noon's
@@ -183,7 +184,7 @@ fn finish_semantic_execution(
     projection: SemanticExecutionProjection,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let camera = semantic_camera_object(store, &projection)?;
-    let reactive = lower_semantic_reactive_projection(store, &projection)?;
+    let reactive = lower_semantic_reactive_projection_for_roots(store, &projection, roots)?;
     let host_callbacks = lower_semantic_host_callbacks(store, roots);
     let compiled =
         CompiledScene::from_semantic_projection_after_reactive_lowering(&projection, store)?;
@@ -271,7 +272,8 @@ mod tests {
 
     use noon_core::{
         FontFaceIdentity, FontResourceArena, FontResourceLookup, GeometryResourceArena,
-        GeometryResourceLookup, GlyphRun, Property, ReactiveValue, Rect, SemanticObjectProperty,
+        GeometryResourceLookup, GlyphRun, Property, ReactiveValue, Rect,
+        SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty,
         SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry,
         TextAffineTransform, TextDirection, TextRenderItem, TextResource, TextResourceLookup,
         TextSourceKind, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
@@ -281,6 +283,40 @@ mod tests {
 
     fn circle(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
+    }
+
+    #[test]
+    fn root_scoped_input_lowers_without_painter_membership_and_isolates_other_roots() {
+        let mut store = SemanticStore::new();
+        let selected = store.insert_family();
+        let other = store.insert_family();
+        let selected_signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let other_signal = store.insert_semantic_input_signal(2.0_f64).unwrap();
+        let detached = store.insert_semantic_input_signal(3.0_f64).unwrap();
+        let mut scope = SemanticMutationTransaction::new();
+        scope
+            .scope_signal(selected, selected_signal)
+            .scope_signal(other, other_signal);
+        scope.apply(&mut store).unwrap();
+
+        let lowered =
+            lower_semantic_execution_root(&store, selected, &mut SemanticExecutionIndex::new())
+                .unwrap();
+        assert_eq!(lowered.compiled().objects().len(), 0);
+        assert!(lowered
+            .reactive()
+            .execution_signal_id(selected_signal)
+            .is_some());
+        assert!(lowered
+            .reactive()
+            .execution_signal_id(other_signal)
+            .is_none());
+        assert!(lowered.reactive().execution_signal_id(detached).is_none());
+
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(SemanticNodeCreation::input_signal(4.0_f64).unwrap());
+        transaction.scope_signal(selected, pending);
+        transaction.apply(&mut store).unwrap();
     }
 
     fn camera(center: Vec2, height: f32) -> SemanticObjectState {

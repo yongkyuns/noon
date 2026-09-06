@@ -4,10 +4,11 @@ use std::collections::BTreeMap;
 use std::error::Error;
 
 use crate::{
-    CallbackAdvance, CallbackPhaseOverlay, EffectiveObjectProperties, ExecutionSegment,
-    ExecutionSegmentAdvanceError, ExecutionSession, ExecutionSessionCallbackError, FrameState,
-    HostCallbackId, SemanticMutationTransaction, SemanticMutationTransactionError,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore, Style, Transform2D, Vec2,
+    CallbackAdvance, CallbackPhaseOverlay, CallbackReadRequest, CallbackReadValue,
+    EffectiveObjectProperties, ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSession,
+    ExecutionSessionCallbackError, FrameState, HostCallbackId, SemanticMutationTransaction,
+    SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeId,
+    SemanticStore, Style, Transform2D, Vec2,
 };
 
 type BoxedCallbackError = Box<dyn Error + 'static>;
@@ -62,6 +63,7 @@ pub struct RustHostCallbackContext<'a> {
     occurrence_index: usize,
     target: SemanticNodeId,
     overlay: &'a mut CallbackPhaseOverlay,
+    session: &'a ExecutionSession,
 }
 
 impl RustHostCallbackContext<'_> {
@@ -93,6 +95,44 @@ impl RustHostCallbackContext<'_> {
 
     pub fn object(&self, object: SemanticNodeId) -> Option<&EffectiveObjectProperties> {
         self.overlay.object(object)
+    }
+
+    /// Read an arbitrary live object through this exact unpublished phase.
+    pub fn read_object(
+        &mut self,
+        object: SemanticNodeId,
+    ) -> Result<EffectiveObjectProperties, ExecutionSessionCallbackError> {
+        if let Some(staged) = self.overlay.object(object) {
+            return Ok(staged.clone());
+        }
+        let value = match self
+            .session
+            .required_callback_read(self.overlay.token(), CallbackReadRequest::Object(object))
+            .map_err(ExecutionSessionCallbackError::from)?
+        {
+            CallbackReadValue::Object(value) => value,
+            CallbackReadValue::Scalar(_) => unreachable!("object request returns object value"),
+        };
+        self.overlay.cache_read_object(object, value.clone());
+        Ok(value)
+    }
+
+    /// Read an arbitrary scalar signal through this exact unpublished phase.
+    pub fn scalar_signal(
+        &self,
+        signal: SemanticNodeId,
+    ) -> Result<f32, ExecutionSessionCallbackError> {
+        match self
+            .session
+            .required_callback_read(
+                self.overlay.token(),
+                CallbackReadRequest::ScalarSignal(signal),
+            )
+            .map_err(ExecutionSessionCallbackError::from)?
+        {
+            CallbackReadValue::Scalar(value) => Ok(value),
+            CallbackReadValue::Object(_) => unreachable!("scalar request returns scalar value"),
+        }
     }
 
     pub fn set_target_transform(
@@ -326,6 +366,7 @@ impl RustHostCallbackTable {
                             occurrence_index,
                             target: invocation.target(),
                             overlay: &mut overlay,
+                            session,
                         };
                         if let Err(source) = callback(&mut context) {
                             session.fail_required_callback_phase(token)?;
@@ -459,6 +500,52 @@ mod tests {
         assert!((rotated.rotation - (0.25 + std::f32::consts::FRAC_PI_2)).abs() < 1.0e-6);
         assert_eq!(rotated.scale, transform.scale);
         assert!(rotate_effective_transform_about_point(transform, f64::NAN, Vec2::ZERO).is_err());
+    }
+
+    #[test]
+    fn typed_host_context_reads_scoped_signal_and_non_target_object() {
+        let mut scene = Scene::new();
+        let active = scene.circle(0.5).unwrap();
+        let mut anchor = scene.circle(0.25).unwrap();
+        anchor.set_translation(2.0, 0.0).unwrap();
+        scene.add(&active).unwrap();
+        scene.add(&anchor).unwrap();
+        let tracker = scene.value_tracker(3.0).unwrap();
+        let tracker_id = tracker.node_id();
+        let anchor_id = anchor.node_id();
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(SET_Y, move |context| {
+                let value = context.scalar_signal(tracker_id)?;
+                let anchor = context.read_object(anchor_id)?;
+                let mut transform = context.target_state().transform;
+                transform.translation.x = value + anchor.transform.translation.x;
+                context.set_target_transform(transform)?;
+                let mut anchor_transform = anchor.transform;
+                anchor_transform.translation.y = 1.0;
+                context.set_transform(anchor_id, anchor_transform)
+            })
+            .unwrap();
+        callbacks
+            .add_updater(
+                &mut scene.store().borrow_mut(),
+                active.node_id(),
+                SET_Y,
+                0.0,
+                None,
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        callbacks.advance_to(&mut session, 0.0).unwrap();
+        let store = scene.store().borrow();
+        let effective = session
+            .effective_semantic_object(&store, active.node_id())
+            .unwrap();
+        assert_eq!(effective.object.transform.translation.x, 5.0);
+        let anchor = session
+            .effective_semantic_object(&store, anchor.node_id())
+            .unwrap();
+        assert_eq!(anchor.object.transform.translation.y, 1.0);
     }
 
     #[test]
