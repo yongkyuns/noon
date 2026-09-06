@@ -173,7 +173,11 @@ impl<C: LiveContinuation> LiveProgram<C> {
     pub fn wake_state(&self) -> crate::RuntimeWakeState {
         let wake = self.session.wake_state();
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
-            return wake;
+            // Only an awaited segment authorizes authored-time advancement.
+            // Endpoint presentation, authoring resumption, and a finished source
+            // retain runtime/input invalidation without driving unbounded
+            // callback registrations beyond the source's logical interval.
+            return wake.without_timeline_wake();
         };
         let timeline = if self.session.frame().time >= segment.end_time() {
             crate::TimelineWakeState::Deadline(self.session.frame().time)
@@ -373,6 +377,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::TimelineWakeState;
 
     struct AnimatedContinuation {
         source: crate::Mobject,
@@ -763,5 +768,42 @@ mod tests {
         program.admit_publication(admitted).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
         assert_eq!(*resumes.borrow(), 2);
+    }
+    #[test]
+    fn callback_program_only_exposes_timeline_wake_while_awaiting() {
+        let (mut program, mut callbacks) =
+            crate::example_scenes::ordinary_callback_continuation_program().unwrap();
+        assert_eq!(
+            program.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
+        program.resume().unwrap();
+        assert_eq!(
+            program.wake_state().timeline(),
+            TimelineWakeState::Continuous
+        );
+        program.drive_to(&mut callbacks, 1.0).unwrap();
+        assert_eq!(
+            program.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
+        assert_eq!(program.session().frame().time, 1.0);
+        let publication = program.session().publication_context();
+        drop(program.take_renderer_publication());
+        if matches!(program.status(), LiveProgramStatus::PublicationPending(_)) {
+            program.admit_publication(publication).unwrap();
+        }
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        // Registration remains authoritative and available to the runtime; the
+        // finite source must not authorize another segment drive after finish.
+        assert_eq!(
+            program.session().wake_state().timeline(),
+            TimelineWakeState::Continuous
+        );
+        assert_eq!(
+            program.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
+        assert_eq!(program.session().frame().time, 1.0);
     }
 }
