@@ -429,7 +429,7 @@ impl LiveContinuation for OrdinaryFadeContinuation {
 /// root membership change, and the final ordinary add reuses the original semantic handle.
 pub fn ordinary_fade_continuation_program() -> Result<LiveProgram<OrdinaryFadeContinuation>, String>
 {
-    let mut scene = Scene::new();
+    let scene = Scene::new();
     let mut circle = scene.circle(0.4).map_err(|error| error.to_string())?;
     circle
         .set_fill(0.0, 0.4, 1.0, 1.0)
