@@ -1400,7 +1400,7 @@ mod tests {
             .live(&mut session)
             .declare_and_activate_uncreate(&foreign, AnimationOptions::new().run_time(1.0));
 
-        assert!(matches!(result, Err(LiveSessionError::ForeignMobject)));
+        assert!(matches!(result, Err(LiveSessionError::ForeignMobjectStore)));
         assert_eq!(session.publication_context(), before);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
