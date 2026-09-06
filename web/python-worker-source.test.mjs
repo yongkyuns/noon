@@ -24,7 +24,10 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.match(source, /if\s*\(isContinuationControl\(event\.data\)\)/);
   assert.match(source, /void\s+handleContinuationControl\(event\.data\)/);
   assert.match(source, /requestQueue\s*=\s*requestQueue\.then\(\(\)\s*=>\s*handleRequest/);
-  assert.match(source, /await\s+execute_construct\(__noon_result\)/);
+  assert.match(
+    source,
+    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\)\s*\)/,
+  );
   assert.match(source, /continuation\.endpoint\.startContinuation\(continuation\.generation\)/);
   assert.match(source, /continuation\.runRequestId\s*!==\s*request\.continuationRunRequestId/);
   assert.match(source, /noonRequireSemanticContinuationActive/);
@@ -51,7 +54,10 @@ test("worker delegates every Scene construct lifecycle to the canonical adapter"
     source.indexOf("async function runAuthoringSource"),
     source.indexOf("async function runCallbackPhase"),
   );
-  assert.match(authoring, /await\s+execute_construct\(__noon_result\)/);
+  assert.match(
+    authoring,
+    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\)\s*\)/,
+  );
   assert.doesNotMatch(authoring, /__noon_result\.(?:setup|construct|tear_down)\(/);
   assert.doesNotMatch(authoring, /_(?:begin|finish)_(?:async|synchronous)_continuation_construct/);
 });

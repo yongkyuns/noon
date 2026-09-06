@@ -133,6 +133,70 @@ assert abs(center.y + 1.0) < 1e-9
 result = scene
 `;
 
+const ordinaryExportBoundarySource = `from noon import *
+
+class OrdinaryExportBoundary(Scene):
+    def construct(self):
+        circle = Circle(radius=0.4)
+        self.add(circle)
+        self.play(circle.animate.shift((2.0, 0.0, 0.0)), run_time=2.0, rate_func=linear)
+        self.wait(1.0)
+`;
+
+const asyncExportBoundarySource = `from noon import *
+import builtins
+
+builtins.__noon_export_boundary_setup_count = 0
+
+class AsyncExportBoundary(Scene):
+    def setup(self):
+        builtins.__noon_export_boundary_setup_count += 1
+        return super().setup()
+
+    async def construct(self):
+        raise AssertionError("async export must reject before construct")
+`;
+
+const exportBoundarySentinelSource = `from noon import *
+import builtins
+
+assert builtins.__noon_export_boundary_setup_count == 0
+result = Scene()
+`;
+
+const unsupportedJspiSource = `from noon import *
+import builtins
+import pyodide.ffi
+
+builtins.__noon_unsupported_jspi_original = pyodide.ffi.can_run_sync
+pyodide.ffi.can_run_sync = lambda: False
+
+class UnsupportedJspiContinuation(Scene):
+    def construct(self):
+        circle = Circle(radius=0.4)
+        self.add(circle)
+        builtins.__noon_unsupported_jspi_scene = self
+        self.play(circle.animate.shift((2.0, 0.0, 0.0)), run_time=1.0, rate_func=linear)
+`;
+
+const restoreUnsupportedJspiSource = `from noon import *
+import builtins
+import pyodide.ffi
+
+try:
+    scene = builtins.__noon_unsupported_jspi_scene
+    context = scene._canonical_authoring_context
+    assert context.liveExecutionOwnership() == "none"
+    assert context.authoredDuration() == 0.0
+    assert scene.time == 0.0
+finally:
+    pyodide.ffi.can_run_sync = builtins.__noon_unsupported_jspi_original
+    del builtins.__noon_unsupported_jspi_original
+    del builtins.__noon_unsupported_jspi_scene
+
+result = Scene()
+`;
+
 const browserArgs = [
   "--enable-unsafe-webgpu",
   "--enable-unsafe-swiftshader",
@@ -490,7 +554,6 @@ try {
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
-      const authored = await harness.authoring.run(source, {});
       const canvas = document.createElement("canvas");
       canvas.id = `scene-${filename.replaceAll(".", "-")}`;
       canvas.width = 640;
@@ -499,12 +562,35 @@ try {
       const execution = new harness.AuthoringExecutionClient(canvas);
       let retainForInspection = false;
       try {
-        const options = {
-          authoringClient: harness.authoring,
-          transportMode: "transferable",
-        };
-        if (authored.duration > 0) options.loopDurationSeconds = authored.duration;
-        await execution.startSemanticExecution(authored.semanticExecution, options);
+        let continuation = null;
+        const authored = await harness.authoring.run(source, {}, {
+          async onSemanticContinuation(registration) {
+            if (continuation !== null) {
+              throw new Error(`${filename}: source registered more than one semantic continuation`);
+            }
+            continuation = registration;
+            await execution.startSemanticExecution(registration.semanticExecution, {
+              authoringClient: harness.authoring,
+              loopDurationSeconds: Math.max(1, registration.duration),
+              transportMode: "transferable",
+            });
+          },
+        });
+        if (continuation !== null) {
+          if (
+            authored.semanticExecution.contextId !== continuation.semanticExecution.contextId ||
+            authored.semanticExecution.continuationGeneration !== continuation.generation
+          ) {
+            throw new Error(`${filename}: final source result changed continuation context`);
+          }
+        } else {
+          const options = {
+            authoringClient: harness.authoring,
+            transportMode: "transferable",
+          };
+          if (authored.duration > 0) options.loopDurationSeconds = authored.duration;
+          await execution.startSemanticExecution(authored.semanticExecution, options);
+        }
 
         async function waitForFrame(afterPresentedFrames = 0) {
           let latest;
@@ -608,6 +694,78 @@ try {
       });
     }
   }
+
+  // `exportDocument` is the explicit #959 codec boundary. It still runs the
+  // shared endpoint authoring operations, but it must never lease a renderer
+  // continuation from a normal def construct. Async source cannot satisfy that
+  // boundary and rejects before `Scene.setup` mutates the worker-resident scene.
+  const exportBoundary = await page.evaluate(async ({
+    ordinarySource,
+    asyncSource,
+    sentinelSource,
+  }) => {
+    const harness = window.sharedAuthoringSmoke;
+    let continuationRegistrations = 0;
+    const ordinary = await harness.authoring.run(ordinarySource, {}, {
+      exportDocument: true,
+      onSemanticContinuation() {
+        continuationRegistrations += 1;
+        throw new Error("document export must not register a continuation");
+      },
+    });
+    let asyncError = null;
+    try {
+      await harness.authoring.run(asyncSource, {}, { exportDocument: true });
+    } catch (error) {
+      asyncError = String(error);
+    }
+    const sentinel = await harness.authoring.run(sentinelSource, {}, { exportDocument: true });
+    return {
+      ordinary: {
+        duration: ordinary.duration,
+        objectCount: ordinary.document.objects.length,
+        translation: ordinary.document.objects[0].transform.translation,
+        hasSemanticExecution: Object.hasOwn(ordinary, "semanticExecution"),
+      },
+      continuationRegistrations,
+      asyncError,
+      sentinelObjectCount: sentinel.document.objects.length,
+    };
+  }, {
+    ordinarySource: ordinaryExportBoundarySource,
+    asyncSource: asyncExportBoundarySource,
+    sentinelSource: exportBoundarySentinelSource,
+  });
+  assert.equal(exportBoundary.ordinary.duration, 3);
+  assert.equal(exportBoundary.ordinary.objectCount, 1);
+  assert.deepEqual(exportBoundary.ordinary.translation, { x: 2, y: 0 });
+  assert.equal(exportBoundary.ordinary.hasSemanticExecution, false);
+  assert.equal(exportBoundary.continuationRegistrations, 0);
+  assert.match(
+    exportBoundary.asyncError ?? "",
+    /exportDocument cannot run an async Scene construct/,
+  );
+  assert.equal(exportBoundary.sentinelObjectCount, 0);
+
+  // A supported ordinary segment must fail at its JSPI capability gate instead
+  // of silently using endpoint-only execution. The restore request verifies the
+  // same worker-resident context never activated a player or advanced time.
+  const unsupportedJspi = await page.evaluate(async ({ source, restoreSource }) => {
+    const harness = window.sharedAuthoringSmoke;
+    let error = null;
+    try {
+      await harness.authoring.run(source, {});
+    } catch (failure) {
+      error = String(failure);
+    } finally {
+      await harness.authoring.run(restoreSource, {});
+    }
+    return { error };
+  }, { source: unsupportedJspiSource, restoreSource: restoreUnsupportedJspiSource });
+  assert.match(
+    unsupportedJspi.error ?? "",
+    /ordinary synchronous canonical play\/wait requires Pyodide JS Promise Integration/,
+  );
 
   // Async Python construct suspends on the worker-owned semantic endpoint. The
   // early descriptor starts the existing execution client while runPythonAsync
@@ -1042,9 +1200,9 @@ try {
     window.sharedAuthoringSmoke.callbackContinuationAuthoredPromise = null;
   });
 
-  // A normal def construct opts into experimental Pyodide JSPI stack switching.
-  // Its source promise remains pending while the same continuation endpoint owns
-  // the Rust player and publishes a real intermediate frame.
+  // A normal def construct uses the canonical JSPI continuation when its first
+  // supported play reaches the shared Rust segment barrier. Its source promise
+  // stays pending while the one endpoint owns the player and presents a frame.
   const synchronousContinuationSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_affine_synchronous_continuation.py"),
     "utf8",

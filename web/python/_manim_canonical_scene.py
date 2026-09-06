@@ -50,6 +50,10 @@ _ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
 _ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
 _SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
+_EXPORT_DOCUMENT_CONSTRUCT = "_noon_export_document_construct"
+_DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
+    "_noon_default_synchronous_continuation_candidate"
+)
 
 
 def _json(value: object) -> str:
@@ -261,25 +265,28 @@ def _async_continuation_active(scene: _base.Scene) -> bool:
     return bool(getattr(scene, _ASYNC_CONTINUATION_MODE, False))
 
 
-def _synchronous_continuation_requested(scene: _base.Scene) -> bool:
-    """Return the explicit opt-in for JSPI-backed synchronous continuation.
-
-    Ordinary ``def construct`` remains endpoint-only by default. This opt-in is
-    per Scene while JSPI remains experimental; it never selects the legacy
-    scheduler when the runtime cannot suspend.
-    """
-    return getattr(scene, "realtime_continuation", False) is True
+def _default_synchronous_continuation_candidate(scene: _base.Scene) -> bool:
+    """Whether this ordinary construct may enter one supported JSPI barrier."""
+    return bool(getattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False))
 
 
-def _begin_synchronous_continuation_construct(scene: _base.Scene) -> None:
-    if _async_continuation_active(scene) or getattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, False):
-        raise RuntimeError("canonical synchronous construct is already active")
+def _start_default_synchronous_continuation(scene: _base.Scene) -> None:
+    """Enter the existing synchronous continuation only before Rust mutation."""
+    if (
+        not _default_synchronous_continuation_candidate(scene)
+        or getattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
+    ):
+        return
+    if _synchronous_continuation_active(scene):
+        return
+    if _async_continuation_active(scene):
+        raise RuntimeError("canonical async and synchronous constructs cannot overlap")
     from pyodide.ffi import can_run_sync
 
     if not can_run_sync():
         raise RuntimeError(
-            "synchronous realtime continuation requires JS Promise Integration; "
-            "use async construct or a JSPI-capable browser"
+            "ordinary synchronous canonical play/wait requires Pyodide JS Promise "
+            "Integration in this browser; use async construct or a JSPI-capable browser"
         )
     setattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, True)
 
@@ -296,24 +303,43 @@ def _semantic_continuation_active(scene: _base.Scene) -> bool:
     return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
 
 
-async def execute_construct(scene: _base.Scene) -> None:
+async def execute_construct(
+    scene: _base.Scene, *, export_document: bool = False
+) -> None:
     """Run one Scene construct lifecycle with its canonical continuation mode."""
+    if export_document and inspect.iscoroutinefunction(scene.construct):
+        raise RuntimeError(
+            "exportDocument cannot run an async Scene construct; "
+            "async source requires a semantic continuation renderer"
+        )
     scene.setup()
     try:
-        if inspect.iscoroutinefunction(scene.construct):
+        if export_document:
+            # #959 owns this explicit codec/export boundary. Ordinary supported
+            # operations retain their existing Rust endpoint helpers here; they
+            # must not request a renderer continuation lease from an exporter.
+            setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, True)
+            try:
+                scene.construct()
+            finally:
+                setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
+        elif inspect.iscoroutinefunction(scene.construct):
             _begin_async_continuation_construct(scene)
             try:
                 await scene.construct()
             finally:
                 _finish_async_continuation_construct(scene)
-        elif _synchronous_continuation_requested(scene):
-            _begin_synchronous_continuation_construct(scene)
+        else:
+            # Do not probe JSPI for a static or legacy-only ordinary construct.
+            # The first supported canonical segment preflights it before Rust
+            # creates or activates that segment, so unsupported browsers fail
+            # without selecting endpoint-only execution for the same operation.
+            setattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, True)
             try:
                 scene.construct()
             finally:
+                setattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False)
                 _finish_synchronous_continuation_construct(scene)
-        else:
-            scene.construct()
     finally:
         scene.tear_down()
 
@@ -462,6 +488,12 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
 def _canonical_wait(
     scene: _base.Scene, duration: float = 1.0
 ) -> _base.Scene | _SemanticContinuationAwaitable:
+    if (
+        _default_synchronous_continuation_candidate(scene)
+        and not getattr(scene, "_legacy_geometry_materialized", False)
+        and getattr(scene, "_canonical_authoring_context", None) is not None
+    ):
+        _start_default_synchronous_continuation(scene)
     if _semantic_continuation_active(scene):
         try:
             _require_semantic_continuation_active(scene)
@@ -533,6 +565,7 @@ def _play_canonical_tracker(
             "canonical ValueTracker.play cannot follow legacy Scene timing"
         )
     try:
+        _start_default_synchronous_continuation(self)
         _require_semantic_continuation_active(self)
         if _semantic_continuation_active(self):
             _prepare_semantic_continuation_callbacks(self, context)
@@ -722,6 +755,7 @@ def _play_canonical_affine(
         raise NotImplementedError(
             "canonical ordinary Scene.play currently supports one linear affine transform"
         )
+    _start_default_synchronous_continuation(self)
     context = _context(self)
     try:
         _require_semantic_continuation_active(self)
@@ -873,6 +907,7 @@ def _play_canonical_fade(
         raise NotImplementedError(
             "canonical ordinary Fade currently supports one basic leaf appearance lifecycle"
         )
+    _start_default_synchronous_continuation(self)
     object_id, reservation = _fade_object_id(self, target, direction)
     context = _context(self)
     try:
@@ -1042,6 +1077,7 @@ def _play_canonical_composition(
         raise NotImplementedError(
             "canonical ordinary composition cannot follow legacy Scene timing"
         )
+    _start_default_synchronous_continuation(self)
     context = _context(self)
     try:
         if _semantic_continuation_active(self):
