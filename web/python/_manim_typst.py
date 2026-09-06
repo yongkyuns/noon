@@ -159,6 +159,16 @@ def _native_layout_handle(handle: object):
     return handle
 
 
+def _in_canonical_callback_phase(mobject: _base.Mobject) -> bool:
+    """Inspect the existing property overlay without creating Text-local state."""
+
+    # Lazy import avoids making retained Text initialization depend on updater
+    # installation. Production installs the updater adapter after this module.
+    import _manim_updaters
+
+    return _manim_updaters._canonical_phase_context(mobject) is not None
+
+
 class _RetainedTextMobject(_base.Mobject):
     """Python semantic identity for one retained resource-backed text object."""
 
@@ -323,10 +333,15 @@ class _RetainedTextMobject(_base.Mobject):
         return json.loads(str(self._retained_handle.specJson()))
 
     def get_center(self) -> _base.Vec2:
+        if self._semantic_handle is not None:
+            return _base.Mobject.get_center(self)
         point = self._spec()["transform"]["translation"]
         return _base.Vec2(float(point["x"]), float(point["y"]))
 
     def shift(self, direction: object) -> _RetainedTextMobject:
+        if self._semantic_handle is not None:
+            _base.Mobject.shift(self, direction)
+            return self
         offset = _compat._as_vec2(direction)
         self._retained_handle.shift(float(offset.x), float(offset.y))
         return self
@@ -334,6 +349,9 @@ class _RetainedTextMobject(_base.Mobject):
     def move_to(self, point: object, *args: Any, **kwargs: Any) -> _RetainedTextMobject:
         if args or kwargs:
             raise NotImplementedError("retained text move_to currently supports point targets only")
+        if self._semantic_handle is not None:
+            _base.Mobject.move_to(self, point)
+            return self
         target = _compat._as_vec2(point)
         self._retained_handle.moveTo(float(target.x), float(target.y))
         return self
@@ -342,11 +360,17 @@ class _RetainedTextMobject(_base.Mobject):
         return self.move_to(_base.ORIGIN)
 
     def set_x(self, x: float) -> _RetainedTextMobject:
+        if self._semantic_handle is not None:
+            _base.Mobject.set_x(self, x)
+            return self
         center = self.get_center()
         self._retained_handle.moveTo(float(x), float(center.y))
         return self
 
     def set_y(self, y: float) -> _RetainedTextMobject:
+        if self._semantic_handle is not None:
+            _base.Mobject.set_y(self, y)
+            return self
         center = self.get_center()
         self._retained_handle.moveTo(float(center.x), float(y))
         return self
@@ -358,6 +382,9 @@ class _RetainedTextMobject(_base.Mobject):
         value = float(factor)
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError("scale factor must be finite and positive")
+        if self._semantic_handle is not None:
+            _base.Mobject.scale(self, value)
+            return self
         # Native Text aliases the ordinary shared Mobject handle, whose affine
         # scale takes independent x/y values. Typst's retained handle remains
         # uniform until that backend reaches the same resource path.
@@ -373,12 +400,18 @@ class _RetainedTextMobject(_base.Mobject):
         value = float(angle)
         if not math.isfinite(value):
             raise ValueError("rotation angle must be finite")
+        if self._semantic_handle is not None:
+            _base.Mobject.rotate(self, value)
+            return self
         self._retained_handle.rotate(value)
         return self
 
     def set_color(self, color: _base.Color, family: bool = True) -> _RetainedTextMobject:
         del family
         value = _as_color(color)
+        if self._semantic_handle is not None:
+            _base.Mobject.set_color(self, value)
+            return self
         self._retained_handle.setColor(
             float(value.red),
             float(value.green),
@@ -392,16 +425,26 @@ class _RetainedTextMobject(_base.Mobject):
         value = float(opacity)
         if not math.isfinite(value) or not 0.0 <= value <= 1.0:
             raise ValueError("opacity must be finite and between 0 and 1")
-        if getattr(self, "_semantic_handle", None) is not None:
-            self._retained_handle.setObjectOpacity(value)
-        else:
-            self._retained_handle.setOpacity(value)
+        if self._semantic_handle is not None and _in_canonical_callback_phase(self):
+            _base.Mobject.set_opacity(self, value)
+            return self
+        if self._semantic_handle is not None:
+            # The shared semantic handler publishes through an active live
+            # session, rejects a transferred lease, and mutates the authored
+            # handle only while no live runtime owns the object.
+            _base.Mobject.set_object_opacity(self, value)
+            return self
+        self._retained_handle.setOpacity(value)
         return self
 
     def _copy_constructor(self) -> _RetainedTextMobject:
         raise NotImplementedError
 
     def copy(self) -> _RetainedTextMobject:
+        if self._semantic_handle is not None and _in_canonical_callback_phase(self):
+            raise NotImplementedError(
+                "canonical callback Text copy is unsupported; use property operations"
+            )
         if self._semantic_handle is not None:
             clone = self._copy_constructor()
             source = self._retained_handle
@@ -527,11 +570,19 @@ class Text(_RetainedTextMobject):
         return self._line_spacing
 
     def get_center(self) -> _base.Vec2:
+        if self._semantic_handle is not None:
+            return _base.Mobject.get_center(self)
         handle = _native_layout_handle(self._retained_handle)
         return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
     @property
     def width(self) -> float:
+        if self._semantic_handle is not None and _in_canonical_callback_phase(self):
+            raise NotImplementedError(
+                "canonical callback Text width requires a shared effective layout query"
+            )
+        if self._semantic_handle is not None:
+            return float(_base.Mobject.width.__get__(self, type(self)))
         return float(_native_layout_handle(self._retained_handle).width)
 
     @width.setter
@@ -546,6 +597,12 @@ class Text(_RetainedTextMobject):
 
     @property
     def height(self) -> float:
+        if self._semantic_handle is not None and _in_canonical_callback_phase(self):
+            raise NotImplementedError(
+                "canonical callback Text height requires a shared effective layout query"
+            )
+        if self._semantic_handle is not None:
+            return float(_base.Mobject.height.__get__(self, type(self)))
         return float(_native_layout_handle(self._retained_handle).height)
 
     @height.setter
