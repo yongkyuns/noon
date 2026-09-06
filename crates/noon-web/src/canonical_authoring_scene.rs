@@ -1092,10 +1092,11 @@ impl CanonicalAuthoringScene {
             return Err("mobject belongs to another authoring store".into());
         }
         source.validate()?;
-        if self.live_player.is_some() {
-            self.active_live_player()?.live_target_editor(source)
-        } else {
-            source.target_editor()
+        match self.live_execution_ownership() {
+            "none" => source.target_editor(),
+            "active" | "returned" => self.active_live_player()?.live_target_editor(source),
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
         }
     }
 
@@ -3359,6 +3360,25 @@ mod tests {
             target.state().unwrap().transform.translation,
             SemanticVec3::new(2.0, -1.0, 0.0)
         );
+    }
+
+    #[test]
+    fn target_editor_rejects_a_transferred_player_without_authored_fallback() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context.live_player(1.0).unwrap();
+        let player = context.take_execution_player(1.0, 17).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+
+        assert!(context.live_target_editor(&circle).is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(context.live_execution_ownership(), "transferred");
+
+        context.return_execution_player(player).unwrap();
+        let target = context.live_target_editor(&circle).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
+        assert!(target.validate().is_ok());
     }
 
     #[test]

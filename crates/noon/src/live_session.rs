@@ -50,6 +50,39 @@ pub struct EffectiveMobjectLayout {
     pub publication: PublicationContext,
 }
 
+/// Reconstruct the supported authored target style directly from one effective
+/// runtime row. Runtime colors already contain the evaluated paint opacity, so
+/// the detached target stores them as solid paints with unit paint opacity and
+/// preserves the row's object opacity separately. Resource paints are not
+/// represented by `Style` and must remain explicitly unavailable here.
+fn target_style_from_effective(
+    authored: &SemanticStyle,
+    effective: Style,
+) -> Result<SemanticStyle, LiveSessionError> {
+    if matches!(
+        authored.fill.as_ref(),
+        Some(noon_core::SemanticPaint::Resource(_))
+    ) || matches!(
+        authored.stroke.as_ref(),
+        Some(noon_core::SemanticPaint::Resource(_))
+    ) {
+        return Err(LiveSessionError::Mobject(
+            "target editor cannot capture a runtime style backed by a paint resource".into(),
+        ));
+    }
+    Ok(SemanticStyle {
+        fill: effective.fill.map(noon_core::SemanticPaint::Solid),
+        fill_opacity: 1.0,
+        stroke: effective.stroke.map(noon_core::SemanticPaint::Solid),
+        stroke_opacity: 1.0,
+        stroke_width: f64::from(effective.stroke_width),
+        stroke_width_mode: effective.stroke_width_mode,
+        stroke_join: effective.stroke_join,
+        stroke_cap: effective.stroke_cap,
+        object_opacity: f64::from(effective.opacity),
+    })
+}
+
 /// One borrowed TransformTo leaf in an atomic live composition request.
 ///
 /// This value contains no schedule or runtime state. The shared Rust compiler resolves all child
@@ -304,7 +337,7 @@ impl<'a> LiveSession<'a> {
         state.transform.scale.x = f64::from(observed.object.transform.scale.x);
         state.transform.scale.y = f64::from(observed.object.transform.scale.y);
         state.transform.rotation_z = f64::from(observed.object.transform.rotation);
-        state.style = SemanticStyle::from_legacy(observed.object.style);
+        state.style = target_style_from_effective(&state.style, observed.object.style)?;
         drop(store);
 
         let mut transaction = SemanticMutationTransaction::new();
@@ -824,6 +857,13 @@ mod tests {
     };
 
     #[test]
+    fn target_style_capture_rejects_resource_paint_without_a_legacy_conversion() {
+        let mut authored = SemanticStyle::default();
+        authored.fill = Some(SemanticPaint::Resource(7));
+        assert!(target_style_from_effective(&authored, Style::default()).is_err());
+    }
+
+    #[test]
     fn live_property_edits_publish_once_and_queries_are_effective_not_authored_aliases() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
@@ -954,7 +994,20 @@ mod tests {
             SemanticVec3::new(1.5, 1.0, 1.0)
         );
         assert_eq!(target_state.transform.rotation_z, 0.25);
-        assert_eq!(target_state.style, SemanticStyle::from_legacy(style));
+        assert_eq!(
+            target_state.style,
+            SemanticStyle {
+                fill: style.fill.map(SemanticPaint::Solid),
+                fill_opacity: 1.0,
+                stroke: style.stroke.map(SemanticPaint::Solid),
+                stroke_opacity: 1.0,
+                stroke_width: f64::from(style.stroke_width),
+                stroke_width_mode: style.stroke_width_mode,
+                stroke_join: style.stroke_join,
+                stroke_cap: style.stroke_cap,
+                object_opacity: f64::from(style.opacity),
+            }
+        );
         assert!(live.session.take_frame_changes().is_empty());
         // The source's authored base remains distinct from the callback effect.
         assert_eq!(
