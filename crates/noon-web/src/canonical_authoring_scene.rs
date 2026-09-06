@@ -714,7 +714,8 @@ impl CanonicalAuthoringScene {
                 "ordinary affine animation cannot follow pre-execution canonical timing".into(),
             );
         }
-        self.scene.can_ordinary_transform_to(source, target, options)
+        self.scene
+            .can_ordinary_transform_to(source, target, options)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
