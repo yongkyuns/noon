@@ -165,6 +165,24 @@ impl<C: LiveContinuation> LiveProgram<C> {
         &self.session
     }
 
+    /// Derive host cadence from the runtime and this program's one continuation barrier.
+    ///
+    /// An already-at-end segment still requests one immediate drive so exact-time
+    /// callbacks and shared completion cannot be skipped merely because the
+    /// underlying tokenless wait already reports a complete interval.
+    pub fn wake_state(&self) -> crate::RuntimeWakeState {
+        let wake = self.session.wake_state();
+        let LiveProgramPhase::Awaiting(segment) = self.phase else {
+            return wake;
+        };
+        let timeline = if self.session.frame().time >= segment.end_time() {
+            crate::TimelineWakeState::Deadline(self.session.frame().time)
+        } else {
+            self.session.segment_state(segment).timeline()
+        };
+        wake.with_additional_timeline(timeline)
+    }
+
     /// Query candidate frame rows through the session-owned derived spatial index.
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
         self.session.query_viewport(bounds)
@@ -608,6 +626,59 @@ mod tests {
         assert_eq!(
             program
                 .drive_to(&mut RustHostCallbackTable::new(), 1.0)
+                .unwrap(),
+            LiveProgramStatus::ReadyToResume
+        );
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert_eq!(*resumes.borrow(), 2);
+    }
+
+    #[test]
+    fn zero_wait_requests_one_immediate_drive_before_resuming() {
+        struct ZeroWaitContinuation {
+            stage: usize,
+            resumes: Rc<RefCell<usize>>,
+        }
+        impl LiveContinuation for ZeroWaitContinuation {
+            type Error = Infallible;
+
+            fn resume(
+                &mut self,
+                live: &mut LiveSession<'_>,
+            ) -> Result<ContinuationStep, Self::Error> {
+                *self.resumes.borrow_mut() += 1;
+                if self.stage == 0 {
+                    self.stage = 1;
+                    Ok(ContinuationStep::Await(live.wait_segment(0.0).unwrap()))
+                } else {
+                    Ok(ContinuationStep::Finished)
+                }
+            }
+        }
+
+        let mut scene = Scene::new();
+        let object = scene.circle(0.4).unwrap();
+        scene.add(&object).unwrap();
+        let resumes = Rc::new(RefCell::new(0));
+        let mut program = scene
+            .into_live_program(ZeroWaitContinuation {
+                stage: 0,
+                resumes: Rc::clone(&resumes),
+            })
+            .unwrap();
+        program.take_renderer_publication();
+        let LiveProgramStatus::Awaiting(state) = program.resume().unwrap() else {
+            panic!("zero wait must still expose its continuation barrier")
+        };
+        assert!(state.is_complete());
+        assert_eq!(
+            program.wake_state().timeline(),
+            crate::TimelineWakeState::Deadline(0.0)
+        );
+        assert_eq!(*resumes.borrow(), 1);
+        assert_eq!(
+            program
+                .drive_to(&mut RustHostCallbackTable::new(), 0.0)
                 .unwrap(),
             LiveProgramStatus::ReadyToResume
         );
