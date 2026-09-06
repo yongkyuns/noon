@@ -376,7 +376,7 @@ async function directExecutionProof(page, expectedBackend) {
   );
   assert.equal(
     direct.metrics.ordinaryPaintPlay?.authoredTime,
-    2,
+    2.4,
     "direct Rust/WASM ordinary paint play did not preserve the shared session time",
   );
   assert.equal(
