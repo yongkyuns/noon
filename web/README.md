@@ -99,3 +99,5 @@ scene.add(Path(curve, fill=BLUE, stroke=WHITE, stroke_width=0.06))
 ```
 
 Static path meshes are tessellated once per semantic path/topology cache key and reused across instances. Geometry-changing path Transforms and supported cross-kind analytic Transforms prepare a fixed source/target pair before playback; steady frames update only compact instance state rather than retessellating geometry.
+
+The paired `ordinary_square_and_circle_create` native example and direct WASM factory execute the same two-shape parallel Create as `manim_parity_square_and_circle.py`.

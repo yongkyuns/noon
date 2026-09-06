@@ -15,6 +15,7 @@ const {
   createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryCreatePlaySmokeRenderer,
   createDirectOrdinarySquareToCircleSmokeRenderer,
+  createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
 } = await import("./pkg/noon_web.js");
@@ -545,9 +546,13 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
   return metrics;
 }
 
-async function directOrdinaryCreateProof(expectedBackend) {
+async function directOrdinaryCreateProof(
+  expectedBackend,
+  createRenderer = createDirectOrdinaryCreatePlaySmokeRenderer,
+  parallel = false,
+) {
   const canvas = new OffscreenCanvas(960, 540);
-  const renderer = await createDirectOrdinaryCreatePlaySmokeRenderer(canvas);
+  const renderer = await createRenderer(canvas);
   try {
     renderer.resize(canvas.width, canvas.height);
     renderer.directWakeDirectiveJson(0);
@@ -560,7 +565,12 @@ async function directOrdinaryCreateProof(expectedBackend) {
     await settleDirectPublication(renderer, 1000);
     const endpoint = await sampleRenderedColor(canvas, 0, 0);
     const directive = JSON.parse(renderer.directWakeDirectiveJson(1000));
-    const metrics = { initial, midpoint, endpoint, time: renderer.time(), cadence: directive.cadence };
+    const square = parallel ? await sampleRenderedColor(canvas, 2.5, 0) : null;
+    const metrics = { initial, midpoint, endpoint, square, time: renderer.time(), cadence: directive.cadence };
+    if (parallel && (renderer.objectCount() !== 2 || square.blue < 90 ||
+        square.green < 70 || square.red > square.blue - 30)) {
+      throw new Error(`direct parallel Create lost square geometry/style: ${JSON.stringify(metrics)}`);
+    }
     if (renderer.rendererBackend() !== expectedBackend || metrics.time !== 1 ||
         metrics.cadence !== "idle" || initial.red > 20 || endpoint.red < 90 ||
         endpoint.blue < 70 || endpoint.green > endpoint.red - 30 ||
@@ -1152,6 +1162,9 @@ async function start() {
   metrics.callbackPaint = await directCallbackPaintProof(expectedBackend);
   metrics.lineMatch = await directLineMatchProof(expectedBackend);
   metrics.ordinaryCreate = await directOrdinaryCreateProof(expectedBackend);
+  metrics.parallelCreate = await directOrdinaryCreateProof(
+    expectedBackend, createDirectOrdinarySquareAndCircleCreateSmokeRenderer, true,
+  );
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
