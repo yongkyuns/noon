@@ -670,9 +670,13 @@ mod tests {
     }
 
     #[test]
-    fn analytic_content_morph_lowers_to_one_existing_object_track() {
+    fn analytic_content_morph_lowers_to_prepared_geometry_and_scalar_channels() {
         let mut store = noon_core::SemanticStore::new();
         let source = visible_circle(&mut store);
+        let source_style = crate::semantic_lowering::projection::lower_semantic_style_value(
+            store.semantic_object_state_checked(source).unwrap(),
+        )
+        .unwrap();
         let mut index = SemanticExecutionIndex::new();
         index.lower_scene(&store).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
@@ -687,7 +691,12 @@ mod tests {
             animation,
             0.0,
             AnimationOptions::new().run_time(2.0),
-            |_| Some(effective(Vec2::ZERO)),
+            |_| {
+                Some(EffectiveAnimationProperties {
+                    style: source_style,
+                    ..effective(Vec2::ZERO)
+                })
+            },
         )
         .unwrap();
 

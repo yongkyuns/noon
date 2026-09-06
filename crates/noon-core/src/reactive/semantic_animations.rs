@@ -381,7 +381,9 @@ mod tests {
             store.semantic_animation_state(animation).unwrap().options(),
             options
         );
-        assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
+        // A detached declaration does not publish a change to any scene.
+        assert_eq!(store.scene_revision(), revision);
+        assert!(!store.node(animation).unwrap().is_scene_owned());
         assert_eq!(store.last_mutation_stats().slots_written, 1);
     }
 
