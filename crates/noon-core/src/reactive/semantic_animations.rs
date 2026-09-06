@@ -39,6 +39,8 @@ pub enum SemanticAnimationIntent {
         target: SemanticNodeId,
         direction: SemanticFadeDirection,
     },
+    /// Introduce one detached semantic leaf through the shared geometry reveal channel.
+    Create { target: SemanticNodeId },
     /// Compose existing semantic animation declarations in stable authored order.
     ///
     /// Children use the same scene-global animation identities as leaf animations;
@@ -53,7 +55,9 @@ pub enum SemanticAnimationIntent {
 impl SemanticAnimationIntent {
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
-            Self::TransformTo { target, .. } | Self::Fade { target, .. } => Some(*target),
+            Self::TransformTo { target, .. }
+            | Self::Fade { target, .. }
+            | Self::Create { target } => Some(*target),
             Self::Composition { .. } => None,
         }
     }
@@ -61,20 +65,20 @@ impl SemanticAnimationIntent {
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target_state, .. } => Some(*target_state),
-            Self::Fade { .. } | Self::Composition { .. } => None,
+            Self::Fade { .. } | Self::Create { .. } | Self::Composition { .. } => None,
         }
     }
 
     pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
         match self {
-            Self::TransformTo { .. } | Self::Fade { .. } => None,
+            Self::TransformTo { .. } | Self::Fade { .. } | Self::Create { .. } => None,
             Self::Composition { kind, .. } => Some(*kind),
         }
     }
 
     pub fn children(&self) -> &[SemanticNodeId] {
         match self {
-            Self::TransformTo { .. } | Self::Fade { .. } => &[],
+            Self::TransformTo { .. } | Self::Fade { .. } | Self::Create { .. } => &[],
             Self::Composition { children, .. } => children,
         }
     }
@@ -230,6 +234,23 @@ impl SemanticStore {
         )
     }
 
+    /// Insert one single-leaf Create declaration into the scene-global semantic arena.
+    pub fn insert_semantic_create_animation(
+        &mut self,
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Create { target },
+                options,
+            )),
+        )
+    }
+
     /// Insert an ordered parallel composition using existing semantic animation IDs.
     pub fn insert_semantic_parallel_animation(
         &mut self,
@@ -336,6 +357,32 @@ mod tests {
             }
         );
         assert_eq!(state.options(), options);
+        assert!(!store.node(animation).unwrap().is_scene_owned());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn create_intent_uses_the_existing_target_identity() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let revision = store.scene_revision();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+
+        let animation = store
+            .insert_semantic_create_animation(target, options)
+            .unwrap();
+        assert_eq!(
+            store.semantic_animation_state(animation).unwrap().intent(),
+            &SemanticAnimationIntent::Create { target }
+        );
+        assert_eq!(
+            store.semantic_animation_state(animation).unwrap().options(),
+            options
+        );
+        // A detached declaration does not publish a change to any scene.
+        assert_eq!(store.scene_revision(), revision);
         assert!(!store.node(animation).unwrap().is_scene_owned());
         assert_eq!(store.last_mutation_stats().slots_written, 1);
     }

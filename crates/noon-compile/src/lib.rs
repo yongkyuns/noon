@@ -664,6 +664,8 @@ impl CompiledScene {
                         | Property::Stroke
                         | Property::Opacity
                         | Property::Appearance
+                        | Property::Reveal
+                        | Property::Morph
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1067,7 +1069,11 @@ impl CompiledScene {
                 )?;
                 for property in [Property::Transform, Property::Morph] {
                     let channel = CompiledChannelKey::new(index, property);
-                    if let Some(track) = self.channel_tracks(channel).first() {
+                    if let Some(track) = self
+                        .channel_tracks(channel)
+                        .iter()
+                        .find(|track| !track.reconciled)
+                    {
                         return Err(CompilePatchError::ContentReplacementHasGeometryDriver {
                             object: *object,
                             track: track.id,
@@ -1217,6 +1223,8 @@ impl CompiledScene {
                             | Property::Stroke
                             | Property::Opacity
                             | Property::Appearance
+                            | Property::Reveal
+                            | Property::Morph
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

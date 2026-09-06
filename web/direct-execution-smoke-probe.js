@@ -13,6 +13,9 @@ const {
   createDirectOrdinaryValueTrackerContinuationSmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryFadePlaySmokeRenderer,
+  createDirectOrdinaryCreatePlaySmokeRenderer,
+  createDirectOrdinarySquareToCircleSmokeRenderer,
+  createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
 } = await import("./pkg/noon_web.js");
@@ -541,6 +544,81 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     throw new Error(`direct callback continuation pixels or lifecycle are invalid ${JSON.stringify(metrics)}`);
   }
   return metrics;
+}
+
+async function directOrdinaryCreateProof(
+  expectedBackend,
+  createRenderer = createDirectOrdinaryCreatePlaySmokeRenderer,
+  parallel = false,
+) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    await settleDirectPublication(renderer, 0);
+    const initial = await sampleRenderedColor(canvas, 0, 0);
+    renderer.advanceDirectRealtime(500);
+    await settleDirectPublication(renderer, 500);
+    const midpoint = await sampleRenderedColor(canvas, 0, 0);
+    renderer.advanceDirectRealtime(1000);
+    await settleDirectPublication(renderer, 1000);
+    const endpoint = await sampleRenderedColor(canvas, 0, 0);
+    const directive = JSON.parse(renderer.directWakeDirectiveJson(1000));
+    const square = parallel ? await sampleRenderedColor(canvas, 2.5, 0) : null;
+    const metrics = { initial, midpoint, endpoint, square, time: renderer.time(), cadence: directive.cadence };
+    if (parallel && (renderer.objectCount() !== 2 || square.blue < 90 ||
+        square.green < 70 || square.red > square.blue - 30)) {
+      throw new Error(`direct parallel Create lost square geometry/style: ${JSON.stringify(metrics)}`);
+    }
+    if (renderer.rendererBackend() !== expectedBackend || metrics.time !== 1 ||
+        metrics.cadence !== "idle" || initial.red > 20 || endpoint.red < 90 ||
+        endpoint.blue < 70 || endpoint.green > endpoint.red - 30 ||
+        midpoint.red > endpoint.red + 3) {
+      throw new Error(`direct Create reveal/fill or completion failed: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directSquareToCircleProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinarySquareToCircleSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    await settleDirectPublication(renderer, 0);
+    for (const time of [1000, 1500]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+    }
+    const midpoint = await sampleRenderedColor(canvas, 0, 0);
+    renderer.advanceDirectRealtime(2000);
+    await settleDirectPublication(renderer, 2000);
+    const endpoint = await sampleRenderedColor(canvas, 0, 0);
+    renderer.advanceDirectRealtime(3000);
+    await settleDirectPublication(renderer, 3000);
+    const removed = await sampleRenderedColor(canvas, 0, 0);
+    const directive = JSON.parse(renderer.directWakeDirectiveJson(3000));
+    const metrics = { midpoint, endpoint, removed, time: renderer.time(), cadence: directive.cadence };
+    if (renderer.rendererBackend() !== expectedBackend || metrics.time !== 3 ||
+        metrics.cadence !== "idle" || midpoint.red < 30 || endpoint.red < 90 ||
+        endpoint.blue < 70 || endpoint.red <= midpoint.red || removed.red > 20 ||
+        renderer.objectCount() !== 0 || renderer.lastDrawCalls() !== 0) {
+      throw new Error(`direct Create/morph/Fade sequence failed: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
 }
 
 async function directLineMatchProof(expectedBackend) {
@@ -1083,6 +1161,11 @@ async function start() {
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.callbackPaint = await directCallbackPaintProof(expectedBackend);
   metrics.lineMatch = await directLineMatchProof(expectedBackend);
+  metrics.ordinaryCreate = await directOrdinaryCreateProof(expectedBackend);
+  metrics.parallelCreate = await directOrdinaryCreateProof(
+    expectedBackend, createDirectOrdinarySquareAndCircleCreateSmokeRenderer, true,
+  );
+  metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);

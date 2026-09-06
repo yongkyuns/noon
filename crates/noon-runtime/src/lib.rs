@@ -1161,6 +1161,7 @@ impl SceneInstance {
             };
             group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
             apply_group(
+                &self.compiled,
                 &mut self.frame,
                 tracks,
                 group,
@@ -1184,6 +1185,7 @@ impl SceneInstance {
             };
             group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
             apply_group(
+                &self.compiled,
                 &mut self.frame,
                 tracks,
                 group,
@@ -1206,6 +1208,7 @@ impl SceneInstance {
             let object = &self.compiled.objects()[group.channel.object_index as usize];
             group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
             apply_group(
+                &self.compiled,
                 &mut self.frame,
                 tracks,
                 group,
@@ -1251,6 +1254,7 @@ impl SceneInstance {
                 stats.tracks_advanced += 1;
             }
             if apply_group(
+                &self.compiled,
                 &mut self.frame,
                 tracks,
                 group,
@@ -1348,7 +1352,9 @@ fn initial_scalar_property(
         if initialized[index] {
             continue;
         }
-        let TrackValues::Scalar { from, .. } = &track.values else {
+        let (TrackValues::Scalar { from, .. } | TrackValues::PreparedMorph { from, .. }) =
+            &track.values
+        else {
             unreachable!("compiled scalar property must contain scalar values");
         };
         values[index] = from.clamp(0.0, 1.0);
@@ -1502,7 +1508,9 @@ fn initial_channel_scalar(
     let Some(track) = compiled.channel_tracks(channel).first() else {
         return default;
     };
-    let TrackValues::Scalar { from, .. } = &track.values else {
+    let (TrackValues::Scalar { from, .. } | TrackValues::PreparedMorph { from, .. }) =
+        &track.values
+    else {
         unreachable!("compiled scalar property must contain scalar values");
     };
     from.clamp(0.0, 1.0)
@@ -1551,6 +1559,7 @@ fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> 
 }
 
 fn apply_group(
+    compiled: &CompiledScene,
     frame: &mut FrameState,
     tracks: &[CompiledTrack],
     group: &TrackGroup,
@@ -1560,6 +1569,7 @@ fn apply_group(
 ) -> bool {
     let object_index = group.channel.object_index as usize;
     apply_group_to_row(
+        compiled,
         frame_row_mut(frame, object_index),
         tracks,
         group,
@@ -1570,6 +1580,7 @@ fn apply_group(
 }
 
 fn apply_group_to_row(
+    compiled: &CompiledScene,
     mut row: FrameRowMut<'_>,
     tracks: &[CompiledTrack],
     group: &TrackGroup,
@@ -1602,7 +1613,23 @@ fn apply_group_to_row(
     let Some((track, progress)) = selected else {
         return false;
     };
+    let preserve_render_frame =
+        matches!(
+            group.channel.property,
+            Property::Position | Property::Rotation | Property::Scale
+        ) && prepared_morph_owns_render_frame(compiled, group.channel.object_index, time);
     if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+        if group.channel.property == Property::Morph
+            && matches!(track.values, TrackValues::PreparedMorph { .. })
+        {
+            let changed = *row.morph != 0.0
+                || row.render_geometry.is_some()
+                || row.render_transform.is_some();
+            *row.morph = 0.0;
+            *row.render_geometry = None;
+            *row.render_transform = None;
+            return changed;
+        }
         let base = match group.channel.property {
             Property::Position => Some(EvaluatedValue::Vec2(base_transform.translation)),
             Property::Rotation => Some(EvaluatedValue::Scalar(base_transform.rotation)),
@@ -1614,15 +1641,31 @@ fn apply_group_to_row(
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
             Property::Presence | Property::Transform => None,
         };
-        return base
-            .is_some_and(|value| apply_evaluated_value(&mut row, group.channel.property, value));
+        return base.is_some_and(|value| {
+            apply_evaluated_value(
+                &mut row,
+                group.channel.property,
+                value,
+                preserve_render_frame,
+            )
+        });
     }
 
     if group.channel.property == Property::Transform {
         return apply_transform_track(&mut row, track, progress);
     }
+    if group.channel.property == Property::Morph
+        && matches!(track.values, TrackValues::PreparedMorph { .. })
+    {
+        return apply_prepared_morph_track(&mut row, track, progress);
+    }
     let value = interpolate(track, progress);
-    apply_evaluated_value(&mut row, group.channel.property, value)
+    apply_evaluated_value(
+        &mut row,
+        group.channel.property,
+        value,
+        preserve_render_frame,
+    )
 }
 
 fn apply_effective_property_to_row(row: FrameRowMut<'_>, write: EffectivePropertyWrite) {
@@ -1639,6 +1682,7 @@ fn apply_evaluated_value(
     row: &mut FrameRowMut<'_>,
     property: Property,
     value: EvaluatedValue,
+    preserve_render_frame: bool,
 ) -> bool {
     match (property, value) {
         (Property::Appearance, EvaluatedValue::Scalar(value)) => {
@@ -1660,22 +1704,34 @@ fn apply_evaluated_value(
             changed
         }
         (Property::Position, EvaluatedValue::Vec2(value)) => {
-            let render_changed =
-                release_render_transform(row.render_geometry, row.render_transform, *row.transform);
+            let render_changed = !preserve_render_frame
+                && release_render_transform(
+                    row.render_geometry,
+                    row.render_transform,
+                    *row.transform,
+                );
             let changed = row.transform.translation != value;
             row.transform.translation = value;
             changed || render_changed
         }
         (Property::Rotation, EvaluatedValue::Scalar(value)) => {
-            let render_changed =
-                release_render_transform(row.render_geometry, row.render_transform, *row.transform);
+            let render_changed = !preserve_render_frame
+                && release_render_transform(
+                    row.render_geometry,
+                    row.render_transform,
+                    *row.transform,
+                );
             let changed = row.transform.rotation != value;
             row.transform.rotation = value;
             changed || render_changed
         }
         (Property::Scale, EvaluatedValue::Vec2(value)) => {
-            let render_changed =
-                release_render_transform(row.render_geometry, row.render_transform, *row.transform);
+            let render_changed = !preserve_render_frame
+                && release_render_transform(
+                    row.render_geometry,
+                    row.render_transform,
+                    *row.transform,
+                );
             let changed = row.transform.scale != value;
             row.transform.scale = value;
             changed || render_changed
@@ -1704,6 +1760,47 @@ enum EvaluatedValue {
     Scalar(f32),
     Vec2(Vec2),
     Color(Option<Color>),
+}
+
+// A prepared morph owns its fixed rendering frame alongside ordinary semantic
+// affine channels. Preserve that frame during their evaluation instead of rebuilding
+// both paths only to reinstall the same compiled resource in the final Morph channel.
+fn prepared_morph_owns_render_frame(
+    compiled: &CompiledScene,
+    object_index: u32,
+    time: f64,
+) -> bool {
+    let tracks = compiled.channel_tracks(CompiledChannelKey::new(object_index, Property::Morph));
+    let cursor = tracks.partition_point(|track| track.timing.start_time <= time);
+    cursor.checked_sub(1).is_some_and(|index| {
+        let track = &tracks[index];
+        matches!(track.values, TrackValues::PreparedMorph { .. })
+            && !(track.reconciled && time >= track.timing.start_time + track.timing.duration)
+            && mapped_track_progress(track, time).is_some()
+    })
+}
+
+fn apply_prepared_morph_track(
+    row: &mut FrameRowMut<'_>,
+    track: &CompiledTrack,
+    progress: f32,
+) -> bool {
+    let TrackValues::PreparedMorph { from, to, .. } = &track.values else {
+        unreachable!("prepared Morph track must contain scalar endpoints");
+    };
+    let Some(TransformGeometryPlan::PathPair {
+        geometry,
+        render_transform,
+    }) = track.transform_geometry_plan.as_ref()
+    else {
+        unreachable!("prepared Morph track must carry compiled endpoint geometry");
+    };
+    let morph = lerp(*from, *to, progress).clamp(0.0, 1.0);
+    let mut changed = *row.morph != morph || *row.render_transform != *render_transform;
+    *row.morph = morph;
+    *row.render_transform = *render_transform;
+    changed |= set_optional_geometry_if_changed(row.render_geometry, Some(geometry), true);
+    changed
 }
 
 fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progress: f32) -> bool {
@@ -2149,6 +2246,9 @@ fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
         }
         TrackValues::Object { .. } => {
             unreachable!("Transform tracks are evaluated atomically")
+        }
+        TrackValues::PreparedMorph { .. } => {
+            unreachable!("prepared Morph tracks install compiled geometry with scalar progress")
         }
     }
 }

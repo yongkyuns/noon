@@ -10,7 +10,7 @@ pub use signal_timeline::SignalTimelineAppendError;
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
 use signal_timeline::SignalTimelineSchedule;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::execution_segment::{
     ExecutionSegment, ExecutionSegmentError, ExecutionSegmentSequence, ExecutionSegmentToken,
@@ -50,6 +50,20 @@ fn resolve_committed_node(
         SemanticTransactionNodeRef::Pending(token) => result
             .resolve(token)
             .expect("prepared animation reference must resolve through its semantic commit"),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PreparedAnimationLifecycle {
+    Introduce(SemanticNodeId),
+    FadeOut(SemanticNodeId),
+}
+
+impl PreparedAnimationLifecycle {
+    const fn root(self) -> SemanticNodeId {
+        match self {
+            Self::Introduce(root) | Self::FadeOut(root) => root,
+        }
     }
 }
 
@@ -218,6 +232,42 @@ impl std::fmt::Display for ExecutionSessionFadeError {
 
 impl std::error::Error for ExecutionSessionFadeError {}
 
+/// Unsupported lifecycle shape for the bounded canonical Create operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecutionSessionCreateError {
+    RootIsNotInExecutionDomain,
+    EmptyParallel,
+    DuplicateTarget,
+    TargetIsNotDetached,
+    ReactiveBindingsUnsupported,
+    RequiredCallbacksUnsupported,
+}
+
+impl std::fmt::Display for ExecutionSessionCreateError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RootIsNotInExecutionDomain => {
+                formatter.write_str("Create root does not belong to this execution session")
+            }
+            Self::EmptyParallel => {
+                formatter.write_str("parallel Create requires at least one target")
+            }
+            Self::DuplicateTarget => {
+                formatter.write_str("parallel Create targets must be distinct")
+            }
+            Self::TargetIsNotDetached => formatter.write_str("Create target must be detached"),
+            Self::ReactiveBindingsUnsupported => {
+                formatter.write_str("Create does not yet support reactive object bindings")
+            }
+            Self::RequiredCallbacksUnsupported => {
+                formatter.write_str("Create does not yet support required host callbacks")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ExecutionSessionCreateError {}
+
 /// Error produced while activating one authoritative semantic animation declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionAnimationError {
@@ -251,6 +301,10 @@ pub enum ExecutionSessionAnimationError {
     FadeTarget {
         target: SemanticNodeId,
         error: ExecutionSessionFadeError,
+    },
+    CreateTarget {
+        target: SemanticNodeId,
+        error: ExecutionSessionCreateError,
     },
     PreparedTrack(TimelineError),
     Publication(CompilePatchError),
@@ -318,6 +372,12 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
             Self::FadeTarget { target, error } => write!(
                 formatter,
                 "fade target {}:{} is invalid: {error}",
+                target.slot(),
+                target.generation()
+            ),
+            Self::CreateTarget { target, error } => write!(
+                formatter,
+                "Create target {}:{} is invalid: {error}",
                 target.slot(),
                 target.generation()
             ),
@@ -1302,8 +1362,137 @@ impl ExecutionSession {
             declaration,
             animation,
             AnimationOptions::new(),
-            Some((root, direction)),
+            Some(match direction {
+                SemanticFadeDirection::In => PreparedAnimationLifecycle::Introduce(root),
+                SemanticFadeDirection::Out => PreparedAnimationLifecycle::FadeOut(root),
+            }),
         )
+    }
+
+    /// Atomically introduce one detached leaf and activate its geometry reveal.
+    pub fn declare_and_activate_create(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        self.require_create_root(root, target)?;
+        self.require_create_target(store, target)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        declaration.add_member(root, target);
+        let animation = declaration.create_create_animation(target, options);
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            animation,
+            AnimationOptions::new(),
+            Some(PreparedAnimationLifecycle::Introduce(root)),
+        )
+    }
+
+    /// Atomically introduce flat parallel detached leaves with one shared reveal segment.
+    ///
+    /// Membership admission, all leaf declarations, the Parallel root, reveal tracks, and
+    /// runtime publication are prepared together. Every target remains detached when checked;
+    /// no target or wrapper-facing identity is committed if any leaf is invalid.
+    pub fn declare_and_activate_create_parallel(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        children: &[(SemanticNodeId, AnimationOptions)],
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let error_target = children.first().map(|(target, _)| *target).unwrap_or(root);
+        self.require_create_root(root, error_target)?;
+        if children.is_empty() {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target: error_target,
+                error: ExecutionSessionCreateError::EmptyParallel,
+            });
+        }
+        let mut targets = HashSet::with_capacity(children.len());
+        for (target, _) in children {
+            if !targets.insert(*target) {
+                return Err(ExecutionSessionAnimationError::CreateTarget {
+                    target: *target,
+                    error: ExecutionSessionCreateError::DuplicateTarget,
+                });
+            }
+            self.require_create_target(store, *target)?;
+        }
+
+        let mut declaration = SemanticMutationTransaction::new();
+        let leaves = children
+            .iter()
+            .map(|(target, options)| {
+                declaration.add_member(root, *target);
+                declaration.create_create_animation(*target, *options)
+            })
+            .collect::<Vec<_>>();
+        let animation_root = declaration.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            leaves,
+            AnimationOptions::new(),
+        );
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            animation_root,
+            play_options,
+            Some(PreparedAnimationLifecycle::Introduce(root)),
+        )
+    }
+
+    fn require_create_root(
+        &self,
+        root: SemanticNodeId,
+        error_target: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target: error_target,
+                error: ExecutionSessionCreateError::RootIsNotInExecutionDomain,
+            });
+        }
+        if !self.callback_schedule.is_empty() {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target: error_target,
+                error: ExecutionSessionCreateError::RequiredCallbacksUnsupported,
+            });
+        }
+        Ok(())
+    }
+
+    fn require_create_target(
+        &self,
+        store: &SemanticStore,
+        target: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        let state = store
+            .semantic_object_state_checked(target)
+            .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?;
+        if !state.signal_bindings().is_empty() {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target,
+                error: ExecutionSessionCreateError::ReactiveBindingsUnsupported,
+            });
+        }
+        let node = store
+            .node(target)
+            .expect("validated semantic object has a live node");
+        if node.is_scene_owned()
+            || !node.parents().is_empty()
+            || self.execution_index.execution_object_id(target).is_some()
+        {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target,
+                error: ExecutionSessionCreateError::TargetIsNotDetached,
+            });
+        }
+        Ok(())
     }
 
     fn require_fade_target(
@@ -1409,7 +1598,7 @@ impl ExecutionSession {
         declaration: SemanticMutationTransaction,
         root: noon_core::SemanticLocalNodeToken,
         play_options: AnimationOptions,
-        lifecycle: Option<(SemanticNodeId, SemanticFadeDirection)>,
+        lifecycle: Option<PreparedAnimationLifecycle>,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         let prepared = declaration.prepare(store).map_err(|error| {
             ExecutionSessionAnimationError::AuthoredPublication(
@@ -1455,7 +1644,7 @@ impl ExecutionSession {
             next_track_id = raw_id.checked_add(1);
         }
 
-        if matches!(lifecycle, Some((_, SemanticFadeDirection::In))) {
+        if matches!(lifecycle, Some(PreparedAnimationLifecycle::Introduce(_))) {
             let existing_tracks = definitions
                 .iter()
                 .filter(|definition| self.runtime.contains_object(definition.object))
@@ -1516,7 +1705,7 @@ impl ExecutionSession {
                 token,
                 activation_scene_revision,
                 kind: PendingSegmentCompletionKind::ObjectTracks {
-                    lifecycle_root: lifecycle.map(|(root, _)| root),
+                    lifecycle_root: lifecycle.map(PreparedAnimationLifecycle::root),
                     entries,
                 },
             });

@@ -174,6 +174,35 @@ pub async fn create_direct_ordinary_fade_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Browser proof that ordinary Create uses the same target-neutral Rust continuation.
+#[wasm_bindgen(js_name = createDirectOrdinaryCreatePlaySmokeRenderer)]
+pub async fn create_direct_ordinary_create_play_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_create_continuation_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Browser proof that flat Parallel Create shares one target-neutral Rust continuation.
+#[wasm_bindgen(js_name = createDirectOrdinarySquareAndCircleCreateSmokeRenderer)]
+pub async fn create_direct_ordinary_square_and_circle_create_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_square_and_circle_create_continuation_program()
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Browser proof for the target-neutral Rust Create, analytic content morph, and Fade sequence.
+#[wasm_bindgen(js_name = createDirectOrdinarySquareToCircleSmokeRenderer)]
+pub async fn create_direct_ordinary_square_to_circle_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::example_scenes::ordinary_create_then_content_morph_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that the paired ordinary continuation and its ordered Rust
 /// callback table execute through the normal direct single-context WASM host.
 #[wasm_bindgen(js_name = createDirectOrdinaryAffineCallbackContinuationSmokeRenderer)]

@@ -981,12 +981,24 @@ def _state_target(self: _BaseMobject, mobject: _BaseMobject, *, match_height: bo
 
 
 def _mobject_generate_target(self: _BaseMobject, use_deepcopy: bool = False) -> _BaseMobject:
-    # Noon's copy already performs a deep semantic clone. In the browser the payload
-    # remains in the Rust/WASM handle, so both Manim modes avoid Python snapshot ownership.
+    """Create the detached target through the installed shared target editor."""
+    # Canonical Mobjects install `_copy_for_animate_target`, which delegates target
+    # capture to Rust.  This preserves effective-state capture for a live source and
+    # avoids using `copy()` as a second target-state model.  Plain compatibility
+    # objects retain their existing copy behavior until they have a typed handle.
     del use_deepcopy
+    factory = getattr(self, "_copy_for_animate_target", None)
+    previous = getattr(self, "target", None)
+    # A target must not recursively clone the previously generated target chain.
+    # Preserve the wrapper's previous target if shared capture is rejected.
     self.target = None
-    self.target = self.copy()
-    return self.target
+    try:
+        target = factory() if callable(factory) else self.copy()
+    except BaseException:
+        self.target = previous
+        raise
+    self.target = target
+    return target
 
 
 def _mobject_save_state(self: _BaseMobject) -> _BaseMobject:
@@ -1045,7 +1057,7 @@ def _mobject_replace(
 
 
 class MoveToTarget:
-    """ManimCE ``MoveToTarget`` over Noon's retained ``Transform`` path."""
+    """ManimCE ``MoveToTarget`` over the shared leaf ``TransformTo`` path."""
 
     def __new__(cls, mobject: object, **kwargs: Any):
         if isinstance(mobject, Group):

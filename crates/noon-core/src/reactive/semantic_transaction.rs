@@ -674,6 +674,25 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage a single-leaf Create declaration and return its transaction-local token.
+    pub fn create_create_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Create {
+                    target: target.into(),
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage an ordered animation composition whose children already exist or
     /// were staged earlier in this transaction.
     pub fn create_animation_composition<I, R>(

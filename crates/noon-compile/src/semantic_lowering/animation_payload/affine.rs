@@ -2,21 +2,22 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
     validate_track_definition, ObjectId, Property, SemanticAnimationError, SemanticAnimationIntent,
-    SemanticFadeDirection, SemanticLoweringError, SemanticNodeId, SemanticObjectProperty,
-    SemanticSceneOperationError, SemanticSignalValue, SemanticStore, Style, TimelineError,
-    TrackDefinition, TrackId, TrackValues, Transform2D,
+    SemanticFadeDirection, SemanticLoweringError, SemanticNodeId, SemanticObjectContent,
+    SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue, SemanticStore,
+    StoredGeometry, Style, TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
 };
 
 use super::super::{
     projection::{
-        lower_semantic_style_value, SemanticExecutionValueError,
+        lower_semantic_style_value, lower_semantic_transform_value, SemanticExecutionValueError,
         SemanticLoweringError as StyleLoweringError,
     },
     SemanticAnimationScheduleProjection, SemanticScheduledAnimationLeaf,
     SemanticScheduledAnimationPayload,
 };
 use super::transform_payload::{
-    validate_transform_payload_shape, SemanticAffineAnimationField, TransformPayloadValidationIssue,
+    is_supported_analytic_content_morph, validate_transform_payload_shape,
+    SemanticAffineAnimationField, TransformPayloadValidationIssue,
 };
 
 /// The activation-time effective domains consumed by the shared animation lowerer.
@@ -44,6 +45,10 @@ pub enum SemanticAnimationCompletion {
     },
     /// Execution-only lifecycle completion. Appearance is not authored object state.
     Fade { direction: SemanticFadeDirection },
+    /// Execution-only Create completion. Reveal is not authored object state.
+    Create,
+    /// Exact authored endpoint for the bounded shared analytic content morph.
+    ContentMorph { content: SemanticObjectContent },
 }
 
 /// One existing execution-timeline channel lowered from an activated semantic animation.
@@ -424,7 +429,8 @@ where
         validate_leaf_matches_declaration(store, leaf)?;
         let target_state = match leaf.payload {
             SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
-            SemanticScheduledAnimationPayload::Fade { .. } => {
+            SemanticScheduledAnimationPayload::Fade { .. }
+            | SemanticScheduledAnimationPayload::Create => {
                 return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation: leaf.animation,
                     remover: leaf.options.remover,
@@ -449,9 +455,23 @@ where
             captures.insert(leaf.execution_object_id, captured);
             captured
         };
-        let channels = lower_affine_channels(source, target, from)
+        let channels = lower_transform_channels(source, target, from)
             .map_err(|issue| existing_payload_error(leaf, issue))?;
         for channel in channels {
+            let umbrella_conflict = transform_driver_conflict(
+                &driven,
+                leaf.execution_object_id,
+                channel.property,
+                leaf.animation,
+            );
+            if let Some(first_animation) = umbrella_conflict {
+                return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
+                    first_animation,
+                    next_animation: leaf.animation,
+                    target: leaf.target,
+                    property: channel.conflict_property,
+                });
+            }
             match driven.entry(driver_key(leaf.execution_object_id, channel.property)) {
                 Entry::Occupied(entry) => {
                     return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
@@ -509,6 +529,12 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
+        SemanticAnimationIntent::Create { target }
+            if *target == leaf.target
+                && leaf.payload == SemanticScheduledAnimationPayload::Create =>
+        {
+            Ok(())
+        }
         _ => Err(SemanticAffineAnimationTrackError::ScheduleMismatch {
             animation: leaf.animation,
         }),
@@ -518,7 +544,8 @@ fn validate_leaf_matches_declaration(
 fn scheduled_target_state(leaf: &SemanticScheduledAnimationLeaf) -> SemanticNodeId {
     match leaf.payload {
         SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
-        SemanticScheduledAnimationPayload::Fade { .. } => {
+        SemanticScheduledAnimationPayload::Fade { .. }
+        | SemanticScheduledAnimationPayload::Create => {
             unreachable!("affine payload errors are only produced for TransformTo leaves")
         }
     }
@@ -742,6 +769,68 @@ pub(super) fn lower_affine_channels(
     Ok(channels)
 }
 
+pub(super) fn lower_transform_channels(
+    source: &noon_core::SemanticObjectState,
+    target: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if source.content == target.content {
+        return lower_affine_channels(source, target, from);
+    }
+    if !is_supported_analytic_content_morph(source, target) {
+        return Err(AffinePayloadIssue::UnsupportedContentChange);
+    }
+    if let Some(binding) = source.signal_bindings().first() {
+        return Err(AffinePayloadIssue::ReactiveDriverConflict(
+            binding.property(),
+        ));
+    }
+    if !transform_is_finite(from.transform) {
+        return Err(AffinePayloadIssue::InvalidEffectiveTransform);
+    }
+    if !style_is_finite(from.style) {
+        return Err(AffinePayloadIssue::InvalidEffectiveStyle);
+    }
+
+    let geometry = |content| match content {
+        SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) => {
+            Ok(noon_core::GeometryRef::circle(radius))
+        }
+        SemanticObjectContent::Geometry(StoredGeometry::Rectangle { size }) => {
+            Ok(noon_core::GeometryRef::Rectangle { size })
+        }
+        _ => Err(AffinePayloadIssue::UnsupportedContentChange),
+    };
+    let target_transform = lower_semantic_transform_value(target)
+        .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
+    let target_style =
+        lower_semantic_style_value(target).map_err(AffinePayloadIssue::InvalidTargetStyle)?;
+    let (prepared, render_transform) = crate::transform::compile_analytic_content_morph(
+        &geometry(source.content)?,
+        &geometry(target.content)?,
+        from.style,
+        target_style,
+        from.transform,
+        target_transform,
+    )
+    .map_err(|_| AffinePayloadIssue::UnsupportedContentChange)?;
+    let mut channels = lower_affine_channels(source, target, from)?;
+    channels.push(LoweredAffineChannel {
+        property: Property::Morph,
+        conflict_property: SemanticObjectProperty::Translation,
+        completion: SemanticAnimationCompletion::ContentMorph {
+            content: target.content,
+        },
+        values: TrackValues::PreparedMorph {
+            from: 0.0,
+            to: 1.0,
+            geometry: prepared,
+            render_transform,
+        },
+    });
+    Ok(channels)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_affine_channel(
     source: &noon_core::SemanticObjectState,
@@ -871,6 +960,33 @@ fn existing_payload_error(
     }
 }
 
+/// Check only this object's bounded channel set, never the entire composition.
+pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
+    driven: &HashMap<(u64, u8), T>,
+    object: ObjectId,
+    property: Property,
+    animation: T,
+) -> Option<T> {
+    let (_, morph_slot) = driver_key(object, Property::Morph);
+    let (object, transform_slot) = driver_key(object, Property::Transform);
+    if property == Property::Morph {
+        (0..morph_slot).find_map(|slot| {
+            driven
+                .get(&(object, slot))
+                .copied()
+                .filter(|owner| *owner != animation)
+        })
+    } else if property == Property::Transform {
+        (0..=morph_slot).find_map(|slot| driven.get(&(object, slot)).copied())
+    } else {
+        driven
+            .get(&(object, transform_slot))
+            .or_else(|| driven.get(&(object, morph_slot)))
+            .copied()
+            .filter(|owner| *owner != animation)
+    }
+}
+
 pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
     let slot = match property {
         Property::Position => 0,
@@ -880,6 +996,9 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Stroke => 4,
         Property::Opacity => 5,
         Property::Appearance => 6,
+        Property::Reveal => 7,
+        Property::Transform => 8,
+        Property::Morph => 9,
         _ => unreachable!("shared animation payload lowering only registers supported drivers"),
     };
     (object.get(), slot)

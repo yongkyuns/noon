@@ -540,6 +540,41 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Atomically introduce one detached leaf and activate shared Create reveal semantics.
+    pub fn declare_and_activate_create(
+        &mut self,
+        target: &Mobject,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(target)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_create(&mut store, self.root, target.node_id(), options)
+            .map_err(Into::into)
+    }
+
+    /// Atomically introduce detached leaves through one flat Parallel Create segment.
+    ///
+    /// The shared execution session validates every handle before staging membership,
+    /// declarations, reveal tracks, and runtime publication in one transaction.
+    pub fn declare_and_activate_create_parallel(
+        &mut self,
+        children: &[(&Mobject, AnimationOptions)],
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        for (target, _) in children {
+            self.require_mobject(target)?;
+        }
+        let children = children
+            .iter()
+            .map(|(target, options)| (target.node_id(), *options))
+            .collect::<Vec<_>>();
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_create_parallel(&mut store, self.root, &children, play_options)
+            .map_err(Into::into)
+    }
+
     /// Atomically author and activate one flat Parallel or Sequence of TransformTo leaves.
     ///
     /// All handles are checked before the semantic transaction is built. Rust snapshots the target
@@ -857,7 +892,7 @@ impl<'a> LiveSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CallbackAdvance, Scene};
+    use crate::{CallbackAdvance, ExecutionSessionCreateError, Scene};
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
     };
@@ -1261,6 +1296,83 @@ mod tests {
             live.authored(&circle).unwrap().transform.translation,
             SemanticVec3::new(8.0, -2.0, 0.0)
         );
+    }
+
+    #[test]
+    fn parallel_create_admits_all_detached_leaves_in_one_reveal_segment() {
+        let scene = Scene::new();
+        let circle = scene.circle(0.4).unwrap();
+        let square = scene.square(0.8).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = circle.store().borrow().len();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Smooth);
+
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_create_parallel(
+                &[(&circle, options), (&square, options)],
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        assert_eq!(segment.start_time(), 0.0);
+        assert_eq!(segment.end_time(), 1.0);
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        // Two Create leaves and one Parallel root share one semantic publication.
+        assert_eq!(circle.store().borrow().len(), before_nodes + 3);
+        assert!(live.contains(&circle).unwrap());
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(live.session.frame().objects.len(), 2);
+        assert!(!live.segment_state(segment).is_complete());
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert!(live.segment_state(segment).is_complete());
+        assert_eq!(live.session.frame().objects.len(), 2);
+    }
+
+    #[test]
+    fn parallel_create_rejects_duplicate_detached_target_before_publication() {
+        let scene = Scene::new();
+        let circle = scene.circle(0.4).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = circle.store().borrow().len();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_create_parallel(
+                &[(&circle, options), (&circle, options)],
+                AnimationOptions::new().run_time(1.0),
+            );
+
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::CreateTarget {
+                    error: ExecutionSessionCreateError::DuplicateTarget,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
     }
 
     #[test]

@@ -92,6 +92,8 @@ def _reserve_typed_binding(
     scene: _base.Scene,
     handle: object,
     key: str | None,
+    *,
+    object_id: int | None = None,
 ) -> _TypedBindingReservation:
     if mobject._scene is not None:
         if mobject._scene is scene:
@@ -114,7 +116,7 @@ def _reserve_typed_binding(
                 prior, prior_key, None, reuse_existing_identity=True
             )
 
-    object_id = scene._next_object_id
+    object_id = scene._next_object_id if object_id is None else object_id
     authoring_key = _ir._authoring_key("key", key, f"@object:{object_id}")
     if object_id in scene._object_keys:
         raise ValueError(f"canonical wrapper object identity is already bound: {object_id}")
@@ -629,7 +631,10 @@ def _canonical_affine_animation(
     # builder with `_AlignedAnimationBuilder`. It deliberately does not inherit
     # Noon’s original `_AnimationBuilder`, so accepting only the latter skips
     # this canonical route and incorrectly lowers an ordinary legacy track.
-    if isinstance(animation, (_base._AnimationBuilder, _compat._CompatAnimationBuilder)):
+    # Do not accept subclasses here. Several compatibility operations inherit the
+    # builder solely to reuse option handling and materialize a target lazily;
+    # reading that property before their own dispatcher runs can be invalid.
+    if type(animation) in (_base._AnimationBuilder, _compat._CompatAnimationBuilder):
         source, target = animation.source, animation.target
     elif type(animation) is _base.Transform:
         source, target = animation.source, animation.target
@@ -647,16 +652,10 @@ def _canonical_affine_animation(
         raise NotImplementedError(
             "canonical ordinary animation requires typed semantic Mobject handles"
         )
-    context = getattr(scene, "_canonical_authoring_context", None)
-    ownership = getattr(context, "liveExecutionOwnership", None)
-    if (
-        callable(ownership)
-        and str(ownership()) in {"active", "transferred", "returned"}
-        and getattr(target, "_canonical_live_target_context", None) is not context
-    ):
-        raise NotImplementedError(
-            "a canonical live Transform target must be copied from its source through the active session"
-        )
+    # A detached target may have been authored before live execution began, as in
+    # Manim's ordinary `circle = Circle(); Transform(square, circle)` pattern.
+    # Rust validates its generational identity, shared-store provenance, detached
+    # status, payload, and current publication revision before activation.
     return source, target, animation
 
 
@@ -781,7 +780,7 @@ def _play_canonical_affine(
     )
     if resolved.lag_ratio != 0.0 or resolved.path_arc != 0.0 or resolved.reverse_rate_function:
         raise NotImplementedError(
-            "canonical ordinary Scene.play currently supports one linear affine transform"
+            "canonical ordinary Scene.play currently supports one affine transform without path or lag options"
         )
     _start_default_synchronous_continuation(self)
     context = _context(self)
@@ -839,6 +838,180 @@ def _canonical_fade_animation(
             "canonical FadeOut target must be bound to this Scene"
         )
     return target, direction
+
+
+def _canonical_create_animation(
+    scene: _base.Scene, animation: object
+) -> _base.Mobject | None:
+    """Classify one exact detached single-leaf Create."""
+    if type(animation) is not _base.Create:
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary Create target must be a Mobject")
+    if getattr(target, "_semantic_handle", None) is None:
+        return None
+    if target._scene is not None:
+        if target._scene is scene:
+            raise NotImplementedError("canonical Create requires a detached Mobject")
+        raise ValueError("Create target already belongs to another Scene")
+    return target
+
+
+def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    args = dict(getattr(animation, "anim_args", {}))
+    if "introducer" in args and args.pop("introducer") is not True:
+        return None
+    if "remover" in args and args.pop("remover") is not False:
+        return None
+    return _canonical_affine_options(animation, kwargs, builder_args=args)
+
+
+def _play_canonical_create(
+    self: _base.Scene,
+    target: _base.Mobject,
+    animation: object,
+    **kwargs: object,
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    duration = kwargs.pop("duration", None)
+    run_time = kwargs.pop("run_time", None)
+    start_time = kwargs.pop("start_time", None)
+    easing = kwargs.pop("easing", None)
+    rate_func = kwargs.pop("rate_func", None)
+    lag_ratio = kwargs.pop("lag_ratio", None)
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if start_time is not None:
+        raise NotImplementedError("canonical ordinary Scene.play uses the shared session cursor")
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
+    if _legacy_authored_time(self) != 0.0:
+        raise NotImplementedError("canonical ordinary Create cannot follow legacy Scene timing")
+    resolved = _canonical_create_options(
+        animation,
+        {
+            "duration": duration,
+            "run_time": run_time,
+            "start_time": start_time,
+            "easing": easing,
+            "rate_func": rate_func,
+            "lag_ratio": lag_ratio,
+        },
+    )
+    if resolved is None:
+        raise NotImplementedError(
+            "canonical ordinary Create currently supports one basic detached leaf"
+        )
+    _start_default_synchronous_continuation(self)
+    handle = getattr(target, "_semantic_handle")
+    reservation = _reserve_typed_binding(target, self, handle, None)
+    context = _context(self)
+    try:
+        _require_semantic_continuation_active(self)
+        method = (
+            context.beginOrdinaryCreate
+            if _semantic_continuation_active(self)
+            else context.ordinaryPlayCreate
+        )
+        method(
+            str(reservation.object.id),
+            handle,
+            float(resolved.run_time),
+            str(resolved.rate_func),
+        )
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    _commit_typed_binding(target, self, reservation, handle)
+    register = getattr(self, "_register_top_level", None)
+    if register is not None:
+        register(target)
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self)
+    if _synchronous_continuation_active(self):
+        return _synchronous_continuation_wait(self)
+    return self
+
+
+def _canonical_create_parallel_candidate(
+    scene: _base.Scene, args: tuple[object, ...], kwargs: dict[str, object]
+) -> tuple[object, list[tuple[_base.Mobject, object, _TypedBindingReservation]]] | None:
+    """Build one inert flat parallel Create candidate without binding Python wrappers."""
+    if len(args) < 2:
+        return None
+    classified = [_canonical_create_animation(scene, animation) for animation in args]
+    if any(target is None for target in classified):
+        return None
+    play = _canonical_affine_options(args[0], kwargs, builder_args={})
+    if play is None:
+        return None
+
+    children: list[tuple[_base.Mobject, object]] = []
+    for animation, target in zip(args, classified, strict=True):
+        child = _canonical_create_options(animation, kwargs)
+        if child is None:
+            return None
+        children.append((target, child))
+
+    # Scene.play options apply to each child through shared option resolution.
+    # The implicit parallel root is linear, so the curve is applied only once.
+    context = _context(scene)
+    play_run_time = kwargs.get("run_time", kwargs.get("duration"))
+    candidate = context.beginOrdinaryCreateParallel(
+        None if play_run_time is None else float(play_run_time), "linear"
+    )
+    next_object_id = scene._next_object_id
+    reservations = []
+    for target, child in children:
+        handle = getattr(target, "_semantic_handle")
+        reservation = _reserve_typed_binding(
+            target, scene, handle, None, object_id=next_object_id
+        )
+        if not reservation.reuse_existing_identity:
+            next_object_id += 1
+        candidate.appendCreate(
+            str(reservation.object.id),
+            handle,
+            float(child.run_time),
+            str(child.rate_func),
+        )
+        reservations.append((target, handle, reservation))
+    return candidate, reservations
+
+
+def _play_canonical_create_parallel(
+    self: _base.Scene,
+    candidate: object,
+    reservations: list[tuple[_base.Mobject, object, _TypedBindingReservation]],
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    if _legacy_authored_time(self) != 0.0:
+        raise NotImplementedError(
+            "canonical ordinary Create cannot follow legacy Scene timing"
+        )
+    _start_default_synchronous_continuation(self)
+    context = _context(self)
+    try:
+        _require_semantic_continuation_active(self)
+        method = (
+            context.beginOrdinaryCreateParallelSegment
+            if _semantic_continuation_active(self)
+            else context.ordinaryPlayCreateParallel
+        )
+        method(candidate)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    for target, handle, reservation in reservations:
+        _commit_typed_binding(target, self, reservation, handle)
+        register = getattr(self, "_register_top_level", None)
+        if register is not None:
+            register(target)
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self)
+    if _synchronous_continuation_active(self):
+        return _synchronous_continuation_wait(self)
+    return self
 
 
 def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> object | None:
@@ -1124,6 +1297,11 @@ def _play_canonical_composition(
 
 
 def _play(self, *args, **kwargs):
+    # An explicit document request authors tracks for its external artifact.
+    # Completing a live segment here would discard the exported animation and
+    # mix runtime completion with the codec's authored-time cursor.
+    if getattr(self, _EXPORT_DOCUMENT_CONSTRUCT, False):
+        return _play_legacy_compatibility(self, *args, **kwargs)
     # Once an unsupported compatibility animation has selected the explicit
     # #959 export/materialization boundary, its timing and lowering remain on
     # that path.  Typed handles deliberately survive materialization for
@@ -1135,6 +1313,34 @@ def _play(self, *args, **kwargs):
                 "realtime construct supports only canonical affine Scene.play and Scene.wait"
             )
         return _play_legacy_compatibility(self, *args, **kwargs)
+
+    canonical_creates = [
+        target
+        for argument in args
+        if (target := _canonical_create_animation(self, argument)) is not None
+    ]
+    if canonical_creates:
+        if len(args) > 1 and len(canonical_creates) == len(args):
+            candidate = _canonical_create_parallel_candidate(self, args, kwargs)
+            if candidate is not None:
+                return _play_canonical_create_parallel(self, *candidate)
+        if len(canonical_creates) != 1 or len(args) != 1:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError(
+                    "realtime construct supports only flat parallel canonical Create leaves"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        if _canonical_create_options(args[0], kwargs) is None:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError("realtime construct Create is outside the canonical leaf subset")
+            context = getattr(self, "_canonical_authoring_context", None)
+            ownership = getattr(context, "liveExecutionOwnership", None)
+            if callable(ownership) and str(ownership()) in {"active", "transferred", "returned"}:
+                raise NotImplementedError(
+                    "active canonical execution cannot fall back to the legacy Create scheduler"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        return _play_canonical_create(self, canonical_creates[0], args[0], **kwargs)
 
     canonical_fades = [
         classified

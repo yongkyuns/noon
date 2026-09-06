@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ManimMoveToTargetTests(unittest.TestCase):
-    def test_exact_example_lowers_to_retained_transform(self) -> None:
+    def test_exact_example_preserves_target_transform_contract(self) -> None:
         python_dir = Path(__file__).resolve().parent
         repo_root = python_dir.parent.parent
         env = os.environ.copy()
@@ -52,6 +52,38 @@ class ManimMoveToTargetTests(unittest.TestCase):
             scene2 = Scene(); scene2.add(c); scene2.play(pending)
             target2 = [t for t in scene2._tracks if t["property"] == "transform"][0]["values"]["object"]["to"]
             assert abs(target2["transform"]["translation"]["x"] - 1.0) < 1e-12
+
+            # Canonical installation supplies this factory. `generate_target` must
+            # select it rather than Python's ordinary `copy`, so MoveToTarget
+            # receives the opaque target-editor result.
+            class CanonicalSource:
+                def __init__(self):
+                    self.calls = []
+                def _copy_for_animate_target(self):
+                    assert self.target is None
+                    self.calls.append("target-editor")
+                    return object()
+                def copy(self):
+                    raise AssertionError("generate_target must not use raw copy")
+
+            canonical = CanonicalSource()
+            captured = _manim_compat._mobject_generate_target(canonical)
+            assert captured is canonical.target
+            assert canonical.calls == ["target-editor"]
+            recaptured = _manim_compat._mobject_generate_target(canonical)
+            assert recaptured is canonical.target and recaptured is not captured
+            def rejected_capture():
+                assert canonical.target is None
+                raise ValueError("capture rejected")
+            canonical._copy_for_animate_target = rejected_capture
+            try:
+                _manim_compat._mobject_generate_target(canonical)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("rejected target capture succeeded")
+            assert canonical.target is recaptured
+
             """
         )
         completed = subprocess.run(

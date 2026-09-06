@@ -348,9 +348,13 @@ impl ExecutionSession {
                         semantic.set_property(entry.semantic_object, *property, value.clone());
                     }
                 }
+                SemanticAnimationCompletion::ContentMorph { content } => {
+                    semantic.replace_content(entry.semantic_object, *content);
+                }
                 SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
-                | SemanticAnimationCompletion::Fade { .. } => {}
+                | SemanticAnimationCompletion::Fade { .. }
+                | SemanticAnimationCompletion::Create => {}
             }
             release.push(ExecutionPatch::ReconcileTrack {
                 track: entry.track,
@@ -502,6 +506,62 @@ mod tests {
         assert!(session.segment_state(segment).is_complete());
         session.seek(2.0).unwrap();
         assert_eq!(session.frame().objects[0].transform.translation.x, 9.0);
+    }
+
+    #[test]
+    fn analytic_content_morph_replaces_authored_endpoint_and_releases_render_pair() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(2.0, 2.0),
+        });
+        target_state.transform.translation = SemanticVec3::new(3.0, -1.0, 0.0);
+        target_state.style.fill = Some(SemanticPaint::Solid(Color::RED));
+        target_state.style.fill_opacity = 0.5;
+        let expected = target_state.clone();
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        session.advance_segment_to(segment, 1.0).unwrap();
+        assert!((session.frame().morph(0) - 0.5).abs() < 1e-6);
+        assert!(matches!(
+            session.frame().render_geometry(0),
+            Some(noon_core::GeometryRef::VectorPath(path)) if path.morph_target().is_some()
+        ));
+        assert!(matches!(
+            store.semantic_object_state_checked(object).unwrap().content,
+            noon_core::SemanticObjectContent::Geometry(StoredGeometry::Circle { .. })
+        ));
+
+        session.advance_segment_to(segment, 2.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        let authored = store.semantic_object_state_checked(object).unwrap();
+        assert_eq!(authored.content, expected.content);
+        assert_eq!(authored.transform, expected.transform);
+        assert_eq!(authored.style, expected.style);
+        assert_eq!(session.frame().morph(0), 0.0);
+        assert!(session.frame().render_geometries[0].is_none());
+        assert!(session.frame().render_transforms[0].is_none());
+        assert!(matches!(
+            session.frame().render_geometry(0),
+            Some(noon_core::GeometryRef::Rectangle { .. })
+        ));
     }
 
     #[test]
