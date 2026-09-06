@@ -500,10 +500,11 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     initialColor,
     midpointColor,
     endpointColor,
+    finalCadence: JSON.parse(renderer.directWakeDirectiveJson(1000)).cadence,
     midpointVacatedLuma,
     endpointVacatedLuma,
   };
-  if (metrics.backend !== expectedBackend || metrics.authoredTime !== 1) {
+  if (metrics.backend !== expectedBackend || metrics.authoredTime !== 1 || metrics.finalCadence !== "idle") {
     throw new Error(`direct callback continuation selected an invalid runtime ${JSON.stringify(metrics)}`);
   }
   if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
