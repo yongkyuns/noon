@@ -149,3 +149,24 @@ test("stop during presentation retry disposes renderer without ready or tick", a
   assert.equal(harness.nextPort.messages.some((message) => message.type === "tick"), false);
   assert.equal(harness.animationFrames.length, 0);
 });
+
+test("retained transport acknowledges an exact publication only after it presents", async () => {
+  const harness = createWorkerHarness([true]);
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  // The stale callback belongs to the retired renderer transition; the current
+  // callback presents the bootstrap snapshot and installs the retained port.
+  harness.animationFrames.shift()(10);
+  harness.animationFrames.shift()(20);
+  await flushTasks();
+
+  vm.runInContext(
+    'consumeDelta("incremental", { session: 11, sequence: 9 });',
+    harness.context,
+  );
+  const acknowledgement = harness.nextPort.messages.find(
+    (message) => message.type === "execution_presented",
+  );
+  assert.equal(acknowledgement.session, 11);
+  assert.equal(acknowledgement.sequence, 9);
+});
