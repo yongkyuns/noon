@@ -4589,13 +4589,12 @@ mod wasm {
             let family = source.semantic_family()?;
             if !std::rc::Rc::ptr_eq(self.inner.scene.store(), family.store()) {
                 return Err(js_error(
-                    "family target and canonical context belong to different authoring stores"
-                        .into(),
+                    "family target and canonical context belong to different authoring stores",
                 ));
             }
             if self.inner.live_execution_ownership() == "transferred" {
                 return Err(js_error(
-                    "live execution session is running in the semantic engine".into(),
+                    "live execution session is running in the semantic engine",
                 ));
             }
             source.target_editor()
@@ -4610,8 +4609,7 @@ mod wasm {
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             if !std::rc::Rc::ptr_eq(self.inner.scene.store(), editor.store()) {
                 return Err(js_error(
-                    "family target and canonical context belong to different authoring stores"
-                        .into(),
+                    "family target and canonical context belong to different authoring stores",
                 ));
             }
             if self.inner.live_execution_ownership() == "none" {
@@ -4633,8 +4631,7 @@ mod wasm {
                         Some(noon_core::SemanticNodeKind::Family) => true,
                         Some(_) => {
                             return Err(js_error(
-                                "live family targets require ordinary mobjects or nested families"
-                                    .into(),
+                                "live family targets require ordinary mobjects or nested families",
                             ));
                         }
                         None => {
@@ -5991,7 +5988,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_family_transform_and_indicate_use_one_recursive_candidate() {
+    fn canonical_family_composition_rejects_crosswrites_and_captures_between_segments() {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
         let right = context.scene.circle(0.4).unwrap();
@@ -6048,17 +6045,31 @@ mod tests {
                 options: indicate_options,
             },
         ];
-        assert_eq!(
-            context
-                .ordinary_play_mixed_composition(
-                    noon_core::SemanticAnimationCompositionKind::Sequence,
-                    &children,
-                    AnimationOptions::new(),
-                    AnimationOptions::new(),
-                )
-                .unwrap(),
-            3.0
-        );
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        // Completion barriers publish the preceding transform before Indicate
+        // captures its effective source and shared family center.
+        for (index, child) in children.iter().enumerate() {
+            assert_eq!(
+                context
+                    .ordinary_play_mixed_composition(
+                        noon_core::SemanticAnimationCompositionKind::Sequence,
+                        std::slice::from_ref(child),
+                        AnimationOptions::new(),
+                        AnimationOptions::new(),
+                    )
+                    .unwrap(),
+                (index + 1) as f64
+            );
+        }
         let player = context.active_live_player().unwrap();
         assert_eq!(
             player.live_effective(&left).unwrap().transform.translation,

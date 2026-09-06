@@ -283,10 +283,18 @@ mod tests {
     #[test]
     fn family_pairing_preserves_order_and_matching_aliases() {
         let mut store = SemanticStore::new();
-        let source_first = store.insert_authoring_object();
-        let source_second = store.insert_authoring_object();
-        let target_first = store.insert_authoring_object();
-        let target_second = store.insert_authoring_object();
+        let source_first = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let source_second = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_first = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_second = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
         let source_nested = store.insert_family();
         let target_nested = store.insert_family();
         let source = store.insert_family();
@@ -309,9 +317,15 @@ mod tests {
     #[test]
     fn family_pairing_rejects_structural_or_alias_mismatch() {
         let mut store = SemanticStore::new();
-        let source_leaf = store.insert_authoring_object();
-        let target_first = store.insert_authoring_object();
-        let target_second = store.insert_authoring_object();
+        let source_leaf = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_first = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_second = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
         let source_nested = store.insert_family();
         let target_nested = store.insert_family();
         let source = store.insert_family();
@@ -343,7 +357,9 @@ mod tests {
     #[test]
     fn stale_or_unknown_root_fails_closed() {
         let mut store = SemanticStore::new();
-        let stale = store.insert_authoring_object();
+        let stale = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
         store.remove_node(stale).unwrap();
 
         assert_eq!(

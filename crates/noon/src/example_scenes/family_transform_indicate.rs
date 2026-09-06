@@ -201,10 +201,15 @@ mod tests {
             1.0
         );
         for time in [4.25, 4.5] {
-            assert!(matches!(
-                program.drive_to(&mut callbacks, time).unwrap(),
-                LiveProgramStatus::ReadyToResume
-            ));
+            match program.drive_to(&mut callbacks, time).unwrap() {
+                LiveProgramStatus::PublicationPending(expected) => {
+                    let context = program.take_renderer_publication().context();
+                    assert_eq!(context, expected);
+                    program.admit_publication(context).unwrap();
+                }
+                LiveProgramStatus::ReadyToResume => {}
+                status => panic!("expected wait completion at {time}, got {status:?}"),
+            }
             let status = program.resume().unwrap();
             assert_eq!(status == LiveProgramStatus::Finished, time == 4.5);
         }

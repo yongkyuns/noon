@@ -2842,14 +2842,22 @@ mod tests {
     #[test]
     fn family_target_editor_builds_target_from_shared_source_order() {
         let mut store = SemanticStore::new();
-        let source_a = store.insert_authoring_object();
-        let source_b = store.insert_authoring_object();
+        let source_a = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+            noon_core::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let source_b = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+            noon_core::StoredGeometry::Circle { radius: 1.0 },
+        ));
         let source_family = store.insert_family();
         store.add_member(source_family, source_a).unwrap();
         store.add_member(source_family, source_b).unwrap();
 
-        let target_a = store.insert_authoring_object();
-        let target_b = store.insert_authoring_object();
+        let target_a = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+            noon_core::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_b = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+            noon_core::StoredGeometry::Circle { radius: 1.0 },
+        ));
         let mut editor = FrontendFamilyTargetEditor::begin(&store, source_family).unwrap();
 
         editor.accept_member(source_a, target_a).unwrap();
