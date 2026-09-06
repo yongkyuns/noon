@@ -64,6 +64,7 @@ pub(crate) enum SemanticCompositionRequest {
     TransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
+        interpolation: noon_core::SemanticTransformInterpolation,
         options: AnimationOptions,
     },
     Rotate {
@@ -1349,6 +1350,7 @@ impl ExecutionSession {
                 |(source, target_state, options)| SemanticCompositionRequest::TransformTo {
                     source: *source,
                     target_state: *target_state,
+                    interpolation: noon_core::SemanticTransformInterpolation::Affine,
                     options: *options,
                 },
             )
@@ -1395,6 +1397,7 @@ impl ExecutionSession {
                     SemanticCompositionRequest::TransformTo {
                         source,
                         target_state,
+                        interpolation,
                         options,
                     } => {
                         let target_state = self.stage_animation_target_state(
@@ -1402,7 +1405,12 @@ impl ExecutionSession {
                             &mut declaration,
                             target_state,
                         )?;
-                        declaration.create_transform_animation(source, target_state, options)
+                        declaration.create_transform_animation_with_interpolation(
+                            source,
+                            target_state,
+                            interpolation,
+                            options,
+                        )
                     }
                     SemanticCompositionRequest::Rotate {
                         target,

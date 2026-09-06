@@ -19,6 +19,16 @@ pub enum SemanticFadeDirection {
     Out,
 }
 
+/// Geometry interpolation chosen explicitly by an authored TransformTo operation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SemanticTransformInterpolation {
+    /// Interpolate the object's semantic affine and style properties.
+    #[default]
+    Affine,
+    /// Interpolate corresponding analytic path points while retaining semantic affine channels.
+    PointCorrespondence,
+}
+
 /// One authored animation operation before execution scheduling/lowering.
 ///
 /// Targets and composition children are semantic identities. Execution tracks,
@@ -32,6 +42,7 @@ pub enum SemanticAnimationIntent {
     TransformTo {
         target: SemanticNodeId,
         target_state: SemanticNodeId,
+        interpolation: SemanticTransformInterpolation,
     },
     /// Rotate one centered 2D object along an angular path. This remains distinct
     /// from TransformTo point correspondence even when both share affine endpoints.
@@ -214,6 +225,22 @@ impl SemanticStore {
         target_state: SemanticNodeId,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_transform_animation_with_interpolation(
+            target,
+            target_state,
+            SemanticTransformInterpolation::Affine,
+            options,
+        )
+    }
+
+    /// Insert one TransformTo declaration with an explicit geometry interpolation contract.
+    pub fn insert_semantic_transform_animation_with_interpolation(
+        &mut self,
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+        interpolation: SemanticTransformInterpolation,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
         self.semantic_object_state_checked(target_state)?;
@@ -227,6 +254,7 @@ impl SemanticStore {
                 SemanticAnimationIntent::TransformTo {
                     target,
                     target_state,
+                    interpolation,
                 },
                 options,
             )),
@@ -392,6 +420,7 @@ mod tests {
             &SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
+                interpolation: SemanticTransformInterpolation::Affine,
             }
         );
         assert_eq!(state.options(), options);

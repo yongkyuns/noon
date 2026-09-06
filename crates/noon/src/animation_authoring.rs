@@ -90,6 +90,7 @@ impl crate::Scene {
             SemanticAnimationIntent::TransformTo {
                 target: source.node_id(),
                 target_state: target.node_id(),
+                interpolation: noon_core::SemanticTransformInterpolation::Affine,
             },
             options,
         )

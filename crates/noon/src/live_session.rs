@@ -97,6 +97,7 @@ fn target_style_from_effective(
 pub struct TransformToRequest<'a> {
     source: &'a Mobject,
     target_state: &'a Mobject,
+    interpolation: noon_core::SemanticTransformInterpolation,
     options: AnimationOptions,
 }
 
@@ -125,6 +126,21 @@ impl<'a> TransformToRequest<'a> {
         Self {
             source,
             target_state,
+            interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            options,
+        }
+    }
+
+    /// Request analytic point correspondence rather than affine-only interpolation.
+    pub const fn point_correspondence(
+        source: &'a Mobject,
+        target_state: &'a Mobject,
+        options: AnimationOptions,
+    ) -> Self {
+        Self {
+            source,
+            target_state,
+            interpolation: noon_core::SemanticTransformInterpolation::PointCorrespondence,
             options,
         }
     }
@@ -677,6 +693,7 @@ impl<'a> LiveSession<'a> {
                     crate::execution_session::SemanticCompositionRequest::TransformTo {
                         source: child.source.node_id(),
                         target_state: child.target_state.node_id(),
+                        interpolation: child.interpolation,
                         options: child.options,
                     }
                 }
@@ -1873,6 +1890,45 @@ mod tests {
         assert_eq!(session.publication_context(), before);
         assert_eq!(session.frame(), &before_frame);
         assert_eq!(square.store().borrow().len(), before_nodes);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn unsupported_point_correspondence_rolls_back_detached_admission() {
+        let mut scene = Scene::new();
+        let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+        let mut target = line.target_editor().unwrap();
+        target.rotate(std::f64::consts::PI).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let before_nodes = line.store().borrow().len();
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[AnimationCompositionRequest::TransformTo(
+                    TransformToRequest::point_correspondence(
+                        &line,
+                        &target,
+                        AnimationOptions::new(),
+                    ),
+                )],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            );
+
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::PreparedAnimation(
+                    noon_compile::PreparedSemanticAnimationLoweringError::UnsupportedPointCorrespondence { .. }
+                )
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(line.store().borrow().len(), before_nodes);
+        assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }
 

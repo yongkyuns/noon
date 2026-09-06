@@ -1281,7 +1281,20 @@ def _build_canonical_composition_candidate(
     for animation in animations:
         affine = _canonical_affine_animation(self, animation)
         if affine is not None:
-            classified.append(("transform", *affine))
+            source, target, animation = affine
+            source_handle = getattr(source, "_semantic_handle")
+            target_handle = getattr(target, "_semantic_handle")
+            builder_rotation = type(animation) in (
+                _base._AnimationBuilder,
+                _compat._CompatAnimationBuilder,
+            ) and not math.isclose(
+                float(source_handle.wireRotation),
+                float(target_handle.wireRotation),
+                abs_tol=1e-12,
+            )
+            classified.append(
+                ("point_transform" if builder_rotation else "transform", source, target, animation)
+            )
             continue
         if type(animation) is _rotate.Rotate:
             target = animation.mobject
@@ -1340,12 +1353,18 @@ def _build_canonical_composition_candidate(
         child = _canonical_composition_child_options(
             animation, kwargs if group is None else {},
         )
-        if leaf_kind == "transform":
+        if leaf_kind in ("transform", "point_transform"):
+            point_correspondence = leaf_kind == "point_transform"
             if source._scene is None:
                 reservation = _reserve_typed_binding(source, self, getattr(source, "_semantic_handle"), None, object_id=next_object_id)
                 reservations.append((source, reservation))
                 next_object_id += 1
-                candidate.appendEnteringTransformTo(
+                method = (
+                    candidate.appendEnteringPointTransformTo
+                    if point_correspondence
+                    else candidate.appendEnteringTransformTo
+                )
+                method(
                     str(reservation.object.id),
                     getattr(source, "_semantic_handle"),
                     getattr(target, "_semantic_handle"),
@@ -1353,7 +1372,12 @@ def _build_canonical_composition_candidate(
                     str(child.rate_func),
                 )
             else:
-                candidate.appendTransformTo(
+                method = (
+                    candidate.appendPointTransformTo
+                    if point_correspondence
+                    else candidate.appendTransformTo
+                )
+                method(
                     getattr(source, "_semantic_handle"),
                     getattr(target, "_semantic_handle"),
                     float(child.run_time),

@@ -130,6 +130,11 @@ pub enum PreparedSemanticAnimationLoweringError {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
     },
+    UnsupportedPointCorrespondence {
+        animation: SemanticTransactionNodeRef,
+        target: SemanticTransactionNodeRef,
+        target_state: SemanticTransactionNodeRef,
+    },
     UnsupportedStyleChange {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
@@ -229,7 +234,10 @@ where
             }
         })?;
         let channel = match leaf.payload {
-            PreparedSemanticScheduledAnimationPayload::TransformTo { target_state } => {
+            PreparedSemanticScheduledAnimationPayload::TransformTo {
+                target_state,
+                interpolation,
+            } => {
                 let target = prepared.object_state(target_state).map_err(|error| {
                     PreparedSemanticAnimationLoweringError::Target {
                         animation: leaf.animation,
@@ -246,12 +254,7 @@ where
                     &mut captures,
                     &mut effective_properties,
                 )?;
-                let entering = leaf
-                    .target
-                    .existing()
-                    .and_then(|node| index.execution_object_id(node))
-                    .is_none();
-                let channels = lower_transform_channels(source, target, from, entering)
+                let channels = lower_transform_channels(source, target, from, interpolation)
                     .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
@@ -526,6 +529,13 @@ fn prepared_payload_error(
         }
         AffinePayloadIssue::UnsupportedContentChange => {
             PreparedSemanticAnimationLoweringError::UnsupportedContentChange {
+                animation: leaf.animation,
+                target: leaf.target,
+                target_state,
+            }
+        }
+        AffinePayloadIssue::UnsupportedPointCorrespondence => {
+            PreparedSemanticAnimationLoweringError::UnsupportedPointCorrespondence {
                 animation: leaf.animation,
                 target: leaf.target,
                 target_state,

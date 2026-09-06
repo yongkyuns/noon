@@ -134,6 +134,7 @@ fn animation_can_reference_two_pending_objects() {
         &SemanticAnimationIntent::TransformTo {
             target,
             target_state,
+            interpolation: SemanticTransformInterpolation::Affine,
         }
     );
 }

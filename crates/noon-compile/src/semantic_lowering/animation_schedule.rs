@@ -5,7 +5,7 @@ use noon_core::{
     ResolvedAnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationError,
     SemanticAnimationIntent, SemanticFadeDirection, SemanticNodeId, SemanticStore,
     SemanticTransactionAnimationIntent, SemanticTransactionNodeRef, SemanticTransactionReadError,
-    TrackTiming,
+    SemanticTransformInterpolation, TrackTiming,
 };
 
 use super::SemanticExecutionIndex;
@@ -53,9 +53,16 @@ impl SemanticAnimationScheduleProjection {
 /// Payload kind retained by one scheduled published animation leaf.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticScheduledAnimationPayload {
-    TransformTo { target_state: SemanticNodeId },
-    Rotate { angle: f64 },
-    Fade { direction: SemanticFadeDirection },
+    TransformTo {
+        target_state: SemanticNodeId,
+        interpolation: SemanticTransformInterpolation,
+    },
+    Rotate {
+        angle: f64,
+    },
+    Fade {
+        direction: SemanticFadeDirection,
+    },
     Create,
 }
 
@@ -119,6 +126,7 @@ impl PreparedSemanticAnimationScheduleProjection {
 pub enum PreparedSemanticScheduledAnimationPayload {
     TransformTo {
         target_state: SemanticTransactionNodeRef,
+        interpolation: SemanticTransformInterpolation,
     },
     Rotate {
         angle: f64,
@@ -297,9 +305,13 @@ pub fn lower_semantic_animation_schedule(
                 target: leaf.target,
                 execution_object_id: leaf.execution_object_id,
                 payload: match leaf.payload {
-                    ScheduledAnimationPayload::TransformTo { target_state } => {
-                        SemanticScheduledAnimationPayload::TransformTo { target_state }
-                    }
+                    ScheduledAnimationPayload::TransformTo {
+                        target_state,
+                        interpolation,
+                    } => SemanticScheduledAnimationPayload::TransformTo {
+                        target_state,
+                        interpolation,
+                    },
                     ScheduledAnimationPayload::Rotate { angle } => {
                         SemanticScheduledAnimationPayload::Rotate { angle }
                     }
@@ -343,9 +355,13 @@ pub fn lower_prepared_semantic_animation_schedule(
                 target: leaf.target,
                 execution_object_id: leaf.execution_object_id,
                 payload: match leaf.payload {
-                    ScheduledAnimationPayload::TransformTo { target_state } => {
-                        PreparedSemanticScheduledAnimationPayload::TransformTo { target_state }
-                    }
+                    ScheduledAnimationPayload::TransformTo {
+                        target_state,
+                        interpolation,
+                    } => PreparedSemanticScheduledAnimationPayload::TransformTo {
+                        target_state,
+                        interpolation,
+                    },
                     ScheduledAnimationPayload::Rotate { angle } => {
                         PreparedSemanticScheduledAnimationPayload::Rotate { angle }
                     }
@@ -375,6 +391,7 @@ enum AnimationDeclarationIntent<R> {
     TransformTo {
         target: R,
         target_state: R,
+        interpolation: SemanticTransformInterpolation,
     },
     Rotate {
         target: R,
@@ -427,6 +444,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
             SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
+                interpolation,
             } => {
                 self.store
                     .semantic_object_state_checked(*target)
@@ -437,6 +455,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::TransformTo {
                     target: *target,
                     target_state: *target_state,
+                    interpolation: *interpolation,
                 }
             }
             SemanticAnimationIntent::Rotate { target, angle } => {
@@ -517,9 +536,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticAnimationIntent::TransformTo {
                         target,
                         target_state,
+                        interpolation,
                     } => AnimationDeclarationIntent::TransformTo {
                         target: (*target).into(),
                         target_state: (*target_state).into(),
+                        interpolation: *interpolation,
                     },
                     SemanticAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
@@ -556,9 +577,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticTransactionAnimationIntent::TransformTo {
                         target,
                         target_state,
+                        interpolation,
                     } => AnimationDeclarationIntent::TransformTo {
                         target: *target,
                         target_state: *target_state,
+                        interpolation: *interpolation,
                     },
                     SemanticTransactionAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
@@ -589,6 +612,7 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
             AnimationDeclarationIntent::TransformTo {
                 target,
                 target_state,
+                ..
             } => {
                 self.prepared
                     .object_state(*target)
@@ -648,9 +672,16 @@ struct ScheduledAnimationLeaf<R> {
 
 #[derive(Clone, Copy, Debug)]
 enum ScheduledAnimationPayload<R> {
-    TransformTo { target_state: R },
-    Rotate { angle: f64 },
-    Fade { direction: SemanticFadeDirection },
+    TransformTo {
+        target_state: R,
+        interpolation: SemanticTransformInterpolation,
+    },
+    Rotate {
+        angle: f64,
+    },
+    Fade {
+        direction: SemanticFadeDirection,
+    },
     Create,
 }
 
@@ -763,6 +794,7 @@ where
         AnimationDeclarationIntent::TransformTo {
             target,
             target_state,
+            interpolation,
         } => {
             let execution_object_id = lookup
                 .execution_object_id(target)
@@ -777,7 +809,10 @@ where
                 kind: PlannedAnimationKind::Leaf {
                     target,
                     execution_object_id,
-                    payload: ScheduledAnimationPayload::TransformTo { target_state },
+                    payload: ScheduledAnimationPayload::TransformTo {
+                        target_state,
+                        interpolation,
+                    },
                     options,
                 },
             })
@@ -1145,7 +1180,10 @@ mod tests {
         assert_eq!(leaf.target, target);
         assert_eq!(
             leaf.payload,
-            SemanticScheduledAnimationPayload::TransformTo { target_state }
+            SemanticScheduledAnimationPayload::TransformTo {
+                target_state,
+                interpolation: SemanticTransformInterpolation::Affine,
+            }
         );
         assert_eq!(
             leaf.execution_object_id,

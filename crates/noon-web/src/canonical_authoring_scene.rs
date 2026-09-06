@@ -1173,12 +1173,14 @@ impl CanonicalAuthoringScene {
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
         transforms: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        point_transforms: &BTreeSet<usize>,
         entering_transforms: &[(
             ObjectId,
             noon::Mobject,
             noon::Mobject,
             noon_core::AnimationOptions,
         )],
+        point_entering_transforms: &BTreeSet<usize>,
         rotations: &[(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
@@ -1186,7 +1188,9 @@ impl CanonicalAuthoringScene {
         let end = self.activate_ordinary_mixed_composition(
             kind,
             transforms,
+            point_transforms,
             entering_transforms,
+            point_entering_transforms,
             rotations,
             composition_options,
             play_options,
@@ -1205,12 +1209,14 @@ impl CanonicalAuthoringScene {
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
         transforms: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        point_transforms: &BTreeSet<usize>,
         entering_transforms: &[(
             ObjectId,
             noon::Mobject,
             noon::Mobject,
             noon_core::AnimationOptions,
         )],
+        point_entering_transforms: &BTreeSet<usize>,
         rotations: &[(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
@@ -1218,7 +1224,9 @@ impl CanonicalAuthoringScene {
         self.activate_ordinary_mixed_composition(
             kind,
             transforms,
+            point_transforms,
             entering_transforms,
+            point_entering_transforms,
             rotations,
             composition_options,
             play_options,
@@ -1231,12 +1239,14 @@ impl CanonicalAuthoringScene {
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
         transforms: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        point_transforms: &BTreeSet<usize>,
         entering_transforms: &[(
             ObjectId,
             noon::Mobject,
             noon::Mobject,
             noon_core::AnimationOptions,
         )],
+        point_entering_transforms: &BTreeSet<usize>,
         rotations: &[(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
@@ -1244,7 +1254,9 @@ impl CanonicalAuthoringScene {
     ) -> Result<f64, String> {
         if !self.can_ordinary_mixed_composition(
             transforms,
+            point_transforms,
             entering_transforms,
+            point_entering_transforms,
             rotations,
             composition_options,
             play_options,
@@ -1262,20 +1274,25 @@ impl CanonicalAuthoringScene {
             );
         let requests = transforms
             .iter()
-            .map(|(source, target, options)| {
-                noon::AnimationCompositionRequest::TransformTo(noon::TransformToRequest::new(
-                    source, target, *options,
-                ))
+            .enumerate()
+            .map(|(index, (source, target, options))| {
+                let request = if point_transforms.contains(&index) {
+                    noon::TransformToRequest::point_correspondence(source, target, *options)
+                } else {
+                    noon::TransformToRequest::new(source, target, *options)
+                };
+                noon::AnimationCompositionRequest::TransformTo(request)
             })
-            .chain(
-                entering_transforms
-                    .iter()
-                    .map(|(_, source, target, options)| {
-                        noon::AnimationCompositionRequest::TransformTo(
-                            noon::TransformToRequest::new(source, target, *options),
-                        )
-                    }),
-            )
+            .chain(entering_transforms.iter().enumerate().map(
+                |(index, (_, source, target, options))| {
+                    let request = if point_entering_transforms.contains(&index) {
+                        noon::TransformToRequest::point_correspondence(source, target, *options)
+                    } else {
+                        noon::TransformToRequest::new(source, target, *options)
+                    };
+                    noon::AnimationCompositionRequest::TransformTo(request)
+                },
+            ))
             .chain(rotations.iter().map(|(_, target, angle, options)| {
                 noon::AnimationCompositionRequest::Rotate {
                     target,
@@ -1469,18 +1486,29 @@ impl CanonicalAuthoringScene {
     fn can_ordinary_mixed_composition(
         &self,
         transforms: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        point_transforms: &BTreeSet<usize>,
         entering_transforms: &[(
             ObjectId,
             noon::Mobject,
             noon::Mobject,
             noon_core::AnimationOptions,
         )],
+        point_entering_transforms: &BTreeSet<usize>,
         rotations: &[(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     ) -> Result<bool, String> {
         if transforms.is_empty() && entering_transforms.is_empty() && rotations.is_empty() {
             return Err("ordinary composition requires at least one child".into());
+        }
+        if point_transforms
+            .iter()
+            .any(|index| *index >= transforms.len())
+            || point_entering_transforms
+                .iter()
+                .any(|index| *index >= entering_transforms.len())
+        {
+            return Err("ordinary composition point-transform index is out of bounds".into());
         }
         noon_core::resolve_animation_options(
             noon_core::AnimationDefaults::MANIM,
@@ -2136,12 +2164,14 @@ mod wasm {
     pub struct WasmOrdinaryTransformCompositionBuilder {
         kind: noon_core::SemanticAnimationCompositionKind,
         children: Vec<(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)>,
+        point_transforms: BTreeSet<usize>,
         entering_transforms: Vec<(
             ObjectId,
             noon::Mobject,
             noon::Mobject,
             noon_core::AnimationOptions,
         )>,
+        point_entering_transforms: BTreeSet<usize>,
         rotations: Vec<(ObjectId, noon::Mobject, f64, noon_core::AnimationOptions)>,
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
@@ -2328,6 +2358,20 @@ mod wasm {
             Ok(())
         }
 
+        #[wasm_bindgen(js_name = appendPointTransformTo)]
+        pub fn append_point_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let index = self.children.len();
+            self.append_transform_to(source, target, child_run_time, rate_function)?;
+            self.point_transforms.insert(index);
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = appendEnteringTransformTo)]
         pub fn append_entering_transform_to(
             &mut self,
@@ -2352,6 +2396,27 @@ mod wasm {
                     .run_time(child_run_time)
                     .rate_func(rate_function),
             ));
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendEnteringPointTransformTo)]
+        pub fn append_entering_point_transform_to(
+            &mut self,
+            object_id: &str,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let index = self.entering_transforms.len();
+            self.append_entering_transform_to(
+                object_id,
+                source,
+                target,
+                child_run_time,
+                rate_function,
+            )?;
+            self.point_entering_transforms.insert(index);
             Ok(())
         }
 
@@ -3086,7 +3151,9 @@ mod wasm {
             Ok(WasmOrdinaryTransformCompositionBuilder {
                 kind,
                 children: Vec::new(),
+                point_transforms: BTreeSet::new(),
                 entering_transforms: Vec::new(),
+                point_entering_transforms: BTreeSet::new(),
                 rotations: Vec::new(),
                 composition_options,
                 play_options,
@@ -3098,7 +3165,10 @@ mod wasm {
             &self,
             candidate: &WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<bool, JsValue> {
-            if candidate.entering_transforms.is_empty() && candidate.rotations.is_empty() {
+            if candidate.point_transforms.is_empty()
+                && candidate.entering_transforms.is_empty()
+                && candidate.rotations.is_empty()
+            {
                 return self
                     .inner
                     .can_ordinary_transform_composition(
@@ -3111,7 +3181,9 @@ mod wasm {
             self.inner
                 .can_ordinary_mixed_composition(
                     &candidate.children,
+                    &candidate.point_transforms,
                     &candidate.entering_transforms,
+                    &candidate.point_entering_transforms,
                     &candidate.rotations,
                     candidate.composition_options,
                     candidate.play_options,
@@ -3124,7 +3196,10 @@ mod wasm {
             &mut self,
             candidate: WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<f64, JsValue> {
-            if candidate.entering_transforms.is_empty() && candidate.rotations.is_empty() {
+            if candidate.point_transforms.is_empty()
+                && candidate.entering_transforms.is_empty()
+                && candidate.rotations.is_empty()
+            {
                 return self
                     .inner
                     .ordinary_play_transform_composition(
@@ -3139,7 +3214,9 @@ mod wasm {
                 .ordinary_play_mixed_composition(
                     candidate.kind,
                     &candidate.children,
+                    &candidate.point_transforms,
                     &candidate.entering_transforms,
+                    &candidate.point_entering_transforms,
                     &candidate.rotations,
                     candidate.composition_options,
                     candidate.play_options,
@@ -3155,7 +3232,10 @@ mod wasm {
             &mut self,
             candidate: WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<f64, JsValue> {
-            if candidate.entering_transforms.is_empty() && candidate.rotations.is_empty() {
+            if candidate.point_transforms.is_empty()
+                && candidate.entering_transforms.is_empty()
+                && candidate.rotations.is_empty()
+            {
                 return self
                     .inner
                     .begin_ordinary_composition(
@@ -3170,7 +3250,9 @@ mod wasm {
                 .begin_ordinary_mixed_composition(
                     candidate.kind,
                     &candidate.children,
+                    &candidate.point_transforms,
                     &candidate.entering_transforms,
+                    &candidate.point_entering_transforms,
                     &candidate.rotations,
                     candidate.composition_options,
                     candidate.play_options,

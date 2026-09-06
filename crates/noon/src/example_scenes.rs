@@ -31,11 +31,13 @@ impl LiveContinuation for OrdinaryDifferentRotations {
                 live.declare_and_activate_animation_composition(
                     SemanticAnimationCompositionKind::Parallel,
                     &[
-                        AnimationCompositionRequest::TransformTo(TransformToRequest::new(
-                            &self.left,
-                            &self.left_target,
-                            options,
-                        )),
+                        AnimationCompositionRequest::TransformTo(
+                            TransformToRequest::point_correspondence(
+                                &self.left,
+                                &self.left_target,
+                                options,
+                            ),
+                        ),
                         AnimationCompositionRequest::Rotate {
                             target: &self.right,
                             angle: std::f64::consts::PI,
@@ -2118,6 +2120,42 @@ mod continuation_tests {
             assert!((point.x + 2.0).abs() < 1e-5);
             assert!(point.y.abs() < 1e-5);
         }
+        let detached_geometry = left_path.clone();
+        let mut bound_scene = Scene::new();
+        let mut bound_square = bound_scene.square(2.0).unwrap();
+        bound_square.set_translation(-2.0, 0.0).unwrap();
+        let mut bound_target = bound_square.target_editor().unwrap();
+        bound_target.rotate(std::f64::consts::PI).unwrap();
+        bound_scene.add(&bound_square).unwrap();
+        let mut bound_session = bound_scene.execution_session().unwrap();
+        let bound_segment = bound_scene
+            .live(&mut bound_session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[AnimationCompositionRequest::TransformTo(
+                    TransformToRequest::point_correspondence(
+                        &bound_square,
+                        &bound_target,
+                        AnimationOptions::new()
+                            .run_time(2.0)
+                            .rate_func(RateFunction::Smooth),
+                    ),
+                )],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        bound_scene
+            .live(&mut bound_session)
+            .advance_segment_to(bound_segment, 1.0)
+            .unwrap();
+        assert_eq!(bound_session.frame().morph(0), frame.morph(0));
+        assert_eq!(
+            bound_session.frame().render_geometry(0),
+            Some(&noon_core::GeometryRef::VectorPath(detached_geometry))
+        );
         assert_eq!(frame.morph(1), 0.0);
         assert!(matches!(
             frame.render_geometry(1),

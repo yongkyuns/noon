@@ -137,6 +137,11 @@ pub enum SemanticAffineAnimationTrackError {
         target: SemanticNodeId,
         target_state: SemanticNodeId,
     },
+    UnsupportedPointCorrespondence {
+        animation: SemanticNodeId,
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+    },
     UnsupportedStyleChange {
         animation: SemanticNodeId,
         target: SemanticNodeId,
@@ -258,6 +263,20 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
             } => write!(
                 formatter,
                 "semantic animation {}:{} changes content from target {}:{} to target-state {}:{} before non-affine TransformTo payload lowering is available",
+                animation.slot(),
+                animation.generation(),
+                target.slot(),
+                target.generation(),
+                target_state.slot(),
+                target_state.generation()
+            ),
+            Self::UnsupportedPointCorrespondence {
+                animation,
+                target,
+                target_state,
+            } => write!(
+                formatter,
+                "semantic animation {}:{} requests point correspondence between unsupported target {}:{} and target-state {}:{} content",
                 animation.slot(),
                 animation.generation(),
                 target.slot(),
@@ -459,8 +478,11 @@ where
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
             continue;
         }
-        let target_state = match leaf.payload {
-            SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
+        let (target_state, interpolation) = match leaf.payload {
+            SemanticScheduledAnimationPayload::TransformTo {
+                target_state,
+                interpolation,
+            } => (target_state, interpolation),
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::Create
             | SemanticScheduledAnimationPayload::Rotate { .. } => {
@@ -488,7 +510,7 @@ where
             captures.insert(leaf.execution_object_id, captured);
             captured
         };
-        let channels = lower_transform_channels(source, target, from, false)
+        let channels = lower_transform_channels(source, target, from, interpolation)
             .map_err(|issue| existing_payload_error(leaf, issue))?;
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
@@ -509,10 +531,12 @@ fn validate_leaf_matches_declaration(
         SemanticAnimationIntent::TransformTo {
             target,
             target_state,
+            interpolation,
         } if *target == leaf.target
             && leaf.payload
                 == SemanticScheduledAnimationPayload::TransformTo {
                     target_state: *target_state,
+                    interpolation: *interpolation,
                 } =>
         {
             Ok(())
@@ -546,7 +570,7 @@ fn validate_leaf_matches_declaration(
 
 fn scheduled_target_state(leaf: &SemanticScheduledAnimationLeaf) -> SemanticNodeId {
     match leaf.payload {
-        SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
+        SemanticScheduledAnimationPayload::TransformTo { target_state, .. } => target_state,
         SemanticScheduledAnimationPayload::Fade { .. }
         | SemanticScheduledAnimationPayload::Create
         | SemanticScheduledAnimationPayload::Rotate { .. } => {
@@ -627,6 +651,7 @@ pub(super) enum AffinePayloadIssue {
     InvalidEffectiveTransform,
     InvalidEffectiveStyle,
     UnsupportedContentChange,
+    UnsupportedPointCorrespondence,
     UnsupportedStyleChange,
     UnsupportedPainterOrderChange,
     UnsupportedBindingChange,
@@ -822,7 +847,7 @@ pub(super) fn lower_transform_channels(
     source: &noon_core::SemanticObjectState,
     target: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
-    point_correspondence_for_same_content: bool,
+    interpolation: noon_core::SemanticTransformInterpolation,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
     let analytic_point_transform = matches!(
         (source.content, target.content),
@@ -834,12 +859,13 @@ pub(super) fn lower_transform_channels(
             SemanticObjectContent::Geometry(StoredGeometry::Rectangle { .. })
         )
     );
-    if source.content == target.content
-        && (!point_correspondence_for_same_content
-            || !analytic_point_transform
-            || source.transform.rotation_z.to_bits() == target.transform.rotation_z.to_bits())
-    {
-        return lower_affine_channels(source, target, from);
+    if source.content == target.content {
+        if interpolation == noon_core::SemanticTransformInterpolation::Affine {
+            return lower_affine_channels(source, target, from);
+        }
+        if !analytic_point_transform {
+            return Err(AffinePayloadIssue::UnsupportedPointCorrespondence);
+        }
     }
     if !analytic_point_transform && !is_supported_analytic_content_morph(source, target) {
         return Err(AffinePayloadIssue::UnsupportedContentChange);
@@ -988,6 +1014,13 @@ fn existing_payload_error(
         }
         AffinePayloadIssue::UnsupportedContentChange => {
             SemanticAffineAnimationTrackError::UnsupportedContentChange {
+                animation: leaf.animation,
+                target: leaf.target,
+                target_state: scheduled_target_state(leaf),
+            }
+        }
+        AffinePayloadIssue::UnsupportedPointCorrespondence => {
+            SemanticAffineAnimationTrackError::UnsupportedPointCorrespondence {
                 animation: leaf.animation,
                 target: leaf.target,
                 target_state: scheduled_target_state(leaf),
@@ -1541,6 +1574,7 @@ mod tests {
         let mut leaf = schedule(&store, &index, animation).leaves()[0].clone();
         leaf.payload = SemanticScheduledAnimationPayload::TransformTo {
             target_state: target,
+            interpolation: noon_core::SemanticTransformInterpolation::Affine,
         };
 
         assert_eq!(
