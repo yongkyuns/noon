@@ -839,7 +839,7 @@ fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
 
 fn style_is_finite(style: Style) -> bool {
     let color_is_finite = |color: Option<noon_core::Color>| {
-        color.map_or(true, |color| {
+        color.is_none_or(|color| {
             color.red.is_finite()
                 && color.green.is_finite()
                 && color.blue.is_finite()
@@ -972,9 +972,11 @@ mod tests {
             .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
             .unwrap();
         let index = index(&store);
-        let mut current = Style::default();
-        current.fill = Some(Color::BLUE);
-        current.opacity = 0.75;
+        let current = Style {
+            fill: Some(Color::BLUE),
+            opacity: 0.75,
+            ..Style::default()
+        };
 
         let projection = lower_semantic_affine_animation_tracks(
             &store,
