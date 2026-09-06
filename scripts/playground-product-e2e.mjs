@@ -121,8 +121,19 @@ async function sampleRendererFps(page) {
 }
 
 async function pauseAndSeek(page, seconds) {
+  const capability = await page.locator("#status").getAttribute("data-playback-controls");
+  assert.ok(
+    capability === "available" || capability === "unavailable",
+    `product E2E did not publish playback capability (${capability})`,
+  );
   const toggle = page.locator(".playback-toggle");
-  if (await toggle.count() === 0) return false;
+  const hasControls = (await toggle.count()) > 0;
+  assert.equal(
+    hasControls,
+    capability === "available",
+    "playback control DOM must match the execution ownership capability",
+  );
+  if (!hasControls) return false;
   await toggle.waitFor({ state: "visible", timeout: 10_000 });
   if ((await toggle.getAttribute("aria-label")) === "Pause animation") {
     await toggle.click();
@@ -201,7 +212,8 @@ try {
   const edited = await runAndMeasure(page);
 
   const sought = await pauseAndSeek(page, 0.5);
-  const screenshotPath = path.join(artifactDir, "frame-0.5.png");
+  const screenshotName = sought ? "frame-0.5.png" : "frame-final.png";
+  const screenshotPath = path.join(artifactDir, screenshotName);
   const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
   const visual = changedPixelStats(screenshot);
   assert.ok(visual.changedPixels > 100, `product frame is effectively blank (${visual.changedPixels} changed pixels)`);
@@ -222,7 +234,7 @@ try {
     fps,
     visual,
     sought,
-    screenshot: "frame-0.5.png",
+    screenshot: screenshotName,
     runtime: {
       backend: cold.state.backend,
       executionMode: cold.state.executionMode,
