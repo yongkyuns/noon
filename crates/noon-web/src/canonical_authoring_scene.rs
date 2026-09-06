@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    Color, FamilyAnimationRequest, ObjectId, ObjectSnapshot, SemanticObjectState, SemanticPaint,
-    SemanticStyle, SemanticTransform2_5D, Style, TextSourceKind, TrackDefinition, Transform2D,
-    Vec2,
+    Color, FamilyAnimationRequest, ObjectId, ObjectSnapshot, SemanticFadeDirection,
+    SemanticObjectState, SemanticPaint, SemanticStyle, SemanticTransform2_5D, Style,
+    TextSourceKind, TrackDefinition, Transform2D, Vec2,
 };
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{HostCallbackId, SemanticMutationTransaction, SemanticVec3};
@@ -680,6 +680,99 @@ impl CanonicalAuthoringScene {
         self.scene.declare_transform_to(source, target, options)
     }
 
+    /// Run one basic ordinary leaf fade through the retained live session.
+    ///
+    /// Rust owns lifecycle membership, appearance tracks, activation, and
+    /// completion. The object ID only records this wrapper's derived binding
+    /// after the shared fade has succeeded; it is never a semantic identity.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn ordinary_play_fade(
+        &mut self,
+        id: ObjectId,
+        target: &noon::Mobject,
+        direction: SemanticFadeDirection,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        let end_time = self.begin_ordinary_fade(id, target, direction, options)?;
+        let player = self.active_live_player()?;
+        player.live_advance_segment_to(end_time)?;
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
+    /// Atomically declare and activate one basic ordinary fade without advancing it.
+    ///
+    /// A FadeIn may bind an existing detached semantic handle. A FadeOut retains
+    /// its derived binding so that the exact same handle can later re-enter via
+    /// `Scene.add`; membership itself remains entirely in the shared session.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_fade(
+        &mut self,
+        id: ObjectId,
+        target: &noon::Mobject,
+        direction: SemanticFadeDirection,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+            return Err("ordinary fade mobject belongs to another authoring store".into());
+        }
+        target.validate()?;
+        let node = target.node_id();
+        let new_binding = match (
+            direction,
+            self.bindings.get(&id),
+            self.identities.get(&node),
+        ) {
+            (SemanticFadeDirection::In, None, None) => true,
+            (_, Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => {
+                false
+            }
+            (SemanticFadeDirection::Out, None, None) => {
+                return Err("ordinary FadeOut target is not bound to this canonical Scene".into());
+            }
+            _ => return Err(format!("canonical object {} is already bound", id.get())),
+        };
+        if self.live_player.is_none() && self.scene.time() != 0.0 {
+            return Err("ordinary fade cannot follow pre-execution canonical timing".into());
+        }
+
+        // The retained player needs a valid presentation extent before activation.
+        // `active_or_bootstrap_live_player` preserves an exact returned continuation
+        // player instead of reinitializing its transport/session state on later awaits.
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(options.run_time.unwrap_or(1.0));
+        let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
+        // `declare_and_activate_fade` is the shared atomic preflight: required
+        // callbacks, bindings, membership, options, and lifecycle conflicts all
+        // fail before its semantic/runtime publication.
+        let end_time = player.live_declare_and_activate_fade(target, direction, options)?;
+        if new_binding {
+            self.bindings.insert(id, node);
+            self.identities.insert(node, id);
+        }
+        Ok(end_time)
+    }
+
+    /// Read the shared session's direct-root membership for one retained wrapper.
+    ///
+    /// This lets Python update only its derived wrapper attachment after a completed
+    /// FadeOut without storing lifecycle state or adding metadata to the player receipt.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_contains_mobject(&mut self, target: &noon::Mobject) -> Result<bool, String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        target.validate()?;
+        if !self.identities.contains_key(&target.node_id()) {
+            return Err("live Mobject is not bound to this canonical Scene".into());
+        }
+        self.active_live_player()?.live_contains(target)
+    }
+
     /// Run one supported ordinary leaf TransformTo through the one retained
     /// session. Declaration, activation, endpoint evaluation, and completion
     /// remain Rust/session operations; Python only supplies typed handles and
@@ -1266,6 +1359,16 @@ mod wasm {
 
     fn parse_button(value: u32) -> Result<u8, JsValue> {
         u8::try_from(value).map_err(|_| js_error("button must be in the range 0..255"))
+    }
+
+    fn parse_fade_direction(value: &str) -> Result<SemanticFadeDirection, JsValue> {
+        match value {
+            "in" => Ok(SemanticFadeDirection::In),
+            "out" => Ok(SemanticFadeDirection::Out),
+            _ => Err(js_error(format!(
+                "ordinary fade direction must be \"in\" or \"out\", got {value:?}"
+            ))),
+        }
     }
 
     #[wasm_bindgen]
@@ -1992,6 +2095,76 @@ mod wasm {
                     target.semantic_mobject(),
                     options,
                 )
+                .map_err(js_error)
+        }
+
+        /// Atomically declare, activate, run, and complete one basic lifecycle fade.
+        #[wasm_bindgen(js_name = ordinaryPlayFade)]
+        pub fn ordinary_play_fade(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            target.id_in_store(self.inner.scene.store(), "ordinary fade animation")?;
+            let direction = parse_fade_direction(direction)?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .ordinary_play_fade(id, target.semantic_mobject(), direction, options)
+                .map_err(js_error)
+        }
+
+        /// Begin one basic lifecycle fade for an async/synchronous continuation.
+        ///
+        /// The exact retained player owns the returned segment and must later be
+        /// driven and completed through the existing continuation lease.
+        #[wasm_bindgen(js_name = beginOrdinaryFade)]
+        pub fn begin_ordinary_fade(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            target.id_in_store(self.inner.scene.store(), "ordinary fade animation")?;
+            let direction = parse_fade_direction(direction)?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .begin_ordinary_fade(id, target.semantic_mobject(), direction, options)
+                .map_err(js_error)
+        }
+
+        /// Query shared root membership after an exact fade completion. Python
+        /// uses it only to attach/detach its derived wrapper identity.
+        #[wasm_bindgen(js_name = liveContainsMobject)]
+        pub fn live_contains_mobject(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<bool, JsValue> {
+            target.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .live_contains_mobject(target.semantic_mobject())
                 .map_err(js_error)
         }
 
@@ -3499,6 +3672,52 @@ mod tests {
         assert!(context.live_player.is_none());
         assert_eq!(context.authored_duration(), 2.0);
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+    }
+
+    #[test]
+    fn ordinary_fade_reuses_one_live_session_and_preserves_readd_identity() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+
+        let fade_in_end = context
+            .begin_ordinary_fade(
+                ObjectId::new(0),
+                &circle,
+                SemanticFadeDirection::In,
+                options,
+            )
+            .unwrap();
+        assert!(context.live_contains_mobject(&circle).unwrap());
+        {
+            let player = context.active_live_player().unwrap();
+            assert_eq!(player.time(), 0.0);
+            player.live_advance_segment_to(fade_in_end).unwrap();
+            player.live_complete_segment().unwrap();
+        }
+        assert!(context.live_contains_mobject(&circle).unwrap());
+
+        let fade_out_end = context
+            .begin_ordinary_fade(
+                ObjectId::new(0),
+                &circle,
+                SemanticFadeDirection::Out,
+                options,
+            )
+            .unwrap();
+        {
+            let player = context.active_live_player().unwrap();
+            player.live_advance_segment_to(fade_out_end).unwrap();
+            player.live_complete_segment().unwrap();
+        }
+        assert!(!context.live_contains_mobject(&circle).unwrap());
+
+        // The original derived ObjectId re-enters through the shared session;
+        // no replacement semantic handle or second runtime is allocated.
+        context.live_add_mobject(ObjectId::new(0), &circle).unwrap();
+        assert!(context.live_contains_mobject(&circle).unwrap());
     }
 
     #[test]

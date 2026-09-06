@@ -80,6 +80,7 @@ class _TypedBindingReservation:
     object: _ir.Object
     key: str
     legacy_snapshot: dict[str, Any] | None
+    reuse_existing_identity: bool = False
 
 
 def _reserve_typed_binding(
@@ -92,6 +93,22 @@ def _reserve_typed_binding(
         if mobject._scene is scene:
             raise ValueError("Mobject is already bound to this Scene")
         raise ValueError("Mobject already belongs to another Scene")
+
+    # A completed canonical FadeOut removes shared root membership but retains
+    # the semantic handle and this wrapper's derived ObjectId. Re-adding that
+    # exact handle must use liveAdd, not allocate a second export identity.
+    prior = getattr(mobject, "_object", None)
+    if prior is not None and prior.id in scene._object_positions:
+        prior_key = scene._object_keys.get(prior.id)
+        geometry_handles = getattr(scene, "_semantic_geometry_handles", {})
+        text_handles = getattr(scene, "_semantic_text_handles", {})
+        prior_handle = geometry_handles.get(prior.id, text_handles.get(prior.id))
+        if prior_key is not None and prior_handle is handle:
+            if key is not None and _ir._authoring_key("key", key, prior_key) != prior_key:
+                raise ValueError("a re-added canonical Mobject keeps its existing key")
+            return _TypedBindingReservation(
+                prior, prior_key, None, reuse_existing_identity=True
+            )
 
     object_id = scene._next_object_id
     authoring_key = _ir._authoring_key("key", key, f"@object:{object_id}")
@@ -119,6 +136,9 @@ def _commit_typed_binding(
 ) -> _ir.Object:
     """Commit derived wrapper bookkeeping after the shared Rust bind succeeded."""
     obj = reservation.object
+    if reservation.reuse_existing_identity:
+        mobject._bind(scene, obj)
+        return obj
     scene._object_keys[obj.id] = reservation.key
     scene._object_key_ids[reservation.key] = obj.id
     scene._next_object_id = obj.id + 1
@@ -133,7 +153,11 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
         materialize_legacy_geometry(scene)
         return _ORIGINAL_BIND(self, scene, key=key)
     reservation = _reserve_typed_binding(self, scene, handle, key)
-    _context(scene).bindMobject(str(reservation.object.id), handle)
+    context = _context(scene)
+    if reservation.reuse_existing_identity:
+        context.liveAdd(str(reservation.object.id), handle)
+    else:
+        context.bindMobject(str(reservation.object.id), handle)
     return _commit_typed_binding(self, scene, reservation, handle)
 
 
@@ -297,8 +321,9 @@ async def execute_construct(scene: _base.Scene) -> None:
 class _SemanticContinuationAwaitable:
     """One consumed Python await over the worker-owned semantic endpoint lease."""
 
-    def __init__(self, scene: _base.Scene) -> None:
+    def __init__(self, scene: _base.Scene, on_complete=None) -> None:
         self._scene = scene
+        self._on_complete = on_complete
         self._consumed = False
         getattr(scene, _ASYNC_CONTINUATION_PENDING).add(self)
 
@@ -313,15 +338,19 @@ class _SemanticContinuationAwaitable:
             from js import noonAwaitSemanticContinuation
 
             await noonAwaitSemanticContinuation(_context(self._scene))
+            if self._on_complete is not None:
+                self._on_complete()
             return self._scene
         finally:
             getattr(self._scene, _ASYNC_CONTINUATION_PENDING).discard(self)
 
 
-def _continuation_awaitable(scene: _base.Scene) -> _SemanticContinuationAwaitable:
+def _continuation_awaitable(
+    scene: _base.Scene, on_complete=None
+) -> _SemanticContinuationAwaitable:
     if not _async_continuation_active(scene):
         raise RuntimeError("semantic continuation awaitable requires async construct")
-    return _SemanticContinuationAwaitable(scene)
+    return _SemanticContinuationAwaitable(scene, on_complete)
 
 
 def _require_semantic_continuation_active(scene: _base.Scene) -> None:
@@ -467,7 +496,10 @@ def _canonical_affine_animation(
 
 
 def _canonical_affine_options(
-    animation: object, kwargs: dict[str, object]
+    animation: object,
+    kwargs: dict[str, object],
+    *,
+    builder_args: dict[str, object] | None = None,
 ) -> object | None:
     """Resolve the existing Python play ergonomics before typed Rust preflight."""
     duration = kwargs.get("duration")
@@ -485,7 +517,9 @@ def _canonical_affine_options(
         return None
     try:
         resolved = _options.resolve(
-            builder_args=_options.builder_args(animation),
+            builder_args=(
+                _options.builder_args(animation) if builder_args is None else builder_args
+            ),
             default_lag_ratio=0.0,
             play_run_time=(run_time if run_time is not None else duration),
             play_easing=easing,
@@ -604,6 +638,168 @@ def _play_canonical_affine(
         return _continuation_awaitable(self)
     if _synchronous_continuation_active(self):
         return _synchronous_continuation_wait(self)
+    return self
+
+
+def _canonical_fade_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_base.Mobject, str] | None:
+    """Classify one exact basic FadeIn/FadeOut without legacy lifecycle setup."""
+    if type(animation) is _base.FadeIn:
+        direction = "in"
+    elif type(animation) is _base.FadeOut:
+        direction = "out"
+    else:
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary Fade target must be a Mobject")
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError(
+            "canonical ordinary Fade requires a typed semantic Mobject handle"
+        )
+    if direction == "in":
+        if target._scene is not None and target._scene is not scene:
+            raise ValueError("FadeIn target already belongs to another Scene")
+        if target._scene is scene:
+            raise NotImplementedError(
+                "canonical FadeIn requires a detached Mobject at activation"
+            )
+    elif target._scene is not scene:
+        raise NotImplementedError(
+            "canonical FadeOut target must be bound to this Scene"
+        )
+    return target, direction
+
+
+def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    """Keep endpoint motion/layout requests out of the basic lifecycle subset."""
+    shift = getattr(animation, "_fade_shift_vector", None)
+    if shift is None or float(shift.x) != 0.0 or float(shift.y) != 0.0:
+        return None
+    if float(getattr(animation, "_fade_scale_factor", float("nan"))) != 1.0:
+        return None
+    if bool(getattr(animation, "_fade_point_target", True)):
+        return None
+    args = dict(getattr(animation, "anim_args", {}))
+    lifecycle = "introducer" if type(animation) is _base.FadeIn else "remover"
+    for name in ("introducer", "remover"):
+        if name not in args:
+            continue
+        if name != lifecycle or args.pop(name) is not True:
+            return None
+    return _canonical_affine_options(animation, kwargs, builder_args=args)
+
+
+def _fade_object_id(
+    scene: _base.Scene, target: _base.Mobject, direction: str
+) -> tuple[str, _TypedBindingReservation | None]:
+    """Reserve only derived wrapper identity; Rust owns fade membership."""
+    handle = getattr(target, "_semantic_handle")
+    if direction == "in":
+        reservation = _reserve_typed_binding(target, scene, handle, None)
+        return str(reservation.object.id), reservation
+    if target._object is None:
+        raise ValueError("canonical FadeOut target has no wrapper object identity")
+    return str(target._object.id), None
+
+
+def _reconcile_fade_membership(
+    scene: _base.Scene, target: _base.Mobject, direction: str
+) -> None:
+    """Reflect completed shared membership in Python's derived wrapper attachment."""
+    if direction != "out":
+        return
+    context = _context(scene)
+    if bool(context.liveContainsMobject(getattr(target, "_semantic_handle"))):
+        raise RuntimeError("completed FadeOut still belongs to the canonical Scene")
+    if target._scene is not scene:
+        raise RuntimeError("FadeOut wrapper binding changed before completion")
+    # Preserve ObjectId/key/opaque handle for a same-handle `Scene.add` re-entry.
+    # The context's membership query is authoritative; this is only wrapper state.
+    target._scene = None
+    top_level = getattr(scene, "_compat_top_level", None)
+    if top_level is not None:
+        scene._compat_top_level = [value for value in top_level if value is not target]
+
+
+def _play_canonical_fade(
+    self: _base.Scene,
+    target: _base.Mobject,
+    direction: str,
+    animation: object,
+    *,
+    duration: float | None,
+    run_time: float | None,
+    start_time: float | None,
+    easing: str | None,
+    rate_func: object | None,
+    lag_ratio: float | None,
+    kwargs: dict[str, object],
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if start_time is not None:
+        raise NotImplementedError("canonical ordinary Scene.play uses the shared session cursor")
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
+    if getattr(self, "_legacy_geometry_materialized", False):
+        raise NotImplementedError("canonical ordinary Fade cannot follow legacy geometry materialization")
+    if _legacy_authored_time(self) != 0.0:
+        raise NotImplementedError("canonical ordinary Fade cannot follow legacy Scene timing")
+
+    resolved = _canonical_fade_options(
+        animation,
+        {
+            "duration": duration,
+            "run_time": run_time,
+            "start_time": start_time,
+            "easing": easing,
+            "rate_func": rate_func,
+            "lag_ratio": lag_ratio,
+        },
+    )
+    if resolved is None:
+        raise NotImplementedError(
+            "canonical ordinary Fade currently supports one basic leaf appearance lifecycle"
+        )
+    object_id, reservation = _fade_object_id(self, target, direction)
+    context = _context(self)
+    try:
+        _require_semantic_continuation_active(self)
+        method = (
+            context.beginOrdinaryFade
+            if _semantic_continuation_active(self)
+            else context.ordinaryPlayFade
+        )
+        method(
+            object_id,
+            getattr(target, "_semantic_handle"),
+            direction,
+            float(resolved.run_time),
+            str(resolved.rate_func),
+        )
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    if reservation is not None:
+        _commit_typed_binding(target, self, reservation, getattr(target, "_semantic_handle"))
+        register = getattr(self, "_register_top_level", None)
+        if register is not None:
+            register(target)
+
+    def completed() -> None:
+        _reconcile_fade_membership(self, target, direction)
+
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self, completed)
+    if _synchronous_continuation_active(self):
+        _synchronous_continuation_wait(self)
+        completed()
+        return self
+    completed()
     return self
 
 
@@ -756,6 +952,45 @@ def _play(self, *args, **kwargs):
                 "realtime construct supports only canonical affine Scene.play and Scene.wait"
             )
         return _play_legacy_compatibility(self, *args, **kwargs)
+
+    canonical_fades = [
+        classified
+        for argument in args
+        if (classified := _canonical_fade_animation(self, argument)) is not None
+    ]
+    if canonical_fades:
+        if len(canonical_fades) != 1 or len(args) != 1:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError(
+                    "realtime construct supports one canonical FadeIn/FadeOut per play"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        target, direction = canonical_fades[0]
+        if _canonical_fade_options(args[0], kwargs) is None:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError(
+                    "realtime construct fade is outside the canonical lifecycle subset"
+                )
+            context = getattr(self, "_canonical_authoring_context", None)
+            ownership = getattr(context, "liveExecutionOwnership", None)
+            if callable(ownership) and str(ownership()) in {"active", "transferred", "returned"}:
+                raise NotImplementedError(
+                    "active canonical execution cannot fall back to the legacy fade scheduler"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        return _play_canonical_fade(
+            self,
+            target,
+            direction,
+            args[0],
+            duration=kwargs.pop("duration", None),
+            run_time=kwargs.pop("run_time", None),
+            start_time=kwargs.pop("start_time", None),
+            easing=kwargs.pop("easing", None),
+            rate_func=kwargs.pop("rate_func", None),
+            lag_ratio=kwargs.pop("lag_ratio", None),
+            kwargs=kwargs,
+        )
 
     if (shape := _canonical_composition_shape(args)) is not None:
         if _semantic_continuation_active(self):
