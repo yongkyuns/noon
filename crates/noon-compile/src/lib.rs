@@ -640,14 +640,18 @@ impl std::error::Error for CompilePatchError {}
 impl CompiledScene {
     /// Validate the bounded affine completion policy for newly activated tracks.
     /// Existing and candidate tracks are inspected only in affected channels.
+    /// Mapped composition leaves retain the root interval as their track timing;
+    /// completion reconciles only at that exact root endpoint, where runtime finish
+    /// semantics settle every leaf to its authored target independently of the
+    /// map's ordinary alpha-at-one sample.
     pub fn preflight_reconcilable_track_additions(
         &self,
         tracks: &[TrackDefinition],
     ) -> Result<(), CompilePatchError> {
         let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
         for track in tracks {
+            validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
             if track.timing.duration <= 0.0
-                || !track.time_map.is_identity()
                 || !matches!(
                     track.property,
                     Property::Position
@@ -1199,7 +1203,6 @@ impl CompiledScene {
                     return Err(CompilePatchError::TrackReconciliationMismatch(*track));
                 }
                 if compiled.timing.duration <= 0.0
-                    || !compiled.time_map.is_identity()
                     || !matches!(
                         compiled.property,
                         Property::Position

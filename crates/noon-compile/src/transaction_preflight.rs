@@ -20,7 +20,6 @@ struct TrackShadow {
     start_time: f64,
     duration: f64,
     reconciled: bool,
-    identity_time_map: bool,
     presence: Option<(bool, bool)>,
 }
 
@@ -33,7 +32,6 @@ impl TrackShadow {
             start_time: track.timing.start_time,
             duration: track.timing.duration,
             reconciled: track.reconciled,
-            identity_time_map: track.time_map.is_identity(),
             presence: presence_endpoints(track.property, &track.values),
         }
     }
@@ -46,7 +44,6 @@ impl TrackShadow {
             start_time: track.timing.start_time,
             duration: track.timing.duration,
             reconciled: false,
-            identity_time_map: track.time_map.is_identity(),
             presence: presence_endpoints(track.property, &track.values),
         }
     }
@@ -366,7 +363,6 @@ pub(super) fn preflight_transaction_with_resources(
                     return Err(CompilePatchError::TrackReconciliationMismatch(*track));
                 }
                 if reconciled.duration <= 0.0
-                    || !reconciled.identity_time_map
                     || !matches!(
                         reconciled.property,
                         Property::Position

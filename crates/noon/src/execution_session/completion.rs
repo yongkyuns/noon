@@ -299,8 +299,8 @@ impl ExecutionSession {
 mod tests {
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticMutationTransaction,
-        SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticVec3,
-        StoredGeometry, TrackTiming, Transform2D, Vec2,
+        SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
+        SemanticVec3, StoredGeometry, TrackTiming, Transform2D, Vec2,
     };
 
     use super::*;
@@ -425,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn style_composition_rejects_unsupported_time_mapping_before_activation() {
+    fn sequence_completion_uses_mapped_finish_and_releases_disjoint_style_channels() {
         let mut store = SemanticStore::new();
         let object =
             store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -438,41 +438,252 @@ mod tests {
         fill_target.style.fill_opacity = 0.4;
         let fill_target = store.insert_semantic_object(fill_target);
         let fill = store
-            .insert_semantic_transform_animation(object, fill_target, AnimationOptions::new())
+            .insert_semantic_transform_animation(
+                object,
+                fill_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
             .unwrap();
 
         let mut opacity_target = store.semantic_object_state_checked(object).unwrap().clone();
         opacity_target.style.object_opacity = 0.5;
         let opacity_target = store.insert_semantic_object(opacity_target);
         let opacity = store
-            .insert_semantic_transform_animation(object, opacity_target, AnimationOptions::new())
+            .insert_semantic_transform_animation(
+                object,
+                opacity_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
             .unwrap();
         let sequence = store
-            .insert_semantic_sequence_animation(&[fill, opacity], AnimationOptions::new())
+            .insert_semantic_sequence_animation(
+                &[fill, opacity],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
             .unwrap();
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-        let before = session.publication_context();
         let authored = store
             .semantic_object_state_checked(object)
             .unwrap()
             .style
             .clone();
-        let effective = session.frame().objects[0].style;
-        // Composition timing is outside the current completion contract. Keep
-        // rejection before publication until #1088/#959 supplies mapped release.
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                sequence,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(segment.end_time(), 2.0);
+
+        session.advance_segment_to(segment, 1.0).unwrap();
+        let first_boundary = session.frame().objects[0].style;
+        assert_eq!(
+            first_boundary.fill,
+            Some(Color {
+                alpha: 0.4,
+                ..Color::RED
+            })
+        );
+        assert_eq!(first_boundary.opacity, 1.0);
+        let before_early_completion = session.publication_context();
         assert!(matches!(
-            session.activate_animation_segment(&store, sequence, AnimationOptions::new()),
-            Err(crate::ExecutionSessionAnimationError::Publication(
-                noon_compile::CompilePatchError::UnsupportedTrackReconciliation(_)
-            ))
+            session.complete_segment(&mut store, segment),
+            Err(ExecutionSegmentCompletionError::NotAtBoundary {
+                expected: 2.0,
+                actual: 1.0,
+            })
         ));
-        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.publication_context(), before_early_completion);
         assert_eq!(
             store.semantic_object_state_checked(object).unwrap().style,
             authored
         );
-        assert_eq!(session.frame().objects[0].style, effective);
+
+        session.seek(0.5).unwrap();
+        let half_first = session.frame().objects[0].style;
+        assert!((half_first.fill.unwrap().alpha - 0.7).abs() < 1e-6);
+        assert_eq!(half_first.opacity, 1.0);
+        session.advance_to(1.0).unwrap();
+        assert_eq!(session.frame().objects[0].style, first_boundary);
+
+        session.advance_segment_to(segment, 2.0).unwrap();
+        let endpoint = session.frame().objects[0].style;
+        assert_eq!(
+            endpoint.fill,
+            Some(Color {
+                alpha: 0.4,
+                ..Color::RED
+            })
+        );
+        assert_eq!(endpoint.opacity, 0.5);
+        let endpoint_publication = session.publication_context();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(session.frame().objects[0].style, endpoint);
+        assert_eq!(
+            store.semantic_object_state_checked(object).unwrap().style,
+            SemanticStyle {
+                fill: Some(SemanticPaint::Solid(Color::RED)),
+                fill_opacity: 0.4,
+                object_opacity: 0.5,
+                ..authored
+            }
+        );
+        assert_eq!(
+            session.publication_context().scene_revision(),
+            endpoint_publication
+                .scene_revision()
+                .checked_next()
+                .unwrap()
+        );
+        assert_eq!(
+            session.publication_context().execution_revision(),
+            endpoint_publication
+                .execution_revision()
+                .checked_next()
+                .unwrap()
+        );
+        assert_eq!(
+            session.publication_context().frame_epoch(),
+            endpoint_publication.frame_epoch().checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn parallel_mapped_leaves_seek_deterministically_and_release_atomically() {
+        let mut store = SemanticStore::new();
+        let left = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 0.5,
+        }));
+        let right =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.5,
+            }));
+        store.attach_to_scene(left).unwrap();
+        store.attach_to_scene(right).unwrap();
+
+        let mut left_target = store.semantic_object_state_checked(left).unwrap().clone();
+        left_target.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
+        let left_target = store.insert_semantic_object(left_target);
+        let mut right_target = store.semantic_object_state_checked(right).unwrap().clone();
+        right_target.transform.translation = SemanticVec3::new(2.0, -1.0, 0.0);
+        let right_target = store.insert_semantic_object(right_target);
+        let leaf_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let left_animation = store
+            .insert_semantic_transform_animation(left, left_target, leaf_options)
+            .unwrap();
+        let right_animation = store
+            .insert_semantic_transform_animation(right, right_target, leaf_options)
+            .unwrap();
+        let parallel = store
+            .insert_semantic_parallel_animation(
+                &[left_animation, right_animation],
+                AnimationOptions::new().rate_func(RateFunction::ThereAndBack),
+            )
+            .unwrap();
+
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                parallel,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        session.advance_segment_to(segment, 0.5).unwrap();
+        let forward = [
+            session.frame().objects[0].transform,
+            session.frame().objects[1].transform,
+        ];
+        assert_eq!(forward[0].translation, Vec2::new(-1.0, 0.5));
+        assert_eq!(forward[1].translation, Vec2::new(1.0, -0.5));
+
+        session.seek(0.25).unwrap();
+        session.advance_to(0.5).unwrap();
+        assert_eq!(session.frame().objects[0].transform, forward[0]);
+        assert_eq!(session.frame().objects[1].transform, forward[1]);
+
+        session.advance_segment_to(segment, 1.0).unwrap();
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(-2.0, 1.0)
+        );
+        assert_eq!(
+            session.frame().objects[1].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        session.advance_segment_to(segment, 1.5).unwrap();
+        assert_eq!(session.frame().objects[0].transform, forward[0]);
+        assert_eq!(session.frame().objects[1].transform, forward[1]);
+
+        // ThereAndBack ordinarily maps alpha one back to zero. The execution
+        // endpoint follows the runtime finish contract and settles both leaves
+        // to their exact targets before reconciliation releases the drivers.
+        session.advance_segment_to(segment, 2.0).unwrap();
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(-2.0, 1.0)
+        );
+        assert_eq!(
+            session.frame().objects[1].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        let endpoint_publication = session.publication_context();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(-2.0, 1.0)
+        );
+        assert_eq!(
+            session.frame().objects[1].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        assert_eq!(
+            store
+                .semantic_object_state_checked(left)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(-2.0, 1.0, 0.0)
+        );
+        assert_eq!(
+            store
+                .semantic_object_state_checked(right)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+        let completed = session.publication_context();
+        assert_eq!(
+            completed.scene_revision(),
+            endpoint_publication
+                .scene_revision()
+                .checked_next()
+                .unwrap()
+        );
+        assert_eq!(
+            completed.execution_revision(),
+            endpoint_publication
+                .execution_revision()
+                .checked_next()
+                .unwrap()
+        );
+        assert_eq!(
+            completed.frame_epoch(),
+            endpoint_publication.frame_epoch().checked_next().unwrap()
+        );
     }
 
     #[test]
