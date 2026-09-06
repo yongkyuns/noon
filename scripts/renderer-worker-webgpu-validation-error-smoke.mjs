@@ -166,10 +166,7 @@ try {
   await page.evaluate(async () => {
     const pkg = await import("./pkg/noon_web.js");
     await pkg.default();
-    const { createExplicitTransportSceneJson } = await import(
-      "../scripts/explicit-transport-scene-fixture.js"
-    );
-    const sceneJson = createExplicitTransportSceneJson(pkg);
+    const sceneJson = pkg.demoSceneJson();
     const canvas = document.querySelector("#scene");
     const offscreen = canvas.transferControlToOffscreen();
     const channel = new MessageChannel();

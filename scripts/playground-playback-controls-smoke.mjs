@@ -92,9 +92,8 @@ async function startDeferredRuntime(page, expectedExampleId) {
   assert.ok(deferred.visibleExampleCount <= 18, "gallery DOM residency must remain bounded on startup");
 
   const runButton = page.locator("#replace-scene");
-  // Source loading may temporarily disable Run after the shell is attached.
-  // Playwright's click waits for the current actionable state instead of
-  // asserting against a stale readiness snapshot.
+  await runButton.waitFor({ state: "attached" });
+  assert.equal(await runButton.isDisabled(), false, "Run must be available before runtime startup");
   await runButton.click();
   await waitForAppliedScene(page, expectedExampleId);
 }

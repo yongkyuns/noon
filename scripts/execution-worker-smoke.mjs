@@ -73,9 +73,6 @@ async function startClient(page, transportMode) {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
     const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
-    const { createExplicitTransportSceneJson } = await import(
-      "../scripts/explicit-transport-scene-fixture.js"
-    );
     const canvas = document.querySelector("#scene");
     const errors = [];
     const client = new ExecutionWorkerClient(canvas, {
@@ -84,7 +81,7 @@ async function startClient(page, transportMode) {
       },
     });
     window.executionSmoke = { client, errors };
-    const ready = await client.start(createExplicitTransportSceneJson(wasm), {
+    const ready = await client.start(wasm.demoSceneJson(), {
       loopDurationSeconds: 4,
       transportMode: mode,
       sharedSlotCapacity: 1024 * 1024,

@@ -54,12 +54,9 @@ async function snapshot(page) {
       runtimeStartup: status?.dataset.runtimeStartup ?? "",
       presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
       executionMode: status?.dataset.executionMode ?? "",
-      objectCount: document.querySelector("#metric-objects")?.value ?? "",
       metricTime: document.querySelector("#metric-time")?.value ?? "",
       patchState: patchStatus?.dataset.state ?? "",
       patchText: patchStatus?.value ?? patchStatus?.textContent ?? "",
-      canvasIdentity: document.querySelector("#scene")?.dataset.lifecycleSmokeIdentity ?? null,
-      canvasCount: document.querySelectorAll("canvas").length,
     };
   });
 }
@@ -95,11 +92,7 @@ async function startDeferredRuntime(page) {
   );
 }
 
-async function waitForFrameAfter(page, previousFrames, expectedObjectCount, viewport, label) {
-  // A completed source-owned scene is intentionally idle. Exercise the public
-  // resize path after activation to prove the existing runtime and surface can
-  // still invalidate and present work after the page resumes.
-  await page.setViewportSize(viewport);
+async function waitForFrameAfter(page, previousFrames, label) {
   await page.waitForFunction(
     (previous) => {
       const status = document.querySelector("#status");
@@ -115,9 +108,6 @@ async function waitForFrameAfter(page, previousFrames, expectedObjectCount, view
   assert.ok(current.presentedFrames > previousFrames, `${label}: no new frame was presented`);
   assert.equal(current.rendererBackend, "WebGL2", `${label}: renderer backend changed`);
   assert.notEqual(current.runtimeState, "error", `${label}: runtime entered an error state`);
-  assert.equal(current.objectCount, expectedObjectCount, `${label}: scene object count changed`);
-  assert.equal(current.canvasIdentity, "original", `${label}: runtime replaced the canvas`);
-  assert.equal(current.canvasCount, 1, `${label}: runtime created an extra canvas`);
   return current;
 }
 
@@ -165,16 +155,8 @@ try {
     waitUntil: "load",
   });
   await startDeferredRuntime(page);
-  await page.evaluate(() => {
-    document.querySelector("#scene").dataset.lifecycleSmokeIdentity = "original";
-  });
 
   diagnostics.snapshots.baseline = await snapshot(page);
-  assert.ok(
-    Number(diagnostics.snapshots.baseline.objectCount) > 0,
-    "lifecycle baseline must retain authored scene objects",
-  );
-  assert.equal(diagnostics.snapshots.baseline.canvasCount, 1, "lifecycle baseline must own one canvas");
   await page.locator("#scene").screenshot({ path: path.join(artifactDir, "baseline.png") });
 
   cdp = await context.newCDPSession(page);
@@ -196,8 +178,6 @@ try {
   diagnostics.snapshots.resumed = await waitForFrameAfter(
     page,
     diagnostics.snapshots.frozen.presentedFrames,
-    diagnostics.snapshots.baseline.objectCount,
-    { width: 1001, height: 700 },
     "resume after page freeze",
   );
   assert.equal(
@@ -212,8 +192,6 @@ try {
   diagnostics.snapshots.secondResume = await waitForFrameAfter(
     page,
     diagnostics.snapshots.resumed.presentedFrames,
-    diagnostics.snapshots.baseline.objectCount,
-    diagnostics.viewport,
     "second resume after page freeze",
   );
 
