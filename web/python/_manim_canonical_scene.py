@@ -16,6 +16,7 @@ import _manim_retained_state as _retained_state
 import _manim_typst as _typst
 import _manim_animation_options as _options
 import _manim_compat as _compat
+import _manim_composition as _composition
 import _manim_reactive as _reactive
 import _noon_ir as _ir
 import noon as _base
@@ -384,7 +385,7 @@ def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):
     ownership = getattr(context, "liveExecutionOwnership", None)
     if callable(ownership) and str(ownership()) in {"active", "transferred"}:
         raise NotImplementedError(
-            "an active canonical session currently supports only one leaf affine animation"
+            "an active canonical session cannot fall back to the legacy animation scheduler"
         )
     # Native Text timeline export stays in the canonical context. Its #959
     # codec is store-derived at finalization, so geometry materialization must
@@ -452,6 +453,143 @@ def _play_canonical_affine(
     return self
 
 
+def _canonical_composition_shape(args: tuple[object, ...]):
+    """Return one flat Rust composition request shape without scheduling it."""
+    if len(args) == 1 and isinstance(args[0], _composition.Succession):
+        group = args[0]
+        return "sequence", tuple(group.animations), group
+    if len(args) > 1:
+        return "parallel", args, None
+    return None
+
+
+def _canonical_linear_play_options(kwargs: dict[str, object]) -> float | None:
+    duration = kwargs.pop("duration", None)
+    run_time = kwargs.pop("run_time", None)
+    start_time = kwargs.pop("start_time", None)
+    easing = kwargs.pop("easing", None)
+    rate_func = kwargs.pop("rate_func", None)
+    lag_ratio = kwargs.pop("lag_ratio", None)
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if start_time is not None:
+        raise NotImplementedError(
+            "canonical ordinary Scene.play uses the shared session cursor"
+        )
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
+    if lag_ratio is not None:
+        raise NotImplementedError(
+            "canonical ordinary composition does not yet support a Scene.play lag_ratio override"
+        )
+    rate_id = None
+    if easing is not None:
+        rate_id = str(easing)
+    elif rate_func is not None:
+        rate_id = _compat._easing_from_rate_func(rate_func)
+    if rate_id != "linear":
+        raise NotImplementedError(
+            "canonical ordinary composition currently requires an explicit linear Scene.play rate_func"
+        )
+    value = run_time if run_time is not None else duration
+    return None if value is None else float(value)
+
+
+def _canonical_linear_child_options(animation: object) -> float:
+    resolved = _options.resolve(
+        builder_args=_options.builder_args(animation),
+        default_lag_ratio=0.0,
+        play_run_time=None,
+        play_easing=None,
+        play_rate_func=None,
+        play_lag_ratio=None,
+    )
+    if (
+        resolved.rate_func != "linear"
+        or resolved.lag_ratio != 0.0
+        or resolved.path_arc != 0.0
+        or resolved.reverse_rate_function
+    ):
+        raise NotImplementedError(
+            "canonical ordinary composition currently requires linear affine leaves"
+        )
+    return float(resolved.run_time)
+
+
+def _build_canonical_composition_candidate(
+    self: _base.Scene,
+    kind: str,
+    animations: tuple[object, ...],
+    group: object | None,
+    kwargs: dict[str, object],
+):
+    classified = [_canonical_affine_animation(self, animation) for animation in animations]
+    present = [leaf for leaf in classified if leaf is not None]
+    if not present:
+        return None
+    if len(present) != len(animations):
+        raise NotImplementedError(
+            "canonical ordinary compositions require only flat affine leaves"
+        )
+
+    play_run_time = _canonical_linear_play_options(dict(kwargs))
+    composition_run_time = None
+    composition_lag_ratio = 0.0 if kind == "parallel" else 1.0
+    if group is not None:
+        if not isinstance(group, _composition.Succession):
+            raise NotImplementedError(
+                "canonical ordinary composition currently supports flat Succession only"
+            )
+        if _compat._easing_from_rate_func(group.rate_func) != "linear":
+            raise NotImplementedError(
+                "canonical ordinary Succession currently requires a linear rate_func"
+            )
+        composition_run_time = group.run_time
+        composition_lag_ratio = float(group.lag_ratio)
+        if composition_lag_ratio != 1.0:
+            raise NotImplementedError(
+                "canonical ordinary Succession currently requires lag_ratio=1"
+            )
+
+    context = _context(self)
+    candidate = context.beginOrdinaryTransformComposition(
+        kind,
+        composition_run_time,
+        composition_lag_ratio,
+        play_run_time,
+    )
+    for source, target, animation in present:
+        candidate.appendTransformTo(
+            getattr(source, "_semantic_handle"),
+            getattr(target, "_semantic_handle"),
+            _canonical_linear_child_options(animation),
+        )
+    try:
+        supported = bool(context.ordinaryCanPlayComposition(candidate))
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return candidate if supported else False
+
+
+def _play_canonical_composition(self: _base.Scene, candidate: object) -> _base.Scene:
+    if getattr(self, "_legacy_geometry_materialized", False):
+        raise NotImplementedError(
+            "canonical ordinary composition cannot follow legacy geometry materialization"
+        )
+    if _legacy_authored_time(self) != 0.0:
+        raise NotImplementedError(
+            "canonical ordinary composition cannot follow legacy Scene timing"
+        )
+    try:
+        _context(self).ordinaryPlayComposition(candidate)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
 def _play(self, *args, **kwargs):
     # Once an unsupported compatibility animation has selected the explicit
     # #959 export/materialization boundary, its timing and lowering remain on
@@ -460,6 +598,28 @@ def _play(self, *args, **kwargs):
     # compatibility play as a canonical live animation.
     if getattr(self, "_legacy_geometry_materialized", False):
         return _play_legacy_compatibility(self, *args, **kwargs)
+
+    if (shape := _canonical_composition_shape(args)) is not None:
+        kind, animations, group = shape
+        try:
+            candidate = _build_canonical_composition_candidate(
+                self, kind, animations, group, kwargs
+            )
+        except NotImplementedError:
+            context = getattr(self, "_canonical_authoring_context", None)
+            ownership = getattr(context, "liveExecutionOwnership", None)
+            if callable(ownership) and str(ownership()) != "none":
+                raise
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        if candidate is False:
+            context = _context(self)
+            if str(context.liveExecutionOwnership()) != "none":
+                raise NotImplementedError(
+                    "active canonical execution cannot fall back to the legacy composition scheduler"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        if candidate is not None:
+            return _play_canonical_composition(self, candidate)
 
     canonical_affine = [
         classified

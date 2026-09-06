@@ -60,6 +60,10 @@ const expectedJavascriptSurface = [
   "authoredWait(",
   "ordinaryCanPlayTransformTo(",
   "ordinaryPlayTransformTo(",
+  "export class WasmOrdinaryTransformCompositionBuilder",
+  "beginOrdinaryTransformComposition(",
+  "ordinaryCanPlayComposition(",
+  "ordinaryPlayComposition(",
   "ordinaryWait(",
   "liveExecutionOwnership(",
   "liveTargetEditor(",
@@ -194,6 +198,10 @@ const expectedTypeSurface = [
   "authoredWait(",
   "ordinaryCanPlayTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, run_time: number, rate_function: string): boolean",
   "ordinaryPlayTransformTo(",
+  "export class WasmOrdinaryTransformCompositionBuilder",
+  "beginOrdinaryTransformComposition(",
+  "ordinaryCanPlayComposition(",
+  "ordinaryPlayComposition(",
   "ordinaryWait(",
   "liveExecutionOwnership(): string",
   "liveTargetEditor(",
@@ -268,11 +276,13 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(",
+    "export function createDirectOrdinaryCompositionPlaySmokeRenderer(",
     "export function createDirectOrdinaryPaintPlaySmokeRenderer(",
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectOrdinaryCompositionPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryPaintPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryStylePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
   );

@@ -685,6 +685,59 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
     }
 
+    /// Run one flat Parallel/Sequence candidate through the shared prepared
+    /// semantic transaction and retained session. The candidate owns no IDs,
+    /// intervals, clock, or execution state.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn ordinary_play_transform_composition(
+        &mut self,
+        kind: noon_core::SemanticAnimationCompositionKind,
+        children: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        composition_options: noon_core::AnimationOptions,
+        play_options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        if !self.can_ordinary_transform_composition(children, composition_options, play_options)? {
+            return Err("ordinary transform composition payload is not yet supported".into());
+        }
+
+        // This extent only bootstraps a player when one does not exist. The
+        // returned Rust segment immediately replaces it with the authoritative
+        // duration derived by the shared composition schedule.
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(
+                play_options
+                    .run_time
+                    .or(composition_options.run_time)
+                    .unwrap_or(1.0),
+            );
+        let player = self.live_player(bootstrap_duration)?;
+        if player.has_required_callbacks() {
+            return Err(
+                "ordinary composition with required callbacks needs an asynchronous continuation"
+                    .into(),
+            );
+        }
+        let requests = children
+            .iter()
+            .map(|(source, target, options)| {
+                noon::TransformToRequest::new(source, target, *options)
+            })
+            .collect::<Vec<_>>();
+        let end_time = player.live_declare_and_activate_transform_composition(
+            kind,
+            &requests,
+            composition_options,
+            play_options,
+        )?;
+        player.live_advance_segment_to(end_time)?;
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn can_ordinary_transform_to(
         &self,
@@ -716,6 +769,32 @@ impl CanonicalAuthoringScene {
         }
         self.scene
             .can_ordinary_transform_to(source, target, options)
+    }
+
+    /// Check handle provenance and the shared leaf/root option policy without
+    /// creating or transferring an execution player.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn can_ordinary_transform_composition(
+        &self,
+        children: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        composition_options: noon_core::AnimationOptions,
+        play_options: noon_core::AnimationOptions,
+    ) -> Result<bool, String> {
+        if children.is_empty() {
+            return Err("ordinary transform composition requires at least one child".into());
+        }
+        noon_core::resolve_animation_options(
+            noon_core::AnimationDefaults::MANIM,
+            composition_options,
+            play_options,
+        )
+        .map_err(|error| error.to_string())?;
+        for (source, target, options) in children {
+            if !self.can_ordinary_transform_to(source, target, *options)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1136,6 +1215,18 @@ mod wasm {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     }
 
+    /// Consumed, inert input for one flat ordinary transform composition.
+    ///
+    /// This owns opaque shared handles and unresolved semantic options only. It
+    /// contains no semantic IDs, resolved intervals, execution tracks, or clock.
+    #[wasm_bindgen]
+    pub struct WasmOrdinaryTransformCompositionBuilder {
+        kind: noon_core::SemanticAnimationCompositionKind,
+        children: Vec<(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)>,
+        composition_options: noon_core::AnimationOptions,
+        play_options: noon_core::AnimationOptions,
+    }
+
     /// Opaque Python/JS identity for one canonical scalar input signal.
     #[wasm_bindgen]
     pub struct WasmValueTrackerHandle {
@@ -1196,6 +1287,25 @@ mod wasm {
         #[wasm_bindgen(getter)]
         pub fn height(&self) -> f64 {
             self.height
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmOrdinaryTransformCompositionBuilder {
+        #[wasm_bindgen(js_name = appendTransformTo)]
+        pub fn append_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+        ) {
+            self.children.push((
+                source.semantic_mobject().clone(),
+                target.semantic_mobject().clone(),
+                noon_core::AnimationOptions::new()
+                    .run_time(child_run_time)
+                    .rate_func(noon_core::RateFunction::Linear),
+            ));
         }
     }
 
@@ -1556,6 +1666,67 @@ mod wasm {
         #[wasm_bindgen(js_name = ordinaryWait)]
         pub fn ordinary_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
             self.inner.ordinary_wait(duration).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = beginOrdinaryTransformComposition)]
+        pub fn begin_ordinary_transform_composition(
+            &self,
+            kind: &str,
+            composition_run_time: Option<f64>,
+            composition_lag_ratio: f64,
+            play_run_time: Option<f64>,
+        ) -> Result<WasmOrdinaryTransformCompositionBuilder, JsValue> {
+            let kind = match kind {
+                "parallel" => noon_core::SemanticAnimationCompositionKind::Parallel,
+                "sequence" => noon_core::SemanticAnimationCompositionKind::Sequence,
+                _ => return Err(js_error("composition kind must be parallel or sequence")),
+            };
+            let mut composition_options = noon_core::AnimationOptions::new()
+                .lag_ratio(composition_lag_ratio)
+                .rate_func(noon_core::RateFunction::Linear);
+            if let Some(run_time) = composition_run_time {
+                composition_options = composition_options.run_time(run_time);
+            }
+            let mut play_options =
+                noon_core::AnimationOptions::new().rate_func(noon_core::RateFunction::Linear);
+            if let Some(run_time) = play_run_time {
+                play_options = play_options.run_time(run_time);
+            }
+            Ok(WasmOrdinaryTransformCompositionBuilder {
+                kind,
+                children: Vec::new(),
+                composition_options,
+                play_options,
+            })
+        }
+
+        #[wasm_bindgen(js_name = ordinaryCanPlayComposition)]
+        pub fn ordinary_can_play_composition(
+            &self,
+            candidate: &WasmOrdinaryTransformCompositionBuilder,
+        ) -> Result<bool, JsValue> {
+            self.inner
+                .can_ordinary_transform_composition(
+                    &candidate.children,
+                    candidate.composition_options,
+                    candidate.play_options,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ordinaryPlayComposition)]
+        pub fn ordinary_play_composition(
+            &mut self,
+            candidate: WasmOrdinaryTransformCompositionBuilder,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .ordinary_play_transform_composition(
+                    candidate.kind,
+                    &candidate.children,
+                    candidate.composition_options,
+                    candidate.play_options,
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addUpdater)]
@@ -2662,6 +2833,109 @@ mod tests {
                 .translation,
             Vec2::new(5.0, -1.0)
         );
+    }
+
+    #[test]
+    fn ordinary_composition_candidate_preflight_is_read_only_before_atomic_play() {
+        let mut context = CanonicalAuthoringScene::default();
+        let mut left = context.scene.circle(0.4).unwrap();
+        left.set_translation(-2.0, 0.0).unwrap();
+        let mut right = context.scene.circle(0.4).unwrap();
+        right.set_translation(2.0, 0.0).unwrap();
+        let mut left_target = left.target_editor().unwrap();
+        left_target.set_translation(-2.0, 1.0).unwrap();
+        let mut right_target = right.target_editor().unwrap();
+        right_target.set_translation(2.0, -1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &left).unwrap();
+        context.bind_mobject(ObjectId::new(1), &right).unwrap();
+        let child = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            (left.clone(), left_target, child),
+            (right.clone(), right_target, child),
+        ];
+        let composition = AnimationOptions::new()
+            .lag_ratio(0.0)
+            .rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let revision = context.scene.store().borrow().scene_revision();
+
+        assert!(context
+            .can_ordinary_transform_composition(&children, composition, play)
+            .unwrap());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let mut unsupported_target = right.target_editor().unwrap();
+        unsupported_target.set_stroke_width(3.0).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(!context
+            .can_ordinary_transform_composition(
+                &[(right.clone(), unsupported_target, child)],
+                composition,
+                play,
+            )
+            .unwrap());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        assert_eq!(
+            context
+                .ordinary_play_transform_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    composition,
+                    play,
+                )
+                .unwrap(),
+            2.0
+        );
+        let player = context.active_live_player().unwrap();
+        assert_eq!(
+            player.live_effective(&left).unwrap().transform.translation,
+            Vec2::new(-2.0, 1.0)
+        );
+        assert_eq!(
+            player.live_effective(&right).unwrap().transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn ordinary_composition_candidate_surfaces_foreign_and_stale_handles_before_bootstrap() {
+        let mut context = CanonicalAuthoringScene::default();
+        let source = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &source).unwrap();
+        let foreign = noon::Scene::new().circle(0.4).unwrap();
+        let child = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let composition = AnimationOptions::new()
+            .lag_ratio(0.0)
+            .rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        assert!(context
+            .can_ordinary_transform_composition(
+                &[(source.clone(), foreign, child)],
+                composition,
+                play,
+            )
+            .unwrap_err()
+            .contains("another authoring store"));
+        assert!(context.live_player.is_none());
+
+        let stale = source.target_editor().unwrap();
+        let mut removal = SemanticMutationTransaction::new();
+        removal.remove_node(stale.node_id());
+        removal
+            .apply(&mut context.scene.store().borrow_mut())
+            .unwrap();
+        assert!(context
+            .can_ordinary_transform_composition(&[(source, stale, child)], composition, play,)
+            .is_err());
+        assert!(context.live_player.is_none());
     }
 
     #[test]

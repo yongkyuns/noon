@@ -4,7 +4,8 @@ use std::error::Error;
 
 use crate::{
     AnimationOptions, Color, ExecutionSession, ExecutionSessionInputError, HostCallbackId,
-    RateFunction, ReactiveValue, RustHostCallbackTable, Scene, SemanticPaint, SemanticVec3, Vec2,
+    RateFunction, ReactiveValue, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind,
+    SemanticPaint, SemanticVec3, TransformToRequest, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -206,6 +207,99 @@ pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
         assert_eq!(live.effective_layout(&circle)?.center, (5.0, -1.0));
         let authored = live.authored(&circle)?.transform.translation;
         assert_eq!((authored.x, authored.y), (5.0, -1.0));
+    }
+    assert_eq!(session.frame().time, 4.0);
+    Ok(session)
+}
+
+/// Execute paired flat Parallel and Sequence compositions on one live runtime.
+///
+/// Child intervals, root timing, transaction-local declaration identity, and
+/// endpoint release are all owned by the shared compiler/session. This builder
+/// is used unchanged by native Rust and direct single-context Rust/WASM hosts.
+pub fn ordinary_composition_play() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut left = scene.circle(0.4)?;
+    left.set_fill(1.0, 1.0, 1.0, 1.0)?;
+    left.set_translation(-2.0, 0.0)?;
+    let mut right = scene.circle(0.4)?;
+    right.set_fill(1.0, 1.0, 1.0, 1.0)?;
+    right.set_translation(2.0, 0.0)?;
+    let mut left_position = left.target_editor()?;
+    left_position.set_translation(-2.0, 1.0)?;
+    let mut right_position = right.target_editor()?;
+    right_position.set_translation(2.0, -1.0)?;
+    scene.add(&left)?;
+    scene.add(&right)?;
+    let linear = |duration| {
+        AnimationOptions::new()
+            .run_time(duration)
+            .rate_func(RateFunction::Linear)
+    };
+
+    let mut session = scene.execution_session()?;
+    {
+        let mut live = scene.live(&mut session);
+        let parallel = [
+            TransformToRequest::new(&left, &left_position, linear(2.0)),
+            TransformToRequest::new(&right, &right_position, linear(2.0)),
+        ];
+        let segment = live.declare_and_activate_transform_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            &parallel,
+            AnimationOptions::new()
+                .lag_ratio(0.0)
+                .rate_func(RateFunction::Linear),
+            AnimationOptions::new().rate_func(RateFunction::Linear),
+        )?;
+        assert_eq!((segment.start_time(), segment.end_time()), (0.0, 2.0));
+        live.advance_segment_to(segment, 1.0)?;
+        assert_eq!(live.effective_layout(&left)?.center, (-2.0, 0.5));
+        assert_eq!(live.effective_layout(&right)?.center, (2.0, -0.5));
+        live.advance_segment_to(segment, segment.end_time())?;
+        live.complete_segment(segment)?;
+        assert_eq!(live.effective_layout(&left)?.center, (-2.0, 1.0));
+        assert_eq!(live.effective_layout(&right)?.center, (2.0, -1.0));
+
+        let left_fill = live.target_editor(&left)?;
+        live.set_fill(&left_fill, 1.0, 0.0, 0.0, 1.0)?;
+        let right_fill = live.target_editor(&right)?;
+        live.set_fill(&right_fill, 0.0, 0.0, 1.0, 1.0)?;
+        let sequence = [
+            TransformToRequest::new(&left, &left_fill, linear(1.0)),
+            TransformToRequest::new(&right, &right_fill, linear(1.0)),
+        ];
+        let segment = live.declare_and_activate_transform_composition(
+            SemanticAnimationCompositionKind::Sequence,
+            &sequence,
+            AnimationOptions::new()
+                .lag_ratio(1.0)
+                .rate_func(RateFunction::Linear),
+            AnimationOptions::new().rate_func(RateFunction::Linear),
+        )?;
+        assert_eq!((segment.start_time(), segment.end_time()), (2.0, 4.0));
+        live.advance_segment_to(segment, 3.0)?;
+        assert_eq!(
+            live.effective(&left)?.style.fill,
+            Some(Color::rgb(1.0, 0.0, 0.0))
+        );
+        assert_eq!(
+            live.effective(&right)?.style.fill,
+            Some(Color::rgb(1.0, 1.0, 1.0))
+        );
+        live.advance_segment_to(segment, segment.end_time())?;
+        assert_eq!(
+            live.effective(&right)?.style.fill,
+            Some(Color::rgb(0.0, 0.0, 1.0))
+        );
+        live.complete_segment(segment)?;
+
+        // An ordinary edit after root completion proves every mapped driver was released.
+        live.set_fill(&left, 0.0, 1.0, 0.0, 1.0)?;
+        assert_eq!(
+            live.effective(&left)?.style.fill,
+            Some(Color::rgb(0.0, 1.0, 0.0))
+        );
     }
     assert_eq!(session.frame().time, 4.0);
     Ok(session)

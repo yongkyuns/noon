@@ -4,6 +4,7 @@ import {
   createDirectExecutionSmokeRenderer,
   createDirectNativeSignalsSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
+  createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
   createDirectValueTrackerSmokeRenderer,
@@ -283,6 +284,54 @@ async function directOrdinaryAffinePlayProof(expectedBackend) {
   return metrics;
 }
 
+async function directOrdinaryCompositionPlayProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryCompositionPlaySmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow) {
+    throw new Error("direct ordinary composition did not expose its settled publication");
+  }
+  await presentDirectFrame(renderer);
+
+  const leftColor = await sampleRenderedColor(canvas, -2, 1);
+  const rightColor = await sampleRenderedColor(canvas, 2, -1);
+  const oldLeftLuma = await sampleRenderedNeighborhood(canvas, -2, 0);
+  const oldRightLuma = await sampleRenderedNeighborhood(canvas, 2, 0);
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    leftColor,
+    rightColor,
+    oldLeftLuma,
+    oldRightLuma,
+  };
+  if (metrics.backend !== expectedBackend) {
+    throw new Error(
+      `direct ordinary composition selected ${metrics.backend}; expected ${expectedBackend}`,
+    );
+  }
+  if (metrics.authoredTime !== 4 || metrics.objectCount !== 2 || metrics.drawCalls <= 0) {
+    throw new Error(`direct ordinary composition produced invalid metrics ${JSON.stringify(metrics)}`);
+  }
+  if (
+    leftColor.green < 180 ||
+    leftColor.green < leftColor.red + 100 ||
+    leftColor.green < leftColor.blue + 100 ||
+    rightColor.blue < 180 ||
+    rightColor.blue < rightColor.red + 100 ||
+    rightColor.blue < rightColor.green + 100 ||
+    oldLeftLuma > 60 ||
+    oldRightLuma > 60
+  ) {
+    throw new Error(`direct ordinary composition pixels are invalid ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
 async function directOrdinaryStylePlayProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinaryStylePlaySmokeRenderer(canvas);
@@ -557,6 +606,7 @@ async function start() {
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
+  metrics.ordinaryCompositionPlay = await directOrdinaryCompositionPlayProof(expectedBackend);
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);
   metrics.valueTracker = await directValueTrackerProof(expectedBackend);

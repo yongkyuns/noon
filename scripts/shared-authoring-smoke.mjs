@@ -189,6 +189,20 @@ function visiblePixelStats(
   };
 }
 
+function renderedWorldPixel(buffer, worldX, worldY) {
+  const png = PNG.sync.read(buffer);
+  const pixelsPerUnit = png.height / 8;
+  const x = Math.round(png.width / 2 + worldX * pixelsPerUnit);
+  const y = Math.round(png.height / 2 - worldY * pixelsPerUnit);
+  const offset = (y * png.width + x) * 4;
+  return {
+    red: png.data[offset],
+    green: png.data[offset + 1],
+    blue: png.data[offset + 2],
+    alpha: png.data[offset + 3],
+  };
+}
+
 function textPixelStats(buffer) {
   const png = PNG.sync.read(buffer);
   let count = 0;
@@ -406,6 +420,7 @@ try {
     expectText = false,
     expectedFinalCenter = null,
     expectedFinalColor = null,
+    expectedComposition = false,
   } of [
     {
       filename: "live_semantic_scene.py",
@@ -432,6 +447,13 @@ try {
       expectedDuration: 4,
       endpointTime: null,
       expectedFinalCenter: [5, -1],
+    },
+    {
+      filename: "ordinary_composition_play.py",
+      objectCount: 2,
+      expectedDuration: 4,
+      endpointTime: null,
+      expectedComposition: true,
     },
     {
       filename: "ordinary_style_play.py",
@@ -471,6 +493,7 @@ try {
       endpointTime,
       expectText,
       expectedFinalCenter,
+      expectedComposition,
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -513,13 +536,13 @@ try {
           const rendered = await waitForFrame(initial.presentedFrames);
           endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
         }
-        retainForInspection = endpointTime !== null || expectText || expectedFinalCenter !== null;
+        retainForInspection = endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition;
         if (retainForInspection) harness.liveExampleExecution = execution;
         return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     assert.ok(result.metrics.drawCalls > 0, `${filename}: no draw calls`);
     if (expectedDuration !== null) {
@@ -566,13 +589,26 @@ try {
         );
       }
     }
+    if (expectedComposition) {
+      const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
+      const left = renderedWorldPixel(screenshot, -2, 1);
+      const right = renderedWorldPixel(screenshot, 2, -1);
+      assert.ok(
+        left.green > left.red + 80 && left.green > left.blue + 80,
+        `${filename}: post-completion left green edit was not rendered: ${JSON.stringify(left)}`,
+      );
+      assert.ok(
+        right.blue > right.red + 80 && right.blue > right.green + 80,
+        `${filename}: sequence right blue endpoint was not rendered: ${JSON.stringify(right)}`,
+      );
+    }
     if (expectText) {
       const pixels = textPixelStats(await page.locator(`#${result.canvasId}`).screenshot());
       assert.ok(pixels.count > 100, `${filename}: replacement glyphs were not rendered`);
       assert.ok(pixels.width > 50, `${filename}: replacement text has no glyph extent`);
       assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
     }
-    if (endpointTime !== null || expectText || expectedFinalCenter !== null) {
+    if (endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition) {
       await page.evaluate(() => {
         window.sharedAuthoringSmoke.liveExampleExecution.terminate();
         window.sharedAuthoringSmoke.liveExampleExecution = null;

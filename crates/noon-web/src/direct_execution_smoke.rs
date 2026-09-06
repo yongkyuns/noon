@@ -117,6 +117,16 @@ pub async fn create_direct_ordinary_affine_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Browser proof that flat Parallel/Sequence composition uses the same typed
+/// target-neutral session as the native Rust example.
+#[wasm_bindgen(js_name = createDirectOrdinaryCompositionPlaySmokeRenderer)]
+pub async fn create_direct_ordinary_composition_play_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::ordinary_composition_play().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Browser proof that ordinary style animation and its following authored edit
 /// execute through the same target-neutral Rust session as the native example.
 #[wasm_bindgen(js_name = createDirectOrdinaryStylePlaySmokeRenderer)]
