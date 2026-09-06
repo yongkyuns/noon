@@ -629,7 +629,10 @@ def _canonical_affine_animation(
     # builder with `_AlignedAnimationBuilder`. It deliberately does not inherit
     # Noon’s original `_AnimationBuilder`, so accepting only the latter skips
     # this canonical route and incorrectly lowers an ordinary legacy track.
-    if isinstance(animation, (_base._AnimationBuilder, _compat._CompatAnimationBuilder)):
+    # Do not accept subclasses here. Several compatibility operations inherit the
+    # builder solely to reuse option handling and materialize a target lazily;
+    # reading that property before their own dispatcher runs can be invalid.
+    if type(animation) in (_base._AnimationBuilder, _compat._CompatAnimationBuilder):
         source, target = animation.source, animation.target
     elif type(animation) is _base.Transform:
         source, target = animation.source, animation.target
