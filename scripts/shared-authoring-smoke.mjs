@@ -702,6 +702,7 @@ try {
     let execution = null;
     let registration = null;
     let settled = false;
+    let authoringFailure = null;
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -717,7 +718,10 @@ try {
         });
       },
     });
-    authoredPromise.then(() => { settled = true; }, () => {});
+    authoredPromise.then(() => { settled = true; }, (error) => {
+      settled = true;
+      authoringFailure = String(error?.message ?? error);
+    });
     harness.callbackContinuationAuthoredPromise = authoredPromise;
 
     let midpoint = null;
@@ -736,7 +740,7 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     if (midpoint === null || settled) {
-      throw new Error("callback continuation source did not remain suspended at a live midpoint");
+      throw new Error(authoringFailure ?? "callback continuation source did not remain suspended at a live midpoint");
     }
     return { canvasId: canvas.id, midpoint, registration };
   }, callbackContinuationSource);
