@@ -79,10 +79,14 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
   const frameSamples = [];
   const sampleFrames = (async () => {
     while (sampling) {
-      frameSamples.push(await page.evaluate(() => ({
-        frames: Number(document.querySelector("#status")?.dataset.presentedFrames ?? 0),
-        now: performance.now(),
-      })));
+      const sample = await page.evaluate(async () => {
+        const report = await window.__noonExampleGallery?.executionMetrics?.();
+        return {
+          frames: Number(report?.metrics?.presentedFrames ?? 0),
+          now: performance.now(),
+        };
+      });
+      frameSamples.push(sample);
       await page.waitForTimeout(50);
     }
   })();
