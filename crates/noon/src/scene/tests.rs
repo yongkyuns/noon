@@ -20,6 +20,13 @@ fn ordinary_transform_preflight_is_read_only_and_shares_affine_payload_validatio
     let mut style_target = circle.target_editor().unwrap();
     style_target.set_fill_opacity(0.5).unwrap();
     let revision = scene.store().borrow().scene_revision();
+    assert!(scene
+        .can_ordinary_transform_to(&circle, &style_target, options)
+        .unwrap());
+    assert_eq!(scene.store().borrow().scene_revision(), revision);
+
+    style_target.set_stroke_width(3.0).unwrap();
+    let revision = scene.store().borrow().scene_revision();
     assert!(!scene
         .can_ordinary_transform_to(&circle, &style_target, options)
         .unwrap());
