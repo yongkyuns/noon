@@ -856,6 +856,22 @@ def _rotate(
     about_edge: object | None = None,
     **kwargs: Any,
 ) -> _base.Mobject:
+    # Shared line geometry routes ``rotate_about_origin`` here after the
+    # semantic-handle wrapper becomes the public rotate implementation. During
+    # a callback, bypass handle/raw dispatch entirely and mutate the exact
+    # property row through the shared Rust transform operation.
+    from _manim_updaters import _canonical_phase_context, _canonical_rotate
+
+    if _canonical_phase_context(self) is not None:
+        return _canonical_rotate(
+            self,
+            angle,
+            axis,
+            about_point=about_point,
+            about_edge=about_edge,
+            **kwargs,
+        )
+
     handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_ROTATE(

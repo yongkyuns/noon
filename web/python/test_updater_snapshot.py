@@ -239,6 +239,32 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertAlmostEqual(writes[0]["transform"]["rotation"], math.pi / 2.0)
         self.assertFalse(next(iter(context._rows.values())).bounds_translation_only)
 
+    def test_shared_line_rotate_about_origin_uses_the_callback_property_row(self) -> None:
+        import _manim_shared_geometry
+
+        scene, _, context = self._mobject_and_context()
+        line = compat.Line((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+        scene.add(line)
+        line._semantic_handle = type(
+            "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
+        )()
+        line._semantic_handle_fresh = True
+        # Bound callback registrations deliberately make the ordinary handle
+        # unavailable; the public shared-geometry wrapper must still reach the
+        # phase property row rather than touching raw Line geometry.
+        line._noon_updaters = []
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            _manim_shared_geometry._rotate_about_origin(line, math.pi / 2.0)
+            writes = context.effective_batch()["writes"]
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+        self.assertEqual(len(context._operations.rotations), 1)
+        self.assertEqual([write["kind"] for write in writes], ["transform"])
+        self.assertEqual(writes[0]["transform"]["translation"], {"x": 1.0, "y": 2.0})
+        self.assertAlmostEqual(writes[0]["transform"]["rotation"], math.pi / 2.0)
+
     def test_native_text_uses_the_same_effective_overlay_without_authored_writes(self) -> None:
         scene, _, context = self._mobject_and_context()
 
