@@ -286,14 +286,17 @@ def _live_mutation_context(value: object):
     detached creation and affine edits through the same live session.
     """
     context = getattr(value, "_canonical_live_target_context", None)
-    if context is not None:
-        return context
-    scene = getattr(value, "_scene", None)
-    context = getattr(scene, "_canonical_authoring_context", None)
-    handoff_duration = getattr(context, "liveHandoffDuration", None)
-    if callable(handoff_duration) and handoff_duration() is not None:
-        return context
-    return None
+    if context is None:
+        scene = getattr(value, "_scene", None)
+        context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None:
+        return None
+    ownership = str(context.liveExecutionOwnership())
+    # A returned runtime is dormant: direct typed authoring updates the shared
+    # store, and the next explicit run boundary refreshes that stale runtime.
+    # A transferred runtime must remain non-mutable from this worker, so retain
+    # the context and let its typed live call reject before any store change.
+    return context if ownership in {"active", "transferred"} else None
 
 
 def _has_shared_layout_queries(handle: object) -> bool:

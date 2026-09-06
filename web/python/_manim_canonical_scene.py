@@ -309,10 +309,10 @@ def _canonical_affine_animation(
             "canonical ordinary animation requires typed semantic Mobject handles"
         )
     context = getattr(scene, "_canonical_authoring_context", None)
-    handoff_duration = getattr(context, "liveHandoffDuration", None)
+    ownership = getattr(context, "liveExecutionOwnership", None)
     if (
-        callable(handoff_duration)
-        and handoff_duration() is not None
+        callable(ownership)
+        and str(ownership()) in {"active", "transferred"}
         and getattr(target, "_canonical_live_target_context", None) is not context
     ):
         raise NotImplementedError(
@@ -428,8 +428,8 @@ def _play(self, *args, **kwargs):
             "legacy Scene.play cannot follow canonical ValueTracker timing"
         )
     context = getattr(self, "_canonical_authoring_context", None)
-    handoff_duration = getattr(context, "liveHandoffDuration", None)
-    if callable(handoff_duration) and handoff_duration() is not None:
+    ownership = getattr(context, "liveExecutionOwnership", None)
+    if callable(ownership) and str(ownership()) in {"active", "transferred"}:
         raise NotImplementedError(
             "an active canonical session currently supports only one leaf affine animation"
         )
