@@ -5708,6 +5708,39 @@ mod tests {
     }
 
     #[test]
+    fn live_family_target_publication_keeps_the_execution_owner_coherent() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context.live_player(1.0).unwrap();
+        let target = context.live_target_editor(&circle).unwrap();
+        let family = context
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)])
+            .unwrap();
+        let nested = context
+            .live_family(&[noon::MobjectFamilyMember::Family(&family)])
+            .unwrap();
+        assert_eq!(
+            context
+                .scene
+                .store()
+                .borrow()
+                .semantic_family_members_checked(nested.node_id())
+                .unwrap(),
+            &[family.node_id()]
+        );
+        let foreign = noon::Scene::new().circle(0.2).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&foreign)])
+            .is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        // Another owner-mediated mutation remains valid after both publications
+        // and the rejected foreign member: no stale execution revision is hidden.
+        context.live_target_editor(&circle).unwrap();
+    }
+
+    #[test]
     fn target_editor_rejects_a_transferred_player_without_authored_fallback() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();

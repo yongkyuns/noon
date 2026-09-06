@@ -97,7 +97,7 @@ impl FamilyTransformIndicate {
 }
 
 pub fn program() -> Result<LiveProgram<FamilyTransformIndicate>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut left = Mobject::manim_square(Rc::clone(scene.store()), 0.6)?;
     let mut right = Mobject::manim_circle(Rc::clone(scene.store()), 0.3)?;
     left.set_translation(-2.0, 0.0)?;

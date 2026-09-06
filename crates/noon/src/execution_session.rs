@@ -47,22 +47,6 @@ use noon_runtime::{
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
-fn recolor_indicate_style(style: &mut noon_core::SemanticStyle, color: noon_core::Color) {
-    let mut changed = false;
-    for paint in [&mut style.fill, &mut style.stroke] {
-        if let Some(noon_core::SemanticPaint::Solid(existing)) = paint {
-            *existing = noon_core::Color {
-                alpha: existing.alpha,
-                ..color
-            };
-            changed = true;
-        }
-    }
-    if !changed {
-        style.fill = Some(noon_core::SemanticPaint::Solid(color));
-    }
-}
-
 fn resolve_committed_node(
     node: SemanticTransactionNodeRef,
     result: &SemanticMutationTransactionResult,
@@ -1645,7 +1629,8 @@ impl ExecutionSession {
                                 source,
                                 target_state,
                                 interpolation: noon_core::SemanticTransformInterpolation::Affine,
-                                options: AnimationOptions::new(),
+                                // The family composition applies authored easing once.
+                                options: AnimationOptions::new().rate_func(RateFunction::Linear),
                             },
                         )
                         .collect(),

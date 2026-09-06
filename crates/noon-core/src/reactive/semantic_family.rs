@@ -91,7 +91,7 @@ impl SemanticStore {
                             target,
                         });
                     }
-                    for (&source_member, &target_member) in
+                    for (&source_member, target_member) in
                         source_node.members().iter().zip(target_node.members())
                     {
                         pair(

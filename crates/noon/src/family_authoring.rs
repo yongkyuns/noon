@@ -28,7 +28,7 @@ impl MobjectFamilyMember<'_> {
         }
     }
 
-    pub(crate) const fn node_id(&self) -> SemanticNodeId {
+    pub(crate) fn node_id(&self) -> SemanticNodeId {
         match self {
             Self::Mobject(member) => member.node_id(),
             Self::Family(member) => member.node_id(),

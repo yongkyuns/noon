@@ -290,12 +290,24 @@ class ManimRotatingPrincipalAxisProjectionTests(unittest.TestCase):
                     timing = final_track["timing"]
                     assert float(timing["start_time"]) + float(timing["duration"]) == end_time
 
-            # The public demo immediately follows the family rotations with a group
-            # animate. Rotating must have committed its final targets to the browser's
-            # shared semantic ownership model before this target-state copy is seeded.
-            scene.play(family.animate.move_to(ORIGIN))
-            assert scene.time == 18.0
-            assert len(semantic_commits) == 20
+            # Target copying still observes the final committed orientations. This
+            # retained fixture cannot schedule the now-migrated family Transform;
+            # its real shared execution is covered by the paired family example.
+            builder = family.animate.move_to(ORIGIN)
+            source_leaves = _manim_compat._leaf_mobjects(family)
+            target_leaves = _manim_compat._leaf_mobjects(builder.target)
+            for source, target in zip(source_leaves, target_leaves):
+                source_transform = source._current_raw().to_ir()["transform"]
+                target_transform = target._current_raw().to_ir()["transform"]
+                assert source_transform["rotation"] == target_transform["rotation"]
+                assert source_transform["scale"] == target_transform["scale"]
+            try:
+                scene.play(builder)
+                raise AssertionError("legacy fixture scheduled a shared family Transform")
+            except NotImplementedError as error:
+                assert "shared semantic composition" in str(error)
+            assert scene.time == 17.0
+            assert len(semantic_commits) == 16
 
             # This is the actual f32 wire value obtained near 3*pi. It is a principal
             # orientation despite representational roundoff and must not be confused
