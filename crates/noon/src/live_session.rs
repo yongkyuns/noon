@@ -669,35 +669,7 @@ impl<'a> LiveSession<'a> {
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, LiveSessionError> {
         self.require_mobject(target)?;
-        let endpoint = match endpoint {
-            AffineLifecycleEndpoint::Point {
-                x,
-                y,
-                rotation_offset,
-                point_color,
-            } => SemanticAffineLifecycleEndpoint {
-                point: SemanticVec3::new(x, y, 0.0),
-                rotation_offset,
-                point_color,
-            },
-            AffineLifecycleEndpoint::EffectiveCenter => {
-                if direction != AffineLifecycleDirection::RemoveTo {
-                    return Err(LiveSessionError::Mobject(
-                        "effective-center lifecycle endpoints require a live removal target".into(),
-                    ));
-                }
-                let center = if self.contains(target)? {
-                    self.effective_layout(target)?.center
-                } else {
-                    target.center().map_err(LiveSessionError::Mobject)?
-                };
-                SemanticAffineLifecycleEndpoint {
-                    point: SemanticVec3::new(center.0, center.1, 0.0),
-                    rotation_offset: 0.0,
-                    point_color: None,
-                }
-            }
-        };
+        let endpoint = self.resolve_affine_lifecycle_endpoint(target, direction, endpoint)?;
         let mut store = self.store.borrow_mut();
         self.session
             .declare_and_activate_affine_lifecycle(
@@ -799,6 +771,43 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, play_options)
     }
 
+    fn resolve_affine_lifecycle_endpoint(
+        &self,
+        target: &Mobject,
+        direction: AffineLifecycleDirection,
+        endpoint: AffineLifecycleEndpoint,
+    ) -> Result<SemanticAffineLifecycleEndpoint, LiveSessionError> {
+        match endpoint {
+            AffineLifecycleEndpoint::Point {
+                x,
+                y,
+                rotation_offset,
+                point_color,
+            } => Ok(SemanticAffineLifecycleEndpoint {
+                point: SemanticVec3::new(x, y, 0.0),
+                rotation_offset,
+                point_color,
+            }),
+            AffineLifecycleEndpoint::EffectiveCenter => {
+                if direction != AffineLifecycleDirection::RemoveTo {
+                    return Err(LiveSessionError::Mobject(
+                        "effective-center lifecycle endpoints require a live removal target".into(),
+                    ));
+                }
+                let center = if self.contains(target)? {
+                    self.effective_layout(target)?.center
+                } else {
+                    target.center().map_err(LiveSessionError::Mobject)?
+                };
+                Ok(SemanticAffineLifecycleEndpoint {
+                    point: SemanticVec3::new(center.0, center.1, 0.0),
+                    rotation_offset: 0.0,
+                    point_color: None,
+                })
+            }
+        }
+    }
+
     fn execution_composition_request(
         &self,
         request: &AnimationCompositionRequest<'_>,
@@ -866,7 +875,8 @@ impl<'a> LiveSession<'a> {
                 Request::AffineLifecycle {
                     target: target.node_id(),
                     direction: *direction,
-                    endpoint: *endpoint,
+                    endpoint: self
+                        .resolve_affine_lifecycle_endpoint(target, *direction, *endpoint)?,
                     options: *options,
                 }
             }
@@ -2777,7 +2787,7 @@ mod recursive_composition_tests {
             result,
             Err(LiveSessionError::Activation(
                 ExecutionSessionAnimationError::CreateTarget {
-                    error: ExecutionSessionCreateError::DuplicateTarget,
+                    error: crate::ExecutionSessionCreateError::DuplicateTarget,
                     ..
                 }
             ))
