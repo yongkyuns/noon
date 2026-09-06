@@ -1122,10 +1122,10 @@ try {
   }, shrinkSource);
   try {
     const canvas = page.locator("#scene-shared-text-shrink");
-    const initial = visiblePixelStats(await canvas.screenshot());
+    const initial = visiblePixelStats(await canvas.screenshot(), (r, g, b) => Math.max(r, g, b) > 80);
     assert.ok(initial.count > 100, "detached Text was not admitted for Shrink");
     await page.evaluate(() => window.sharedAuthoringSmoke.shrinkProof.execution.sampleToAuthoredTime(0.5));
-    const midpoint = visiblePixelStats(await canvas.screenshot());
+    const midpoint = visiblePixelStats(await canvas.screenshot(), (r, g, b) => Math.max(r, g, b) > 80);
     assert.ok(midpoint.count > 20 && midpoint.count < initial.count * 0.6,
       "Text did not shrink at the midpoint");
     assert.ok(Math.abs(midpoint.centerX - initial.centerX) < 4 &&
@@ -1138,7 +1138,7 @@ try {
     });
     assert.equal(result.duration, 1);
     assert.equal(result.metrics.objectCount, 0);
-    assert.equal(visiblePixelStats(await canvas.screenshot()).count, 0,
+    assert.equal(visiblePixelStats(await canvas.screenshot(), (r, g, b) => Math.max(r, g, b) > 80).count, 0,
       "Text remained visible after shared Shrink completion");
   } finally {
     await page.evaluate(() => {

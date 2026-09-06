@@ -23,7 +23,7 @@ assert.ok(ready.length >= 1, "expected exact-source Manim examples");
 const parityManifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
 const parityManifest = JSON.parse(await readFile(parityManifestPath, "utf8"));
 const parityFixtures = new Map(parityManifest.fixtures.map((fixture) => [fixture.id, fixture]));
-const retainedTextAnimationId = "manim-shrink-to-center-text";
+const completedRemovalId = "manim-shrink-to-center-text";
 
 function noonSourceFromUpstream(source, id) {
   const upstreamImport = "from manim import *";
@@ -214,7 +214,7 @@ try {
       ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
       { result, label: entry.id },
     );
-    if (entry.id === retainedTextAnimationId) {
+    if (entry.id === completedRemovalId) {
       assert.equal(authoredObjectCount(entry, result, retained), 0,
         `${entry.id}: completed shared Shrink must export no live object`);
     } else {
