@@ -3,6 +3,7 @@ import {
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
   createDirectNativeSignalsSmokeRenderer,
+  createDirectOrdinaryAffineCallbackContinuationSmokeRenderer,
   createDirectOrdinaryAffineContinuationSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
@@ -466,6 +467,66 @@ async function directOrdinaryFadePlayProof(expectedBackend) {
   return metrics;
 }
 
+async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryAffineCallbackContinuationSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow || initial.cadence !== "animation-frame") {
+    throw new Error(
+      `direct callback continuation did not start its shared animation: ${JSON.stringify(initial)}`,
+    );
+  }
+  await presentDirectFrame(renderer);
+  const initialColor = await sampleRenderedColor(canvas, 0, 0);
+
+  if (!renderer.advanceDirectRealtime(500)) {
+    throw new Error("direct callback continuation did not publish its midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const midpointColor = await sampleRenderedColor(canvas, 1, 1);
+  const midpointVacatedLuma = await sampleRenderedNeighborhood(canvas, 1, 0);
+
+  if (!renderer.advanceDirectRealtime(1000)) {
+    throw new Error("direct callback continuation did not publish its endpoint");
+  }
+  await presentDirectFrame(renderer);
+  const endpointColor = await sampleRenderedColor(canvas, 2, 1);
+  const endpointVacatedLuma = await sampleRenderedNeighborhood(canvas, 2, 0);
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    initialColor,
+    midpointColor,
+    endpointColor,
+    midpointVacatedLuma,
+    endpointVacatedLuma,
+  };
+  if (metrics.backend !== expectedBackend || metrics.authoredTime !== 1) {
+    throw new Error(`direct callback continuation selected an invalid runtime ${JSON.stringify(metrics)}`);
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
+    throw new Error(`direct callback continuation produced invalid renderer metrics ${JSON.stringify(metrics)}`);
+  }
+  if (
+    initialColor.blue < 180 ||
+    midpointColor.blue < 70 ||
+    endpointColor.blue < 70 ||
+    midpointColor.blue >= initialColor.blue * 0.7 ||
+    midpointColor.blue <= initialColor.blue * 0.25 ||
+    endpointColor.blue >= initialColor.blue * 0.7 ||
+    endpointColor.blue <= initialColor.blue * 0.25 ||
+    midpointVacatedLuma > 60 ||
+    endpointVacatedLuma > 60
+  ) {
+    throw new Error(`direct callback continuation pixels or lifecycle are invalid ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
 async function directOrdinaryCompositionPlayProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinaryCompositionPlaySmokeRenderer(canvas);
@@ -790,6 +851,8 @@ async function start() {
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
   metrics.ordinaryFadePlay = await directOrdinaryFadePlayProof(expectedBackend);
+  metrics.ordinaryAffineCallbackContinuation =
+    await directOrdinaryAffineCallbackContinuationProof(expectedBackend);
   metrics.ordinaryCompositionPlay = await directOrdinaryCompositionPlayProof(expectedBackend);
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);

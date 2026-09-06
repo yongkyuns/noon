@@ -197,7 +197,10 @@ mod wasm {
         C: LiveContinuation + 'static,
         C::Error: std::fmt::Display,
     {
-        fn new(mut program: LiveProgram<C>) -> Result<Self, JsValue> {
+        fn new_with_callbacks(
+            mut program: LiveProgram<C>,
+            callbacks: RustHostCallbackTable,
+        ) -> Result<Self, JsValue> {
             let status = program.resume().map_err(js_error)?;
             if !matches!(
                 status,
@@ -207,10 +210,7 @@ mod wasm {
                     "direct live continuation did not begin at an await or finished state",
                 ));
             }
-            Ok(Self {
-                program,
-                callbacks: RustHostCallbackTable::new(),
-            })
+            Ok(Self { program, callbacks })
         }
 
         fn resume_if_ready(&mut self) -> Result<bool, JsValue> {
@@ -306,15 +306,18 @@ mod wasm {
             }
         }
 
-        fn from_live_program<C>(program: LiveProgram<C>) -> Result<Self, JsValue>
+        fn from_live_program_with_callbacks<C>(
+            program: LiveProgram<C>,
+            callbacks: RustHostCallbackTable,
+        ) -> Result<Self, JsValue>
         where
             C: LiveContinuation + 'static,
             C::Error: std::fmt::Display,
         {
             Ok(Self {
-                authority: DirectSourceAuthority::Program(Box::new(DirectLiveProgramAdapter::new(
-                    program,
-                )?)),
+                authority: DirectSourceAuthority::Program(Box::new(
+                    DirectLiveProgramAdapter::new_with_callbacks(program, callbacks)?,
+                )),
                 next_native_event_sequence: 0,
             })
         }
@@ -1301,7 +1304,31 @@ mod wasm {
             C: LiveContinuation + 'static,
             C::Error: std::fmt::Display,
         {
-            let source = DirectExecutionSource::from_live_program(program)?;
+            Self::create_from_live_program_with_callbacks(
+                canvas,
+                program,
+                RustHostCallbackTable::new(),
+            )
+            .await
+        }
+
+        /// Build the browser canvas host from one shared Rust continuation and
+        /// its target-native callable table.
+        ///
+        /// Callback phases are selected and committed by the program's execution
+        /// session in the same WASM context. JavaScript receives only the canvas
+        /// renderer and its derived wake directives.
+        pub async fn create_from_live_program_with_callbacks<C>(
+            canvas: OffscreenCanvas,
+            program: LiveProgram<C>,
+            callbacks: RustHostCallbackTable,
+        ) -> Result<Self, JsValue>
+        where
+            C: LiveContinuation + 'static,
+            C::Error: std::fmt::Display,
+        {
+            let source =
+                DirectExecutionSource::from_live_program_with_callbacks(program, callbacks)?;
             let camera = source.session().camera().map_err(js_error)?;
             Self::create_with_source(
                 canvas,

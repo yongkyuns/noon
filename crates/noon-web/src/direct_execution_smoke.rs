@@ -137,6 +137,18 @@ pub async fn create_direct_ordinary_fade_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Browser proof that the paired ordinary continuation and its ordered Rust
+/// callback table execute through the normal direct single-context WASM host.
+#[wasm_bindgen(js_name = createDirectOrdinaryAffineCallbackContinuationSmokeRenderer)]
+pub async fn create_direct_ordinary_affine_callback_continuation_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (program, callbacks) =
+        noon::example_scenes::ordinary_callback_continuation_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
+        .await
+}
+
 /// Browser proof that flat Parallel/Sequence composition uses the same typed
 /// target-neutral session as the native Rust example.
 #[wasm_bindgen(js_name = createDirectOrdinaryCompositionPlaySmokeRenderer)]

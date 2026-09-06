@@ -398,6 +398,23 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM ordinary fade did not preserve detached wait and same-handle re-entry",
   );
   assert.equal(
+    direct.metrics.ordinaryAffineCallbackContinuation?.backend,
+    expectedBackend,
+    "direct Rust/WASM callback continuation did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffineCallbackContinuation?.authoredTime,
+    1,
+    "direct Rust/WASM callback continuation did not reach its exact endpoint",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffineCallbackContinuation?.midpointColor.blue >= 70 &&
+      direct.metrics.ordinaryAffineCallbackContinuation?.endpointColor.blue >= 70 &&
+      direct.metrics.ordinaryAffineCallbackContinuation?.midpointVacatedLuma <= 60 &&
+      direct.metrics.ordinaryAffineCallbackContinuation?.endpointVacatedLuma <= 60,
+    "direct Rust/WASM callback continuation did not render its ordered midpoint and endpoint",
+  );
+  assert.equal(
     direct.metrics.ordinaryCompositionPlay?.backend,
     expectedBackend,
     "direct Rust/WASM ordinary composition did not use the selected renderer backend",

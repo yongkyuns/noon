@@ -103,6 +103,7 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Affine completion | [live_affine_completion.rs](crates/noon-native/examples/live_affine_completion.rs) | [live_affine_completion.py](web/python/examples/live_affine_completion.py) |
 | Sequential ordinary affine play | [ordinary_affine_play.rs](crates/noon-native/examples/ordinary_affine_play.rs) | [ordinary_affine_play.py](web/python/examples/ordinary_affine_play.py) |
 | Ordinary FadeIn/FadeOut lifecycle | [ordinary_fade_play.rs](crates/noon-native/examples/ordinary_fade_play.rs) | [ordinary_fade_play.py](web/python/examples/ordinary_fade_play.py) |
+| Ordinary affine callback continuation | [ordinary_affine_callback_continuation.rs](crates/noon-native/examples/ordinary_affine_callback_continuation.rs) | [ordinary_affine_callback_continuation.py](web/python/examples/ordinary_affine_callback_continuation.py) |
 | Flat ordinary composition | [ordinary_composition_play.rs](crates/noon-native/examples/ordinary_composition_play.rs) | [ordinary_composition_play.py](web/python/examples/ordinary_composition_play.py) |
 | Scalar ValueTracker | [live_value_tracker.rs](crates/noon-native/examples/live_value_tracker.rs) | [live_value_tracker.py](web/python/examples/live_value_tracker.py) |
 | Ordered property callbacks | [live_affine_callbacks.rs](crates/noon-native/examples/live_affine_callbacks.rs) | [live_affine_callbacks.py](web/python/examples/live_affine_callbacks.py) |
@@ -110,7 +111,7 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 
 Run a Rust example with `cargo run -p noon-native --example live_content_switch`, or paste its paired Python source into the playground. The shared browser smoke executes the published Python files and checks their rendered output.
 
-The callback example runs forward, combining an affine animation with ordered transform/style updates and a separate `dt` accumulator. This callback path currently supports object property reads and writes for active callback targets. Family callbacks, structural callback edits, undeclared reads, and seeking or looping opaque callbacks are not supported. A callback failure stops progression at the last coherent frame.
+The callback examples run forward through compiler-selected barriers. The ordinary continuation pairs one affine transform with ordered transform/style updates and resumes authoring only after its exact endpoint publication. The broader callback example also includes a separate `dt` accumulator. This callback path currently supports object property reads and writes for active callback targets. Family callbacks, structural callback edits, undeclared reads, and seeking or looping opaque callbacks are not supported. A callback failure stops progression at the last coherent frame.
 
 The API is intentionally mutable and interactive. The implementation is not forced to remain dynamic: predetermined animation lowers to compiled tracks, common reactive behavior lowers to a native dependency graph, and only semantics that genuinely require arbitrary host-language execution retain host callback slots.
 
