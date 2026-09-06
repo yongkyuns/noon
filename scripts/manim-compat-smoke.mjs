@@ -764,7 +764,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent retained-family play, mixed family/ordinary play with retained edit-rerun rebuild, independent fill/stroke opacity, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent retained-family play, mixed family/ordinary play with retained edit-rerun rebuild, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();
