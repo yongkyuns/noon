@@ -3,6 +3,8 @@ import { ExecutionWorkerClient } from "./execution-worker-client.js";
 export const AUTHORING_EXECUTION_LEGACY = "legacy";
 export const AUTHORING_EXECUTION_RETAINED = "retained";
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
+export const SEMANTIC_PACING_REALTIME = "realtime";
+export const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 
 const SCENE_SPEC_VERSION = 1;
 const DEFAULT_LOOP_DURATION_SECONDS = 4;
@@ -181,6 +183,7 @@ export class AuthoringExecutionClient {
       transportMode = undefined,
       sharedSlotCapacity = undefined,
       initiallyPaused = false,
+      pacing = SEMANTIC_PACING_REALTIME,
     } = {},
   ) {
     if (this.#player !== null || this.#transition !== null) {
@@ -194,12 +197,17 @@ export class AuthoringExecutionClient {
     if (initiallyPaused && semantic.continuationGeneration !== null) {
       throw new Error("source-owned semantic continuations cannot start paused");
     }
+    validateSemanticPacing(pacing);
+    if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && semantic.continuationGeneration === null) {
+      throw new Error("external sample pacing requires a source-owned semantic continuation");
+    }
     this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
     this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
     const options = {
       loopDurationSeconds: this.#loopDurationSeconds,
       sharedSlotCapacity: this.#sharedSlotCapacity,
       initiallyPaused,
+      pacing,
     };
     if (transportMode !== undefined) {
       options.transportMode = transportMode;
@@ -375,6 +383,15 @@ export class AuthoringExecutionClient {
         throw new Error("forward authored-time advancement requires semantic execution mode");
       }
       return player.advanceTo(timeSeconds);
+    });
+  }
+
+  async sampleToAuthoredTime(timeSeconds) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("external authored-time sampling requires semantic execution mode");
+      }
+      return player.sampleToAuthoredTime(timeSeconds);
     });
   }
 
@@ -774,6 +791,13 @@ function validateLoopDurationSeconds(loopDurationSeconds) {
     throw new TypeError("loop duration must be positive and finite");
   }
   return loopDurationSeconds;
+}
+
+function validateSemanticPacing(pacing) {
+  if (pacing !== SEMANTIC_PACING_REALTIME && pacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES) {
+    throw new TypeError(`unsupported semantic execution pacing ${pacing}`);
+  }
+  return pacing;
 }
 
 function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
