@@ -298,6 +298,46 @@ function textPixelStats(buffer) {
   };
 }
 
+// Share source attachment across visual proofs; authored timing stays in Rust.
+async function startSampledSource(page, source, canvasId) {
+  await page.evaluate(async ({ source, canvasId }) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = canvasId;
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    let resolveAttached;
+    let rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
+    });
+    const authored = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(registration) {
+        await execution.startSemanticExecution(registration.semanticExecution, {
+          authoringClient: harness.authoring,
+          transportMode: "transferable",
+          pacing: "external_samples",
+        });
+        resolveAttached();
+      },
+    });
+    authored.then(() => rejectAttached(new Error(`${canvasId} did not register a continuation`)), rejectAttached);
+    harness.sampledProof = { execution, authored };
+    await attached;
+    await execution.sampleToAuthoredTime(0);
+  }, { source, canvasId });
+}
+
+async function stopSampledSource(page) {
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.sampledProof.execution.terminate();
+    window.sharedAuthoringSmoke.sampledProof = null;
+  });
+}
+
 await new Promise((resolve, reject) => {
   server.once("error", reject);
   server.listen(port, "127.0.0.1", resolve);
@@ -621,6 +661,18 @@ try {
       expectedDuration: 2.6,
       endpointTime: null,
       expectedCamera: true,
+    },
+    {
+      filename: "manim_example_add_with_run_time.py",
+      objectCount: 25,
+      expectedDuration: 6,
+      endpointTime: null,
+    },
+    {
+      filename: "manim_example_succession.py",
+      objectCount: 4,
+      expectedDuration: 4,
+      endpointTime: null,
     },
     {
       filename: "ordinary_composition_play.py",
@@ -1091,40 +1143,12 @@ try {
   const shrinkSource = await readFile(
     path.join(repoRoot, "web/python/examples/manim_parity_shrink_to_center.py"), "utf8",
   );
-  await page.evaluate(async (source) => {
-    const harness = window.sharedAuthoringSmoke;
-    const canvas = document.createElement("canvas");
-    canvas.id = "scene-shared-text-shrink";
-    canvas.width = 640;
-    canvas.height = 360;
-    document.body.append(canvas);
-    const execution = new harness.AuthoringExecutionClient(canvas);
-    let resolveAttached;
-    let rejectAttached;
-    const attached = new Promise((resolve, reject) => {
-      resolveAttached = resolve;
-      rejectAttached = reject;
-    });
-    const authored = harness.authoring.run(source, {}, {
-      async onSemanticContinuation(registration) {
-        await execution.startSemanticExecution(registration.semanticExecution, {
-          authoringClient: harness.authoring,
-          transportMode: "transferable",
-          pacing: "external_samples",
-        });
-        resolveAttached();
-      },
-    });
-    authored.then(() => rejectAttached(new Error("Shrink did not register a continuation")), rejectAttached);
-    harness.shrinkProof = { execution, authored };
-    await attached;
-    await execution.sampleToAuthoredTime(0);
-  }, shrinkSource);
+  await startSampledSource(page, shrinkSource, "scene-shared-text-shrink");
   try {
     const canvas = page.locator("#scene-shared-text-shrink");
     const initial = visiblePixelStats(await canvas.screenshot(), (r, g, b) => Math.max(r, g, b) > 80);
     assert.ok(initial.count > 100, "detached Text was not admitted for Shrink");
-    await page.evaluate(() => window.sharedAuthoringSmoke.shrinkProof.execution.sampleToAuthoredTime(0.5));
+    await page.evaluate(() => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.5));
     const midpoint = visiblePixelStats(await canvas.screenshot(), (r, g, b) => Math.max(r, g, b) > 80);
     assert.ok(midpoint.count > 20 && midpoint.count < initial.count * 0.6,
       "Text did not shrink at the midpoint");
@@ -1132,7 +1156,7 @@ try {
       Math.abs(midpoint.centerY - initial.centerY) < 4,
       "Text shrink moved its effective visual center");
     const result = await page.evaluate(async () => {
-      const { execution, authored } = window.sharedAuthoringSmoke.shrinkProof;
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
       const [, result] = await Promise.all([execution.sampleToAuthoredTime(1), authored]);
       return { duration: result.duration, metrics: (await execution.metrics()).metrics };
     });
@@ -1141,10 +1165,39 @@ try {
     assert.equal(visiblePixelStats(await canvas.screenshot(), (r, g, b) => Math.max(r, g, b) > 80).count, 0,
       "Text remained visible after shared Shrink completion");
   } finally {
-    await page.evaluate(() => {
-      window.sharedAuthoringSmoke.shrinkProof.execution.terminate();
-      window.sharedAuthoringSmoke.shrinkProof = null;
+    await stopSampledSource(page);
+  }
+
+  const compositionSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_timed_composition.py"), "utf8",
+  );
+  await startSampledSource(page, compositionSource, "scene-shared-timed-composition");
+  try {
+    const canvas = page.locator("#scene-shared-timed-composition");
+    for (const [time, expected] of [
+      [0, [true, false, false]],
+      [0.4, [true, false, false]],
+      [0.5, [true, true, false]],
+      [0.6, [true, true, false]],
+      [0.8, [true, true, true]],
+    ]) {
+      await page.evaluate((time) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(time), time);
+      const screenshot = await canvas.screenshot();
+      const visible = [-2, 0, 2].map((x) => {
+        const pixel = renderedWorldPixel(screenshot, x, 0);
+        return pixel.blue > pixel.red + 25;
+      });
+      assert.deepEqual(visible, expected, `shared nested Add visibility at ${time}s`);
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(1.25), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
     });
+    assert.equal(result.duration, 1.25);
+    assert.equal(result.metrics.objectCount, 3);
+  } finally {
+    await stopSampledSource(page);
   }
 
   // Scalar tracker continuation keeps both values and timing in the returned

@@ -1,5 +1,7 @@
 //! Target-neutral scene builders shared by executable Rust examples.
 
+pub mod timed_composition;
+
 use std::{error::Error, rc::Rc};
 
 use crate::{
