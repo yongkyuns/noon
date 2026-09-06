@@ -775,6 +775,22 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
     return _ORIGINAL_GET_CENTER(self)
 
 
+def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
+    """Read a leaf critical point from the authoritative semantic layout."""
+    axis = _compat._as_vec2(direction)
+    observed = _bound_layout_observation(self)
+    if observed is not None:
+        center_x = float(observed.centerX)
+        center_y = float(observed.centerY)
+        half_width = float(observed.width) * 0.5
+        half_height = float(observed.height) * 0.5
+        return _base.Vec2(
+            center_x - half_width if axis.x < 0.0 else center_x + half_width if axis.x > 0.0 else center_x,
+            center_y - half_height if axis.y < 0.0 else center_y + half_height if axis.y > 0.0 else center_y,
+        )
+    return _critical(self, axis)
+
+
 def _width(self: _base.Mobject) -> float:
     observed = _bound_layout_observation(self)
     if observed is not None:
@@ -2042,6 +2058,7 @@ def install() -> None:
     _base.Mobject.copy = _copy_mobject
     _base.Mobject._copy_for_animate_target = _target_mobject
     _base.Mobject.get_center = _get_center
+    _base.Mobject.get_critical_point = _get_critical_point
     _base.Mobject.width = property(_width, _set_width_property)
     _base.Mobject.height = property(_height, _set_height_property)
     _base.Mobject.shift = _shift
