@@ -381,6 +381,20 @@ def _play_canonical_affine(
 
 
 def _play(self, *args, **kwargs):
+    # Once an unsupported compatibility animation has selected the explicit
+    # #959 export/materialization boundary, its timing and lowering remain on
+    # that path.  Typed handles deliberately survive materialization for
+    # identity/export purposes, so they must not reclassify a later ordinary
+    # compatibility play as a canonical live animation.
+    if getattr(self, "_legacy_geometry_materialized", False):
+        context = getattr(self, "_canonical_authoring_context", None)
+        ownership = getattr(context, "liveExecutionOwnership", None)
+        if callable(ownership) and str(ownership()) in {"active", "transferred"}:
+            raise NotImplementedError(
+                "an active canonical session currently supports only one leaf affine animation"
+            )
+        return _ORIGINAL_PLAY(self, *args, **kwargs)
+
     canonical_affine = [
         classified
         for argument in args
