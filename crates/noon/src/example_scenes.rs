@@ -1356,13 +1356,13 @@ mod continuation_tests {
 #[cfg(test)]
 mod line_callback_tests {
     use super::*;
-    use crate::Transform2D;
 
     #[test]
     fn line_callback_windows_reverse_one_local_effective_transform() {
         let (mut session, mut callbacks) = live_line_callback_rotation().unwrap();
         callbacks.advance_to(&mut session, 0.0).unwrap();
         session.take_frame_changes();
+        let siblings = [0, 1, 3].map(|index| session.frame().objects[index].transform);
 
         callbacks.advance_to(&mut session, 1.0).unwrap();
         assert!((session.frame().objects[2].transform.rotation - 1.0).abs() < 1.0e-6);
@@ -1371,11 +1371,9 @@ mod line_callback_tests {
         callbacks.advance_to(&mut session, 3.0).unwrap();
         assert!((session.frame().objects[2].transform.rotation + 1.0).abs() < 1.0e-6);
         assert_eq!(session.take_frame_changes().object_indices(), &[2]);
-        assert_eq!(session.frame().objects[0].transform, Transform2D::IDENTITY);
-        assert_eq!(session.frame().objects[1].transform, Transform2D::IDENTITY);
         assert_eq!(
-            session.frame().objects[3].transform.translation,
-            Vec2::new(0.0, -2.0)
+            [0, 1, 3].map(|index| session.frame().objects[index].transform),
+            siblings
         );
     }
 }
