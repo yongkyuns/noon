@@ -13,8 +13,10 @@ use super::super::{
 };
 use super::affine::{
     driver_key, lower_affine_channels, validate_affine_payload, AffinePayloadIssue,
-    EffectiveAnimationProperties, SemanticAffineAnimationField, SemanticAnimationCompletion,
+    EffectiveAnimationProperties, SemanticAnimationCompletion,
 };
+
+use super::transform_payload::SemanticAffineAnimationField;
 
 /// One execution track lowered from an animation declaration that still has transaction-local
 /// semantic references.
