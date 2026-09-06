@@ -92,6 +92,8 @@ async function initializePyodide() {
     completeContinuationCallback(context, tokenJson, patchBatchJson);
   self.noonFailSemanticContinuationCallback = (context, tokenJson, message) =>
     failContinuationCallback(context, tokenJson, message);
+  self.noonReadSemanticContinuationCallback = (context, tokenJson, requestJson) =>
+    readContinuationCallback(context, tokenJson, requestJson);
   self.noonSemanticContinuationGeneration = (context) => {
     const continuation = activeAuthoringRun?.continuation;
     return continuation?.context === context ? continuation.generation : undefined;
@@ -344,6 +346,7 @@ function registerContinuationContext(context) {
     generation,
     runRequestId: activeAuthoringRun.requestId,
     endpoint: null,
+    callbackRead: null,
     pending: null,
     callbackRequest: null,
     terminal: false,
@@ -410,7 +413,7 @@ function requestContinuationCallback(continuation, phase) {
     return Promise.reject(new Error("canonical callback phase is missing its token"));
   }
   return new Promise((resolve, reject) => {
-    continuation.callbackRequest = { phaseTokenJson, resolve, reject };
+    continuation.callbackRequest = { phaseTokenJson, resolve, reject, read: null };
     const pending = continuation.pending;
     continuation.pending = null;
     pending.resolve(continuationEvent("callback", { phase }));
@@ -427,6 +430,63 @@ function continuationCallbackRequest(context, tokenJson) {
     throw new Error("semantic continuation callback token is stale");
   }
   return continuation;
+}
+
+function parseContinuationCallbackReadRequest(requestJson) {
+  if (typeof requestJson !== "string" || requestJson.trim() === "") {
+    throw new TypeError("canonical callback read request must be non-empty JSON");
+  }
+  let request;
+  try {
+    request = JSON.parse(requestJson);
+  } catch (error) {
+    throw new TypeError(`canonical callback read request is not valid JSON: ${error}`);
+  }
+  if (!isRecord(request) ||
+      !Number.isSafeInteger(request.request_id) || request.request_id < 0 ||
+      !["scalar_signal", "object"].includes(request.kind) || !isRecord(request.node) ||
+      !Number.isSafeInteger(request.node.slot) || request.node.slot < 0 || request.node.slot > 0xffffffff ||
+      !Number.isSafeInteger(request.node.generation) || request.node.generation < 0 || request.node.generation > 0xffffffff) {
+    throw new TypeError("canonical callback read request must contain a request ID, typed kind, and semantic node");
+  }
+  return request;
+}
+
+function readContinuationCallback(context, tokenJson, requestJson) {
+  let continuation;
+  let request;
+  try {
+    continuation = continuationCallbackRequest(context, tokenJson);
+    request = parseContinuationCallbackReadRequest(requestJson);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  const callback = continuation.callbackRequest;
+  if (callback.read !== null) {
+    return Promise.reject(new Error("semantic continuation already has a callback read in flight"));
+  }
+  if (continuation.callbackRead === null) {
+    return Promise.reject(new Error("semantic continuation callback sparse reads are unavailable"));
+  }
+  return new Promise((resolve, reject) => {
+    const read = { requestId: request.request_id, resolve, reject };
+    callback.read = read;
+    Promise.resolve()
+      .then(() => continuation.callbackRead(tokenJson, request))
+      .then((result) => {
+        if (continuation.terminal || continuation.callbackRequest !== callback || callback.read !== read) {
+          return;
+        }
+        callback.read = null;
+        resolve(result);
+      })
+      .catch((error) => {
+        if (continuation.callbackRequest === callback && callback.read === read) {
+          callback.read = null;
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+  });
 }
 
 function awaitContinuationEvent(continuation) {
@@ -447,6 +507,9 @@ function completeContinuationCallback(context, tokenJson, patchBatchJson) {
   }
   const continuation = continuationCallbackRequest(context, tokenJson);
   const callback = continuation.callbackRequest;
+  if (callback.read !== null) {
+    throw new Error("semantic continuation callback cannot complete while a callback read is pending");
+  }
   const next = awaitContinuationEvent(continuation);
   continuation.callbackRequest = null;
   callback.resolve(patchBatchJson);
@@ -459,6 +522,10 @@ function failContinuationCallback(context, tokenJson, message) {
   }
   const continuation = continuationCallbackRequest(context, tokenJson);
   const callback = continuation.callbackRequest;
+  if (callback.read !== null) {
+    callback.read.reject(new Error(message));
+    callback.read = null;
+  }
   const next = awaitContinuationEvent(continuation);
   continuation.callbackRequest = null;
   callback.reject(new Error(message));
@@ -479,9 +546,11 @@ function failContinuation(continuation, error) {
   if (continuation.terminal) return;
   continuation.terminal = true;
   if (continuation.callbackRequest !== null) {
-    const { reject } = continuation.callbackRequest;
+    const callback = continuation.callbackRequest;
     continuation.callbackRequest = null;
-    reject(error instanceof Error ? error : new Error(String(error)));
+    const failure = error instanceof Error ? error : new Error(String(error));
+    if (callback.read !== null) callback.read.reject(failure);
+    callback.reject(failure);
   }
   if (continuation.pending !== null) {
     const { reject } = continuation.pending;
@@ -655,6 +724,7 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
         entry.released = true;
         failContinuation(continuation, error);
       },
+      onCallbackReadAvailable: (read) => { continuation.callbackRead = read; },
     } : null,
   );
   entry.endpoints.add(endpoint);

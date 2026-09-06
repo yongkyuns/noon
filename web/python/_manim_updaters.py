@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import json
 import math
 import sys
 from dataclasses import dataclass, replace
@@ -648,31 +649,89 @@ class _CanonicalCallbackContext:
     They intentionally cannot carry geometry, identity, membership, or authored state.
     """
 
-    def __init__(self, frame: dict[str, Any], operations: object) -> None:
+    def __init__(self, frame: dict[str, Any], authoring_context: object) -> None:
         self.time = float(frame["time"])
         self.delta_time = float(frame["delta_time"])
         self.token = frame["token"]
-        self._operations = operations
+        self._authoring_context = authoring_context
+        self._operations = authoring_context
         self._frame_items = {
             _phase_node_key(item["node"]): item for item in frame["objects"]
         }
         self._rows: dict[tuple[int, int], _PhasePropertyRow] = {}
+        self._signals: dict[tuple[int, int], float] = {}
+        self._next_read_request_id = 0
         self._writes: list[dict[str, Any]] = []
+
+    def _read(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
+        """Suspend this exact callback invocation for one Rust-pinned read miss."""
+        try:
+            from js import (
+                noonReadSemanticContinuationCallback,
+                noonSemanticContinuationGeneration,
+            )
+            from pyodide.ffi import can_run_sync, run_sync
+        except ImportError as error:
+            raise NotImplementedError(
+                "canonical callback sparse reads require a suspended Pyodide continuation"
+            ) from error
+        if noonSemanticContinuationGeneration(self._authoring_context) is None:
+            raise NotImplementedError(
+                "canonical callback sparse reads require a suspended semantic continuation"
+            )
+        if not can_run_sync():
+            raise NotImplementedError(
+                "canonical callback sparse reads require Pyodide JS Promise Integration"
+            )
+        request_id = self._next_read_request_id
+        self._next_read_request_id += 1
+        request = {
+            "request_id": request_id,
+            "kind": kind,
+            "node": _phase_node_json(key),
+        }
+        try:
+            result_json = run_sync(
+                noonReadSemanticContinuationCallback(
+                    self._authoring_context,
+                    json.dumps(self.token, separators=(",", ":")),
+                    json.dumps(request, separators=(",", ":")),
+                )
+            )
+            result = json.loads(str(result_json))
+        except Exception as error:
+            raise RuntimeError(f"canonical callback sparse read failed: {error}") from None
+        expected_kind = "scalar" if kind == "scalar_signal" else "object"
+        if not isinstance(result, dict) or result.get("kind") != expected_kind:
+            raise RuntimeError("canonical callback sparse read returned the wrong typed value")
+        return result
+
+    def _object_item(self, key: tuple[int, int]) -> dict[str, Any]:
+        try:
+            return self._frame_items[key]
+        except KeyError:
+            result = self._read("object", key)
+            item = result.get("object")
+            if not isinstance(item, dict) or _phase_node_key(item.get("node")) != key:
+                raise RuntimeError("canonical callback object read returned a foreign semantic node")
+            self._frame_items[key] = item
+            return item
+
+    def scalar(self, key: tuple[int, int]) -> float:
+        cached = self._signals.get(key)
+        if cached is not None:
+            return cached
+        result = self._read("scalar_signal", key)
+        value = _phase_number("scalar callback read", result.get("value"))
+        self._signals[key] = value
+        return value
 
     def row(self, mobject: _base.Mobject) -> tuple[tuple[int, int], _PhasePropertyRow]:
         key = _semantic_key(mobject)
         existing = self._rows.get(key)
         if existing is not None:
             return key, existing
-        try:
-            item = self._frame_items[key]
-        except KeyError as error:
-            raise RuntimeError(
-                "canonical callback phase exposes only active callback targets; "
-                "reading undeclared semantic node "
-                f"{key[0]}:{key[1]} is not supported"
-            ) from error
-        row = _PhasePropertyRow.from_wire(item)
+        row = _PhasePropertyRow.from_wire(self._object_item(key))
         self._rows[key] = row
         return key, row
 
@@ -726,6 +785,18 @@ class _CanonicalCallbackContext:
 
     def effective_batch(self) -> dict[str, Any]:
         return {"token": self.token, "writes": self._writes}
+
+
+def canonical_callback_scalar_value(scene: _base.Scene, handle: object) -> float:
+    """Return one phase-local Rust scalar without consulting published tracker state."""
+    context = _ACTIVE_CONTEXTS.get(id(scene))
+    if not isinstance(context, _CanonicalCallbackContext):
+        raise RuntimeError("canonical callback scalar reads require an active callback phase")
+    try:
+        key = (int(handle.semanticSlot), int(handle.semanticGeneration))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RuntimeError("canonical ValueTracker has no generational semantic identity") from error
+    return context.scalar(key)
 
 
 def _canonical_callback_time(mobject: _base.Mobject) -> float:

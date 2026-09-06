@@ -31,6 +31,7 @@ function fixture(
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
   let created = 0, resumed = 0, completedSegments = 0, drained = 0, committedPhases = 0;
   let initialSnapshots = 0, resourceBundles = 0;
+  const callbackReads = [];
   const nativeInputs = [];
   const continuationDriveTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
@@ -48,6 +49,10 @@ function fixture(
     commitCallbackPhaseJson: () => { committedPhases += 1; },
     drainRendererObservationPublicationJson: () => {
       throw new Error("fixture did not configure a renderer observation publication");
+    },
+    requiredCallbackReadJson: (token, request) => {
+      callbackReads.push({ token, request });
+      return JSON.stringify({ kind: "scalar", value: 3 });
     },
     failCallbackPhaseJson: () => {},
     callbackTerminationJson: () => null,
@@ -79,6 +84,7 @@ function fixture(
   return { control, render, player, stats: () => ({
     returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
     initialSnapshots, resourceBundles, continuationDriveTimes, drained, committedPhases,
+    callbackReads,
   }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
@@ -310,6 +316,58 @@ test("semantic continuation returns one completed player before resuming and ret
     assert.equal(f.stats().returned, 2);
     assert.equal(wakes.at(-1), "idle");
     assert.throws(() => endpoint.startContinuation(8), /stale semantic continuation generation/);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("callback sparse reads are pinned to the pending phase and never publish it", async () => {
+  let resolveCallback;
+  let readPhase = null;
+  const phase = {
+    token: { runtime: 3, publication: { scene: 1, execution: 2, frame: 3 }, sequence: 4 },
+    invocations: [{ callback_id: 9 }],
+  };
+  const f = fixture("transferable", () => new Promise((resolve) => { resolveCallback = resolve; }), {
+    generation: 41,
+    onComplete: () => {},
+    onError: (_generation, error) => { throw error; },
+    onCallbackReadAvailable: (read) => { readPhase = read; },
+  });
+  let endpoint;
+  try {
+    f.player.initialCallbackPhaseJson = () => JSON.stringify(phase);
+    const attaching = f.attach().then((value) => { endpoint = value; return value; });
+    await turn();
+    assert.equal(typeof readPhase, "function", "read service is available before the initial callback runs");
+    const token = JSON.stringify(phase.token);
+    const result = readPhase(token, {
+      request_id: 11,
+      kind: "scalar_signal",
+      node: { slot: 8, generation: 2 },
+    });
+    assert.equal(result, JSON.stringify({ kind: "scalar", value: 3 }));
+    assert.deepEqual(f.stats().callbackReads, [{
+      token,
+      request: JSON.stringify({ kind: "scalar_signal", node: { slot: 8, generation: 2 } }),
+    }]);
+    assert.equal(f.stats().committedPhases, 0);
+    assert.equal(f.stats().drained, 0, "a sparse read cannot drain a renderer delta");
+
+    assert.throws(
+      () => readPhase(JSON.stringify({ ...phase.token, sequence: 5 }), {
+        request_id: 12, kind: "scalar_signal", node: { slot: 8, generation: 2 },
+      }),
+      /token is stale/,
+    );
+    resolveCallback(JSON.stringify({ token: phase.token, writes: [] }));
+    await attaching;
+    assert.equal(f.stats().committedPhases, 1);
+    assert.throws(
+      () => readPhase(token, {
+        request_id: 13, kind: "object", node: { slot: 8, generation: 2 },
+      }),
+      /no pending live phase/,
+    );
+    endpoint.stop();
   } finally { endpoint?.stop(); f.close(); }
 });
 

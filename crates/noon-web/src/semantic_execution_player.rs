@@ -1,7 +1,7 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 use noon::{
-    CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
-    ExecutionSession, RuntimeIdentity,
+    CallbackAdvance, CallbackPhaseToken, CallbackReadRequest, CallbackReadValue,
+    EffectivePropertyBatch, EffectiveSemanticPropertyWrite, ExecutionSession, RuntimeIdentity,
 };
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
@@ -1328,6 +1328,29 @@ struct CallbackPhaseTokenEnvelope {
     token: CallbackTokenWire,
 }
 
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CallbackReadRequestWire {
+    ScalarSignal { node: CallbackNodeWire },
+    Object { node: CallbackNodeWire },
+}
+
+impl From<CallbackReadRequestWire> for CallbackReadRequest {
+    fn from(value: CallbackReadRequestWire) -> Self {
+        match value {
+            CallbackReadRequestWire::ScalarSignal { node } => Self::ScalarSignal(node.into()),
+            CallbackReadRequestWire::Object { node } => Self::Object(node.into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CallbackReadValueWire {
+    Scalar { value: f32 },
+    Object { object: CallbackPhaseObjectWire },
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CallbackTerminationWire {
     token: CallbackTokenWire,
@@ -1602,6 +1625,47 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment))]
     pub fn complete_live_segment_wasm(&mut self) -> Result<(), String> {
         self.live_complete_segment()
+    }
+
+    /// Read one typed value from the exact pending callback phase without
+    /// committing it. This is the real Python-worker boundary; direct Rust
+    /// callbacks call the session API without JSON.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = requiredCallbackReadJson))]
+    pub fn required_callback_read_json(
+        &mut self,
+        token_json: &str,
+        request_json: &str,
+    ) -> Result<String, String> {
+        let token = Self::phase_token_from_json(token_json)?;
+        self.pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback read does not match the player pending phase")?;
+        let request_wire: CallbackReadRequestWire = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
+        let requested_object = match &request_wire {
+            CallbackReadRequestWire::Object { node } => Some(node.clone()),
+            CallbackReadRequestWire::ScalarSignal { .. } => None,
+        };
+        let value = self
+            .session
+            .required_callback_read(token, request_wire.into())
+            .map_err(|error| error.to_string())?;
+        let wire = match value {
+            CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },
+            CallbackReadValue::Object(properties) => CallbackReadValueWire::Object {
+                object: CallbackPhaseObjectWire {
+                    node: requested_object.ok_or("scalar callback read returned an object")?,
+                    transform: properties.transform,
+                    style: properties.style,
+                    appearance: properties.appearance,
+                    presence: properties.presence,
+                    reveal: properties.reveal,
+                    morph: properties.morph,
+                    bounds: properties.bounds,
+                },
+            },
+        };
+        serde_json::to_string(&wire).map_err(|error| error.to_string())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]

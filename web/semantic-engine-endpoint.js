@@ -319,6 +319,41 @@ export async function attachSemanticEngine(
     };
   }
 
+  function callbackReadRequestJson(request) {
+    if (!request || typeof request !== "object" ||
+        !["scalar_signal", "object"].includes(request.kind) ||
+        !request.node || typeof request.node !== "object" ||
+        !Number.isSafeInteger(request.node.slot) || request.node.slot < 0 || request.node.slot > 0xffffffff ||
+        !Number.isSafeInteger(request.node.generation) || request.node.generation < 0 || request.node.generation > 0xffffffff) {
+      throw new Error("canonical callback read request is invalid");
+    }
+    return JSON.stringify({ kind: request.kind, node: request.node });
+  }
+
+  function readCallbackPhase(tokenJson, request) {
+    if (stopped || player === null || pendingPhaseJson === null || callbackFault !== null) {
+      throw new Error("canonical callback read has no pending live phase");
+    }
+    if (typeof tokenJson !== "string") {
+      throw new TypeError("canonical callback read token must be JSON");
+    }
+    let pendingToken;
+    try {
+      pendingToken = JSON.stringify(JSON.parse(pendingPhaseJson)?.token);
+    } catch (error) {
+      throw new Error(`pending canonical callback phase has invalid token: ${error}`);
+    }
+    if (pendingToken === undefined || pendingToken !== tokenJson) {
+      throw new Error("canonical callback read token is stale");
+    }
+    if (typeof player.requiredCallbackReadJson !== "function") {
+      throw new Error("canonical callback sparse reads are unavailable for this player");
+    }
+    // This is a revision-pinned phase query only. It neither drains a delta nor
+    // advances, commits, or presents the pending callback phase.
+    return player.requiredCallbackReadJson(tokenJson, callbackReadRequestJson(request));
+  }
+
   async function advanceToAuthoredTime(time, observeRenderer) {
     const phaseTokens = new Set();
     let phaseCount = 0;
@@ -565,6 +600,7 @@ export async function attachSemanticEngine(
   function stop() {
     if (stopped) return;
     stopped = true;
+    continuation?.onCallbackReadAvailable?.(null);
     callbackGeneration += 1;
     rejectPendingPresentation(new Error("semantic execution stopped before renderer publication"));
     rejectPendingRendererObservation(
@@ -604,6 +640,7 @@ export async function attachSemanticEngine(
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
     if (initiallyPaused) player.pause();
+    continuation?.onCallbackReadAvailable?.(readCallbackPhase);
     if (typeof player.resourceBundleBytes !== "function") {
       throw new Error("semantic execution requires retained resource bundle support");
     }
