@@ -122,6 +122,7 @@ async function sampleRendererFps(page) {
 
 async function pauseAndSeek(page, seconds) {
   const toggle = page.locator(".playback-toggle");
+  if (await toggle.count() === 0) return false;
   await toggle.waitFor({ state: "visible", timeout: 10_000 });
   if ((await toggle.getAttribute("aria-label")) === "Pause animation") {
     await toggle.click();
@@ -134,6 +135,7 @@ async function pauseAndSeek(page, seconds) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }, seconds);
   await page.waitForTimeout(150);
+  return true;
 }
 
 let browser = null;
@@ -198,7 +200,7 @@ try {
   }, marker);
   const edited = await runAndMeasure(page);
 
-  await pauseAndSeek(page, 0.5);
+  const sought = await pauseAndSeek(page, 0.5);
   const screenshotPath = path.join(artifactDir, "frame-0.5.png");
   const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
   const visual = changedPixelStats(screenshot);
@@ -219,6 +221,7 @@ try {
     editRunMs: edited.milliseconds,
     fps,
     visual,
+    sought,
     screenshot: "frame-0.5.png",
     runtime: {
       backend: cold.state.backend,

@@ -41,3 +41,15 @@ test("playground tears down an early continuation when its run becomes stale", (
     /catch \(error\) \{\s*discardEarlyContinuationRuntime\(earlyContinuation\?\.attachedPlayer\)/,
   );
 });
+
+test("source-owned semantic runs do not expose unsupported playback controls", () => {
+  const runtimeStart = main.indexOf("async function ensureRuntimeReady(");
+  const runtimeEnd = main.indexOf("async function ensureExecutionReady(", runtimeStart);
+  const runtime = main.slice(runtimeStart, runtimeEnd);
+  assert.match(runtime, /semanticExecution\?\.continuationGeneration != null/);
+  assert.match(runtime, /if \(!sourceOwnsExecution\) \{[\s\S]*new PlaygroundPlaybackControls/);
+  assert.match(
+    runScene,
+    /if \(semanticExecution\?\.continuationGeneration != null\) \{[\s\S]*playbackControls = null;/,
+  );
+});
