@@ -591,7 +591,10 @@ mod tests {
         );
         live.set_object_opacity(&target, 0.5).unwrap();
         let style = live.authored(&target).unwrap().style;
-        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::RED)));
+        assert_eq!(
+            style.fill,
+            Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)))
+        );
         assert_eq!(style.fill_opacity, 0.4);
         assert_eq!(style.object_opacity, 0.5);
 

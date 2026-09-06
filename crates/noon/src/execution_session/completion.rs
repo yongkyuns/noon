@@ -425,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn separate_fill_and_opacity_leaves_coalesce_into_one_authored_style() {
+    fn style_composition_rejects_unsupported_time_mapping_before_activation() {
         let mut store = SemanticStore::new();
         let object =
             store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -452,18 +452,27 @@ mod tests {
             .unwrap();
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-        let segment = session
-            .activate_animation_segment(&store, sequence, AnimationOptions::new())
-            .unwrap();
-        session
-            .advance_segment_to(segment, segment.end_time())
-            .unwrap();
-        session.complete_segment(&mut store, segment).unwrap();
-
-        let style = &store.semantic_object_state_checked(object).unwrap().style;
-        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::RED)));
-        assert_eq!(style.fill_opacity, 0.4);
-        assert_eq!(style.object_opacity, 0.5);
+        let before = session.publication_context();
+        let authored = store
+            .semantic_object_state_checked(object)
+            .unwrap()
+            .style
+            .clone();
+        let effective = session.frame().objects[0].style;
+        // Composition timing is outside the current completion contract. Keep
+        // rejection before publication until #1088/#959 supplies mapped release.
+        assert!(matches!(
+            session.activate_animation_segment(&store, sequence, AnimationOptions::new()),
+            Err(crate::ExecutionSessionAnimationError::Publication(
+                noon_compile::CompilePatchError::UnsupportedTrackReconciliation(_)
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(
+            store.semantic_object_state_checked(object).unwrap().style,
+            authored
+        );
+        assert_eq!(session.frame().objects[0].style, effective);
     }
 
     #[test]
