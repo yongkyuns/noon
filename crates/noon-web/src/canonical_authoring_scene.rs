@@ -2743,6 +2743,33 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAnimationCompositionBuilder {
+        #[wasm_bindgen(js_name = setCompositionRateFunction)]
+        pub fn set_composition_rate_function(
+            &mut self,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.composition_options = self.composition_options.rate_func(rate_function);
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = setPlayRateFunction)]
+        pub fn set_play_rate_function(&mut self, rate_function: &str) -> Result<(), JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.play_options = self.play_options.rate_func(rate_function);
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = appendTransformTo)]
         pub fn append_transform_to(
             &mut self,

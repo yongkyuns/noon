@@ -1375,12 +1375,18 @@ def _canonical_linear_play_options(kwargs: dict[str, object]) -> float | None:
         rate_id = str(easing)
     elif rate_func is not None:
         rate_id = _compat._easing_from_rate_func(rate_func)
-    if rate_id not in (None, "linear"):
-        raise NotImplementedError(
-            "canonical ordinary composition currently requires a linear root rate_func"
-        )
     value = run_time if run_time is not None else duration
     return None if value is None else float(value)
+
+
+def _canonical_composition_rate_id(kwargs: dict[str, object]) -> str:
+    easing = kwargs.get("easing")
+    rate_func = kwargs.get("rate_func")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either easing or rate_func, not both")
+    return str(easing) if easing is not None else (
+        _compat._easing_from_rate_func(rate_func) if rate_func is not None else "linear"
+    )
 
 
 def _canonical_composition_child_options(animation: object, kwargs: dict[str, object]):
@@ -1405,12 +1411,14 @@ def _build_canonical_composition_candidate(
     play_run_time = _canonical_linear_play_options(dict(kwargs))
     composition_run_time = None if group is None else group.run_time
     composition_lag_ratio = 0.0 if group is None else float(group.lag_ratio)
-    if group is not None and _compat._easing_from_rate_func(group.rate_func) != "linear":
-        raise NotImplementedError("canonical composition currently requires a linear group rate_func")
     context = _context(self)
     candidate = context.beginOrdinaryTransformComposition(
         kind, composition_run_time, composition_lag_ratio, play_run_time,
     )
+    candidate.setCompositionRateFunction(
+        _compat._easing_from_rate_func(group.rate_func) if group is not None else "linear"
+    )
+    candidate.setPlayRateFunction(_canonical_composition_rate_id(kwargs))
     reservations: list[tuple[_base.Mobject, object]] = []
     next_object_id = self._next_object_id
 
@@ -1427,8 +1435,7 @@ def _build_canonical_composition_candidate(
         nonlocal next_object_id
         if isinstance(animation, _composition.AnimationGroup):
             nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
-            nested, nested_reservations = build(nested_kind, tuple(animation.animations), animation, {})
-            reservations.extend(nested_reservations)
+            nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
             return
         if isinstance(animation, _composition.Wait):
@@ -1439,11 +1446,13 @@ def _build_canonical_composition_candidate(
         if isinstance(animation, _composition.Add):
             if child_kwargs:
                 raise NotImplementedError("Add inside a composition does not accept play timing overrides")
-            for member in _compat._leaf_mobjects(animation.mobject):
-                if getattr(member, "_semantic_handle", None) is None or member._scene is not None:
-                    raise NotImplementedError("canonical Add requires detached typed leaves")
-                reservation = reserve(member)
-                builder.appendAdd(str(reservation.object.id), getattr(member, "_semantic_handle"), float(animation.run_time), "linear")
+            if not isinstance(animation.mobject, _base.Mobject) or isinstance(animation.mobject, _compat.Group):
+                raise NotImplementedError("canonical Add requires one detached typed leaf")
+            member = animation.mobject
+            if getattr(member, "_semantic_handle", None) is None or member._scene is not None:
+                raise NotImplementedError("canonical Add requires one detached typed leaf")
+            reservation = reserve(member)
+            builder.appendAdd(str(reservation.object.id), getattr(member, "_semantic_handle"), float(animation.run_time), "linear")
             return
         lifecycle = _canonical_affine_lifecycle_animation(self, animation)
         if lifecycle is not None:
@@ -1470,10 +1479,10 @@ def _build_canonical_composition_candidate(
             child = _canonical_fade_options(animation, child_kwargs)
             if child is None:
                 raise NotImplementedError("unsupported canonical fade options")
-            object_id, reservation = _fade_object_id(self, target, direction)
-            if reservation is not None:
-                reservations.append((target, reservation))
-            elif direction == "out":
+            if direction == "in":
+                reservation = reserve(target)
+                object_id = str(reservation.object.id)
+            else:
                 object_id = ""
             builder.appendFade(object_id, getattr(target, "_semantic_handle"), direction, float(child.run_time), str(child.rate_func))
             return
@@ -1515,23 +1524,20 @@ def _build_canonical_composition_candidate(
         raise NotImplementedError(f"canonical composition does not support {type(animation).__name__}")
 
     def build(root_kind: str, root_animations: tuple[object, ...], root_group: object | None, root_kwargs: dict[str, object]):
-        # Recursion uses a fresh builder; reservations are accumulated by the caller.
+        # Recursion uses a fresh inert builder while one reservation accumulator is shared.
         nested = context.beginOrdinaryTransformComposition(
             root_kind,
             None if root_group is None else root_group.run_time,
             0.0 if root_group is None else float(root_group.lag_ratio),
             None if root_group is not None else _canonical_linear_play_options(dict(root_kwargs)),
         )
-        local_reservations: list[tuple[_base.Mobject, object]] = []
-        # Temporarily redirect the shared reservation accumulator for this subtree.
-        outer = reservations[:]
-        reservations.clear()
+        nested.setCompositionRateFunction(
+            _compat._easing_from_rate_func(root_group.rate_func) if root_group is not None else "linear"
+        )
+        nested.setPlayRateFunction(_canonical_composition_rate_id(root_kwargs))
         for child_animation in root_animations:
             append_leaf(nested, child_animation, {} if root_group is not None else root_kwargs)
-        local_reservations.extend(reservations)
-        reservations.clear()
-        reservations.extend(outer)
-        return nested, local_reservations
+        return nested
 
     for animation in animations:
         append_leaf(candidate, animation, {} if group is not None else kwargs)
