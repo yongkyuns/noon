@@ -569,6 +569,12 @@ try {
       endpointTime: null,
     },
     {
+      filename: "manim_parity_uncreate_styled_square.py",
+      objectCount: 0,
+      expectedDuration: 1,
+      endpointTime: null,
+    },
+    {
       filename: "manim_example_typst_text.py",
       objectCount: 1,
       expectedDuration: null,
