@@ -235,7 +235,6 @@ fn validate_mutations(
                 | SemanticMutation::RemoveMember { .. }
                 | SemanticMutation::AddNode { .. }
                 | SemanticMutation::AddAnimation { .. }
-                | SemanticMutation::AddTransformAnimation { .. }
                 | SemanticMutation::RemoveNode { .. }
         ) {
             return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
@@ -497,7 +496,6 @@ fn lower_semantic_publication(
             | SemanticMutation::RemoveMember { .. }
             | SemanticMutation::AddNode { .. }
             | SemanticMutation::AddAnimation { .. }
-            | SemanticMutation::AddTransformAnimation { .. }
             | SemanticMutation::RemoveNode { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
