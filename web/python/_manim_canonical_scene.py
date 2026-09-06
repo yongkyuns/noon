@@ -321,6 +321,98 @@ def _canonical_affine_animation(
     return source, target, animation
 
 
+def _canonical_affine_style_is_supported(
+    source: _base.Mobject, target: _base.Mobject
+) -> bool:
+    """Keep style-changing compatibility Transforms at the explicit #959 boundary.
+
+    The ordinary session currently owns affine transform channels only.  Read the
+    existing typed handle projection directly to choose that supported subset;
+    this does not snapshot, export, or duplicate either Mobject's style.
+    """
+    source_handle = getattr(source, "_semantic_handle")
+    target_handle = getattr(target, "_semantic_handle")
+    required = ("wireHasFill", "wireHasStroke", "wireStrokeWidth", "wireObjectOpacity")
+    if not all(
+        hasattr(source_handle, field) and hasattr(target_handle, field) for field in required
+    ):
+        return False
+    if bool(source_handle.wireHasFill) != bool(target_handle.wireHasFill):
+        return False
+    if bool(source_handle.wireHasFill) and any(
+        getattr(source_handle, field) != getattr(target_handle, field)
+        for field in ("wireFillRed", "wireFillGreen", "wireFillBlue", "wireFillAlpha")
+    ):
+        return False
+    if bool(source_handle.wireHasStroke) != bool(target_handle.wireHasStroke):
+        return False
+    if bool(source_handle.wireHasStroke) and any(
+        getattr(source_handle, field) != getattr(target_handle, field)
+        for field in ("wireStrokeRed", "wireStrokeGreen", "wireStrokeBlue", "wireStrokeAlpha")
+    ):
+        return False
+    return (
+        source_handle.wireStrokeWidth == target_handle.wireStrokeWidth
+        and source_handle.wireObjectOpacity == target_handle.wireObjectOpacity
+    )
+
+
+def _canonical_affine_options_are_supported(
+    animation: object, kwargs: dict[str, object]
+) -> bool:
+    """Select the currently supported linear leaf-affine option subset."""
+    duration = kwargs.get("duration")
+    run_time = kwargs.get("run_time")
+    easing = kwargs.get("easing")
+    rate_func = kwargs.get("rate_func")
+    lag_ratio = kwargs.get("lag_ratio")
+    if (
+        duration is not None and run_time is not None
+    ) or (easing is not None and rate_func is not None):
+        return False
+    if kwargs.keys() - {"duration", "run_time", "start_time", "easing", "rate_func", "lag_ratio"}:
+        return False
+    if kwargs.get("start_time") is not None:
+        return False
+    try:
+        resolved = _options.resolve(
+            builder_args=_options.builder_args(animation),
+            default_lag_ratio=0.0,
+            play_run_time=(run_time if run_time is not None else duration),
+            play_easing=easing,
+            play_rate_func=rate_func,
+            play_lag_ratio=lag_ratio,
+        )
+    except (TypeError, ValueError, NotImplementedError):
+        return False
+    return (
+        resolved.rate_func == "linear"
+        and resolved.lag_ratio == 0.0
+        and resolved.path_arc == 0.0
+        and not resolved.reverse_rate_function
+    )
+
+
+def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):
+    """Use the one existing #959 legacy play/export boundary when it is safe."""
+    authority, _ = _timing_authority(self)
+    if authority == "canonical":
+        raise NotImplementedError(
+            "legacy Scene.play cannot follow canonical ValueTracker timing"
+        )
+    context = getattr(self, "_canonical_authoring_context", None)
+    ownership = getattr(context, "liveExecutionOwnership", None)
+    if callable(ownership) and str(ownership()) in {"active", "transferred"}:
+        raise NotImplementedError(
+            "an active canonical session currently supports only one leaf affine animation"
+        )
+    # Native Text timeline export stays in the canonical context. Its #959
+    # codec is store-derived at finalization, so geometry materialization must
+    # not force it through a geometry-only legacy document.
+    materialize_legacy_geometry(self)
+    return _ORIGINAL_PLAY(self, *args, **kwargs)
+
+
 def _play_canonical_affine(
     self: _base.Scene,
     source: _base.Mobject,
@@ -387,13 +479,7 @@ def _play(self, *args, **kwargs):
     # identity/export purposes, so they must not reclassify a later ordinary
     # compatibility play as a canonical live animation.
     if getattr(self, "_legacy_geometry_materialized", False):
-        context = getattr(self, "_canonical_authoring_context", None)
-        ownership = getattr(context, "liveExecutionOwnership", None)
-        if callable(ownership) and str(ownership()) in {"active", "transferred"}:
-            raise NotImplementedError(
-                "an active canonical session currently supports only one leaf affine animation"
-            )
-        return _ORIGINAL_PLAY(self, *args, **kwargs)
+        return _play_legacy_compatibility(self, *args, **kwargs)
 
     canonical_affine = [
         classified
@@ -402,10 +488,13 @@ def _play(self, *args, **kwargs):
     ]
     if canonical_affine:
         if len(canonical_affine) != 1 or len(args) != 1:
-            raise NotImplementedError(
-                "canonical ordinary Scene.play currently supports one leaf affine animation"
-            )
+            return _play_legacy_compatibility(self, *args, **kwargs)
         source, target, animation = canonical_affine[0]
+        if not (
+            _canonical_affine_style_is_supported(source, target)
+            and _canonical_affine_options_are_supported(animation, kwargs)
+        ):
+            return _play_legacy_compatibility(self, *args, **kwargs)
         return _play_canonical_affine(
             self,
             source,
@@ -436,22 +525,7 @@ def _play(self, *args, **kwargs):
             lag_ratio=kwargs.pop("lag_ratio", None),
             kwargs=kwargs,
         )
-    authority, _ = _timing_authority(self)
-    if authority == "canonical":
-        raise NotImplementedError(
-            "legacy Scene.play cannot follow canonical ValueTracker timing"
-        )
-    context = getattr(self, "_canonical_authoring_context", None)
-    ownership = getattr(context, "liveExecutionOwnership", None)
-    if callable(ownership) and str(ownership()) in {"active", "transferred"}:
-        raise NotImplementedError(
-            "an active canonical session currently supports only one leaf affine animation"
-        )
-    # Native Text timeline export stays in the canonical context. Its #959
-    # codec is store-derived at finalization, so geometry materialization must
-    # not force it through a geometry-only legacy document.
-    materialize_legacy_geometry(self)
-    return _ORIGINAL_PLAY(self, *args, **kwargs)
+    return _play_legacy_compatibility(self, *args, **kwargs)
 
 
 def _canonical_value_tracker(self: _base.Scene, value: float = 0.0) -> _reactive.ValueTracker:
