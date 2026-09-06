@@ -385,13 +385,7 @@ class _RetainedTextMobject(_base.Mobject):
         if self._semantic_handle is not None:
             _base.Mobject.scale(self, value)
             return self
-        # Native Text aliases the ordinary shared Mobject handle, whose affine
-        # scale takes independent x/y values. Typst's retained handle remains
-        # uniform until that backend reaches the same resource path.
-        if getattr(self, "_semantic_handle", None) is not None:
-            self._retained_handle.scale(value, value)
-        else:
-            self._retained_handle.scale(value)
+        self._retained_handle.scale(value)
         return self
 
     def rotate(self, angle: float, *args: Any, **kwargs: Any) -> _RetainedTextMobject:

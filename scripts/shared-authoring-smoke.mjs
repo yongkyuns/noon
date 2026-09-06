@@ -838,7 +838,7 @@ result = scene
   assert.ok(Number.isSafeInteger(publication.session));
   assert.ok(Number.isSafeInteger(publication.sequence));
   assert.equal(committed.time, callbackResult.requestedTime);
-  assert.equal(committed.dirty, "updated");
+  assert.equal(committed.dirty, "updated", JSON.stringify(rendererObservation));
   assert.equal(committed.presence, true);
   assert.deepEqual(committed.transform.translation, { x: 1, y: -2 });
   assert.equal(committed.transform.rotation, 0);
