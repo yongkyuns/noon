@@ -4,15 +4,54 @@ use std::collections::BTreeMap;
 use std::error::Error;
 
 use crate::{
-    CallbackAdvance, CallbackPhaseOverlay, EffectiveObjectProperties, ExecutionSession,
-    ExecutionSessionCallbackError, FrameState, HostCallbackId, SemanticMutationTransaction,
-    SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticStore, Style, Transform2D,
+    CallbackAdvance, CallbackPhaseOverlay, EffectiveObjectProperties, ExecutionSegment,
+    ExecutionSegmentAdvanceError, ExecutionSession, ExecutionSessionCallbackError, FrameState,
+    HostCallbackId, SemanticMutationTransaction, SemanticMutationTransactionError,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore, Style, Transform2D,
 };
 
 type BoxedCallbackError = Box<dyn Error + 'static>;
 type RustHostCallback =
     dyn for<'a> FnMut(&mut RustHostCallbackContext<'a>) -> Result<(), BoxedCallbackError> + 'static;
+
+#[derive(Clone, Copy)]
+enum CallbackAdvanceTarget {
+    Time(f64),
+    Segment {
+        segment: ExecutionSegment,
+        requested_time: f64,
+        target_time: f64,
+    },
+}
+
+impl CallbackAdvanceTarget {
+    fn advance<'a>(
+        self,
+        session: &'a mut ExecutionSession,
+    ) -> Result<CallbackAdvance<'a>, RustHostCallbackError> {
+        match self {
+            Self::Time(time) => session
+                .advance_to_callback_barrier(time)
+                .map_err(Into::into),
+            Self::Segment {
+                segment,
+                requested_time,
+                ..
+            } => session
+                .advance_segment_to_callback_barrier(segment, requested_time)
+                .map_err(Into::into),
+        }
+    }
+
+    fn reached(self, ready_time: f64) -> bool {
+        match self {
+            Self::Time(time) => ready_time == time,
+            // A callback activation boundary with no active invocation can yield
+            // Ready before the requested/clamped segment target, so keep driving.
+            Self::Segment { target_time, .. } => ready_time == target_time,
+        }
+    }
+}
 
 /// Thin callback-local view over one revision-pinned ordered phase overlay.
 ///
@@ -167,11 +206,46 @@ impl RustHostCallbackTable {
         session: &'a mut ExecutionSession,
         time: f64,
     ) -> Result<&'a FrameState, RustHostCallbackError> {
+        self.advance(CallbackAdvanceTarget::Time(time), session)
+    }
+
+    /// Advance one existing logical segment through the same ordered callback loop.
+    ///
+    /// Segment validation, forward clamping, and callback phase selection remain
+    /// owned by [`ExecutionSession`]. This table only invokes the host callables
+    /// selected by that session and commits their one ordered overlay.
+    pub fn advance_segment_to<'a>(
+        &mut self,
+        session: &'a mut ExecutionSession,
+        segment: ExecutionSegment,
+        requested_time: f64,
+    ) -> Result<&'a FrameState, RustHostCallbackError> {
+        let current_time = session.frame().time;
+        let target_time = if current_time >= segment.end_time() {
+            current_time
+        } else {
+            requested_time.max(current_time).min(segment.end_time())
+        };
+        self.advance(
+            CallbackAdvanceTarget::Segment {
+                segment,
+                requested_time,
+                target_time,
+            },
+            session,
+        )
+    }
+
+    fn advance<'a>(
+        &mut self,
+        target: CallbackAdvanceTarget,
+        session: &'a mut ExecutionSession,
+    ) -> Result<&'a FrameState, RustHostCallbackError> {
         loop {
-            match session.advance_to_callback_barrier(time)? {
+            match target.advance(session)? {
                 CallbackAdvance::Ready(frame) => {
                     let ready_time = frame.time;
-                    if ready_time == time {
+                    if target.reached(ready_time) {
                         return Ok(session.frame());
                     }
                     continue;
@@ -231,6 +305,7 @@ pub enum RustHostCallbackError {
     },
     Semantic(SemanticMutationTransactionError),
     Session(ExecutionSessionCallbackError),
+    Segment(ExecutionSegmentAdvanceError),
 }
 
 impl std::fmt::Display for RustHostCallbackError {
@@ -267,6 +342,7 @@ impl std::fmt::Display for RustHostCallbackError {
             ),
             Self::Semantic(error) => error.fmt(formatter),
             Self::Session(error) => error.fmt(formatter),
+            Self::Segment(error) => error.fmt(formatter),
         }
     }
 }
@@ -277,6 +353,7 @@ impl Error for RustHostCallbackError {
             Self::CallbackFailed { source, .. } => Some(source.as_ref()),
             Self::Semantic(error) => Some(error),
             Self::Session(error) => Some(error),
+            Self::Segment(error) => Some(error),
             Self::DuplicateCallback(_) | Self::UnknownCallback { .. } => None,
         }
     }
@@ -285,6 +362,12 @@ impl Error for RustHostCallbackError {
 impl From<ExecutionSessionCallbackError> for RustHostCallbackError {
     fn from(value: ExecutionSessionCallbackError) -> Self {
         Self::Session(value)
+    }
+}
+
+impl From<ExecutionSegmentAdvanceError> for RustHostCallbackError {
+    fn from(value: ExecutionSegmentAdvanceError) -> Self {
+        Self::Segment(value)
     }
 }
 

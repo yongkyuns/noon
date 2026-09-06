@@ -18,6 +18,7 @@ mod geometry_authoring;
 mod host_callbacks;
 pub mod legacy;
 mod line_matcher_authoring;
+mod live_program;
 mod live_session;
 mod native_signal_authoring;
 mod polygram_authoring;
@@ -33,6 +34,7 @@ pub use animation_authoring::DeclaredAnimation;
 pub use execution_segment::*;
 pub use execution_session::*;
 pub use host_callbacks::*;
+pub use live_program::*;
 pub use live_session::{
     EffectiveMobjectLayout, EffectiveMobjectState, LiveSession, LiveSessionError,
     TransformToRequest,
@@ -53,8 +55,9 @@ pub use text_authoring::*;
 /// Common imports for direct typed semantic authoring.
 pub mod prelude {
     pub use crate::{
-        DeclaredAnimation, EffectiveMobjectState, ExecutionSession, LiveSession, Mobject,
-        NativeBoolSignal, NativeVectorSignal, Scene, TrackerPosition, ValueTracker,
+        ContinuationStep, DeclaredAnimation, EffectiveMobjectState, ExecutionSession,
+        LiveContinuation, LiveProgram, LiveSession, Mobject, NativeBoolSignal, NativeVectorSignal,
+        Scene, TrackerPosition, ValueTracker,
     };
     pub use noon_core::{
         Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,
