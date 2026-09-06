@@ -32,7 +32,6 @@ const expectedJavascriptSurface = [
   "textSpecJson(",
   "export class SemanticExecutionPlayer",
   "resourceBundleBytes(",
-  "export function createDirectOrdinaryAffinePlaySmokeRenderer(",
   "export class CanonicalAuthoringSceneContext",
   "export class WasmValueTrackerHandle",
   "export class WasmTrackerPositionHandle",
@@ -165,7 +164,6 @@ const expectedTypeSurface = [
   "textSpecJson(): string",
   "export class SemanticExecutionPlayer",
   "resourceBundleBytes(): Uint8Array",
-  "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
   "export class CanonicalAuthoringSceneContext",
   "export class WasmValueTrackerHandle",
   "export class WasmTrackerPositionHandle",
@@ -258,6 +256,17 @@ const expectedTypeSurface = [
   "export function resolveLifecyclePlan(",
   "export function validatePresenceTransition(",
 ];
+
+// Direct example factories are compiled only with Rust debug assertions.
+// The build profile is explicit in CI; detect an existing debug factory as well
+// when this checker is run directly against an already generated package.
+if (process.env.NOON_WASM_PROFILE === "dev"
+    || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
+  expectedJavascriptSurface.push("export function createDirectOrdinaryAffinePlaySmokeRenderer(");
+  expectedTypeSurface.push(
+    "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+  );
+}
 
 for (const fragment of expectedJavascriptSurface) {
   if (!javascript.includes(fragment)) {
