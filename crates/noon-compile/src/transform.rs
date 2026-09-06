@@ -187,6 +187,9 @@ pub(crate) fn compile_analytic_content_morph(
     else {
         unreachable!("analytic cross-content morph compiles to a path pair")
     };
+    if from_style.stroke_width_mode == StrokeWidthMode::ScreenSpace && render_transform.is_none() {
+        return Err(TransformCompileFailure::RequiresRetessellation);
+    }
     Ok((geometry.as_ref().clone(), render_transform))
 }
 
@@ -378,5 +381,30 @@ mod tests {
         assert!(path
             .conservative_bounds()
             .is_some_and(|bounds| bounds.width() > 2.5 && bounds.height() > 2.5));
+    }
+
+    #[test]
+    fn analytic_screen_space_morph_rejects_singular_fixed_frame() {
+        let style = Style {
+            stroke: Some(Color::WHITE),
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let singular = Transform2D {
+            scale: Vec2::new(0.0, 1.0),
+            ..Transform2D::IDENTITY
+        };
+
+        assert_eq!(
+            compile_analytic_content_morph(
+                &GeometryRef::rectangle(2.0, 2.0),
+                &GeometryRef::circle(1.0),
+                style,
+                style,
+                singular,
+                Transform2D::IDENTITY,
+            ),
+            Err(TransformCompileFailure::RequiresRetessellation)
+        );
     }
 }
