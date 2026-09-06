@@ -921,6 +921,7 @@ async function directTimedCompositionProof(expectedBackend) {
       [500, [true, true, false]],
       [600, [true, true, false]],
       [800, [true, true, true]],
+      [1000, [true, true, true]],
       [1250, [true, true, true]],
     ]) {
       renderer.advanceDirectRealtime(time);
