@@ -3849,7 +3849,8 @@ mod tests {
             .execution_slot_for_frame_index(0)
             .unwrap();
         assert_eq!(context.ordinary_wait(0.3).unwrap(), 0.3);
-        let collision = context.scene.circle(0.25).unwrap();
+        // New detached state must publish through the active session as well.
+        let collision = context.live_target_editor(&anchor).unwrap();
         let revision = context.scene.store().borrow().scene_revision();
         assert!(context
             .live_add_mobject(ObjectId::new(0), &collision)

@@ -849,7 +849,6 @@ impl Play<'_> {
 
 pub use crate::analytic_geometry_authoring::*;
 pub use crate::arc_authoring::*;
-pub use crate::camera_authoring::*;
 pub use crate::dashed_line_authoring::*;
 pub use crate::elbow_authoring::*;
 pub use crate::geometry_authoring::*;

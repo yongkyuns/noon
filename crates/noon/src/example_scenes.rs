@@ -1656,7 +1656,7 @@ pub fn ordinary_moving_camera_center_program(
         object_opacity: 1.0,
     };
     let mut triangle = scene.path(triangle_path, triangle_style)?;
-    triangle.set_translation(2.0, 0.0)?;
+    triangle.move_to(2.0, 0.0)?;
 
     scene
         .into_live_program(OrdinaryMovingCameraCenter {
