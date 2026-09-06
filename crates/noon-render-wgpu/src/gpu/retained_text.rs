@@ -287,13 +287,15 @@ impl PreparedRetainedGpuFrame<'_> {
                 crate::PreparedGeometryObjectOutcome::Unsupported(object) => {
                     RetainedPreparedObjectOutcome::Unsupported(object)
                 }
-            })?;
-        if geometry
-            .as_ref()
-            .is_some_and(|prepared| prepared.object != object)
-        {
-            return Err(RetainedPreparedObjectOutcome::Absent);
-        }
+            })?
+            .map(|mut prepared| {
+                // Mixed preparation assigns renderer-private scratch IDs. The
+                // indexed source-to-scratch map above proves ownership, so expose
+                // the semantic object selected by the caller rather than leaking
+                // the private scratch ID from the geometry preparer.
+                prepared.object = object;
+                prepared
+            });
         if items.is_empty() && geometry.is_none() {
             return Err(RetainedPreparedObjectOutcome::Absent);
         }
@@ -1815,6 +1817,7 @@ impl RetainedFramePreparer {
                 }
                 ObjectContentRef::Text(handle) => {
                     let mut fast_text_only = true;
+                    let first_scratch_slot = self.scratch.objects.len();
                     let resource = texts
                         .get(*handle)
                         .ok_or(RetainedPrepareError::MissingTextResource)?;
@@ -1861,6 +1864,13 @@ impl RetainedFramePreparer {
                                 )?;
                             }
                         }
+                    }
+                    if self.scratch.objects.len() > first_scratch_slot {
+                        // Text vector decorations and outlined glyphs are ordinary
+                        // prepared geometry. Retain the first exact scratch slot so
+                        // an object observation can correlate its geometry upload
+                        // without guessing from semantic or packed IDs.
+                        self.scratch_slots[object_index] = Some(first_scratch_slot);
                     }
                     self.fast_text_only[object_index] = fast_text_only;
                 }
@@ -3102,6 +3112,8 @@ mod tests {
             .unwrap();
 
         let observed = prepared.observe_object(1, ObjectId::new(2)).unwrap();
+        assert_eq!(observed.object, ObjectId::new(2));
+        assert_eq!(observed.geometry.as_ref().unwrap().object, ObjectId::new(2));
         assert_eq!(observed.kind, RetainedPreparedObjectKind::Mixed);
         assert!(observed.geometry.is_some());
         assert_eq!(observed.glyph_ranges.len(), observed.glyph_item_count);
@@ -3220,29 +3232,41 @@ mod tests {
     #[test]
     fn observed_geometry_only_mega_path_is_explicitly_unavailable() {
         let frame = geometry_only_mega_path_frame();
-        let texts = TextResourceArena::new();
-        let fonts = FontResourceArena::new();
-        let geometries = GeometryResourceArena::new();
-        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut preparer = RetainedFramePreparer::new();
-        let prepared = preparer
-            .prepare_with_changes(
-                &device,
-                &queue,
-                &frame,
-                &FrameChanges::all(),
-                &texts,
-                &fonts,
-                &geometries,
-                metrics,
-            )
-            .unwrap();
+        // Retained mixed preparation intentionally keeps individual path draws
+        // for painter interleaving. Construct the compacted geometry state that
+        // this defensive boundary protects without changing that policy.
+        let mut geometry_preparer = FramePreparer::new();
+        let geometry = geometry_preparer.prepare(&frame);
+        let text_preparer = RetainedTextQuadPreparer::default();
+        let mut applied_publication = None;
+        let prepared = PreparedRetainedGpuFrame {
+            applied_publication: &mut applied_publication,
+            geometry,
+            geometry_only: true,
+            text_generation: 0,
+            text: PreparedRetainedTextSnapshot {
+                time: frame.time,
+                mask_quads: &[],
+                color_quads: &[],
+                items: &[],
+                stats: RetainedTextPrepareStats::default(),
+                atlas: text_preparer.atlas(),
+                partial_upload_base_generation: None,
+                dirty_mask_ranges: &[],
+                dirty_color_ranges: &[],
+            },
+            render_items: &[],
+            stats: RetainedPrepareStats::default(),
+            source_geometry_slots: None,
+            render_item_ranges: None,
+        };
 
         assert!(prepared.geometry_only);
-        assert!(prepared.geometry.render_batches.iter().any(|batch| {
-            matches!(batch.primitive, RenderPrimitive::MegaPath { .. })
-        }));
+        assert!(prepared
+            .geometry
+            .render_batches
+            .iter()
+            .any(|batch| { matches!(batch.primitive, RenderPrimitive::MegaPath { .. }) }));
         assert!(matches!(
             prepared.observe_object(0, ObjectId::new(1)),
             Err(RetainedPreparedObjectOutcome::MegaPathMappingUnavailable)
