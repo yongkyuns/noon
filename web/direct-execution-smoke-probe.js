@@ -7,11 +7,11 @@ import {
   createDirectOrdinaryAffineContinuationSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
   createDirectOrdinaryCompositionContinuationSmokeRenderer,
+  createDirectOrdinaryValueTrackerContinuationSmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
-  createDirectValueTrackerSmokeRenderer,
 } from "./pkg/noon_web.js";
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
 
@@ -652,6 +652,72 @@ async function directOrdinaryCompositionContinuationProof(expectedBackend) {
   return metrics;
 }
 
+async function directOrdinaryValueTrackerContinuationProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryValueTrackerContinuationSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow || initial.cadence !== "animation-frame") {
+    throw new Error(`direct scalar continuation did not start: ${JSON.stringify(initial)}`);
+  }
+  await presentDirectFrame(renderer);
+
+  if (!renderer.advanceDirectRealtime(1000)) {
+    throw new Error("direct scalar continuation did not publish its first midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const firstMidpoint = await sampleRenderedColor(canvas, -1, 0);
+
+  if (!renderer.advanceDirectRealtime(2000)) {
+    throw new Error("direct scalar continuation did not complete its first track");
+  }
+  await presentDirectFrame(renderer);
+  if (!renderer.advanceDirectRealtime(2500)) {
+    throw new Error("direct scalar continuation did not drive its persistent hold");
+  }
+  await presentDirectFrame(renderer);
+  const persistentHold = await sampleRenderedColor(canvas, 1, 0);
+
+  if (!renderer.advanceDirectRealtime(3500)) {
+    throw new Error("direct scalar continuation did not publish its second midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const secondMidpoint = await sampleRenderedColor(canvas, 2, 0);
+
+  if (!renderer.advanceDirectRealtime(4000)) {
+    throw new Error("direct scalar continuation did not complete its second track");
+  }
+  await presentDirectFrame(renderer);
+  const endpoint = await sampleRenderedColor(canvas, 3, 0);
+  const finalDirective = JSON.parse(renderer.directWakeDirectiveJson(4000));
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    firstMidpoint,
+    persistentHold,
+    secondMidpoint,
+    endpoint,
+    finalCadence: finalDirective.cadence,
+  };
+  if (metrics.backend !== expectedBackend || metrics.authoredTime !== 4) {
+    throw new Error(`direct scalar continuation selected invalid runtime ${JSON.stringify(metrics)}`);
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0 || metrics.finalCadence !== "idle") {
+    throw new Error(`direct scalar continuation lifecycle is invalid ${JSON.stringify(metrics)}`);
+  }
+  for (const [label, color] of Object.entries({
+    firstMidpoint, persistentHold, secondMidpoint, endpoint,
+  })) {
+    if (color.red < 180 || color.green < 180 || color.blue < 180) {
+      throw new Error(`direct scalar continuation ${label} is not visibly white: ${JSON.stringify(metrics)}`);
+    }
+  }
+  return metrics;
+}
+
 async function directOrdinaryStylePlayProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinaryStylePlaySmokeRenderer(canvas);
@@ -734,44 +800,6 @@ async function directOrdinaryPaintPlayProof(expectedBackend) {
     endpointColor.blue > 100
   ) {
     throw new Error(`direct ordinary paint did not render its yellow authored edit ${JSON.stringify(metrics)}`);
-  }
-  return metrics;
-}
-
-async function directValueTrackerProof(expectedBackend) {
-  const canvas = new OffscreenCanvas(960, 540);
-  const renderer = await createDirectValueTrackerSmokeRenderer(canvas);
-  renderer.resize(canvas.width, canvas.height);
-
-  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
-  if (!initial.presentNow) {
-    throw new Error("direct ValueTracker session did not expose its settled publication");
-  }
-  await presentDirectFrame(renderer);
-
-  const endpointLuma = await sampleRenderedPixel(canvas, 2, 0);
-  const midpointLuma = await sampleRenderedPixel(canvas, 0, 0);
-  const metrics = {
-    backend: renderer.rendererBackend(),
-    authoredTime: renderer.time(),
-    objectCount: renderer.objectCount(),
-    drawCalls: renderer.lastDrawCalls(),
-    endpointLuma,
-    midpointLuma,
-  };
-  if (metrics.backend !== expectedBackend) {
-    throw new Error(
-      `direct ValueTracker renderer selected ${metrics.backend}; expected ${expectedBackend}`,
-    );
-  }
-  if (metrics.authoredTime !== 2) {
-    throw new Error(`direct ValueTracker authored time is ${metrics.authoredTime}; expected 2`);
-  }
-  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
-    throw new Error(`direct ValueTracker produced invalid metrics ${JSON.stringify(metrics)}`);
-  }
-  if (endpointLuma < 600 || midpointLuma > 60) {
-    throw new Error(`direct ValueTracker did not render its x=2 endpoint ${JSON.stringify(metrics)}`);
   }
   return metrics;
 }
@@ -933,9 +961,10 @@ async function start() {
   metrics.ordinaryCompositionPlay = await directOrdinaryCompositionPlayProof(expectedBackend);
   metrics.ordinaryCompositionContinuation =
     await directOrdinaryCompositionContinuationProof(expectedBackend);
+  metrics.ordinaryValueTrackerContinuation =
+    await directOrdinaryValueTrackerContinuationProof(expectedBackend);
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);
-  metrics.valueTracker = await directValueTrackerProof(expectedBackend);
   metrics.nativeSignals = await directNativeSignalsProof(expectedBackend);
 
   state.metrics = metrics;

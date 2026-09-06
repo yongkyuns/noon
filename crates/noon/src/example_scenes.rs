@@ -3,10 +3,11 @@
 use std::error::Error;
 
 use crate::{
-    AnimationOptions, Color, ExecutionSession, ExecutionSessionInputError, HostCallbackId,
-    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, ReactiveValue,
+    AnimationOptions, Color, ExecutionSession, HostCallbackId,
+    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction,
     RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, TransformToRequest, Vec2,
+    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, TransformToRequest, ValueTracker,
+    Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -307,6 +308,93 @@ pub fn ordinary_affine_continuation_program(
             first_target,
             stage: 0,
         })
+        .map_err(|error| error.to_string())
+}
+
+/// Scalar continuation that keeps the signal timeline and persistent setter in Rust.
+pub struct OrdinaryValueTrackerContinuation {
+    tracker: ValueTracker,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryValueTrackerContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.declare_and_activate_value_tracker(
+                    &self.tracker,
+                    2.0,
+                    2.0,
+                    RateFunction::Linear,
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                // Completion releases the first track. This setter is one
+                // authored hold at t=2, not a host-side scalar cache.
+                live.set_value(&self.tracker, 3.0)
+                    .map_err(|error| error.to_string())?;
+                self.stage = 2;
+                live.wait_segment(1.0)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            2 => {
+                self.stage = 3;
+                live.declare_and_activate_value_tracker(
+                    &self.tracker,
+                    5.0,
+                    1.0,
+                    RateFunction::Linear,
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            3 => {
+                self.stage = 4;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary ValueTracker continuation resumed after it finished".to_owned()),
+        }
+    }
+}
+
+/// Build the paired Python/Rust scalar continuation without selecting a host.
+///
+/// A white circle follows `offset + tracker * RIGHT`: the tracker moves from
+/// `0` to `2` over two seconds, is held at `3` through a one-second wait, and
+/// then moves from `3` to `5` over one second. The returned `LiveProgram` owns
+/// the one session, segment lifecycle, and renderer publication barriers.
+pub fn ordinary_value_tracker_continuation_program(
+) -> Result<LiveProgram<OrdinaryValueTrackerContinuation>, String> {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.4).map_err(|error| error.to_string())?;
+    circle
+        .set_fill(1.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
+
+    let tracker = scene.value_tracker(0.0).map_err(|error| error.to_string())?;
+    let position = scene
+        .position_from_tracker(
+            &tracker,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(-2.0, 0.0, 0.0),
+        )
+        .map_err(|error| error.to_string())?;
+    scene
+        .bind_position(&circle, &position)
+        .map_err(|error| error.to_string())?;
+
+    scene
+        .into_live_program(OrdinaryValueTrackerContinuation { stage: 0, tracker })
         .map_err(|error| error.to_string())
 }
 
@@ -912,57 +1000,6 @@ pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
         assert_eq!(effective.opacity, 1.0);
     }
     assert_eq!(session.frame().time, 2.4);
-    Ok(session)
-}
-
-/// Build and settle the paired canonical scalar `ValueTracker` example.
-///
-/// Signal-track scheduling, interpolation, binding evaluation, and direct-write
-/// ownership all remain inside the one canonical execution session. Native and
-/// direct single-context Rust/WASM hosts consume the returned typed session.
-pub fn live_value_tracker() -> Result<ExecutionSession, Box<dyn Error>> {
-    let mut scene = Scene::new();
-    let mut circle = scene.circle(0.4)?;
-    circle.set_fill(1.0, 1.0, 1.0, 1.0)?;
-    scene.add(&circle)?;
-
-    let tracker = scene.value_tracker(0.0)?;
-    let position = scene.position_from_tracker(
-        &tracker,
-        SemanticVec3::new(1.0, 0.0, 0.0),
-        SemanticVec3::new(-2.0, 0.0, 0.0),
-    )?;
-    scene.bind_position(&circle, &position)?;
-    scene
-        .play_value(&tracker, 4.0)
-        .rate_func(RateFunction::Linear)
-        .run_time(2.0)?;
-    assert_eq!(scene.value_tracker_value(&tracker)?, 4.0);
-
-    let mut session = scene.execution_session()?;
-    session.evaluate(1.0)?;
-    assert_eq!(
-        session.effective_signal_value(tracker.node_id()),
-        Some(&ReactiveValue::Scalar(2.0))
-    );
-    assert_eq!(
-        scene.live(&mut session).effective_layout(&circle)?.center,
-        (0.0, 0.0)
-    );
-
-    session.evaluate(2.0)?;
-    assert_eq!(
-        session.effective_signal_value(tracker.node_id()),
-        Some(&ReactiveValue::Scalar(4.0))
-    );
-    assert_eq!(
-        scene.live(&mut session).effective_layout(&circle)?.center,
-        (2.0, 0.0)
-    );
-    assert!(matches!(
-        session.set_reactive_input(tracker.node_id(), 3.0_f32),
-        Err(ExecutionSessionInputError::TimelineOwnedSignal { .. })
-    ));
     Ok(session)
 }
 

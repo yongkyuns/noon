@@ -506,28 +506,31 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM ordinary paint play did not render its post-completion yellow edit",
   );
   assert.equal(
-    direct.metrics.valueTracker?.backend,
+    direct.metrics.ordinaryValueTrackerContinuation?.backend,
     expectedBackend,
-    "direct Rust/WASM ValueTracker did not use the selected renderer backend",
+    "direct Rust/WASM scalar continuation did not use the selected renderer backend",
   );
   assert.equal(
-    direct.metrics.valueTracker?.authoredTime,
-    2,
-    "direct Rust/WASM ValueTracker did not reach its authored endpoint",
+    direct.metrics.ordinaryValueTrackerContinuation?.authoredTime,
+    4,
+    "direct Rust/WASM scalar continuation did not preserve its shared session time",
   );
   assert.equal(
-    direct.metrics.valueTracker?.objectCount,
+    direct.metrics.ordinaryValueTrackerContinuation?.objectCount,
     1,
-    "direct Rust/WASM ValueTracker scene did not retain its bound object",
+    "direct Rust/WASM scalar continuation did not retain its bound object",
   );
-  assert.ok(
-    direct.metrics.valueTracker?.endpointLuma >= 600,
-    "direct Rust/WASM ValueTracker did not render its white x=2 endpoint",
-  );
-  assert.ok(
-    direct.metrics.valueTracker?.midpointLuma <= 60,
-    "direct Rust/WASM ValueTracker remained at its x=0 midpoint",
-  );
+  for (const [label, color] of Object.entries({
+    firstMidpoint: direct.metrics.ordinaryValueTrackerContinuation?.firstMidpoint,
+    persistentHold: direct.metrics.ordinaryValueTrackerContinuation?.persistentHold,
+    secondMidpoint: direct.metrics.ordinaryValueTrackerContinuation?.secondMidpoint,
+    endpoint: direct.metrics.ordinaryValueTrackerContinuation?.endpoint,
+  })) {
+    assert.ok(
+      color?.red >= 180 && color?.green >= 180 && color?.blue >= 180,
+      `direct Rust/WASM scalar continuation did not render its ${label} state`,
+    );
+  }
   assert.equal(
     direct.metrics.nativeSignals?.backend,
     expectedBackend,

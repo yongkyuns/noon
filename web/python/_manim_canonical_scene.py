@@ -495,7 +495,7 @@ def _play_canonical_tracker(
     rate_func: object | None,
     lag_ratio: float | None,
     kwargs: dict[str, object],
-) -> _base.Scene:
+) -> _base.Scene | _SemanticContinuationAwaitable:
     if duration is not None and run_time is not None:
         raise ValueError("use either duration or run_time, not both")
     if easing is not None and rate_func is not None:
@@ -532,12 +532,27 @@ def _play_canonical_tracker(
         raise NotImplementedError(
             "canonical ValueTracker.play cannot follow legacy Scene timing"
         )
-    context.declareValueTrackerPlay(
-        handle,
-        float(builder.target_value),
-        float(resolved.run_time),
-        str(resolved.rate_func),
-    )
+    try:
+        _require_semantic_continuation_active(self)
+        if _semantic_continuation_active(self):
+            _prepare_semantic_continuation_callbacks(self, context)
+        method = (
+            context.beginOrdinaryValueTrackerPlay
+            if _semantic_continuation_active(self)
+            else context.declareValueTrackerPlay
+        )
+        method(
+            handle,
+            float(builder.target_value),
+            float(resolved.run_time),
+            str(resolved.rate_func),
+        )
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self)
+    if _synchronous_continuation_active(self):
+        return _synchronous_continuation_wait(self)
     return self
 
 

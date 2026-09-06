@@ -127,6 +127,17 @@ pub async fn create_direct_ordinary_affine_continuation_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Browser proof that scalar track activation, persistent set, wait, and a
+/// second track execute through one direct Rust/WASM continuation program.
+#[wasm_bindgen(js_name = createDirectOrdinaryValueTrackerContinuationSmokeRenderer)]
+pub async fn create_direct_ordinary_value_tracker_continuation_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::example_scenes::ordinary_value_tracker_continuation_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that FadeIn/FadeOut, detached wait, and same-handle re-entry
 /// execute through the same target-neutral Rust continuation as the native example.
 #[wasm_bindgen(js_name = createDirectOrdinaryFadePlaySmokeRenderer)]
@@ -187,16 +198,6 @@ pub async fn create_direct_ordinary_paint_play_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::ordinary_paint_play().map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
-}
-
-/// Browser proof that the target-neutral Rust scalar tracker example executes
-/// and renders through the typed direct single-context WASM path.
-#[wasm_bindgen(js_name = createDirectValueTrackerSmokeRenderer)]
-pub async fn create_direct_value_tracker_smoke_renderer(
-    canvas: OffscreenCanvas,
-) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let session = noon::example_scenes::live_value_tracker().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 

@@ -472,13 +472,6 @@ try {
       expectedFinalColor: "yellow",
     },
     {
-      filename: "live_value_tracker.py",
-      objectCount: 1,
-      expectedDuration: 2,
-      endpointTime: null,
-      expectedFinalCenter: [2, 0],
-    },
-    {
       filename: "live_content_switch.py",
       objectCount: 2,
       expectedDuration: null,
@@ -682,6 +675,131 @@ try {
   await page.evaluate(() => {
     window.sharedAuthoringSmoke.liveContinuationExecution.terminate();
     window.sharedAuthoringSmoke.liveContinuationExecution = null;
+  });
+
+  // Scalar tracker continuation keeps both values and timing in the returned
+  // Rust player. Python remains suspended through both tracks and the wait.
+  const scalarContinuationSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_value_tracker_continuation.py"),
+    "utf8",
+  );
+  const scalarContinuation = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-ordinary-value-tracker-continuation";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let execution = null;
+    let registration = null;
+    let settled = false;
+    const authoredPromise = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(next) {
+        if (registration !== null) {
+          throw new Error("scalar continuation source registered more than one semantic context");
+        }
+        registration = next;
+        execution = new harness.AuthoringExecutionClient(canvas);
+        await execution.startSemanticExecution(next.semanticExecution, {
+          authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, next.duration),
+          transportMode: "transferable",
+        });
+      },
+    });
+    authoredPromise.then(() => { settled = true; }, () => {});
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (execution !== null && registration !== null) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (execution === null || registration === null) {
+      throw new Error("scalar continuation source did not register its semantic continuation");
+    }
+    harness.scalarContinuation = {
+      authoredPromise,
+      execution,
+      registration,
+      get settled() { return settled; },
+    };
+    return { canvasId: canvas.id };
+  }, scalarContinuationSource);
+
+  async function observeScalarDuring(start, end, label) {
+    return page.evaluate(async ({ startTime, endTime, phaseLabel }) => {
+      const continuation = window.sharedAuthoringSmoke.scalarContinuation;
+      let latest = null;
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        if (continuation.settled) break;
+        try {
+          latest = await continuation.execution.state();
+          if (latest.time > startTime && latest.time < endTime) return latest;
+          if (latest.time >= endTime) break;
+        } catch {
+          // A transferred player is observable again only after the source has
+          // authored and returned the next shared segment.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`${phaseLabel} did not reach its observable interval: ${JSON.stringify(latest)}`);
+    }, { startTime: start, endTime: end, phaseLabel: label });
+  }
+
+  const scalarFirstMidpoint = await observeScalarDuring(0.7, 1.3, "scalar first midpoint");
+  const scalarFirstPixels = await page.locator(`#${scalarContinuation.canvasId}`).screenshot();
+  const scalarFirstX = -2 + scalarFirstMidpoint.time;
+  const scalarFirstPixel = renderedWorldPixel(scalarFirstPixels, scalarFirstX, 0);
+  assert.ok(
+    scalarFirstPixel.red > 180 && scalarFirstPixel.green > 180 && scalarFirstPixel.blue > 180,
+    `scalar first track midpoint was not rendered from its captured state: ${JSON.stringify({ scalarFirstMidpoint, scalarFirstPixel })}`,
+  );
+
+  const scalarHold = await observeScalarDuring(2.15, 2.85, "scalar persistent hold");
+  const scalarHoldPixels = await page.locator(`#${scalarContinuation.canvasId}`).screenshot();
+  const scalarHoldPixel = renderedWorldPixel(scalarHoldPixels, 1, 0);
+  assert.ok(
+    scalarHoldPixel.red > 180 && scalarHoldPixel.green > 180 && scalarHoldPixel.blue > 180,
+    `scalar persistent hold did not retain value 3: ${JSON.stringify({ scalarHold, scalarHoldPixel })}`,
+  );
+
+  const scalarSecondMidpoint = await observeScalarDuring(3.25, 3.75, "scalar second midpoint");
+  const scalarSecondPixels = await page.locator(`#${scalarContinuation.canvasId}`).screenshot();
+  const scalarSecondX = 1 + 2 * (scalarSecondMidpoint.time - 3);
+  const scalarSecondPixel = renderedWorldPixel(scalarSecondPixels, scalarSecondX, 0);
+  assert.ok(
+    scalarSecondPixel.red > 180 && scalarSecondPixel.green > 180 && scalarSecondPixel.blue > 180,
+    `scalar second track midpoint was not rendered from its captured state: ${JSON.stringify({ scalarSecondMidpoint, scalarSecondPixel })}`,
+  );
+
+  const scalarContinuationResult = await page.evaluate(async () => {
+    const continuation = window.sharedAuthoringSmoke.scalarContinuation;
+    const authored = await continuation.authoredPromise;
+    if (
+      authored.semanticExecution.contextId !== continuation.registration.semanticExecution.contextId ||
+      authored.semanticExecution.continuationGeneration !== continuation.registration.generation
+    ) {
+      throw new Error("scalar continuation did not retain its early canonical context");
+    }
+    let metrics;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      metrics = (await continuation.execution.metrics()).metrics;
+      if (metrics.objectCount === 1 && metrics.drawCalls > 0 && metrics.presentedFrames > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    window.sharedAuthoringSmoke.scalarContinuationExecution = continuation.execution;
+    return { duration: authored.duration, metrics };
+  });
+  assert.equal(scalarContinuationResult.duration, 4);
+  assert.equal(scalarContinuationResult.metrics.objectCount, 1);
+  const scalarFinalPixels = await page.locator(`#${scalarContinuation.canvasId}`).screenshot();
+  const scalarFinalPixel = renderedWorldPixel(scalarFinalPixels, 3, 0);
+  assert.ok(
+    scalarFinalPixel.red > 180 && scalarFinalPixel.green > 180 && scalarFinalPixel.blue > 180,
+    `scalar continuation did not render its value 5 endpoint: ${JSON.stringify(scalarFinalPixel)}`,
+  );
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.scalarContinuationExecution.terminate();
+    window.sharedAuthoringSmoke.scalarContinuationExecution = null;
+    window.sharedAuthoringSmoke.scalarContinuation = null;
   });
 
   // Flat composition uses the same source-stack continuation lease. The Rust
