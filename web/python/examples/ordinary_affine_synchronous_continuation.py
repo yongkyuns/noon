@@ -1,13 +1,9 @@
-"""Synchronous JSPI continuation over the shared canonical affine runtime."""
+"""Ordinary synchronous continuation over the shared canonical affine runtime."""
 
 from noon import Circle, Color, Scene, Transform, linear
 
 
 class OrdinaryAffineSynchronousContinuation(Scene):
-    # Explicit while Pyodide JSPI/run_sync remains experimental. Ordinary
-    # synchronous constructs retain endpoint-only behavior by default.
-    realtime_continuation = True
-
     def construct(self):
         circle = Circle(radius=0.4).set_fill(Color(0.0, 0.4, 1.0), opacity=1.0)
         self.add(circle)

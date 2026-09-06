@@ -1060,9 +1060,9 @@ try {
     window.sharedAuthoringSmoke.callbackContinuationAuthoredPromise = null;
   });
 
-  // A normal def construct opts into experimental Pyodide JSPI stack switching.
-  // Its source promise remains pending while the same continuation endpoint owns
-  // the Rust player and publishes a real intermediate frame.
+  // A normal def construct uses the canonical JSPI continuation when its first
+  // supported play reaches the shared Rust segment barrier. Its source promise
+  // stays pending while the one endpoint owns the player and presents a frame.
   const synchronousContinuationSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_affine_synchronous_continuation.py"),
     "utf8",

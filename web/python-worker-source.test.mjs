@@ -106,4 +106,8 @@ test("explicit document export bypasses continuation leasing before construct mu
     canonicalScene,
     /if export_document:[\s\S]*?setattr\(scene, _EXPORT_DOCUMENT_CONSTRUCT, True\)[\s\S]*?scene\.construct\(\)[\s\S]*?setattr\(scene, _EXPORT_DOCUMENT_CONSTRUCT, False\)/,
   );
+  assert.match(
+    canonicalScene,
+    /def _start_default_synchronous_continuation\(scene: _base\.Scene\)[\s\S]*?getattr\(scene, _EXPORT_DOCUMENT_CONSTRUCT, False\)[\s\S]*?return/,
+  );
 });
