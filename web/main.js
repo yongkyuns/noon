@@ -465,6 +465,24 @@ function createRuntimeClient() {
   return candidate;
 }
 
+function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds }) {
+  status.dataset.playbackControls = supported ? "available" : "unavailable";
+  if (!supported) {
+    playbackControls?.destroy();
+    playbackControls = null;
+    return;
+  }
+  if (playbackControls === null) {
+    playbackControls = new PlaygroundPlaybackControls(
+      nextPlayer,
+      document.querySelector(".preview-pane"),
+      { durationSeconds, onError: showPlaybackError },
+    );
+  } else {
+    playbackControls.setDuration(durationSeconds);
+  }
+}
+
 function ensureRuntimePreparation() {
   if (player !== null) return null;
   if (runtimePreparation !== null) return runtimePreparation;
@@ -556,14 +574,12 @@ async function ensureRuntimeReady({
           : "python-semantic-engine-render-worker";
       status.dataset.runtimeStartup = "started-on-demand";
       const sourceOwnsExecution = semanticExecution?.continuationGeneration != null;
+      status.dataset.playbackControls = sourceOwnsExecution ? "unavailable" : "available";
       if (!sourceOwnsExecution) {
         playbackControls = new PlaygroundPlaybackControls(
           nextPlayer,
           document.querySelector(".preview-pane"),
-          {
-            durationSeconds: loopDurationSeconds,
-            onError: showPlaybackError,
-          },
+          { durationSeconds: loopDurationSeconds, onError: showPlaybackError },
         );
       }
 
@@ -879,9 +895,12 @@ async function runScene() {
       const startRetained = semanticExecution === null && sceneSpecJson !== null;
       const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
 
-      if (semanticExecution?.continuationGeneration != null) {
-        playbackControls?.destroy();
-        playbackControls = null;
+      if (player !== null) {
+        updatePlaybackControls({
+          supported: semanticExecution?.continuationGeneration == null,
+          player,
+          durationSeconds: loopDurationSeconds,
+        });
       }
 
       await runPlaygroundTestHook("beforeReconcile", {

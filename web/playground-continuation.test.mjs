@@ -50,6 +50,7 @@ test("source-owned semantic runs do not expose unsupported playback controls", (
   assert.match(runtime, /if \(!sourceOwnsExecution\) \{[\s\S]*new PlaygroundPlaybackControls/);
   assert.match(
     runScene,
-    /if \(semanticExecution\?\.continuationGeneration != null\) \{[\s\S]*playbackControls = null;/,
+    /updatePlaybackControls\(\{\s*supported: semanticExecution\?\.continuationGeneration == null,/,
   );
+  assert.match(runtime, /playbackControls\?\.destroy\(\);\s*playbackControls = null;/);
 });
