@@ -688,9 +688,9 @@ mod tests {
             .activate_animation_segment(
                 &store,
                 parallel,
-                AnimationOptions::new()
-                    .run_time(2.0)
-                    .rate_func(RateFunction::Linear),
+                // Keep the root's authored ThereAndBack rate function; a play
+                // rate override would intentionally replace that mapping.
+                AnimationOptions::new().run_time(2.0),
             )
             .unwrap();
         session.advance_segment_to(segment, 0.5).unwrap();
