@@ -8,11 +8,14 @@
 
 use std::error::Error;
 
-use noon_core::PublicationContext;
+use noon_core::{
+    NativeEventOccurrence, NativeInputValue, NativeStateSource, PublicationContext, Rect,
+};
 
 use crate::{
-    ExecutionSegment, ExecutionSegmentState, ExecutionSession, LiveSession, RendererPublication,
-    RustHostCallbackError, RustHostCallbackTable, Scene,
+    ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
+    ExecutionSessionInputError, ExecutionViewportQuery, FrameState, LiveSession,
+    RendererPublication, RustHostCallbackError, RustHostCallbackTable, Scene,
 };
 
 /// One application-authored continuation result.
@@ -70,7 +73,10 @@ pub enum LiveProgramError<E> {
     PublicationStillPending {
         expected: PublicationContext,
     },
+    CompletedSegment(ExecutionSegment),
     Callback(RustHostCallbackError),
+    Input(ExecutionSessionInputError),
+    Segment(ExecutionSegmentAdvanceError),
     Completion(crate::LiveSessionError),
     Continuation(E),
 }
@@ -92,7 +98,14 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
                 formatter,
                 "cannot resume before publication {expected:?} is admitted by the host"
             ),
+            Self::CompletedSegment(segment) => write!(
+                formatter,
+                "continuation returned an already completed segment ending at {}",
+                segment.end_time()
+            ),
             Self::Callback(error) => error.fmt(formatter),
+            Self::Input(error) => error.fmt(formatter),
+            Self::Segment(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
             Self::Continuation(error) => error.fmt(formatter),
         }
@@ -103,9 +116,12 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Callback(error) => Some(error),
+            Self::Input(error) => Some(error),
+            Self::Segment(error) => Some(error),
             Self::Completion(error) => Some(error),
             Self::Continuation(error) => Some(error),
             Self::InvalidState { .. }
+            | Self::CompletedSegment(_)
             | Self::PublicationMismatch { .. }
             | Self::PublicationStillPending { .. } => None,
         }
@@ -149,6 +165,34 @@ impl<C: LiveContinuation> LiveProgram<C> {
         &self.session
     }
 
+    /// Query candidate frame rows through the session-owned derived spatial index.
+    pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
+        self.session.query_viewport(bounds)
+    }
+
+    /// Deliver one normalized sampled native value without exposing mutable session authority.
+    pub fn set_native_state_input(
+        &mut self,
+        source: NativeStateSource,
+        value: NativeInputValue,
+    ) -> Result<&FrameState, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("deliver native state input")?;
+        self.session
+            .set_native_state_input(source, value)
+            .map_err(LiveProgramError::Input)
+    }
+
+    /// Deliver one ordered native event without exposing mutable session authority.
+    pub fn emit_native_event(
+        &mut self,
+        occurrence: NativeEventOccurrence,
+    ) -> Result<&FrameState, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("deliver a native event")?;
+        self.session
+            .emit_native_event(occurrence)
+            .map_err(LiveProgramError::Input)
+    }
+
     /// Consume the runtime's current renderer-facing invalidation without copying state.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         self.session.take_renderer_publication()
@@ -182,6 +226,17 @@ impl<C: LiveContinuation> LiveProgram<C> {
         };
         match result {
             Ok(ContinuationStep::Await(segment)) => {
+                match self.session.validate_segment_for_advance(segment) {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        self.phase = LiveProgramPhase::Terminal;
+                        return Err(LiveProgramError::CompletedSegment(segment));
+                    }
+                    Err(error) => {
+                        self.phase = LiveProgramPhase::Terminal;
+                        return Err(LiveProgramError::Segment(error));
+                    }
+                }
                 self.phase = LiveProgramPhase::Awaiting(segment);
                 Ok(self.status())
             }
@@ -267,6 +322,19 @@ impl<C: LiveContinuation> LiveProgram<C> {
             operation,
             state: self.status(),
         }
+    }
+
+    fn ensure_host_input_available(
+        &self,
+        operation: &'static str,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        if matches!(
+            self.phase,
+            LiveProgramPhase::PublicationPending(_) | LiveProgramPhase::Terminal
+        ) {
+            return Err(self.invalid_state(operation));
+        }
+        Ok(())
     }
 }
 
@@ -388,6 +456,77 @@ mod tests {
     struct WaitContinuation {
         stage: usize,
         resumes: Rc<RefCell<usize>>,
+    }
+
+    struct ReturnSegment(ExecutionSegment);
+
+    impl LiveContinuation for ReturnSegment {
+        type Error = Infallible;
+
+        fn resume(&mut self, _live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            Ok(ContinuationStep::Await(self.0))
+        }
+    }
+
+    fn scene_with_pending_segment() -> (Scene, ExecutionSession, ExecutionSegment) {
+        let mut scene = Scene::new();
+        let source = scene.circle(0.4).unwrap();
+        scene.add(&source).unwrap();
+        let mut target = source.target_editor().unwrap();
+        target.set_translation(2.0, 0.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_transform_to(
+                &source,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        (scene, session, segment)
+    }
+
+    #[test]
+    fn returned_foreign_or_stale_segment_is_terminal_before_drive() {
+        let (_, _, foreign) = scene_with_pending_segment();
+        let mut scene = Scene::new();
+        let object = scene.circle(0.4).unwrap();
+        scene.add(&object).unwrap();
+        let mut foreign_program = scene.into_live_program(ReturnSegment(foreign)).unwrap();
+        assert!(matches!(
+            foreign_program.resume(),
+            Err(LiveProgramError::Segment(
+                ExecutionSegmentAdvanceError::ForeignSegment { .. }
+            ))
+        ));
+        assert_eq!(foreign_program.status(), LiveProgramStatus::Terminal);
+
+        let (scene, session, pending) = scene_with_pending_segment();
+        let pending_token = pending.token().unwrap();
+        let stale_sequence = crate::ExecutionSegmentSequence::new(
+            pending_token.sequence().get().checked_add(1).unwrap(),
+        );
+        let stale = ExecutionSegment::from_duration(pending.start_time(), pending.duration())
+            .unwrap()
+            .with_completion_token(crate::ExecutionSegmentToken::new(
+                session.runtime_identity(),
+                stale_sequence,
+            ));
+        let mut stale_program = LiveProgram {
+            scene,
+            session,
+            continuation: ReturnSegment(stale),
+            phase: LiveProgramPhase::ReadyToResume,
+        };
+        assert!(matches!(
+            stale_program.resume(),
+            Err(LiveProgramError::Segment(
+                ExecutionSegmentAdvanceError::StaleSegment { .. }
+            ))
+        ));
+        assert_eq!(stale_program.status(), LiveProgramStatus::Terminal);
     }
 
     impl LiveContinuation for WaitContinuation {

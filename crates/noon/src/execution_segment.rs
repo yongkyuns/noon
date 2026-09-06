@@ -285,7 +285,7 @@ impl ExecutionSession {
     /// drive operation can change the frame. A previously completed receipt is
     /// intentionally an idempotent no-op. Tokenless waits carry no driver
     /// completion record and remain ordinary authored-time boundaries.
-    fn validate_segment_for_advance(
+    pub(crate) fn validate_segment_for_advance(
         &self,
         segment: ExecutionSegment,
     ) -> Result<bool, ExecutionSegmentAdvanceError> {
