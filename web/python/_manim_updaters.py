@@ -496,7 +496,9 @@ class _CallbackContext:
                     fill=_color(after.style["fill"]),
                     stroke=_color(after.style["stroke"]),
                     stroke_width=after.style["stroke_width"],
-                    stroke_width_mode=after.style.get("stroke_width_mode", "scale_with_object"),
+                    stroke_width_mode=after.style.get(
+                        "stroke_width_mode", _DEFAULT_STROKE_WIDTH_MODE
+                    ),
                     stroke_join=after.style["stroke_join"],
                     stroke_cap=after.style["stroke_cap"],
                     opacity=after.style["opacity"],
@@ -536,6 +538,9 @@ class _PhaseTransform:
         }
 
 
+_DEFAULT_STROKE_WIDTH_MODE = "scale_with_object"
+
+
 @dataclass(frozen=True, slots=True)
 class _PhaseStyle:
     fill: tuple[float, float, float, float] | None
@@ -550,14 +555,22 @@ class _PhaseStyle:
     def from_wire(cls, value: object) -> "_PhaseStyle":
         if not isinstance(value, dict):
             raise TypeError("canonical callback style must be an object")
-        for key in ("stroke_width_mode", "stroke_join", "stroke_cap"):
-            if not isinstance(value.get(key), str):
+        stroke_width_mode = value.get(
+            "stroke_width_mode", _DEFAULT_STROKE_WIDTH_MODE
+        )
+        string_fields = {
+            "stroke_width_mode": stroke_width_mode,
+            "stroke_join": value.get("stroke_join"),
+            "stroke_cap": value.get("stroke_cap"),
+        }
+        for key, field in string_fields.items():
+            if not isinstance(field, str):
                 raise TypeError(f"canonical callback style.{key} must be a string")
         return cls(
             _phase_color("style.fill", value.get("fill")),
             _phase_color("style.stroke", value.get("stroke")),
             _phase_number("style.stroke_width", value.get("stroke_width")),
-            value["stroke_width_mode"],
+            stroke_width_mode,
             value["stroke_join"],
             value["stroke_cap"],
             _phase_number("style.opacity", value.get("opacity")),
