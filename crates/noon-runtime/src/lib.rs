@@ -2151,10 +2151,12 @@ const fn lerp(from: f32, to: f32, progress: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use noon_compile::{CompiledObject, CompiledScene};
+    use noon_compile::CompiledObject;
+    use noon_compile::CompiledScene;
+    use noon_core::TrackId;
     use noon_core::{
         Color, CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, Property,
-        RateFunction, SceneDefinition, Style, TrackDefinition, TrackId, TrackTiming,
+        RateFunction, SceneDefinition, Style, TrackDefinition, TrackTiming,
     };
 
     use super::*;
@@ -2716,28 +2718,32 @@ mod tests {
 
     #[test]
     fn fill_track_uses_optional_paint_appearance_and_local_style_dirtying() {
-        let mut definition = SceneDefinition::new();
-        let object = definition.add_snapshot(ObjectSnapshot {
-            geometry: GeometryRef::circle(1.0),
-            transform: Transform2D::default(),
-            style: Style {
-                fill: None,
-                ..Style::default()
+        let object = ObjectId::new(1);
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Fill,
+            values: TrackValues::Color {
+                from: None,
+                to: Some(Color::RED),
             },
-        });
-        definition
-            .add_track(
+            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
                 object,
-                Property::Fill,
-                TrackValues::Color {
-                    from: None,
-                    to: Some(Color::RED),
+                GeometryRef::circle(1.0),
+                Transform2D::default(),
+                Style {
+                    fill: None,
+                    ..Style::default()
                 },
-                TrackTiming::new(0.0, 2.0, Easing::Linear),
-            )
-            .unwrap();
-        let mut instance =
-            SceneInstance::new(CompiledScene::compile(&definition).expect("scene must compile"));
+            )],
+            &[track],
+        )
+        .expect("scene must compile");
+        let mut instance = SceneInstance::new(compiled);
         instance.take_frame_changes();
 
         instance.advance_to(1.0).unwrap();
