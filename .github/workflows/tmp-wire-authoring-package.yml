@@ -48,36 +48,6 @@ jobs:
               raise SystemExit('authoring export assertion block changed')
           p.write_text(text.replace(old, new, 1))
 
-          for path in ['.github/workflows/ci.yml', '.github/workflows/playground-cross-browser.yml']:
-              p = Path(path)
-              text = p.read_text()
-              needle = '            web/pkg\n            web/python-worker.js'
-              if needle not in text:
-                  raise SystemExit(f'package artifact block missing in {path}')
-              p.write_text(text.replace(
-                  needle,
-                  '            web/pkg\n            web/pkg-authoring\n            web/python-worker.js',
-                  1,
-              ))
-
-          p = Path('.github/workflows/playground-cross-browser.yml')
-          text = p.read_text()
-          needle = '      - "scripts/build-web-demo.sh"\n'
-          if '      - "scripts/build-web-authoring-package.sh"\n' not in text:
-              if needle not in text:
-                  raise SystemExit('cross-browser build script path trigger missing')
-              text = text.replace(needle, needle + '      - "scripts/build-web-authoring-package.sh"\n', 1)
-          p.write_text(text)
-
-          p = Path('.github/workflows/playground-product-gate.yml')
-          text = p.read_text()
-          needle = '      - "scripts/build-web-demo.sh"\n'
-          if '      - "scripts/build-web-authoring-package.sh"\n' not in text:
-              if needle not in text:
-                  raise SystemExit('product gate build script path trigger missing')
-              text = text.replace(needle, needle + '      - "scripts/build-web-authoring-package.sh"\n', 1)
-          p.write_text(text)
-
           p = Path('.gitignore')
           text = p.read_text()
           if '/web/pkg-authoring\n' not in text:
@@ -92,9 +62,6 @@ jobs:
           git config user.email "noreply@openai.com"
           git add \
             .gitignore \
-            .github/workflows/ci.yml \
-            .github/workflows/playground-cross-browser.yml \
-            .github/workflows/playground-product-gate.yml \
             scripts/build-web-authoring-package.sh \
             scripts/build-web-demo.sh \
             web/python-worker.source.js
