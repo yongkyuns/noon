@@ -68,7 +68,14 @@ async function snapshot(page) {
   });
 }
 
-async function waitForPreloadedScene(page) {
+async function startDeferredRuntime(page) {
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const deferred = await snapshot(page);
+  assert.equal(deferred.runtimeStartup, "deferred", "stress playground must defer startup until Run");
+  assert.equal(deferred.rendererBackend, "", "deferred stress playground must not own a renderer");
+  assert.equal(deferred.presentedFrames, 0, "deferred stress playground must not present frames");
+
+  await page.locator("#replace-scene").click();
   await page.waitForFunction(
     () => {
       const status = document.querySelector("#status");
@@ -88,11 +95,11 @@ async function waitForPreloadedScene(page) {
   assert.equal(
     state.runtimeStartup,
     "started-on-demand",
-    "stress playground must preload the existing execution owner without an explicit Run",
+    "stress playground must start its execution owner from explicit Run",
   );
   assert.equal(state.liveAuthoring, "ready");
-  assert.ok(state.presentedFrames > 0, "stress preload must present a frame");
-  assert.equal(state.patchState, "applied", `stress preload must succeed: ${state.patchText}`);
+  assert.ok(state.presentedFrames > 0, "stress Run must present a frame");
+  assert.equal(state.patchState, "applied", `stress Run must succeed: ${state.patchText}`);
   return state;
 }
 
@@ -190,7 +197,7 @@ try {
     `focusing CodeMirror must not expand the editor pane (${diagnostics.snapshots.loaded.editorHeight} -> ${focused.editorHeight})`,
   );
 
-  diagnostics.snapshots.baseline = await waitForPreloadedScene(page);
+  diagnostics.snapshots.baseline = await startDeferredRuntime(page);
   assert.equal(diagnostics.snapshots.baseline.exampleId, "manim-parity-stress-grid");
   assert.equal(diagnostics.snapshots.baseline.executionMode, "retained");
   assert.match(diagnostics.snapshots.baseline.patchText, /Scene rebuilt atomically/);
