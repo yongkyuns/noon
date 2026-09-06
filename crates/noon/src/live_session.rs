@@ -100,6 +100,22 @@ pub struct TransformToRequest<'a> {
     options: AnimationOptions,
 }
 
+/// One typed leaf in an atomic live animation composition.
+#[derive(Clone, Copy)]
+pub enum AnimationCompositionRequest<'a> {
+    /// Transform a source by point correspondence toward an authored target state.
+    TransformTo(TransformToRequest<'a>),
+    /// Rotate a centered 2D leaf along an angular path.
+    Rotate {
+        /// The authored semantic object affected by this leaf.
+        target: &'a Mobject,
+        /// Signed 2D rotation in radians.
+        angle: f64,
+        /// Leaf-local authored timing options.
+        options: AnimationOptions,
+    },
+}
+
 impl<'a> TransformToRequest<'a> {
     pub const fn new(
         source: &'a Mobject,
@@ -631,6 +647,59 @@ impl<'a> LiveSession<'a> {
                 &children,
                 composition_options,
                 play_options,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Atomically admit detached leaves and activate mixed point-transform/angular-path leaves.
+    pub fn declare_and_activate_animation_composition(
+        &mut self,
+        kind: SemanticAnimationCompositionKind,
+        children: &[AnimationCompositionRequest<'_>],
+        composition_options: AnimationOptions,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        for child in children {
+            match child {
+                AnimationCompositionRequest::TransformTo(child) => {
+                    self.require_mobject(child.source)?;
+                    self.require_mobject(child.target_state)?;
+                }
+                AnimationCompositionRequest::Rotate { target, .. } => {
+                    self.require_mobject(target)?;
+                }
+            }
+        }
+        let children = children
+            .iter()
+            .map(|child| match child {
+                AnimationCompositionRequest::TransformTo(child) => {
+                    crate::execution_session::SemanticCompositionRequest::TransformTo {
+                        source: child.source.node_id(),
+                        target_state: child.target_state.node_id(),
+                        options: child.options,
+                    }
+                }
+                AnimationCompositionRequest::Rotate {
+                    target,
+                    angle,
+                    options,
+                } => crate::execution_session::SemanticCompositionRequest::Rotate {
+                    target: target.node_id(),
+                    angle: *angle,
+                    options: *options,
+                },
+            })
+            .collect::<Vec<_>>();
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_mixed_composition(
+                &mut store,
+                kind,
+                &children,
+                composition_options,
+                play_options,
+                Some(self.root),
             )
             .map_err(Into::into)
     }
@@ -1763,6 +1832,47 @@ mod tests {
         assert_eq!(session.publication_context(), before);
         assert_eq!(session.frame(), &before_frame);
         assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn mixed_composition_rejects_foreign_leaf_before_detached_admission() {
+        let mut scene = Scene::new();
+        let square = scene.rectangle(2.0, 2.0).unwrap();
+        let mut target = square.target_editor().unwrap();
+        target.rotate(std::f64::consts::PI).unwrap();
+        let foreign = Scene::new().rectangle(2.0, 2.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_frame = session.frame().clone();
+        let before_nodes = square.store().borrow().len();
+        let children = [
+            AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                &square,
+                &target,
+                AnimationOptions::new(),
+            )),
+            AnimationCompositionRequest::Rotate {
+                target: &foreign,
+                angle: std::f64::consts::PI,
+                options: AnimationOptions::new(),
+            },
+        ];
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &children,
+                AnimationOptions::new(),
+                AnimationOptions::new().run_time(2.0),
+            );
+
+        assert!(matches!(result, Err(LiveSessionError::ForeignMobjectStore)));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &before_frame);
+        assert_eq!(square.store().borrow().len(), before_nodes);
         assert!(session.take_frame_changes().is_empty());
     }
 

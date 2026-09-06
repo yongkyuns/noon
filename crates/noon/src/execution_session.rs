@@ -59,6 +59,20 @@ enum PreparedAnimationLifecycle {
     FadeOut(SemanticNodeId),
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum SemanticCompositionRequest {
+    TransformTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    },
+    Rotate {
+        target: SemanticNodeId,
+        angle: f64,
+        options: AnimationOptions,
+    },
+}
+
 impl PreparedAnimationLifecycle {
     const fn root(self) -> SemanticNodeId {
         match self {
@@ -1329,18 +1343,83 @@ impl ExecutionSession {
         composition_options: AnimationOptions,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
-        self.require_animation_declaration_context(store)?;
-        let mut declaration = SemanticMutationTransaction::new();
         let children = children
             .iter()
-            .map(|(source, target_state, options)| {
-                let target_state =
-                    self.stage_animation_target_state(store, &mut declaration, *target_state)?;
-                Ok(declaration.create_transform_animation(*source, target_state, *options))
+            .map(
+                |(source, target_state, options)| SemanticCompositionRequest::TransformTo {
+                    source: *source,
+                    target_state: *target_state,
+                    options: *options,
+                },
+            )
+            .collect::<Vec<_>>();
+        self.declare_and_activate_mixed_composition(
+            store,
+            kind,
+            &children,
+            composition_options,
+            play_options,
+            None,
+        )
+    }
+
+    pub(crate) fn declare_and_activate_mixed_composition(
+        &mut self,
+        store: &mut SemanticStore,
+        kind: SemanticAnimationCompositionKind,
+        children: &[SemanticCompositionRequest],
+        composition_options: AnimationOptions,
+        play_options: AnimationOptions,
+        admission_root: Option<SemanticNodeId>,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        if let Some(root) = admission_root {
+            let mut admitted = HashSet::new();
+            for child in children {
+                let target = match *child {
+                    SemanticCompositionRequest::TransformTo { source, .. } => source,
+                    SemanticCompositionRequest::Rotate { target, .. } => target,
+                };
+                if admitted.insert(target)
+                    && self.execution_index.execution_object_id(target).is_none()
+                {
+                    declaration.add_member(root, target);
+                }
+            }
+        }
+        let leaves = children
+            .iter()
+            .map(|child| {
+                Ok(match *child {
+                    SemanticCompositionRequest::TransformTo {
+                        source,
+                        target_state,
+                        options,
+                    } => {
+                        let target_state = self.stage_animation_target_state(
+                            store,
+                            &mut declaration,
+                            target_state,
+                        )?;
+                        declaration.create_transform_animation(source, target_state, options)
+                    }
+                    SemanticCompositionRequest::Rotate {
+                        target,
+                        angle,
+                        options,
+                    } => declaration.create_rotate_animation(target, angle, options),
+                })
             })
             .collect::<Result<Vec<_>, ExecutionSessionAnimationError>>()?;
-        let root = declaration.create_animation_composition(kind, children, composition_options);
-        self.declare_and_activate_prepared_animation(store, declaration, root, play_options, None)
+        let root = declaration.create_animation_composition(kind, leaves, composition_options);
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            root,
+            play_options,
+            admission_root.map(PreparedAnimationLifecycle::Introduce),
+        )
     }
 
     /// Atomically declare and activate one canonical single-leaf fade.

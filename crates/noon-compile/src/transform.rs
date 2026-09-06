@@ -150,9 +150,9 @@ pub(crate) fn compile_transform_geometry_plan(
     Ok(Some(plan))
 }
 
-/// Compile a typed analytic content morph without constructing an authored
-/// object endpoint. The returned resource is execution-owned and may use a
-/// fixed render frame while semantic affine channels remain independently visible.
+/// Compile a typed analytic point-correspondence transform without constructing
+/// an authored object endpoint. The returned resource is execution-owned and may
+/// use a fixed render frame while semantic affine channels remain independently visible.
 pub(crate) fn compile_analytic_content_morph(
     from_geometry: &GeometryRef,
     to_geometry: &GeometryRef,
@@ -165,6 +165,8 @@ pub(crate) fn compile_analytic_content_morph(
         (from_geometry, to_geometry),
         (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
             | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. })
+            | (GeometryRef::Circle { .. }, GeometryRef::Circle { .. })
+            | (GeometryRef::Rectangle { .. }, GeometryRef::Rectangle { .. })
     );
     if !supported {
         return Err(TransformCompileFailure::UnsupportedGeometry);
@@ -185,7 +187,7 @@ pub(crate) fn compile_analytic_content_morph(
         target,
     )?
     else {
-        unreachable!("analytic cross-content morph compiles to a path pair")
+        unreachable!("analytic point transform compiles to a path pair")
     };
     if from_style.stroke_width_mode == StrokeWidthMode::ScreenSpace && render_transform.is_none() {
         return Err(TransformCompileFailure::RequiresRetessellation);

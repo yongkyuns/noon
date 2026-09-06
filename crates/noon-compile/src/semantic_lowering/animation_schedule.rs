@@ -51,9 +51,10 @@ impl SemanticAnimationScheduleProjection {
 }
 
 /// Payload kind retained by one scheduled published animation leaf.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticScheduledAnimationPayload {
     TransformTo { target_state: SemanticNodeId },
+    Rotate { angle: f64 },
     Fade { direction: SemanticFadeDirection },
     Create,
 }
@@ -114,10 +115,13 @@ impl PreparedSemanticAnimationScheduleProjection {
 }
 
 /// Payload kind retained by one scheduled transaction-local animation leaf.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PreparedSemanticScheduledAnimationPayload {
     TransformTo {
         target_state: SemanticTransactionNodeRef,
+    },
+    Rotate {
+        angle: f64,
     },
     Fade {
         direction: SemanticFadeDirection,
@@ -296,6 +300,9 @@ pub fn lower_semantic_animation_schedule(
                     ScheduledAnimationPayload::TransformTo { target_state } => {
                         SemanticScheduledAnimationPayload::TransformTo { target_state }
                     }
+                    ScheduledAnimationPayload::Rotate { angle } => {
+                        SemanticScheduledAnimationPayload::Rotate { angle }
+                    }
                     ScheduledAnimationPayload::Fade { direction } => {
                         SemanticScheduledAnimationPayload::Fade { direction }
                     }
@@ -339,6 +346,9 @@ pub fn lower_prepared_semantic_animation_schedule(
                     ScheduledAnimationPayload::TransformTo { target_state } => {
                         PreparedSemanticScheduledAnimationPayload::TransformTo { target_state }
                     }
+                    ScheduledAnimationPayload::Rotate { angle } => {
+                        PreparedSemanticScheduledAnimationPayload::Rotate { angle }
+                    }
                     ScheduledAnimationPayload::Fade { direction } => {
                         PreparedSemanticScheduledAnimationPayload::Fade { direction }
                     }
@@ -365,6 +375,10 @@ enum AnimationDeclarationIntent<R> {
     TransformTo {
         target: R,
         target_state: R,
+    },
+    Rotate {
+        target: R,
+        angle: f64,
     },
     Fade {
         target: R,
@@ -423,6 +437,15 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::TransformTo {
                     target: *target,
                     target_state: *target_state,
+                }
+            }
+            SemanticAnimationIntent::Rotate { target, angle } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::Rotate {
+                    target: *target,
+                    angle: *angle,
                 }
             }
             SemanticAnimationIntent::Fade { target, direction } => {
@@ -498,6 +521,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         target: (*target).into(),
                         target_state: (*target_state).into(),
                     },
+                    SemanticAnimationIntent::Rotate { target, angle } => {
+                        AnimationDeclarationIntent::Rotate {
+                            target: (*target).into(),
+                            angle: *angle,
+                        }
+                    }
                     SemanticAnimationIntent::Fade { target, direction } => {
                         AnimationDeclarationIntent::Fade {
                             target: (*target).into(),
@@ -531,6 +560,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         target: *target,
                         target_state: *target_state,
                     },
+                    SemanticTransactionAnimationIntent::Rotate { target, angle } => {
+                        AnimationDeclarationIntent::Rotate {
+                            target: *target,
+                            angle: *angle,
+                        }
+                    }
                     SemanticTransactionAnimationIntent::Fade { target, direction } => {
                         AnimationDeclarationIntent::Fade {
                             target: *target,
@@ -560,6 +595,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
                 self.prepared
                     .object_state(*target_state)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
+            AnimationDeclarationIntent::Rotate { target, .. } => {
+                self.prepared
+                    .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
             AnimationDeclarationIntent::Fade { target, .. } => {
@@ -609,6 +649,7 @@ struct ScheduledAnimationLeaf<R> {
 #[derive(Clone, Copy, Debug)]
 enum ScheduledAnimationPayload<R> {
     TransformTo { target_state: R },
+    Rotate { angle: f64 },
     Fade { direction: SemanticFadeDirection },
     Create,
 }
@@ -737,6 +778,25 @@ where
                     target,
                     execution_object_id,
                     payload: ScheduledAnimationPayload::TransformTo { target_state },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::Rotate { target, angle } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options =
+                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
+                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::Rotate { angle },
                     options,
                 },
             })

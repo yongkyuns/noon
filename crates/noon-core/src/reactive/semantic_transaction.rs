@@ -653,6 +653,27 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage a centered 2D angular-path rotation declaration.
+    pub fn create_rotate_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        angle: f64,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Rotate {
+                    target: target.into(),
+                    angle,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a single-leaf fade declaration and return its transaction-local token.
     pub fn create_fade_animation(
         &mut self,
@@ -1841,6 +1862,9 @@ pub enum SemanticMutationTransactionError {
     InvalidAnimationRunTime {
         index: usize,
     },
+    InvalidAnimationAngle {
+        index: usize,
+    },
     InvalidAnimationLagRatio {
         index: usize,
     },
@@ -2203,6 +2227,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidAnimationRunTime { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add animation with non-finite or non-positive run_time"
+            ),
+            Self::InvalidAnimationAngle { index } => write!(
+                formatter,
+                "semantic mutation {index} has a non-finite rotation angle"
             ),
             Self::InvalidAnimationLagRatio { index } => write!(
                 formatter,

@@ -239,13 +239,49 @@ where
                 })?;
                 validate_affine_payload(source, target, leaf.options)
                     .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
-                let from = capture_effective(leaf, &mut captures, &mut effective_properties)?;
-                let channels = lower_transform_channels(source, target, from)
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    index,
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                let entering = leaf
+                    .target
+                    .existing()
+                    .and_then(|node| index.execution_object_id(node))
+                    .is_none();
+                let channels = lower_transform_channels(source, target, from, entering)
                     .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }
                 continue;
+            }
+            PreparedSemanticScheduledAnimationPayload::Rotate { angle } => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.remover
+                    || leaf.options.introducer
+                    || leaf.options.reverse_rate_function
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                            animation: leaf.animation,
+                            remover: leaf.options.remover,
+                            introducer: leaf.options.introducer,
+                        },
+                    );
+                }
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    index,
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                super::affine::lower_rotation_channel(source, from, angle)
+                    .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?
             }
             PreparedSemanticScheduledAnimationPayload::Fade { direction } => {
                 if leaf.options.lag_ratio != 0.0
@@ -277,8 +313,14 @@ where
                 let from = match direction {
                     SemanticFadeDirection::In => 0.0,
                     SemanticFadeDirection::Out => {
-                        capture_effective(leaf, &mut captures, &mut effective_properties)?
-                            .appearance
+                        capture_effective(
+                            leaf,
+                            source,
+                            index,
+                            &mut captures,
+                            &mut effective_properties,
+                        )?
+                        .appearance
                     }
                 };
                 if !from.is_finite() || !(0.0..=1.0).contains(&from) {
@@ -369,6 +411,8 @@ fn is_flat_parallel_time_map(time_map: &noon_core::CompositionTimeMap) -> bool {
 
 fn capture_effective<F>(
     leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
+    source: &noon_core::SemanticObjectState,
+    index: &SemanticExecutionIndex,
     captures: &mut HashMap<ObjectId, EffectiveAnimationProperties>,
     effective_properties: &mut F,
 ) -> Result<EffectiveAnimationProperties, PreparedSemanticAnimationLoweringError>
@@ -378,13 +422,40 @@ where
     if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
         return Ok(captured);
     }
-    let captured = effective_properties(leaf.execution_object_id).ok_or(
-        PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
-            animation: leaf.animation,
-            target: leaf.target,
-            execution_object_id: leaf.execution_object_id,
-        },
-    )?;
+    let captured = if let Some(captured) = effective_properties(leaf.execution_object_id) {
+        captured
+    } else if leaf
+        .target
+        .existing()
+        .and_then(|node| index.execution_object_id(node))
+        .is_none()
+    {
+        EffectiveAnimationProperties {
+            transform: super::super::projection::lower_semantic_transform_value(source).map_err(
+                |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                    animation: leaf.animation,
+                    target: leaf.target,
+                    execution_object_id: leaf.execution_object_id,
+                },
+            )?,
+            style: super::super::projection::lower_semantic_style_value(source).map_err(|_| {
+                PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                    animation: leaf.animation,
+                    target: leaf.target,
+                    execution_object_id: leaf.execution_object_id,
+                }
+            })?,
+            appearance: 1.0,
+        }
+    } else {
+        return Err(
+            PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+            },
+        );
+    };
     captures.insert(leaf.execution_object_id, captured);
     Ok(captured)
 }

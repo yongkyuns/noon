@@ -3,12 +3,121 @@
 use std::{error::Error, rc::Rc};
 
 use crate::{
-    AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
+    AnimationCompositionRequest, AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
     LiveSession, MathTypst, Mobject, RateFunction, RustHostCallbackTable, Scene,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
     SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
     StrokeJoin, StrokeWidthMode, TransformToRequest, Typst, ValueTracker, Vec2, VectorPath,
 };
+
+/// Direct counterpart of Manim's DifferentRotations example.
+pub struct OrdinaryDifferentRotations {
+    left: Mobject,
+    left_target: Mobject,
+    right: Mobject,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryDifferentRotations {
+    type Error = String;
+
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                let options = AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Smooth);
+                live.declare_and_activate_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    &[
+                        AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                            &self.left,
+                            &self.left_target,
+                            options,
+                        )),
+                        AnimationCompositionRequest::Rotate {
+                            target: &self.right,
+                            angle: std::f64::consts::PI,
+                            options,
+                        },
+                    ],
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    AnimationOptions::new()
+                        .run_time(2.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                let left = live
+                    .effective(&self.left)
+                    .map_err(|error| error.to_string())?;
+                let right = live
+                    .effective(&self.right)
+                    .map_err(|error| error.to_string())?;
+                if (left.transform.rotation - std::f32::consts::PI).abs() > 1.0e-5
+                    || (right.transform.rotation - std::f32::consts::PI).abs() > 1.0e-5
+                {
+                    return Err("DifferentRotations did not publish both endpoints".into());
+                }
+                self.stage = 2;
+                live.wait_segment(1.0)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            2 => {
+                self.stage = 3;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("DifferentRotations resumed after completion".into()),
+        }
+    }
+}
+
+pub fn ordinary_different_rotations_program(
+) -> Result<LiveProgram<OrdinaryDifferentRotations>, String> {
+    let scene = Scene::new();
+    let mut left = scene.square(2.0)?;
+    left.set_translation(-2.0, 0.0)?;
+    left.set_color(
+        f64::from(Color::BLUE.red),
+        f64::from(Color::BLUE.green),
+        f64::from(Color::BLUE.blue),
+        1.0,
+    )?;
+    left.set_fill(
+        f64::from(Color::BLUE.red),
+        f64::from(Color::BLUE.green),
+        f64::from(Color::BLUE.blue),
+        0.7,
+    )?;
+    let mut left_target = left.target_editor()?;
+    left_target.rotate(std::f64::consts::PI)?;
+    let mut right = scene.square(2.0)?;
+    right.set_translation(2.0, 0.0)?;
+    right.set_color(
+        f64::from(Color::GREEN.red),
+        f64::from(Color::GREEN.green),
+        f64::from(Color::GREEN.blue),
+        1.0,
+    )?;
+    right.set_fill(
+        f64::from(Color::GREEN.red),
+        f64::from(Color::GREEN.green),
+        f64::from(Color::GREEN.blue),
+        0.7,
+    )?;
+    scene
+        .into_live_program(OrdinaryDifferentRotations {
+            left,
+            left_target,
+            right,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
 const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
@@ -1970,6 +2079,68 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
 mod continuation_tests {
     use super::*;
     use crate::{LiveProgramStatus, TimelineWakeState};
+
+    #[test]
+    fn different_rotations_keeps_point_transform_distinct_from_angular_path() {
+        let mut program = ordinary_different_rotations_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.take_renderer_publication();
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        let frame = program.session().frame();
+        assert_eq!(frame.objects.len(), 2);
+        assert!((frame.morph(0) - 0.5).abs() < 1e-6);
+        let Some(noon_core::GeometryRef::VectorPath(left_path)) = frame.render_geometry(0) else {
+            panic!("builder rotation must install point-correspondence geometry");
+        };
+        let left_target = left_path
+            .morph_target()
+            .expect("builder rotation must retain its correspondence target");
+        for (source, target) in left_path.commands().iter().zip(left_target.commands()) {
+            let point = match (*source, *target) {
+                (
+                    noon_core::PathCommand::MoveTo { to: source },
+                    noon_core::PathCommand::MoveTo { to: target },
+                )
+                | (
+                    noon_core::PathCommand::LineTo { to: source },
+                    noon_core::PathCommand::LineTo { to: target },
+                ) => (source + target) * 0.5,
+                (noon_core::PathCommand::Close, noon_core::PathCommand::Close) => continue,
+                _ => panic!("square correspondence changed command shape"),
+            };
+            assert!((point.x + 2.0).abs() < 1e-5);
+            assert!(point.y.abs() < 1e-5);
+        }
+        assert_eq!(frame.morph(1), 0.0);
+        assert!(matches!(
+            frame.render_geometry(1),
+            Some(noon_core::GeometryRef::Rectangle { .. })
+        ));
+        assert!((frame.objects[1].transform.rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        program.take_renderer_publication();
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 2.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().render_transforms,
+            vec![None, None]
+        );
+        assert!(program.session().frame().render_geometry(0).is_some());
+    }
 
     #[test]
     fn ordinary_succession_preserves_smooth_children_and_exact_sequence_endpoints() {
