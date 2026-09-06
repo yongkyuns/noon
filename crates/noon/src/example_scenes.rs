@@ -1160,6 +1160,113 @@ pub fn ordinary_create_continuation_program(
         .map_err(|error| error.to_string())
 }
 
+/// Ordinary flat Parallel Create continuation shared by native and direct Rust/WASM hosts.
+///
+/// This is the target-neutral counterpart of `manim_parity_square_and_circle.py`:
+/// a pink circle and blue square stay detached until one shared Parallel Create
+/// admits and reveals both over one second.
+pub struct OrdinarySquareAndCircleCreateContinuation {
+    circle: Mobject,
+    square: Mobject,
+    circle_semantic_id: SemanticNodeId,
+    square_semantic_id: SemanticNodeId,
+    circle_style: SemanticStyle,
+    square_style: SemanticStyle,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinarySquareAndCircleCreateContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                if live
+                    .contains(&self.circle)
+                    .map_err(|error| error.to_string())?
+                    || live
+                        .contains(&self.square)
+                        .map_err(|error| error.to_string())?
+                {
+                    return Err("parallel Create targets must begin detached".into());
+                }
+                self.stage = 1;
+                let child_options = AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Smooth);
+                live.declare_and_activate_create_parallel(
+                    &[(&self.circle, child_options), (&self.square, child_options)],
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                let circle = live
+                    .authored(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                let square = live
+                    .authored(&self.square)
+                    .map_err(|error| error.to_string())?;
+                if self.circle.node_id() != self.circle_semantic_id
+                    || self.square.node_id() != self.square_semantic_id
+                    || !live
+                        .contains(&self.circle)
+                        .map_err(|error| error.to_string())?
+                    || !live
+                        .contains(&self.square)
+                        .map_err(|error| error.to_string())?
+                    || circle.style != self.circle_style
+                    || square.style != self.square_style
+                {
+                    return Err("parallel Create did not publish its exact shared endpoint".into());
+                }
+                self.stage = 2;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary parallel Create continuation resumed after it finished".into()),
+        }
+    }
+}
+
+/// Build the paired ordinary Square-and-Circle Create program without selecting a platform host.
+pub fn ordinary_square_and_circle_create_continuation_program(
+) -> Result<LiveProgram<OrdinarySquareAndCircleCreateContinuation>, String> {
+    let scene = Scene::new();
+    let mut circle = scene.circle(1.0).map_err(|error| error.to_string())?;
+    circle
+        .set_fill(209.0 / 255.0, 71.0 / 255.0, 189.0 / 255.0, 0.5)
+        .map_err(|error| error.to_string())?;
+    let mut square = scene.square(2.0).map_err(|error| error.to_string())?;
+    square
+        .set_fill(88.0 / 255.0, 196.0 / 255.0, 221.0 / 255.0, 0.5)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_translation(2.5, 0.0)
+        .map_err(|error| error.to_string())?;
+
+    let circle_semantic_id = circle.node_id();
+    let square_semantic_id = square.node_id();
+    let circle_style = circle.state().map_err(|error| error.to_string())?.style;
+    let square_style = square.state().map_err(|error| error.to_string())?.style;
+    scene
+        .into_live_program(OrdinarySquareAndCircleCreateContinuation {
+            circle,
+            square,
+            circle_semantic_id,
+            square_semantic_id,
+            circle_style,
+            square_style,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// Ordinary Create followed by a Circle/Rectangle content morph on one shared session.
 pub struct OrdinaryCreateThenContentMorph {
     square: Mobject,
@@ -1815,6 +1922,47 @@ mod continuation_tests {
             LiveProgramStatus::PublicationPending(_)
         ));
         assert_eq!(program.session().frame().reveals, vec![1.0]);
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[test]
+    fn ordinary_square_and_circle_create_reveals_both_leaves_in_one_segment() {
+        let mut program = ordinary_square_and_circle_create_continuation_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(program.session().frame().reveals, vec![0.0, 0.0]);
+        assert_eq!(
+            program.session().frame().objects[0].transform.translation,
+            Vec2::new(0.0, 0.0)
+        );
+        assert_eq!(
+            program.session().frame().objects[1].transform.translation,
+            Vec2::new(2.5, 0.0)
+        );
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.25).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        let smooth_quarter = RateFunction::Smooth.evaluate(0.25);
+        assert_eq!(
+            program.session().frame().reveals,
+            vec![smooth_quarter, smooth_quarter],
+            "the root timeline stays linear while each Create leaf applies Smooth once"
+        );
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        assert_eq!(program.session().frame().reveals, vec![1.0, 1.0]);
         let publication = program.take_renderer_publication().context();
         program.admit_publication(publication).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
