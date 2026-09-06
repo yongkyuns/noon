@@ -88,13 +88,24 @@ fn signal_scope_publication_writes_only_the_selected_root() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let selected = store.insert_semantic_input_signal(1.0_f64).unwrap();
+    let mut populate = SemanticMutationTransaction::new();
     for value in 0..512 {
-        store
+        let unrelated = store
             .insert_semantic_input_signal(f64::from(value))
             .unwrap();
+        populate.scope_signal(root, unrelated);
     }
+    populate.apply(&mut store).unwrap();
+
     let mut transaction = SemanticMutationTransaction::new();
     transaction.scope_signal(root, selected);
     transaction.apply(&mut store).unwrap();
     assert_eq!(store.last_mutation_stats().slots_written, 1);
+
+    let revision = store.scene_revision();
+    let mut duplicate = SemanticMutationTransaction::new();
+    duplicate.scope_signal(root, selected);
+    duplicate.apply(&mut store).unwrap();
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
 }

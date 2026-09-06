@@ -99,20 +99,22 @@ impl RustHostCallbackContext<'_> {
 
     /// Read an arbitrary live object through this exact unpublished phase.
     pub fn read_object(
-        &self,
+        &mut self,
         object: SemanticNodeId,
     ) -> Result<EffectiveObjectProperties, ExecutionSessionCallbackError> {
         if let Some(staged) = self.overlay.object(object) {
             return Ok(staged.clone());
         }
-        match self
+        let value = match self
             .session
             .required_callback_read(self.overlay.token(), CallbackReadRequest::Object(object))
             .map_err(ExecutionSessionCallbackError::from)?
         {
-            CallbackReadValue::Object(value) => Ok(value),
+            CallbackReadValue::Object(value) => value,
             CallbackReadValue::Scalar(_) => unreachable!("object request returns object value"),
-        }
+        };
+        self.overlay.cache_read_object(object, value.clone());
+        Ok(value)
     }
 
     /// Read an arbitrary scalar signal through this exact unpublished phase.
@@ -457,7 +459,10 @@ mod tests {
                 let anchor = context.read_object(anchor_id)?;
                 let mut transform = context.target_state().transform;
                 transform.translation.x = value + anchor.transform.translation.x;
-                context.set_target_transform(transform)
+                context.set_target_transform(transform)?;
+                let mut anchor_transform = anchor.transform;
+                anchor_transform.translation.y = 1.0;
+                context.set_transform(anchor_id, anchor_transform)
             })
             .unwrap();
         callbacks
@@ -476,6 +481,10 @@ mod tests {
             .effective_semantic_object(&store, active.node_id())
             .unwrap();
         assert_eq!(effective.object.transform.translation.x, 5.0);
+        let anchor = session
+            .effective_semantic_object(&store, anchor.node_id())
+            .unwrap();
+        assert_eq!(anchor.object.transform.translation.y, 1.0);
     }
 
     #[test]

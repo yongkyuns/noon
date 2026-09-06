@@ -338,7 +338,7 @@ pub(super) struct SemanticTransactionPreflight {
     family_edges: FamilyEdgePreflight,
     pending_creations: HashMap<SemanticLocalNodeToken, SemanticNodeCreation>,
     pending_animations: HashMap<SemanticLocalNodeToken, SemanticTransactionAnimation>,
-    staged_scoped_signals: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
+    staged_signal_scope_additions: Vec<(SemanticTransactionNodeRef, SemanticTransactionNodeRef)>,
     removed_existing: HashSet<SemanticNodeId>,
     removed_pending: HashSet<SemanticLocalNodeToken>,
 }
@@ -857,8 +857,8 @@ impl SemanticMutationTransaction {
             HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
         let mut staged_signal_timeline =
             HashMap::<SemanticNodeId, Vec<SemanticScalarSignalTimelineEntry>>::new();
-        let mut staged_scoped_signals =
-            HashMap::<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>::new();
+        let mut staged_signal_scope_additions = Vec::new();
+        let mut staged_signal_scope_membership = HashSet::new();
         let mut available_pending_animations = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
@@ -1273,22 +1273,19 @@ impl SemanticMutationTransaction {
                             },
                         );
                     }
-                    let scoped =
-                        staged_scoped_signals
-                            .entry(*scope)
-                            .or_insert_with(|| match scope {
-                                SemanticTransactionNodeRef::Existing(scope) => store
-                                    .semantic_scoped_signals(*scope)
-                                    .expect("validated family remains live")
-                                    .iter()
-                                    .copied()
-                                    .map(Into::into)
-                                    .collect(),
-                                SemanticTransactionNodeRef::Pending(_) => Vec::new(),
-                            });
-                    let did_change = !scoped.contains(signal);
+                    let pair = (*scope, *signal);
+                    let already_scoped = staged_signal_scope_membership.contains(&pair)
+                        || matches!(
+                            pair,
+                            (
+                                SemanticTransactionNodeRef::Existing(scope),
+                                SemanticTransactionNodeRef::Existing(signal)
+                            ) if store.is_semantic_signal_scoped(scope, signal)
+                        );
+                    let did_change = !already_scoped;
                     if did_change {
-                        scoped.push(*signal);
+                        staged_signal_scope_membership.insert(pair);
+                        staged_signal_scope_additions.push(pair);
                     }
                     changed.push(did_change);
                 }
@@ -1364,7 +1361,7 @@ impl SemanticMutationTransaction {
             staged_objects,
             staged_object_order,
             family_edges,
-            staged_scoped_signals,
+            staged_signal_scope_additions,
             pending_creations,
             pending_animations,
             removed_existing: removed_nodes,

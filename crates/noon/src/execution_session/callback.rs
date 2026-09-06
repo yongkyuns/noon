@@ -434,6 +434,14 @@ impl CallbackPhaseOverlay {
         self.objects.iter().map(|(&object, state)| (object, state))
     }
 
+    pub(crate) fn cache_read_object(
+        &mut self,
+        object: SemanticNodeId,
+        value: EffectiveObjectProperties,
+    ) {
+        self.objects.entry(object).or_insert(value);
+    }
+
     pub const fn staged_row_count(&self) -> usize {
         self.staged_rows
     }

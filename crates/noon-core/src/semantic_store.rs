@@ -696,10 +696,7 @@ impl SemanticStore {
         ) {
             return Err(SemanticStoreError::UnknownNode(signal));
         }
-        if self
-            .node(scope)
-            .is_some_and(|node| node.scoped_signals().contains(&signal))
-        {
+        if self.is_semantic_signal_scoped(scope, signal) {
             return Ok(false);
         }
         self.node_mut(scope)

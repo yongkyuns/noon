@@ -305,14 +305,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             }
             _ => {}
         }
-        if let Some(scoped) = self.preflight.staged_scoped_signals.get(&scope) {
-            return Ok(scoped
-                .iter()
-                .copied()
-                .filter(|signal| !self.is_removed_ref(*signal))
-                .collect());
-        }
-        match scope {
+        let mut scoped = match scope {
             SemanticTransactionNodeRef::Existing(scope) => {
                 let node = self
                     .store
@@ -321,19 +314,28 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 if !matches!(node.kind(), SemanticNodeKind::Family) {
                     return Err(SemanticTransactionReadError::NotFamily(scope.into()));
                 }
-                Ok(node
-                    .scoped_signals()
+                node.scoped_signals()
                     .iter()
                     .copied()
                     .map(Into::into)
-                    .collect())
+                    .collect()
             }
             SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
-                Some(SemanticNodeCreation::Family { .. }) => Ok(Vec::new()),
-                Some(_) => Err(SemanticTransactionReadError::NotFamily(scope)),
-                None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
+                Some(SemanticNodeCreation::Family { .. }) => Vec::new(),
+                Some(_) => return Err(SemanticTransactionReadError::NotFamily(scope)),
+                None => return Err(SemanticTransactionReadError::UnknownPendingNode(token)),
             },
-        }
+        };
+        scoped.extend(
+            self.preflight
+                .staged_signal_scope_additions
+                .iter()
+                .filter_map(|(candidate_scope, signal)| {
+                    (*candidate_scope == scope).then_some(*signal)
+                }),
+        );
+        scoped.retain(|signal| !self.is_removed_ref(*signal));
+        Ok(scoped)
     }
 
     fn validate_read_token(

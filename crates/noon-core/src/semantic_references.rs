@@ -57,6 +57,17 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
+    pub(crate) fn is_semantic_signal_scoped(
+        &self,
+        scope: SemanticNodeId,
+        signal: SemanticNodeId,
+    ) -> bool {
+        let reference = SemanticIncomingReference::new(scope, SemanticReferenceKind::ScopedSignal);
+        self.incoming_references
+            .get(&signal)
+            .is_some_and(|incoming| incoming.contains(&reference))
+    }
+
     pub(crate) fn register_semantic_scoped_signal_reference(
         &mut self,
         scope: SemanticNodeId,

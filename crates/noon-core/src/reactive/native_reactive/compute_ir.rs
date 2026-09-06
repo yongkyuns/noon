@@ -334,7 +334,7 @@ fn next_compute_identity() -> u64 {
 pub struct PreparedComputeInputBatch {
     identity: u64,
     expected_revision: u64,
-    changed_values: Vec<(usize, ReactiveValue)>,
+    changed_values: BTreeMap<usize, ReactiveValue>,
     update: ReactiveUpdate,
 }
 
@@ -360,16 +360,38 @@ impl PreparedComputeInputBatch {
 pub enum PreparedComputeCommitError {
     ForeignState,
     StaleRevision,
+    SignalMismatch {
+        expected: SignalId,
+        actual: SignalId,
+    },
+    DuplicateSignal(SignalId),
     RevisionExhausted,
 }
 
 impl std::fmt::Display for PreparedComputeCommitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::ForeignState => "prepared reactive batch belongs to another compute state",
-            Self::StaleRevision => "prepared reactive batch targets a stale compute revision",
-            Self::RevisionExhausted => "Noon compute-state revision space exhausted",
-        })
+        match self {
+            Self::ForeignState => {
+                formatter.write_str("prepared reactive batch belongs to another compute state")
+            }
+            Self::StaleRevision => {
+                formatter.write_str("prepared reactive batch targets a stale compute revision")
+            }
+            Self::SignalMismatch { expected, actual } => write!(
+                formatter,
+                "prepared reactive enrollment reserved signal {} but commit supplied {}",
+                expected.get(),
+                actual.get()
+            ),
+            Self::DuplicateSignal(signal) => write!(
+                formatter,
+                "prepared reactive enrollment cannot replace existing signal {}",
+                signal.get()
+            ),
+            Self::RevisionExhausted => {
+                formatter.write_str("Noon compute-state revision space exhausted")
+            }
+        }
     }
 }
 
@@ -393,9 +415,8 @@ impl ComputeState {
         let index = *self.program.reference.signal_indices.get(&signal)?;
         prepared
             .changed_values
-            .iter()
-            .rev()
-            .find_map(|(changed, value)| (*changed == index).then(|| value.clone()))
+            .get(&index)
+            .cloned()
             .or_else(|| self.values.get(index).cloned())
     }
 
@@ -435,10 +456,17 @@ impl ComputeState {
         if prepared.expected_revision != self.revision {
             return Err(PreparedComputeCommitError::StaleRevision);
         }
-        debug_assert!(prepared
-            .expected_signal
-            .is_none_or(|expected| expected == signal));
-        debug_assert!(!self.program.reference.signal_indices.contains_key(&signal));
+        if let Some(expected) = prepared.expected_signal {
+            if expected != signal {
+                return Err(PreparedComputeCommitError::SignalMismatch {
+                    expected,
+                    actual: signal,
+                });
+            }
+        }
+        if self.program.reference.signal_indices.contains_key(&signal) {
+            return Err(PreparedComputeCommitError::DuplicateSignal(signal));
+        }
         let index = self.program.reference.signals.len();
         self.program.reference.signal_indices.insert(signal, index);
         self.program.reference.signals.push(super::CompiledSignal {
@@ -511,7 +539,7 @@ impl ComputeState {
             return Ok(PreparedComputeInputBatch {
                 identity: self.identity,
                 expected_revision: self.revision,
-                changed_values: Vec::new(),
+                changed_values: BTreeMap::new(),
                 update: ReactiveUpdate::default(),
             });
         }
@@ -1237,6 +1265,50 @@ mod tests {
             first.commit_prepared_input_batch(stale),
             Err(PreparedComputeCommitError::StaleRevision)
         );
+    }
+
+    #[test]
+    fn prepared_enrollment_rejects_a_different_signal_without_mutation() {
+        let scene = SemanticScene::new();
+        let mut state = scene
+            .compile_reactive()
+            .unwrap()
+            .into_compute()
+            .unwrap()
+            .instantiate();
+        let expected = SignalId::new(41);
+        let actual = SignalId::new(42);
+        let prepared = state
+            .prepare_input_enrollment(Some(expected), ReactiveValue::Scalar(2.0))
+            .unwrap();
+
+        assert_eq!(
+            state.commit_input_enrollment(prepared, actual),
+            Err(PreparedComputeCommitError::SignalMismatch { expected, actual })
+        );
+        assert_eq!(state.value(expected), None);
+        assert_eq!(state.value(actual), None);
+    }
+
+    #[test]
+    fn prepared_enrollment_rejects_an_existing_signal_without_mutation() {
+        let mut scene = SemanticScene::new();
+        let existing = scene.add_input(1.0_f32);
+        let mut state = scene
+            .compile_reactive()
+            .unwrap()
+            .into_compute()
+            .unwrap()
+            .instantiate();
+        let prepared = state
+            .prepare_input_enrollment(None, ReactiveValue::Scalar(2.0))
+            .unwrap();
+
+        assert_eq!(
+            state.commit_input_enrollment(prepared, existing),
+            Err(PreparedComputeCommitError::DuplicateSignal(existing))
+        );
+        assert_eq!(state.value(existing), Some(&ReactiveValue::Scalar(1.0)));
     }
 
     fn next(state: &mut u64) -> u64 {
