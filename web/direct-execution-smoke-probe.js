@@ -63,6 +63,17 @@ async function presentDirectFrame(renderer) {
   throw new Error("direct affine callback renderer could not acquire a frame");
 }
 
+async function settleDirectPublication(renderer, wallTimeMs) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await presentDirectFrame(renderer);
+    // Presentation may resume Rust source and publish a final edit or begin its
+    // next segment. Mirror the production driver's fresh wake observation.
+    const directive = JSON.parse(renderer.directWakeDirectiveJson(wallTimeMs));
+    if (!directive.presentNow) return directive;
+  }
+  throw new Error("direct source did not settle its presentation publications");
+}
+
 async function advanceDirectCallbackFrame(renderer, wallTimeMs) {
   const directive = JSON.parse(renderer.directWakeDirectiveJson(wallTimeMs));
   if (directive.cadence !== "animation-frame") {
@@ -583,29 +594,29 @@ async function directOrdinaryCompositionContinuationProof(expectedBackend) {
   if (!initial.presentNow || initial.cadence !== "animation-frame") {
     throw new Error(`direct composition continuation did not start: ${JSON.stringify(initial)}`);
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 0);
   if (!renderer.advanceDirectRealtime(1000)) {
     throw new Error("direct composition continuation did not publish its parallel midpoint");
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 1000);
   const leftMidpoint = await sampleRenderedColor(canvas, -2, 0.5);
   const rightMidpoint = await sampleRenderedColor(canvas, 2, -0.5);
 
   if (!renderer.advanceDirectRealtime(2000)) {
     throw new Error("direct composition continuation did not complete its parallel segment");
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 2000);
   if (!renderer.advanceDirectRealtime(3000)) {
     throw new Error("direct composition continuation did not publish its sequence midpoint");
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 3000);
   const leftSequence = await sampleRenderedColor(canvas, -2, 1);
   const rightSequence = await sampleRenderedColor(canvas, 2, -1);
 
   if (!renderer.advanceDirectRealtime(4000)) {
     throw new Error("direct composition continuation did not complete its sequence");
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 4000);
   const leftFinal = await sampleRenderedColor(canvas, -2, 1);
   const rightFinal = await sampleRenderedColor(canvas, 2, -1);
   const finalDirective = JSON.parse(renderer.directWakeDirectiveJson(4000));
