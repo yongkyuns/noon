@@ -119,9 +119,7 @@ impl ValueTrackerPlay<'_> {
             .scene
             .store()
             .borrow()
-            .semantic_scoped_signals(self.scene.root())
-            .map_err(|error| error.to_string())?
-            .contains(&self.tracker.node)
+            .is_semantic_signal_scoped(self.scene.root(), self.tracker.node)
         {
             return Err("ValueTracker is not associated with this Scene".into());
         }

@@ -408,9 +408,7 @@ impl<'a> LiveSession<'a> {
         if !self
             .store
             .borrow()
-            .semantic_scoped_signals(self.root)
-            .map_err(|error| LiveSessionError::Animation(error.to_string()))?
-            .contains(&tracker.node_id())
+            .is_semantic_signal_scoped(self.root, tracker.node_id())
         {
             return Err(LiveSessionError::Animation(
                 "ValueTracker is not associated with this Scene".into(),

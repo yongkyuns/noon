@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -298,8 +298,10 @@ pub struct SemanticNode {
     /// Signals explicitly authored in this family-root scope.
     ///
     /// This is separate from painter membership: scoped signals participate in
-    /// reactive lowering without becoming renderable family children.
-    scoped_signals: Vec<SemanticNodeId>,
+    /// reactive lowering without becoming renderable family children. Scope has
+    /// no painter ordering, so one ordered identity set provides deterministic
+    /// traversal and local membership insertion/removal without a mirror index.
+    scoped_signals: BTreeSet<SemanticNodeId>,
 }
 
 impl SemanticNode {
@@ -394,11 +396,11 @@ impl SemanticNode {
         &mut self.host_updaters
     }
 
-    pub fn scoped_signals(&self) -> &[SemanticNodeId] {
+    pub fn scoped_signals(&self) -> &BTreeSet<SemanticNodeId> {
         &self.scoped_signals
     }
 
-    pub(crate) fn scoped_signals_mut(&mut self) -> &mut Vec<SemanticNodeId> {
+    pub(crate) fn scoped_signals_mut(&mut self) -> &mut BTreeSet<SemanticNodeId> {
         &mut self.scoped_signals
     }
 }
@@ -623,7 +625,7 @@ impl SemanticStore {
             parents: Vec::new(),
             members: OrderedFamilyMembers::default(),
             host_updaters: Vec::new(),
-            scoped_signals: Vec::new(),
+            scoped_signals: BTreeSet::new(),
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
@@ -662,11 +664,12 @@ impl SemanticStore {
             .filter(|id| self.node(*id).is_some())
     }
 
-    /// Signals explicitly included in one family-root execution scope.
+    /// Signals explicitly included in one family-root execution scope, ordered
+    /// by stable semantic identity rather than painter position.
     pub fn semantic_scoped_signals(
         &self,
         scope: SemanticNodeId,
-    ) -> Result<&[SemanticNodeId], SemanticStoreError> {
+    ) -> Result<&BTreeSet<SemanticNodeId>, SemanticStoreError> {
         let node = self
             .node(scope)
             .ok_or(SemanticStoreError::UnknownNode(scope))?;
@@ -699,10 +702,12 @@ impl SemanticStore {
         if self.is_semantic_signal_scoped(scope, signal) {
             return Ok(false);
         }
-        self.node_mut(scope)
+        let inserted = self
+            .node_mut(scope)
             .expect("validated scope remains live")
             .scoped_signals_mut()
-            .push(signal);
+            .insert(signal);
+        debug_assert!(inserted);
         self.register_semantic_scoped_signal_reference(scope, signal);
         Ok(true)
     }

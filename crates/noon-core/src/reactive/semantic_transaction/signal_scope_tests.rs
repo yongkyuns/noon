@@ -14,7 +14,15 @@ fn pending_signal_and_scope_publish_once_and_read_through_prepared_view() {
     let result = prepared.commit();
     let signal = result.resolve(signal).unwrap();
 
-    assert_eq!(store.semantic_scoped_signals(root).unwrap(), &[signal]);
+    assert_eq!(
+        store
+            .semantic_scoped_signals(root)
+            .unwrap()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![signal]
+    );
     assert_eq!(
         store.semantic_input_scalar_value_at(signal, 0.0).unwrap(),
         1.25
@@ -72,15 +80,27 @@ fn removing_signal_cleans_only_its_indexed_scope_edges() {
         .scope_signal(first, signal)
         .scope_signal(first, other)
         .scope_signal(second, signal);
+    let mut unrelated = Vec::new();
+    for value in 0..512 {
+        let candidate = store
+            .insert_semantic_input_signal(f64::from(value))
+            .unwrap();
+        scope.scope_signal(first, candidate);
+        unrelated.push(candidate);
+    }
     scope.apply(&mut store).unwrap();
 
     let mut remove = SemanticMutationTransaction::new();
     remove.remove_node(signal);
     remove.apply(&mut store).unwrap();
 
-    assert_eq!(store.semantic_scoped_signals(first).unwrap(), &[other]);
+    let remaining = store.semantic_scoped_signals(first).unwrap();
+    assert_eq!(remaining.len(), unrelated.len() + 1);
+    assert!(remaining.contains(&other));
+    assert!(unrelated.iter().all(|signal| remaining.contains(signal)));
     assert!(store.semantic_scoped_signals(second).unwrap().is_empty());
     assert!(store.semantic_signal_state(other).is_ok());
+    assert_eq!(store.last_mutation_stats().slots_written, 3);
 }
 
 #[test]

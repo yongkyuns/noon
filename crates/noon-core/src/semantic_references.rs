@@ -57,11 +57,11 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
-    pub(crate) fn is_semantic_signal_scoped(
-        &self,
-        scope: SemanticNodeId,
-        signal: SemanticNodeId,
-    ) -> bool {
+    /// Whether one exact live signal-to-family scope edge is indexed.
+    ///
+    /// Stale identities and nodes of another kind have no such edge and return
+    /// `false`. Work is proportional only to this signal's direct scope aliases.
+    pub fn is_semantic_signal_scoped(&self, scope: SemanticNodeId, signal: SemanticNodeId) -> bool {
         let reference = SemanticIncomingReference::new(scope, SemanticReferenceKind::ScopedSignal);
         self.incoming_references
             .get(&signal)
@@ -250,11 +250,9 @@ impl SemanticStore {
                 }
                 SemanticReferenceKind::ScopedSignal => {
                     let scope = reference.owner;
-                    let removed = self.node_mut(scope).is_some_and(|node| {
-                        let before = node.scoped_signals().len();
-                        node.scoped_signals_mut().retain(|signal| *signal != id);
-                        node.scoped_signals().len() != before
-                    });
+                    let removed = self
+                        .node_mut(scope)
+                        .is_some_and(|node| node.scoped_signals_mut().remove(&id));
                     if removed {
                         outcome.written_slots.insert(scope);
                     }
