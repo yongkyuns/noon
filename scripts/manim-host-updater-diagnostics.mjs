@@ -129,18 +129,28 @@ function assertCommonObservation(observation, backend, label) {
 
 function assertGeometryObservation(observation, backend) {
   assertCommonObservation(observation, backend, `${backend} geometry`);
+  assert.deepEqual(observation.committed.transform.translation, { x: 1, y: 1 });
   assert.equal(observation.prepared.kind, "geometry");
   assert.equal(observation.prepared.primitive, "circle");
   assert.ok(observation.prepared.instance_end > observation.prepared.instance_start);
   assert.equal(observation.prepared.glyph_item_count, 0);
   assert.deepEqual(observation.prepared.glyph_ranges, []);
   assertTargetWrite(observation.upload.target_write, "circle", `${backend} geometry`);
+  assert.ok(observation.upload.target_write.instance_start < observation.prepared.instance_end);
+  assert.ok(observation.upload.target_write.instance_end > observation.prepared.instance_start);
+  const { transform } = observation.committed;
+  assert.deepEqual(observation.prepared.transform, {
+    translation: [transform.translation.x, transform.translation.y],
+    scale: [transform.scale.x, transform.scale.y],
+    rotation: transform.rotation,
+  });
   assert.deepEqual(observation.upload.target_text_writes, []);
   assert.ok(observation.upload.geometry_bytes_uploaded >= observation.upload.target_write.byte_length);
 }
 
 function assertTextObservation(observation, backend) {
   assertCommonObservation(observation, backend, `${backend} text`);
+  assert.deepEqual(observation.committed.transform.translation, { x: 1, y: -2 });
   assert.equal(observation.prepared.kind, "text");
   assert.equal(observation.prepared.primitive, null);
   assert.equal(observation.prepared.instance_start, null);
@@ -162,9 +172,30 @@ function assertTextObservation(observation, backend) {
     assert.ok(write.instance_end > write.instance_start);
     assert.ok(write.byte_length > 0);
     assert.ok(write.payload_hash > 0);
+    assert.ok(observation.prepared.glyph_ranges.some((range) =>
+      write.buffer === `text_${range.plane}` &&
+      write.instance_start < range.instance_end && write.instance_end > range.instance_start),
+    "text upload does not overlap the observed target");
   }
   assert.ok(observation.upload.text_bytes_uploaded >= observation.upload.target_text_writes
     .reduce((total, write) => total + write.byte_length, 0));
+}
+
+function assertVisibleScene(screenshot) {
+  const png = PNG.sync.read(screenshot);
+  const counts = { animated: 0, anchor: 0, label: 0 };
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      const offset = (y * png.width + x) * 4;
+      if (Math.min(...png.data.subarray(offset, offset + 3)) <= 35) continue;
+      if (x > 320 && x < 410 && y > 90 && y < 180) counts.animated += 1;
+      if (x > 160 && x < 210 && y > 155 && y < 205) counts.anchor += 1;
+      if (x > 300 && x < 450 && y > 230 && y < 310) counts.label += 1;
+    }
+  }
+  assert.ok(counts.animated > 500, "animated callback geometry was blank");
+  assert.ok(counts.anchor > 100, "unchanged resident geometry was blank");
+  assert.ok(counts.label > 20, "observed callback Text was blank");
 }
 
 async function installHarness(page) {
@@ -249,6 +280,8 @@ async function runBackend(backend) {
     assert.equal(text.rendererBackend, expectedBackend);
     assertGeometryObservation(geometry.observation, backend);
     assertTextObservation(text.observation, backend);
+    assertVisibleScene(geometry.screenshot);
+    assertVisibleScene(text.screenshot);
     assert.deepEqual(errors, [], `${backend}: browser errors`);
     return { geometry, text };
   } finally {
@@ -266,6 +299,10 @@ try {
   const webgl = await runBackend("webgl");
   const webgpu = await runBackend("webgpu");
   for (const target of ["geometry", "text"]) {
+    for (const field of ["object", "semantic_slot", "semantic_generation", "time", "transform", "style", "presence"]) {
+      assert.deepEqual(webgpu[target].observation.committed[field],
+        webgl[target].observation.committed[field], `${target}: backend ${field} diverged`);
+    }
     const rasterComparison = compareForegroundCoverage(
       PNG.sync.read(webgpu[target].screenshot),
       PNG.sync.read(webgl[target].screenshot),
