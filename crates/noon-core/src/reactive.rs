@@ -45,6 +45,7 @@ mod semantic_transaction;
 pub use semantic_transaction::*;
 
 mod semantic_family;
+pub use semantic_family::*;
 
 mod animation_member_plan;
 pub use animation_member_plan::*;

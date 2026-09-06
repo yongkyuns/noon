@@ -16,7 +16,7 @@ use crate::{
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
-    ValueTracker,
+    MobjectFamily, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -66,12 +66,34 @@ pub enum AffineLifecycleEndpoint {
 
 pub type AffineLifecycleDirection = SemanticAffineLifecycleDirection;
 
+/// Appearance endpoint for the shared restoring Indicate composition.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IndicateOptions {
+    pub scale_factor: f64,
+    pub color: Color,
+}
+
+impl IndicateOptions {
+    pub const fn new(scale_factor: f64, color: Color) -> Self {
+        Self {
+            scale_factor,
+            color,
+        }
+    }
+}
+
+impl Default for IndicateOptions {
+    fn default() -> Self {
+        Self::new(1.2, noon_core::YELLOW)
+    }
+}
+
 /// Reconstruct the supported authored target style directly from one effective
 /// runtime row. Runtime colors already contain the evaluated paint opacity, so
 /// the detached target stores them as solid paints with unit paint opacity and
 /// preserves the row's object opacity separately. Resource paints are not
 /// represented by `Style` and must remain explicitly unavailable here.
-fn target_style_from_effective(
+pub(crate) fn target_style_from_effective(
     authored: &SemanticStyle,
     effective: Style,
 ) -> Result<SemanticStyle, LiveSessionError> {
@@ -125,6 +147,21 @@ pub struct TransformToRequest<'a> {
 #[derive(Clone)]
 pub enum AnimationCompositionRequest<'a> {
     TransformTo(TransformToRequest<'a>),
+    FamilyTransformTo {
+        source: &'a MobjectFamily,
+        target_state: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
+    Indicate {
+        target: &'a Mobject,
+        indication: IndicateOptions,
+        options: AnimationOptions,
+    },
+    FamilyIndicate {
+        target: &'a MobjectFamily,
+        indication: IndicateOptions,
+        options: AnimationOptions,
+    },
     Rotate {
         target: &'a Mobject,
         angle: f64,
@@ -588,6 +625,51 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Transform two equivalent semantic families through one ordered composition.
+    pub fn declare_and_activate_family_transform_to(
+        &mut self,
+        source: &MobjectFamily,
+        target_state: &MobjectFamily,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::FamilyTransformTo {
+            source,
+            target_state,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Indicate one object and restore its activation-effective source state.
+    pub fn declare_and_activate_indicate(
+        &mut self,
+        target: &Mobject,
+        indication: IndicateOptions,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::Indicate {
+            target,
+            indication,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Indicate an ordered semantic family and restore every effective source state.
+    pub fn declare_and_activate_family_indicate(
+        &mut self,
+        target: &MobjectFamily,
+        indication: IndicateOptions,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::FamilyIndicate {
+            target,
+            indication,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
     /// Atomically append and activate one scalar tracker interval at the current
     /// session time. The returned segment uses the same completion barrier as
     /// object-property animation tracks.
@@ -817,6 +899,43 @@ impl<'a> LiveSession<'a> {
                     target_state: child.target_state.node_id(),
                     interpolation: child.interpolation,
                     options: child.options,
+                }
+            }
+            AnimationCompositionRequest::FamilyTransformTo {
+                source,
+                target_state,
+                options,
+            } => {
+                self.require_family(source)?;
+                self.require_family(target_state)?;
+                Request::FamilyTransformTo {
+                    source: source.node_id(),
+                    target_state: target_state.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::Indicate {
+                target,
+                indication,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::Indicate {
+                    target: target.node_id(),
+                    indication: *indication,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilyIndicate {
+                target,
+                indication,
+                options,
+            } => {
+                self.require_family(target)?;
+                Request::FamilyIndicate {
+                    target: target.node_id(),
+                    indication: *indication,
+                    options: *options,
                 }
             }
             AnimationCompositionRequest::Rotate {
@@ -1239,6 +1358,13 @@ impl<'a> LiveSession<'a> {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
         mobject.validate().map_err(LiveSessionError::Mobject)
+    }
+
+    fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
+        if !Rc::ptr_eq(self.store, family.store()) {
+            return Err(LiveSessionError::ForeignMobjectStore);
+        }
+        family.validate().map_err(LiveSessionError::Mobject)
     }
 }
 
@@ -3101,5 +3227,150 @@ mod recursive_composition_tests {
             .has_semantic_signal_scope(second.node_id()));
         assert_eq!(session.effective_signal_value(first.node_id()), None);
         assert_eq!(session.effective_signal_value(second.node_id()), None);
+    }
+
+    #[test]
+    fn ordered_family_transform_applies_lag_to_authoritative_member_order() {
+        let mut scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        scene.add(&first).unwrap();
+        scene.add(&second).unwrap();
+        let mut first_target = first.target_editor().unwrap();
+        let mut second_target = second.target_editor().unwrap();
+        first_target.set_translation(3.0, 0.0).unwrap();
+        second_target.set_translation(6.0, 0.0).unwrap();
+        let source = scene.family(&[&first, &second]).unwrap();
+        let target = scene.family(&[&first_target, &second_target]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_family_transform_to(
+                &source,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear)
+                    .lag_ratio(0.5),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 0.25)
+            .unwrap();
+        assert!(live.effective(&first).unwrap().transform.translation.x > 0.0);
+        assert_eq!(
+            live.effective(&second).unwrap().transform.translation.x,
+            0.0
+        );
+    }
+
+    #[test]
+    fn invalid_family_topology_rolls_back_before_declaration() {
+        let mut scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        let target = first.target_editor().unwrap();
+        scene.add(&first).unwrap();
+        scene.add(&second).unwrap();
+        let source = scene.family(&[&first, &second]).unwrap();
+        let nested = {
+            let mut transaction = SemanticMutationTransaction::new();
+            let inner = transaction.create_node(noon_core::SemanticNodeCreation::family());
+            transaction.add_member(inner, target.node_id());
+            let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
+            transaction.add_member(outer, inner);
+            let result = transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+            MobjectFamily::from_node(Rc::clone(scene.store()), result.resolve(outer).unwrap())
+                .unwrap()
+        };
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let before_nodes = scene.store().borrow().len();
+
+        assert!(scene
+            .live(&mut session)
+            .declare_and_activate_family_transform_to(&source, &nested, AnimationOptions::new(),)
+            .is_err());
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(scene.store().borrow().len(), before_nodes);
+    }
+
+    #[test]
+    fn indicate_restores_the_activation_effective_source() {
+        let mut scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        scene.add(&square).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        live.scale(&square, 1.5, 0.75).unwrap();
+        let source = live.effective(&square).unwrap();
+        let segment = live
+            .declare_and_activate_indicate(
+                &square,
+                IndicateOptions::default(),
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::ThereAndBack),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 1.0)
+            .unwrap();
+        let outward = live.effective(&square).unwrap();
+        assert!((outward.transform.scale.x - source.transform.scale.x * 1.2).abs() < 1e-5);
+        assert!((outward.transform.scale.y - source.transform.scale.y * 1.2).abs() < 1e-5);
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        let restored = live.effective(&square).unwrap();
+        assert_eq!(restored.transform, source.transform);
+        assert_eq!(restored.style, source.style);
+    }
+
+    #[test]
+    fn sequenced_family_indicate_restores_the_preceding_transform_endpoint() {
+        let mut scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        scene.add(&first).unwrap();
+        scene.add(&second).unwrap();
+        let mut first_target = first.target_editor().unwrap();
+        let mut second_target = second.target_editor().unwrap();
+        first_target.set_translation(2.0, 0.0).unwrap();
+        second_target.set_translation(4.0, 0.0).unwrap();
+        let source = scene.family(&[&first, &second]).unwrap();
+        let target = scene.family(&[&first_target, &second_target]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Sequence,
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+            children: vec![
+                AnimationCompositionRequest::FamilyTransformTo {
+                    source: &source,
+                    target_state: &target,
+                    options: linear(1.0),
+                },
+                AnimationCompositionRequest::FamilyIndicate {
+                    target: &source,
+                    indication: IndicateOptions::default(),
+                    options: AnimationOptions::new()
+                        .run_time(2.0)
+                        .rate_func(RateFunction::ThereAndBack),
+                },
+            ],
+        };
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+
+        assert_eq!(live.effective(&first).unwrap().transform.translation.x, 2.0);
+        assert_eq!(
+            live.effective(&second).unwrap().transform.translation.x,
+            4.0
+        );
     }
 }

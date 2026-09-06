@@ -1,5 +1,5 @@
 //! Direct authoring scope over one family in the shared semantic store.
-use crate::{ExecutionSession, LiveSession, Mobject};
+use crate::{ExecutionSession, LiveSession, Mobject, MobjectFamily};
 use noon_core::{
     AnimationOptions, GeometryRef, RateFunction, SemanticMutationImpact,
     SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticStore,
@@ -76,6 +76,28 @@ impl Scene {
     pub fn add(&mut self, object: &Mobject) -> Result<(), String> {
         self.require_object(object)?;
         self.add_node(object.node_id())
+    }
+
+    /// Create one detached semantic family with authoritative ordered members.
+    pub fn family(&self, members: &[&Mobject]) -> Result<MobjectFamily, String> {
+        if members.is_empty() {
+            return Err("semantic family requires at least one member".into());
+        }
+        for member in members {
+            self.require_object(member)?;
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        let family = transaction.create_node(SemanticNodeCreation::family());
+        for member in members {
+            transaction.add_member(family, member.node_id());
+        }
+        let result = transaction
+            .apply(&mut self.store.borrow_mut())
+            .map_err(|error| error.to_string())?;
+        let node = result
+            .resolve(family)
+            .expect("committed family token resolves to one semantic identity");
+        MobjectFamily::from_node(Rc::clone(&self.store), node)
     }
     pub fn remove(&mut self, object: &Mobject) -> Result<(), String> {
         self.require_object(object)?;
