@@ -798,6 +798,7 @@ where
         } => {
             let execution_object_id = lookup
                 .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
                 .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
             let options =
                 resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)

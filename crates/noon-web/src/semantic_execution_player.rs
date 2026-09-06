@@ -978,7 +978,7 @@ impl SemanticExecutionPlayer {
     }
 
     /// Atomically admit and activate one mixed point-transform/angular-path composition.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_declare_and_activate_animation_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,

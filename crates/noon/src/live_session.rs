@@ -104,7 +104,7 @@ pub struct TransformToRequest<'a> {
 /// One typed leaf in an atomic live animation composition.
 #[derive(Clone, Copy)]
 pub enum AnimationCompositionRequest<'a> {
-    /// Transform a source by point correspondence toward an authored target state.
+    /// Transform a source toward an authored target using the requested interpolation.
     TransformTo(TransformToRequest<'a>),
     /// Rotate a centered 2D leaf along an angular path.
     Rotate {
@@ -647,22 +647,24 @@ impl<'a> LiveSession<'a> {
         }
         let children = children
             .iter()
-            .map(|child| {
-                (
-                    child.source.node_id(),
-                    child.target_state.node_id(),
-                    child.options,
-                )
-            })
+            .map(
+                |child| crate::execution_session::SemanticCompositionRequest::TransformTo {
+                    source: child.source.node_id(),
+                    target_state: child.target_state.node_id(),
+                    interpolation: child.interpolation,
+                    options: child.options,
+                },
+            )
             .collect::<Vec<_>>();
         let mut store = self.store.borrow_mut();
         self.session
-            .declare_and_activate_transform_composition(
+            .declare_and_activate_mixed_composition(
                 &mut store,
                 kind,
                 &children,
                 composition_options,
                 play_options,
+                None,
             )
             .map_err(Into::into)
     }
@@ -1854,7 +1856,7 @@ mod tests {
 
     #[test]
     fn mixed_composition_rejects_foreign_leaf_before_detached_admission() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let square = scene.rectangle(2.0, 2.0).unwrap();
         let mut target = square.target_editor().unwrap();
         target.rotate(std::f64::consts::PI).unwrap();
@@ -1895,11 +1897,12 @@ mod tests {
 
     #[test]
     fn unsupported_point_correspondence_rolls_back_detached_admission() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         let mut target = line.target_editor().unwrap();
         target.rotate(std::f64::consts::PI).unwrap();
         let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
         let before = session.publication_context();
         let before_nodes = line.store().borrow().len();
 
@@ -1919,13 +1922,13 @@ mod tests {
             );
 
         assert!(matches!(
-            result,
+            &result,
             Err(LiveSessionError::Activation(
                 ExecutionSessionAnimationError::PreparedAnimation(
                     noon_compile::PreparedSemanticAnimationLoweringError::UnsupportedPointCorrespondence { .. }
                 )
             ))
-        ));
+        ), "unexpected rejection: {result:?}");
         assert_eq!(session.publication_context(), before);
         assert_eq!(line.store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
@@ -1934,7 +1937,7 @@ mod tests {
 
     #[test]
     fn mixed_sequence_preserves_rotate_before_transform_order() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let rotating = scene.square(1.0).unwrap();
         let moving = scene.square(1.0).unwrap();
         let mut moving_target = moving.target_editor().unwrap();

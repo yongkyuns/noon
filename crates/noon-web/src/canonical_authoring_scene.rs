@@ -18,7 +18,7 @@ use crate::{
     RetainedTrackAuthoringSpec,
 };
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 #[derive(Clone)]
 enum OrdinaryCompositionChild {
     TransformTo {
@@ -1186,7 +1186,7 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn ordinary_play_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
@@ -1209,7 +1209,7 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "live execution player has no handoff duration".into())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn begin_ordinary_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
@@ -1226,7 +1226,7 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn activate_ordinary_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
@@ -1468,7 +1468,7 @@ impl CanonicalAuthoringScene {
         Ok(supported)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn validate_ordinary_mixed_composition(
         &self,
         children: &[OrdinaryCompositionChild],

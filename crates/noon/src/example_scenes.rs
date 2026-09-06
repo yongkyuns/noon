@@ -3,11 +3,12 @@
 use std::{error::Error, rc::Rc};
 
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
-    LiveSession, MathTypst, Mobject, RateFunction, RustHostCallbackTable, Scene,
-    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
-    StrokeJoin, StrokeWidthMode, TransformToRequest, Typst, ValueTracker, Vec2, VectorPath,
+    AnimationCompositionRequest, AnimationOptions, Color, ExecutionSession, HostCallbackId,
+    LiveContinuation, LiveProgram, LiveSession, MathTypst, Mobject, RateFunction,
+    RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticMutationTransaction, SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3,
+    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, TransformToRequest, Typst,
+    ValueTracker, Vec2, VectorPath,
 };
 
 /// Direct counterpart of Manim's DifferentRotations example.
@@ -2130,16 +2131,14 @@ mod continuation_tests {
         let mut bound_session = bound_scene.execution_session().unwrap();
         let bound_segment = bound_scene
             .live(&mut bound_session)
-            .declare_and_activate_animation_composition(
+            .declare_and_activate_transform_composition(
                 SemanticAnimationCompositionKind::Parallel,
-                &[AnimationCompositionRequest::TransformTo(
-                    TransformToRequest::point_correspondence(
-                        &bound_square,
-                        &bound_target,
-                        AnimationOptions::new()
-                            .run_time(2.0)
-                            .rate_func(RateFunction::Smooth),
-                    ),
+                &[TransformToRequest::point_correspondence(
+                    &bound_square,
+                    &bound_target,
+                    AnimationOptions::new()
+                        .run_time(2.0)
+                        .rate_func(RateFunction::Smooth),
                 )],
                 AnimationOptions::new().rate_func(RateFunction::Linear),
                 AnimationOptions::new()
