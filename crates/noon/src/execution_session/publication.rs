@@ -10,7 +10,7 @@ use noon_core::{
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
     AuthoredPublicationError, ExecutionSlotError, FrameObjectState, PreparedEffectivePropertyBatch,
-    PreparedReactiveSignalEnrollment,
+    PreparedReactiveSignalEnrollmentBatch,
 };
 
 use super::ExecutionSession;
@@ -22,10 +22,8 @@ pub(crate) enum SemanticPublicationPurpose {
 }
 
 pub(crate) struct PreparedReactiveEnrollmentBatch {
-    pub enrollments: Vec<(
-        noon_compile::PreparedSemanticInputSignalEnrollment,
-        PreparedReactiveSignalEnrollment,
-    )>,
+    pub projection_enrollments: Vec<noon_compile::PreparedSemanticInputSignalEnrollment>,
+    pub runtime_enrollment: PreparedReactiveSignalEnrollmentBatch,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -281,15 +279,15 @@ impl ExecutionSession {
                 .chain(execution_suffix),
         );
         if let Some(reactive_enrollment) = reactive_enrollment {
-            for (projection_enrollment, runtime_enrollment) in reactive_enrollment.enrollments {
+            for projection_enrollment in reactive_enrollment.projection_enrollments {
                 let expected = projection_enrollment.execution_signal();
                 let signal = self
                     .reactive_projection
                     .commit_input_signal_enrollment(projection_enrollment);
                 debug_assert_eq!(signal, expected);
-                self.runtime
-                    .commit_reactive_signal_enrollment(runtime_enrollment, signal);
             }
+            self.runtime
+                .commit_reactive_signal_enrollment_batch(reactive_enrollment.runtime_enrollment);
         }
         self.runtime
             .apply_authored_execution_transaction_with_effective(

@@ -2164,7 +2164,8 @@ impl ExecutionSession {
                 )
             })?;
 
-        let mut reactive_enrollments = Vec::new();
+        let mut projection_enrollments = Vec::new();
+        let mut runtime_enrollment_inputs = Vec::new();
         let mut prepared_execution_signals = HashMap::new();
         let mut seen_scalar_signals = HashSet::new();
         let mut newly_enrolled_signals = HashSet::new();
@@ -2204,13 +2205,10 @@ impl ExecutionSession {
                 .prepare_input_signal_enrollment(leaf.signal, ReactiveValue::Scalar(initial))?
                 .expect("fresh scalar signal produces one sparse enrollment");
             let execution = projection_enrollment.execution_signal();
-            let runtime_enrollment = self.runtime.prepare_reactive_signal_enrollment(
-                Some(execution),
-                ReactiveValue::Scalar(initial),
-            )?;
             newly_enrolled_signals.insert(leaf.signal);
             prepared_execution_signals.insert(leaf.signal, execution);
-            reactive_enrollments.push((projection_enrollment, runtime_enrollment));
+            projection_enrollments.push(projection_enrollment);
+            runtime_enrollment_inputs.push((execution, ReactiveValue::Scalar(initial)));
         }
 
         let scalar_timeline_entries =
@@ -2336,11 +2334,17 @@ impl ExecutionSession {
             .into_iter()
             .map(ExecutionPatch::AddTrack)
             .collect();
-        let reactive_enrollment = (!reactive_enrollments.is_empty()).then_some(
-            publication::PreparedReactiveEnrollmentBatch {
-                enrollments: reactive_enrollments,
-            },
-        );
+        let reactive_enrollment = if projection_enrollments.is_empty() {
+            None
+        } else {
+            let runtime_enrollment = self
+                .runtime
+                .prepare_reactive_signal_enrollment_batch(&runtime_enrollment_inputs)?;
+            Some(publication::PreparedReactiveEnrollmentBatch {
+                projection_enrollments,
+                runtime_enrollment,
+            })
+        };
         let result = self
             .apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
                 prepared,
