@@ -38,4 +38,3 @@ class RendererObservationCallbacks(Scene):
 
         live = self.live_execution()
         assert live.play(animation) == 2.0
-
