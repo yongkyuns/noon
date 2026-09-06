@@ -1188,7 +1188,11 @@ mod tests {
         assert!(matches!(
             invalid,
             Err(LiveSessionError::Activation(
-                ExecutionSessionAnimationError::PreparedAnimation(_)
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Semantic(
+                        noon_core::SemanticMutationTransactionError::InvalidAnimationRunTime { .. }
+                    )
+                )
             ))
         ));
         assert_eq!(session.publication_context(), before);
