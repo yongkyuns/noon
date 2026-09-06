@@ -12,6 +12,7 @@ pub enum SemanticTransactionReadError {
     UnknownExistingNode(SemanticNodeId),
     NotObject(SemanticTransactionNodeRef),
     NotFamily(SemanticTransactionNodeRef),
+    NotAnimation(SemanticTransactionNodeRef),
     Existing(SemanticSceneOperationError),
 }
 
@@ -164,6 +165,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 Some(SemanticNodeCreation::Family { .. }) => {
                     Err(SemanticTransactionReadError::NotObject(object))
                 }
+                None if self.preflight.pending_animations.contains_key(&token) => {
+                    Err(SemanticTransactionReadError::NotObject(object))
+                }
                 None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
             },
         }
@@ -207,6 +211,25 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
 
     pub fn node_is_removed(&self, node: impl Into<SemanticTransactionNodeRef>) -> bool {
         self.is_removed_ref(node.into())
+    }
+
+    /// Read one staged animation declaration without assigning it a permanent
+    /// semantic identity. Its intent retains transaction-local node references.
+    pub fn pending_animation(
+        &self,
+        token: SemanticLocalNodeToken,
+    ) -> Result<&SemanticTransactionAnimation, SemanticTransactionReadError> {
+        self.validate_read_token(token)?;
+        if self.preflight.removed_pending.contains(&token) {
+            return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+        }
+        if let Some(animation) = self.preflight.pending_animations.get(&token) {
+            return Ok(animation);
+        }
+        if self.preflight.pending_creations.contains_key(&token) {
+            return Err(SemanticTransactionReadError::NotAnimation(token.into()));
+        }
+        Err(SemanticTransactionReadError::UnknownPendingNode(token))
     }
 
     /// Read final direct family order through the transaction-local overlay.
@@ -254,6 +277,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 Some(SemanticNodeCreation::Object { .. }) => {
                     Err(SemanticTransactionReadError::NotFamily(family))
                 }
+                None if self.preflight.pending_animations.contains_key(&token) => {
+                    Err(SemanticTransactionReadError::NotFamily(family))
+                }
                 None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
             },
         }
@@ -297,17 +323,32 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         let mut pending_source_assignments = Vec::new();
         let mut committed_nodes = HashMap::new();
         for mutation in &transaction.mutations {
-            let SemanticMutation::AddNode { token, creation } = mutation else {
-                continue;
-            };
-            if preflight.removed_pending.contains(token) {
-                continue;
-            }
-            let (node, source_identity) = commit_add_node(store, creation.clone());
-            committed_nodes.insert(*token, node);
-            written_slots.insert(node);
-            if let Some(source_identity) = source_identity {
-                pending_source_assignments.push((node, source_identity));
+            match mutation {
+                SemanticMutation::AddNode { token, creation } => {
+                    if preflight.removed_pending.contains(token) {
+                        continue;
+                    }
+                    let (node, source_identity) = commit_add_node(store, creation.clone());
+                    committed_nodes.insert(*token, node);
+                    written_slots.insert(node);
+                    if let Some(source_identity) = source_identity {
+                        pending_source_assignments.push((node, source_identity));
+                    }
+                }
+                SemanticMutation::AddAnimation { token, animation } => {
+                    if preflight.removed_pending.contains(token)
+                        || animation.intent().node_references().any(|reference| {
+                            matches!(reference, SemanticTransactionNodeRef::Pending(dependency) if preflight.removed_pending.contains(&dependency))
+                        })
+                    {
+                        continue;
+                    }
+                    let state = animation.resolve(&committed_nodes);
+                    let node = commit_add_animation(store, &state);
+                    committed_nodes.insert(*token, node);
+                    written_slots.insert(node);
+                }
+                _ => {}
             }
         }
         for (mutation, changed) in transaction.mutations.into_iter().zip(preflight.changed) {
@@ -456,27 +497,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     let node = committed_nodes[&token];
                     impacts.push(SemanticMutationImpact::NodeAdded { node });
                 }
-                SemanticMutation::AddAnimation { state } => {
-                    let animation = commit_add_animation(store, &state);
-                    written_slots.insert(animation);
-                    impacts.push(SemanticMutationImpact::AnimationAdded { animation });
-                }
-                SemanticMutation::AddTransformAnimation {
-                    target,
-                    target_state,
-                    options,
-                } => {
-                    let target = resolve_node_ref(target, &committed_nodes);
-                    let target_state = resolve_node_ref(target_state, &committed_nodes);
-                    let state = SemanticAnimationState::new(
-                        SemanticAnimationIntent::TransformTo {
-                            target,
-                            target_state,
-                        },
-                        options,
-                    );
-                    let animation = commit_add_animation(store, &state);
-                    written_slots.insert(animation);
+                SemanticMutation::AddAnimation { token, .. } => {
+                    let animation = committed_nodes[&token];
                     impacts.push(SemanticMutationImpact::AnimationAdded { animation });
                 }
                 SemanticMutation::RemoveAnimation { animation }

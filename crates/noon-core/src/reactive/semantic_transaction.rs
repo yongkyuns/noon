@@ -6,7 +6,7 @@ use super::semantic_declarations::{
 };
 use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
-    AnimationOptions, HostCallbackId, SemanticAnimationIntent, SemanticAnimationState,
+    AnimationOptions, HostCallbackId, SemanticAnimationCompositionKind, SemanticAnimationState,
     SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
     SemanticObjectState, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
@@ -19,9 +19,8 @@ mod prepared;
 pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
 
 mod animation_addition;
-use animation_addition::{
-    commit_add_animation, preflight_add_animation, preflight_animation_options,
-};
+use animation_addition::{commit_add_animation, preflight_transaction_animation};
+pub use animation_addition::{SemanticTransactionAnimation, SemanticTransactionAnimationIntent};
 
 mod family_edges;
 use family_edges::FamilyEdgePreflight;
@@ -112,12 +111,8 @@ pub enum SemanticMutation {
         creation: SemanticNodeCreation,
     },
     AddAnimation {
-        state: SemanticAnimationState,
-    },
-    AddTransformAnimation {
-        target: SemanticTransactionNodeRef,
-        target_state: SemanticTransactionNodeRef,
-        options: AnimationOptions,
+        token: SemanticLocalNodeToken,
+        animation: SemanticTransactionAnimation,
     },
     RemoveAnimation {
         animation: SemanticNodeId,
@@ -150,15 +145,10 @@ impl SemanticMutation {
                 references
             }
             Self::RemoveNode { node } => vec![*node],
-            Self::AddTransformAnimation {
-                target,
-                target_state,
-                ..
-            } => vec![*target, *target_state],
+            Self::AddAnimation { animation, .. } => animation.intent().node_references().collect(),
             Self::SetSignal { .. }
             | Self::AddScalarSignalTrack { .. }
             | Self::AddNode { .. }
-            | Self::AddAnimation { .. }
             | Self::RemoveAnimation { .. } => Vec::new(),
         }
     }
@@ -166,7 +156,7 @@ impl SemanticMutation {
     fn references_any_pending(&self, removed: &HashSet<SemanticLocalNodeToken>) -> bool {
         self.node_references().into_iter().any(
             |node| matches!(node, SemanticTransactionNodeRef::Pending(token) if removed.contains(&token)),
-        ) || matches!(self, Self::AddNode { token, .. } if removed.contains(token))
+        ) || matches!(self, Self::AddNode { token, .. } | Self::AddAnimation { token, .. } if removed.contains(token))
     }
 
     /// Existing semantic identity directly targeted by this mutation.
@@ -188,9 +178,7 @@ impl SemanticMutation {
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => family.existing(),
-            Self::AddNode { .. }
-            | Self::AddAnimation { .. }
-            | Self::AddTransformAnimation { .. } => None,
+            Self::AddNode { .. } | Self::AddAnimation { .. } => None,
             Self::RemoveAnimation { animation } => Some(*animation),
             Self::RemoveNode { node } => node.existing(),
         }
@@ -229,9 +217,7 @@ impl SemanticMutation {
                 family: *family,
                 member: *member,
             }),
-            Self::AddNode { .. }
-            | Self::AddAnimation { .. }
-            | Self::AddTransformAnimation { .. } => None,
+            Self::AddNode { .. } | Self::AddAnimation { .. } => None,
             Self::RemoveAnimation { animation } => Some(SemanticMutationKey::NodeRemoval(
                 SemanticTransactionNodeRef::Existing(*animation),
             )),
@@ -332,6 +318,7 @@ pub(super) struct SemanticTransactionPreflight {
     staged_object_order: Vec<SemanticTransactionNodeRef>,
     family_edges: FamilyEdgePreflight,
     pending_creations: HashMap<SemanticLocalNodeToken, SemanticNodeCreation>,
+    pending_animations: HashMap<SemanticLocalNodeToken, SemanticTransactionAnimation>,
     removed_existing: HashSet<SemanticNodeId>,
     removed_pending: HashSet<SemanticLocalNodeToken>,
 }
@@ -559,12 +546,7 @@ impl SemanticMutationTransaction {
 
     /// Stage a node allocation and return its transaction-local reference token.
     pub fn create_node(&mut self, creation: SemanticNodeCreation) -> SemanticLocalNodeToken {
-        let ordinal = self.next_token;
-        self.next_token = self
-            .next_token
-            .checked_add(1)
-            .expect("Noon semantic transaction local-node space exhausted");
-        let token = SemanticLocalNodeToken::new(self.id, ordinal);
+        let token = self.allocate_local_node_token();
         self.mutations
             .push(SemanticMutation::AddNode { token, creation });
         token
@@ -576,9 +558,18 @@ impl SemanticMutationTransaction {
     /// newly allocated animation identity is reported by `AnimationAdded` in the
     /// transaction result, rather than allocating semantic identity before commit.
     pub fn add_animation(&mut self, state: SemanticAnimationState) -> &mut Self {
-        self.mutations
-            .push(SemanticMutation::AddAnimation { state });
+        self.create_animation(state);
         self
+    }
+
+    /// Stage an animation declaration and return its transaction-local node token.
+    pub fn create_animation(&mut self, state: SemanticAnimationState) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::from_published(state),
+        });
+        token
     }
 
     /// Add a transform declaration that may reference objects staged in this batch.
@@ -588,13 +579,64 @@ impl SemanticMutationTransaction {
         target_state: impl Into<SemanticTransactionNodeRef>,
         options: AnimationOptions,
     ) -> &mut Self {
-        self.mutations
-            .push(SemanticMutation::AddTransformAnimation {
-                target: target.into(),
-                target_state: target_state.into(),
-                options,
-            });
+        self.create_transform_animation(target, target_state, options);
         self
+    }
+
+    /// Stage a transform declaration and return its transaction-local node token.
+    pub fn create_transform_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::TransformTo {
+                    target: target.into(),
+                    target_state: target_state.into(),
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage an ordered animation composition whose children already exist or
+    /// were staged earlier in this transaction.
+    pub fn create_animation_composition<I, R>(
+        &mut self,
+        kind: SemanticAnimationCompositionKind,
+        children: I,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<SemanticTransactionNodeRef>,
+    {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Composition {
+                    kind,
+                    children: children.into_iter().map(Into::into).collect(),
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    fn allocate_local_node_token(&mut self) -> SemanticLocalNodeToken {
+        let ordinal = self.next_token;
+        self.next_token = self
+            .next_token
+            .checked_add(1)
+            .expect("Noon semantic transaction local-node space exhausted");
+        SemanticLocalNodeToken::new(self.id, ordinal)
     }
 
     /// Delete one authored animation declaration through the same structural
@@ -699,8 +741,23 @@ impl SemanticMutationTransaction {
                 _ => {}
             }
         }
+        // Pending animation declarations form an insertion-ordered DAG because
+        // compositions can only reference earlier pending animations. Canceling
+        // any pending dependency therefore invalidates its parent declarations
+        // transitively in one forward pass.
+        for mutation in &self.mutations {
+            let SemanticMutation::AddAnimation { token, animation } = mutation else {
+                continue;
+            };
+            if animation.intent().node_references().any(|reference| {
+                matches!(reference, SemanticTransactionNodeRef::Pending(dependency) if removed_pending.contains(&dependency))
+            }) {
+                removed_pending.insert(*token);
+            }
+        }
         let removed_nodes = store.semantic_removal_closure(&removed_nodes);
         let pending_creations = catalog.cloned_creations();
+        let pending_animations = catalog.cloned_animations();
         let surviving_object_creations = pending_creations
             .iter()
             .filter(|(token, creation)| {
@@ -730,6 +787,7 @@ impl SemanticMutationTransaction {
             HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
         let mut staged_signal_tracks =
             HashMap::<SemanticNodeId, Vec<SemanticScalarSignalTrack>>::new();
+        let mut available_pending_animations = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
             for node in mutation.node_references() {
@@ -840,13 +898,8 @@ impl SemanticMutationTransaction {
                     }
                 }
             }
-            if let SemanticMutation::AddTransformAnimation {
-                target,
-                target_state,
-                ..
-            } = mutation
-            {
-                for node in [*target, *target_state] {
+            if let SemanticMutation::AddAnimation { animation, .. } = mutation {
+                for node in animation.intent().node_references() {
                     if let SemanticTransactionNodeRef::Existing(node) = node {
                         if removed_nodes.contains(&node) {
                             return Err(
@@ -1134,45 +1187,17 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(!removed_pending.contains(token));
                 }
-                SemanticMutation::AddAnimation { state } => {
-                    preflight_add_animation(store, state, &removed_nodes, index)?;
-                    changed.push(true);
-                }
-                SemanticMutation::AddTransformAnimation {
-                    target,
-                    target_state,
-                    options,
-                } => {
-                    preflight_animation_options(*options, index)?;
-                    catalog.staged_object_state(
+                SemanticMutation::AddAnimation { token, animation } => {
+                    preflight_transaction_animation(
+                        &catalog,
+                        *token,
+                        animation,
+                        &mut available_pending_animations,
                         &mut staged_objects,
                         &mut staged_object_order,
-                        *target,
                         index,
                     )?;
-                    catalog.staged_object_state(
-                        &mut staged_objects,
-                        &mut staged_object_order,
-                        *target_state,
-                        index,
-                    )?;
-                    if target == target_state {
-                        return Err(match target {
-                            SemanticTransactionNodeRef::Existing(node) => {
-                                SemanticMutationTransactionError::SameAnimationTargetAndTargetState {
-                                    index,
-                                    node: *node,
-                                }
-                            }
-                            SemanticTransactionNodeRef::Pending(_) => {
-                                SemanticMutationTransactionError::SamePendingAnimationTargetAndTargetState {
-                                    index,
-                                    node: *target,
-                                }
-                            }
-                        });
-                    }
-                    changed.push(true);
+                    changed.push(!removed_pending.contains(token));
                 }
                 SemanticMutation::RemoveAnimation { .. } => {
                     changed.push(true);
@@ -1206,6 +1231,7 @@ impl SemanticMutationTransaction {
             staged_object_order,
             family_edges,
             pending_creations,
+            pending_animations,
             removed_existing: removed_nodes,
             removed_pending,
         })
@@ -1456,6 +1482,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         token: SemanticLocalNodeToken,
         expected: SemanticPendingNodeKind,
+    },
+    PendingAnimationForwardReference {
+        index: usize,
+        animation: SemanticLocalNodeToken,
     },
     DuplicatePendingMutation {
         index: usize,
@@ -1731,6 +1761,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::PendingNodeKindMismatch { index, token, expected } => write!(
                 formatter,
                 "semantic transaction mutation {index} requires pending node {token:?} to be {expected:?}"
+            ),
+            Self::PendingAnimationForwardReference { index, animation } => write!(
+                formatter,
+                "semantic transaction mutation {index} references pending animation {animation:?} before its declaration"
             ),
             Self::DuplicatePendingMutation { index, node } => write!(
                 formatter,
