@@ -1169,10 +1169,6 @@ def _play(self, *args, **kwargs):
         )
     canonical_builders = [argument for argument in args if _canonical_tracker_builder(argument)]
     if canonical_builders:
-        if _semantic_continuation_active(self):
-            raise NotImplementedError(
-                "realtime construct does not yet support ValueTracker play"
-            )
         if len(canonical_builders) != 1 or len(args) != 1:
             raise NotImplementedError(
                 "canonical ValueTracker.play currently supports one scalar track without ordinary animations"
