@@ -1,7 +1,7 @@
 use noon_render_wgpu::{
-    PackedStyle, PackedTransform, RenderPrimitive, RetainedDrawStats, RetainedPreparedObjectKind,
-    RetainedPreparedObjectObservation, RetainedPreparedObjectOutcome, RetainedUploadStats,
-    UploadWrite,
+    PackedStyle, PackedTransform, RenderPrimitive, RetainedDrawStats, RetainedGlyphPlane,
+    RetainedPreparedObjectKind, RetainedPreparedObjectObservation, RetainedPreparedObjectOutcome,
+    RetainedUploadStats, UploadWrite,
 };
 
 use crate::RetainedExecutionFrameMirror;
@@ -121,8 +121,18 @@ pub struct RendererPreparedObjectObservation {
     pub render_item_end: Option<usize>,
     pub render_item_count: usize,
     pub glyph_item_count: usize,
+    pub glyph_ranges: Vec<RendererPreparedGlyphRangeObservation>,
     pub full_rebuilds: usize,
     pub instances_repacked: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RendererPreparedGlyphRangeObservation {
+    pub plane: &'static str,
+    pub page: u32,
+    pub instance_start: u32,
+    pub instance_end: u32,
+    pub instance_dirty: bool,
 }
 
 impl From<RetainedPreparedObjectObservation> for RendererPreparedObjectObservation {
@@ -140,6 +150,20 @@ impl From<RetainedPreparedObjectObservation> for RendererPreparedObjectObservati
             render_item_end: value.render_item_end,
             render_item_count: value.render_item_count,
             glyph_item_count: value.glyph_item_count,
+            glyph_ranges: value
+                .glyph_ranges
+                .into_iter()
+                .map(|range| RendererPreparedGlyphRangeObservation {
+                    plane: match range.plane {
+                        RetainedGlyphPlane::Mask => "mask",
+                        RetainedGlyphPlane::Color => "color",
+                    },
+                    page: range.page,
+                    instance_start: range.instance_range.start,
+                    instance_end: range.instance_range.end,
+                    instance_dirty: range.instance_dirty,
+                })
+                .collect(),
             full_rebuilds: value.full_rebuilds,
             instances_repacked: value.instances_repacked,
         }
@@ -172,6 +196,7 @@ impl From<&UploadWrite> for RendererUploadWriteObservation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RendererUploadObservation {
     pub target_write: Option<RendererUploadWriteObservation>,
+    pub target_text_writes: Vec<RendererUploadWriteObservation>,
     pub geometry_bytes_uploaded: usize,
     pub text_bytes_uploaded: usize,
     pub buffer_reallocations: usize,
@@ -298,7 +323,7 @@ pub(crate) fn resolve_renderer_observation_target(
 pub(crate) fn finish_renderer_observation(
     target: ResolvedRendererObservationTarget,
     prepared: Result<RetainedPreparedObjectObservation, RetainedPreparedObjectOutcome>,
-    geometry_writes: &[UploadWrite],
+    upload_writes: &[UploadWrite],
     upload: RetainedUploadStats,
     draw: RetainedDrawStats,
     presentation_sequence: u64,
@@ -346,39 +371,57 @@ pub(crate) fn finish_renderer_observation(
             };
         }
     };
-    if matches!(
-        prepared.kind,
-        RetainedPreparedObjectKind::Text | RetainedPreparedObjectKind::Mixed
-    ) {
+    let geometry = prepared.geometry;
+    let target_write = if let Some(geometry) = geometry {
+        let primitive: RendererPreparedPrimitive = geometry.primitive.into();
+        if primitive == RendererPreparedPrimitive::Path {
+            return RendererObservationOutcome::ResourceUnavailable {
+                schema_version: RENDERER_OBSERVATION_VERSION,
+                publication: target.request.publication,
+                slot: target.request.slot,
+                resource: "path_draw_instance_mapping",
+            };
+        }
+        let write = upload_writes.iter().find(|write| {
+            write.buffer == primitive.upload_buffer()
+                && write.instance_range.contains(&geometry.instance_index)
+        });
+        if geometry.instance_dirty && write.is_none() {
+            return RendererObservationOutcome::ResourceUnavailable {
+                schema_version: RENDERER_OBSERVATION_VERSION,
+                publication: target.request.publication,
+                slot: target.request.slot,
+                resource: "geometry_upload_write",
+            };
+        }
+        write
+    } else {
+        None
+    };
+    let target_text_writes = upload_writes
+        .iter()
+        .filter(|write| {
+            prepared.glyph_ranges.iter().any(|range| {
+                write.buffer == glyph_upload_buffer(range.plane)
+                    && write.instance_range.start <= range.instance_range.start as usize
+                    && write.instance_range.end >= range.instance_range.end as usize
+            })
+        })
+        .map(Into::into)
+        .collect::<Vec<_>>();
+    if prepared.glyph_ranges.iter().any(|range| {
+        range.instance_dirty
+            && !upload_writes.iter().any(|write| {
+                write.buffer == glyph_upload_buffer(range.plane)
+                    && write.instance_range.start <= range.instance_range.start as usize
+                    && write.instance_range.end >= range.instance_range.end as usize
+            })
+    }) {
         return RendererObservationOutcome::ResourceUnavailable {
             schema_version: RENDERER_OBSERVATION_VERSION,
             publication: target.request.publication,
             slot: target.request.slot,
-            resource: "text_upload_ranges",
-        };
-    }
-    let geometry = prepared
-        .geometry
-        .expect("geometry-only observation has one instance");
-    let primitive: RendererPreparedPrimitive = geometry.primitive.into();
-    if primitive == RendererPreparedPrimitive::Path {
-        return RendererObservationOutcome::ResourceUnavailable {
-            schema_version: RENDERER_OBSERVATION_VERSION,
-            publication: target.request.publication,
-            slot: target.request.slot,
-            resource: "path_draw_instance_mapping",
-        };
-    }
-    let target_write = geometry_writes.iter().find(|write| {
-        write.buffer == primitive.upload_buffer()
-            && write.instance_range.contains(&geometry.instance_index)
-    });
-    if geometry.instance_dirty && target_write.is_none() {
-        return RendererObservationOutcome::ResourceUnavailable {
-            schema_version: RENDERER_OBSERVATION_VERSION,
-            publication: target.request.publication,
-            slot: target.request.slot,
-            resource: "geometry_upload_write",
+            resource: "text_upload_write",
         };
     }
     let submission_membership = prepared.submission_membership;
@@ -391,9 +434,13 @@ pub(crate) fn finish_renderer_observation(
         prepared: prepared.into(),
         upload: RendererUploadObservation {
             target_write: target_write.map(Into::into),
+            target_text_writes,
             geometry_bytes_uploaded: upload.geometry.bytes_uploaded,
             text_bytes_uploaded: upload.text.bytes_uploaded,
-            buffer_reallocations: upload.geometry.buffer_reallocations,
+            buffer_reallocations: upload
+                .geometry
+                .buffer_reallocations
+                .saturating_add(upload.text.buffer_reallocations),
         },
         draw: RendererDrawObservation {
             submission_membership,
@@ -409,6 +456,13 @@ pub(crate) fn finish_renderer_observation(
             present_called: true,
         },
     }))
+}
+
+const fn glyph_upload_buffer(plane: RetainedGlyphPlane) -> &'static str {
+    match plane {
+        RetainedGlyphPlane::Mask => "text_mask",
+        RetainedGlyphPlane::Color => "text_color",
+    }
 }
 
 #[cfg(test)]
@@ -564,6 +618,7 @@ mod tests {
             render_item_end: Some(8),
             render_item_count: 1,
             glyph_item_count: 0,
+            glyph_ranges: Vec::new(),
             submission_membership: true,
             full_rebuilds: 0,
             instances_repacked: 1,
@@ -628,9 +683,174 @@ mod tests {
             (3, 4)
         );
         assert_eq!(target_write.byte_offset, 240);
+        assert!(upload.target_text_writes.is_empty());
         assert!(draw.submission_membership);
         assert_eq!(presentation.presentation_sequence, 4);
         assert!(presentation.submit_called);
         assert!(presentation.present_called);
+    }
+
+    #[test]
+    fn presented_text_observation_requires_and_reports_its_local_upload_write() {
+        let mirror = mirror();
+        let slot = TransportSlotId {
+            slot: 4,
+            generation: 2,
+        };
+        let target = resolve_renderer_observation_target(request(0, slot), &mirror).unwrap();
+        let prepared = RetainedPreparedObjectObservation {
+            object: ObjectId::new(21),
+            kind: RetainedPreparedObjectKind::Text,
+            geometry: None,
+            render_item_start: Some(7),
+            render_item_end: Some(8),
+            render_item_count: 1,
+            glyph_item_count: 1,
+            glyph_ranges: vec![noon_render_wgpu::RetainedPreparedGlyphRange {
+                plane: RetainedGlyphPlane::Mask,
+                page: 0,
+                instance_range: 3..6,
+                instance_dirty: true,
+            }],
+            submission_membership: true,
+            full_rebuilds: 0,
+            instances_repacked: 0,
+        };
+        let write = UploadWrite {
+            buffer: "text_mask",
+            instance_range: 2..7,
+            byte_offset: 128,
+            byte_length: 320,
+            payload_hash: 23,
+        };
+        let mut upload = RetainedUploadStats::default();
+        upload.text.bytes_uploaded = 320;
+        let mut draw = RetainedDrawStats::default();
+        draw.text.draw_calls = 1;
+        draw.text.instances_drawn = 3;
+
+        let missing = finish_renderer_observation(
+            target.clone(),
+            Ok(prepared.clone()),
+            &[],
+            upload,
+            draw,
+            4,
+            "WebGPU",
+            "success",
+        );
+        assert!(matches!(
+            missing,
+            RendererObservationOutcome::ResourceUnavailable {
+                resource: "text_upload_write",
+                ..
+            }
+        ));
+
+        let outcome = finish_renderer_observation(
+            target,
+            Ok(prepared),
+            &[write],
+            upload,
+            draw,
+            4,
+            "WebGPU",
+            "success",
+        );
+        let RendererObservationOutcome::Presented(observation) = outcome else {
+            panic!("an exact retained text observation must be publishable");
+        };
+        assert_eq!(observation.prepared.kind, RendererPreparedKind::Text);
+        assert_eq!(observation.prepared.glyph_ranges.len(), 1);
+        assert!(observation.prepared.glyph_ranges[0].instance_dirty);
+        assert!(observation.upload.target_write.is_none());
+        assert_eq!(observation.upload.target_text_writes.len(), 1);
+        assert_eq!(observation.upload.target_text_writes[0].buffer, "text_mask");
+        assert!(observation.draw.submission_membership);
+        assert_eq!(observation.draw.text_instances_drawn, 3);
+    }
+
+    #[test]
+    fn presented_mixed_observation_keeps_geometry_and_text_evidence_together() {
+        let mirror = mirror();
+        let slot = TransportSlotId {
+            slot: 4,
+            generation: 2,
+        };
+        let target = resolve_renderer_observation_target(request(0, slot), &mirror).unwrap();
+        let prepared = RetainedPreparedObjectObservation {
+            object: ObjectId::new(21),
+            kind: RetainedPreparedObjectKind::Mixed,
+            geometry: Some(PreparedGeometryObjectObservation {
+                object: ObjectId::new(21),
+                primitive: RenderPrimitive::Circle,
+                instance_index: 3,
+                instance_start: 3,
+                instance_end: 4,
+                transform: PackedTransform::from(target.mirrored.transform),
+                style: PackedStyle::from(target.mirrored.style),
+                instance_dirty: true,
+                submission_membership: Some(true),
+            }),
+            render_item_start: Some(7),
+            render_item_end: Some(9),
+            render_item_count: 2,
+            glyph_item_count: 1,
+            glyph_ranges: vec![noon_render_wgpu::RetainedPreparedGlyphRange {
+                plane: RetainedGlyphPlane::Color,
+                page: 1,
+                instance_range: 5..6,
+                instance_dirty: true,
+            }],
+            submission_membership: true,
+            full_rebuilds: 0,
+            instances_repacked: 1,
+        };
+        let writes = [
+            UploadWrite {
+                buffer: "circle",
+                instance_range: 3..4,
+                byte_offset: 240,
+                byte_length: 80,
+                payload_hash: 17,
+            },
+            UploadWrite {
+                buffer: "text_color",
+                instance_range: 5..6,
+                byte_offset: 320,
+                byte_length: 64,
+                payload_hash: 29,
+            },
+        ];
+        let mut upload = RetainedUploadStats::default();
+        upload.geometry.bytes_uploaded = 80;
+        upload.text.bytes_uploaded = 64;
+        let mut draw = RetainedDrawStats::default();
+        draw.geometry.draw_calls = 1;
+        draw.geometry.instances_drawn = 1;
+        draw.text.draw_calls = 1;
+        draw.text.instances_drawn = 1;
+
+        let outcome = finish_renderer_observation(
+            target,
+            Ok(prepared),
+            &writes,
+            upload,
+            draw,
+            5,
+            "WebGPU",
+            "success",
+        );
+        let RendererObservationOutcome::Presented(observation) = outcome else {
+            panic!("an exact mixed retained observation must be publishable");
+        };
+        assert_eq!(observation.prepared.kind, RendererPreparedKind::Mixed);
+        assert_eq!(observation.upload.target_write.unwrap().buffer, "circle");
+        assert_eq!(observation.upload.target_text_writes.len(), 1);
+        assert_eq!(
+            observation.upload.target_text_writes[0].buffer,
+            "text_color"
+        );
+        assert!(observation.draw.submission_membership);
     }
 }

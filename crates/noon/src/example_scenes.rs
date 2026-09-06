@@ -11,6 +11,7 @@ use crate::{
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
 const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
 const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
+const ACCUMULATE_TEXT_DT: HostCallbackId = HostCallbackId::new(4);
 
 /// Build the paired affine callback example without selecting a platform host.
 ///
@@ -20,11 +21,14 @@ const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
 pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>>
 {
     let mut scene = Scene::new();
+    let mut label = scene.text("Noon")?;
+    label.set_translation(0.0, -2.0)?;
     let mut source = scene.circle(1.0)?;
     source.set_fill(1.0, 1.0, 1.0, 1.0)?;
     let mut drift = scene.circle(0.5)?;
     drift.set_fill(1.0, 1.0, 1.0, 1.0)?;
     drift.set_translation(-3.0, 0.0)?;
+    scene.add(&label)?;
     scene.add(&source)?;
     scene.add(&drift)?;
 
@@ -56,9 +60,15 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
         transform.translation.y += context.delta_time() as f32;
         context.set_target_transform(transform)
     })?;
+    callbacks.insert(ACCUMULATE_TEXT_DT, |context| {
+        let mut transform = context.target_state().transform;
+        transform.translation.x += context.delta_time() as f32;
+        context.set_target_transform(transform)
+    })?;
 
     {
         let mut store = scene.store().borrow_mut();
+        callbacks.add_updater(&mut store, label.node_id(), ACCUMULATE_TEXT_DT, 0.0, None)?;
         callbacks.add_updater(&mut store, source.node_id(), SET_Y, 0.0, None)?;
         callbacks.add_updater(&mut store, source.node_id(), SET_OPACITY, 0.0, None)?;
         callbacks.add_updater(&mut store, drift.node_id(), ACCUMULATE_DT, 0.0, None)?;

@@ -14,7 +14,7 @@ use noon_core::{
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
-use noon_text_atlas::GpuGlyphAtlas;
+use noon_text_atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
 use noon_text_render_wgpu::{
     GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
     RetainedTextQuadPreparer, TextCamera2D, TextDeviceMetrics, TextGlyphGpuRenderer,
@@ -28,7 +28,7 @@ use swash::{
     CacheKey, FontRef, GlyphId,
 };
 
-use super::{Camera2D, DrawStats, GpuRenderer, UploadStats, PATH_SAMPLE_COUNT};
+use super::{push_upload_write, Camera2D, DrawStats, GpuRenderer, UploadStats, PATH_SAMPLE_COUNT};
 use crate::{
     FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive, VisibleRenderError,
 };
@@ -151,7 +151,21 @@ pub enum RetainedPreparedObjectKind {
     Mixed,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetainedGlyphPlane {
+    Mask,
+    Color,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetainedPreparedGlyphRange {
+    pub plane: RetainedGlyphPlane,
+    pub page: u32,
+    pub instance_range: std::ops::Range<u32>,
+    pub instance_dirty: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RetainedPreparedObjectObservation {
     pub object: ObjectId,
     pub kind: RetainedPreparedObjectKind,
@@ -160,6 +174,7 @@ pub struct RetainedPreparedObjectObservation {
     pub render_item_end: Option<usize>,
     pub render_item_count: usize,
     pub glyph_item_count: usize,
+    pub glyph_ranges: Vec<RetainedPreparedGlyphRange>,
     pub submission_membership: bool,
     pub full_rebuilds: usize,
     pub instances_repacked: usize,
@@ -227,6 +242,7 @@ impl PreparedRetainedGpuFrame<'_> {
                 render_item_end: None,
                 render_item_count: usize::from(submission_membership),
                 glyph_item_count: 0,
+                glyph_ranges: Vec::new(),
                 submission_membership,
                 full_rebuilds: self.geometry.stats.full_rebuilds,
                 instances_repacked: self.geometry.stats.instances_repacked,
@@ -248,6 +264,7 @@ impl PreparedRetainedGpuFrame<'_> {
             .iter()
             .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
             .count();
+        let glyph_ranges = observed_glyph_ranges(&self.text, items);
         let geometry_item_count = items.len().saturating_sub(glyph_item_count);
         let geometry = self
             .source_geometry_slots
@@ -287,11 +304,58 @@ impl PreparedRetainedGpuFrame<'_> {
             render_item_end: Some(range.end),
             render_item_count: items.len(),
             glyph_item_count,
+            glyph_ranges,
             submission_membership: !items.is_empty(),
             full_rebuilds: self.geometry.stats.full_rebuilds,
             instances_repacked: self.geometry.stats.instances_repacked,
         })
     }
+}
+
+fn observed_glyph_ranges(
+    text: &PreparedRetainedTextSnapshot<'_>,
+    items: &[RetainedRenderItem],
+) -> Vec<RetainedPreparedGlyphRange> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let RetainedRenderItem::Glyph {
+                text_item_index, ..
+            } = item
+            else {
+                return None;
+            };
+            let PreparedTextItem::GlyphBatch {
+                plane,
+                page,
+                instance_range,
+                ..
+            } = text.items.get(*text_item_index)?
+            else {
+                return None;
+            };
+            let dirty_ranges = match plane {
+                noon_text_atlas::GlyphAtlasPlane::Mask => text.dirty_mask_ranges,
+                noon_text_atlas::GlyphAtlasPlane::Color => text.dirty_color_ranges,
+            };
+            Some(RetainedPreparedGlyphRange {
+                plane: match plane {
+                    noon_text_atlas::GlyphAtlasPlane::Mask => RetainedGlyphPlane::Mask,
+                    noon_text_atlas::GlyphAtlasPlane::Color => RetainedGlyphPlane::Color,
+                },
+                page: *page,
+                instance_range: instance_range.clone(),
+                instance_dirty: sorted_ranges_overlap(dirty_ranges, instance_range),
+            })
+        })
+        .collect()
+}
+
+fn sorted_ranges_overlap(ranges: &[std::ops::Range<u32>], target: &std::ops::Range<u32>) -> bool {
+    let candidate = ranges.partition_point(|range| range.end <= target.start);
+    ranges
+        .get(candidate)
+        .is_some_and(|range| range.start < target.end)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2362,19 +2426,17 @@ impl GpuRenderer {
         self.upload_retained_inner(device, queue, prepared, text_state, None)
     }
 
-    /// Upload a retained frame while recording exact geometry-buffer writes.
-    ///
-    /// The caller owns the opt-in trace allocation. Text retains its existing
-    /// aggregate upload statistics until the glyph renderer exposes typed ranges.
+    /// Upload a retained frame while recording exact geometry and glyph-instance
+    /// buffer writes. The caller owns the opt-in trace allocation.
     pub fn upload_retained_with_trace(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         prepared: &PreparedRetainedGpuFrame<'_>,
         text_state: &mut RetainedTextGpuState,
-        geometry_writes: &mut Vec<crate::UploadWrite>,
+        upload_writes: &mut Vec<crate::UploadWrite>,
     ) -> RetainedUploadStats {
-        self.upload_retained_inner(device, queue, prepared, text_state, Some(geometry_writes))
+        self.upload_retained_inner(device, queue, prepared, text_state, Some(upload_writes))
     }
 
     fn upload_retained_inner(
@@ -2383,9 +2445,9 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         prepared: &PreparedRetainedGpuFrame<'_>,
         text_state: &mut RetainedTextGpuState,
-        geometry_writes: Option<&mut Vec<crate::UploadWrite>>,
+        mut upload_writes: Option<&mut Vec<crate::UploadWrite>>,
     ) -> RetainedUploadStats {
-        let geometry = if let Some(writes) = geometry_writes {
+        let geometry = if let Some(writes) = upload_writes.as_deref_mut() {
             self.upload_with_trace(device, queue, &prepared.geometry, writes)
         } else {
             self.upload(device, queue, &prepared.geometry)
@@ -2398,10 +2460,37 @@ impl GpuRenderer {
             prepared.text_generation,
         ) {
             let text_frame = prepared.text.as_prepared_frame();
-            let uploaded = if prepared.text.partial_upload_base_generation.is_some()
+            let partial = prepared.text.partial_upload_base_generation.is_some()
                 && prepared.text.partial_upload_base_generation
-                    == text_state.last_uploaded_generation
-            {
+                    == text_state.last_uploaded_generation;
+            let uploaded = if let Some(writes) = upload_writes.as_deref_mut() {
+                let mut trace = |plane, range, offset, bytes: &[u8]| {
+                    let buffer = match plane {
+                        GlyphAtlasPlane::Mask => "text_mask",
+                        GlyphAtlasPlane::Color => "text_color",
+                    };
+                    push_upload_write(writes, buffer, range, offset, bytes);
+                };
+                if partial {
+                    text_state.glyphs.upload_ranges_with_trace(
+                        device,
+                        queue,
+                        &text_frame,
+                        prepared.text.atlas,
+                        prepared.text.dirty_mask_ranges,
+                        prepared.text.dirty_color_ranges,
+                        &mut trace,
+                    )
+                } else {
+                    text_state.glyphs.upload_with_trace(
+                        device,
+                        queue,
+                        &text_frame,
+                        prepared.text.atlas,
+                        &mut trace,
+                    )
+                }
+            } else if partial {
                 text_state.glyphs.upload_ranges(
                     device,
                     queue,
@@ -2864,6 +2953,68 @@ mod tests {
         assert!(text_upload_needed(None, 1));
         assert!(!text_upload_needed(Some(1), 1));
         assert!(text_upload_needed(Some(1), 2));
+    }
+
+    #[test]
+    fn observed_text_object_reuses_its_existing_glyph_instance_ranges() {
+        let (frame, texts, fonts) = mixed_text_frame();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+
+        let observed = prepared.observe_object(1, ObjectId::new(2)).unwrap();
+        assert!(matches!(
+            observed.kind,
+            RetainedPreparedObjectKind::Text | RetainedPreparedObjectKind::Mixed
+        ));
+        assert_eq!(observed.glyph_ranges.len(), observed.glyph_item_count);
+        assert!(!observed.glyph_ranges.is_empty());
+        for range in &observed.glyph_ranges {
+            assert!(!range.instance_range.is_empty());
+            assert!(prepared.render_items
+                [observed.render_item_start.unwrap()..observed.render_item_end.unwrap()]
+                .iter()
+                .filter_map(|item| {
+                    let RetainedRenderItem::Glyph {
+                        text_item_index, ..
+                    } = item
+                    else {
+                        return None;
+                    };
+                    let PreparedTextItem::GlyphBatch {
+                        plane,
+                        page,
+                        instance_range,
+                        ..
+                    } = &prepared.text.items[*text_item_index]
+                    else {
+                        return None;
+                    };
+                    Some((plane, page, instance_range))
+                })
+                .any(|(plane, page, instance_range)| {
+                    let plane = match plane {
+                        GlyphAtlasPlane::Mask => RetainedGlyphPlane::Mask,
+                        GlyphAtlasPlane::Color => RetainedGlyphPlane::Color,
+                    };
+                    plane == range.plane
+                        && *page == range.page
+                        && instance_range == &range.instance_range
+                }));
+        }
     }
 
     #[test]

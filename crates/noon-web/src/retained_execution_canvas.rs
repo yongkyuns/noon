@@ -331,7 +331,7 @@ mod wasm {
             let prepared_observation = resolved_observation_target.as_ref().map(|target| {
                 prepared.observe_object(target.mirrored.frame_index, target.mirrored.object)
             });
-            let mut geometry_writes = resolved_observation_target
+            let mut upload_writes = resolved_observation_target
                 .is_some()
                 .then(Vec::<UploadWrite>::new);
             let upload = if resolved_observation_target.is_some() {
@@ -340,7 +340,7 @@ mod wasm {
                     &self.queue,
                     &prepared,
                     &mut self.text_gpu,
-                    geometry_writes
+                    upload_writes
                         .as_mut()
                         .expect("resolved observation owns its upload trace"),
                 )
@@ -386,7 +386,7 @@ mod wasm {
                     Ok(target) => finish_renderer_observation(
                         target,
                         prepared_observation.expect("resolved target was prepared"),
-                        geometry_writes.as_deref().unwrap_or_default(),
+                        upload_writes.as_deref().unwrap_or_default(),
                         upload,
                         draw,
                         self.presentation_sequence,

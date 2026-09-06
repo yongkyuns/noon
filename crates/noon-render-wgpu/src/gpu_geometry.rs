@@ -1427,14 +1427,24 @@ fn record_upload_write(
     bytes: &[u8],
 ) {
     if let Some(writes) = writes.as_deref_mut() {
-        writes.push(UploadWrite {
-            buffer,
-            instance_range,
-            byte_offset,
-            byte_length: bytes.len(),
-            payload_hash: payload_hash(bytes),
-        });
+        push_upload_write(writes, buffer, instance_range, byte_offset, bytes);
     }
+}
+
+pub(crate) fn push_upload_write(
+    writes: &mut Vec<UploadWrite>,
+    buffer: &'static str,
+    instance_range: std::ops::Range<usize>,
+    byte_offset: wgpu::BufferAddress,
+    bytes: &[u8],
+) {
+    writes.push(UploadWrite {
+        buffer,
+        instance_range,
+        byte_offset,
+        byte_length: bytes.len(),
+        payload_hash: payload_hash(bytes),
+    });
 }
 
 fn payload_hash(bytes: &[u8]) -> u64 {

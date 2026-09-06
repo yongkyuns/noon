@@ -827,7 +827,7 @@ result = scene
   assert.equal(callbackResult.paused.playing, false);
   assert.equal(callbackResult.advanced.playing, false);
   assert.equal(callbackResult.advanced.time, callbackResult.requestedTime);
-  assert.equal(callbackResult.metrics.objectCount, 2);
+  assert.equal(callbackResult.metrics.objectCount, 3);
   assert.ok(callbackResult.metrics.drawCalls > 0);
   const rendererObservation = callbackResult.rendererObservation;
   const {
@@ -840,11 +840,10 @@ result = scene
   assert.equal(committed.time, callbackResult.requestedTime);
   assert.equal(committed.dirty, "updated");
   assert.equal(committed.presence, true);
-  assert.deepEqual(committed.transform.translation, { x: 1, y: 1 });
-  assert.deepEqual(committed.transform.scale, { x: 1, y: 1 });
+  assert.deepEqual(committed.transform.translation, { x: 1, y: -2 });
   assert.equal(committed.transform.rotation, 0);
   assert.equal(committed.style.fill.alpha, 1);
-  assert.equal(committed.style.opacity, 0.5);
+  assert.equal(committed.style.opacity, 1);
   assert.equal(mirrored.object, committed.object);
   assert.equal(mirrored.frame_index, committed.frame_index);
   assert.equal(mirrored.time, committed.time);
@@ -852,35 +851,37 @@ result = scene
   assert.deepEqual(mirrored.style, committed.style);
   assert.equal(mirrored.presence, committed.presence);
 
-  assert.equal(prepared.kind, "geometry");
-  assert.equal(prepared.primitive, "circle");
-  assert.deepEqual(prepared.transform.translation, [1, 1]);
-  assert.deepEqual(prepared.transform.scale, [1, 1]);
-  assert.equal(prepared.transform.rotation, 0);
-  assert.equal(prepared.style.fill[3], 1);
-  assert.equal(prepared.style.opacity, 0.5);
-  assert.equal(prepared.instance_end, prepared.instance_start + 1);
-  // The geometry fast path draws packed instances directly; it does not build
-  // the mixed text/geometry render-item table.
-  assert.equal(prepared.render_item_start, null);
-  assert.equal(prepared.render_item_end, null);
-  assert.equal(prepared.render_item_count, 1);
-  assert.equal(prepared.glyph_item_count, 0);
+  assert.equal(prepared.kind, "text");
+  assert.equal(prepared.primitive, null);
+  assert.equal(prepared.transform, null);
+  assert.equal(prepared.style, null);
+  assert.equal(prepared.instance_start, null);
+  assert.equal(prepared.instance_end, null);
+  assert.ok(prepared.render_item_end > prepared.render_item_start);
+  assert.equal(prepared.render_item_count, prepared.glyph_item_count);
+  assert.ok(prepared.glyph_item_count > 0);
+  assert.equal(prepared.glyph_ranges.length, prepared.glyph_item_count);
+  assert.ok(prepared.glyph_ranges.every((range) =>
+    ["mask", "color"].includes(range.plane) &&
+    range.instance_end > range.instance_start &&
+    range.instance_dirty === true));
   assert.equal(prepared.full_rebuilds, 0);
-  assert.ok(prepared.instances_repacked > 0);
 
-  assert.equal(upload.target_write.buffer, "circle");
-  assert.ok(upload.target_write.instance_start <= prepared.instance_start);
-  assert.ok(upload.target_write.instance_end >= prepared.instance_end);
-  assert.ok(upload.target_write.byte_length > 0);
-  assert.ok(upload.geometry_bytes_uploaded >= upload.target_write.byte_length);
-  assert.equal(upload.text_bytes_uploaded, 0);
+  assert.equal(upload.target_write, null);
+  assert.ok(upload.target_text_writes.length > 0);
+  assert.ok(upload.target_text_writes.every((write) =>
+    ["text_mask", "text_color"].includes(write.buffer) &&
+    write.instance_end > write.instance_start &&
+    write.byte_length > 0 &&
+    write.payload_hash > 0));
+  assert.ok(upload.text_bytes_uploaded >= upload.target_text_writes
+    .reduce((total, write) => total + write.byte_length, 0));
   assert.equal(upload.buffer_reallocations, 0);
   assert.equal(draw.submission_membership, true);
   assert.ok(draw.geometry_draw_calls > 0);
   assert.ok(draw.geometry_instances_drawn >= 2);
-  assert.equal(draw.text_draw_calls, 0);
-  assert.equal(draw.text_instances_drawn, 0);
+  assert.ok(draw.text_draw_calls > 0);
+  assert.ok(draw.text_instances_drawn > 0);
   assert.ok(["success", "suboptimal"].includes(presentation.surface_status));
   assert.ok(presentation.presentation_sequence > 0);
   assert.equal(presentation.submit_called, true);
@@ -892,12 +893,15 @@ result = scene
   const callbackScreenshot = await page.locator(`#${callbackResult.canvasId}`).screenshot();
   const callbackPixels = {
     animated: visiblePixelStats(callbackScreenshot,
-      (r, g, b, x) => x > 300 && Math.min(r, g, b) > 35),
+      (r, g, b, x, y) => x > 300 && y < 220 && Math.min(r, g, b) > 35),
     drift: visiblePixelStats(callbackScreenshot,
-      (r, g, b, x) => x < 250 && Math.min(r, g, b) > 35),
+      (r, g, b, x, y) => x < 250 && y < 220 && Math.min(r, g, b) > 35),
+    label: visiblePixelStats(callbackScreenshot,
+      (r, g, b, x, y) => x > 300 && x < 430 && y > 230 && Math.min(r, g, b) > 35),
   };
   assert.ok(callbackPixels.animated.count > 500, "ordered callback circle was blank");
   assert.ok(callbackPixels.drift.count > 100, "accumulating callback circle was blank");
+  assert.ok(callbackPixels.label.count > 20, "observed callback text was blank");
   assert.ok(Math.abs(callbackPixels.animated.centerX - 365) < 4, "timeline midpoint x");
   assert.ok(Math.abs(callbackPixels.animated.centerY - 135) < 4, "ordered callback lift y");
   assert.ok(Math.abs(callbackPixels.drift.centerX - 185) < 4, "unowned callback x");

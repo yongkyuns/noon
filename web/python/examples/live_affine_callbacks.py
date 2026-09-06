@@ -7,14 +7,15 @@ property batch through the Pyodide worker boundary. This source deliberately doe
 not seek or replay opaque callbacks: browser execution advances it forward.
 """
 
-from noon import Circle, Scene, WHITE, linear
+from noon import Circle, Scene, Text, WHITE, linear
 
 
 class LiveAffineCallbacks(Scene):
     def construct(self):
+        label = Text("Noon", font_size=48).shift((0.0, -2.0, 0.0))
         animated = Circle(1.0).set_fill(WHITE, opacity=1.0)
         drift = Circle(0.5).set_fill(WHITE, opacity=1.0).shift((-3.0, 0.0, 0.0))
-        self.add(animated, drift)
+        self.add(label, animated, drift)
 
         target = animated.copy().shift((2.0, 0.0, 0.0))
         animation = self.declare_live_transform_to(
@@ -35,6 +36,10 @@ class LiveAffineCallbacks(Scene):
         def accumulate_drift(mobject, dt):
             mobject.shift((0.0, dt, 0.0))
 
+        def accumulate_text(mobject, dt):
+            mobject.shift((dt, 0.0, 0.0))
+
+        label.add_updater(accumulate_text)
         animated.add_updater(lift)
         animated.add_updater(style_after_lift)
         drift.add_updater(accumulate_drift)
