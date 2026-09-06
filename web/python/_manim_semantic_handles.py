@@ -193,6 +193,7 @@ _ORIGINAL_MOVE_TO = _base.Mobject.move_to
 _ORIGINAL_SCALE = _base.Mobject.scale
 _ORIGINAL_ROTATE = _base.Mobject.rotate
 _ORIGINAL_SET_COLOR = _base.Mobject.set_color
+_ORIGINAL_SET_OBJECT_OPACITY = _base.Mobject.set_object_opacity
 _ORIGINAL_NEXT_TO = _base.Mobject.next_to
 _ORIGINAL_ALIGN_TO = _base.Mobject.align_to
 _ORIGINAL_ALIGN_ON_FRAME = _base.Mobject._align_on_frame
@@ -1213,6 +1214,28 @@ def _set_opacity(
     return self
 
 
+def _set_object_opacity(
+    self: _base.Mobject,
+    opacity: float,
+) -> _base.Mobject:
+    """Set the object-composite multiplier, distinct from Manim paint opacity."""
+
+    handle = _mutation_handle_for(self)
+    if handle is None:
+        return _ORIGINAL_SET_OBJECT_OPACITY(self, opacity)
+    alpha = _phase_b._opacity("object opacity", opacity)
+    live_context = _live_mutation_context(self)
+    try:
+        if live_context is not None:
+            live_context.liveSetObjectOpacity(handle, alpha)
+        else:
+            handle.setObjectOpacity(alpha)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    _sync_bound_style(self, handle)
+    return self
+
+
 def _get_fill_opacity(self: _compat.VMobject) -> float:
     handle = _handle_for(self)
     if handle is None:
@@ -1790,6 +1813,7 @@ def install() -> None:
     _base.Mobject.scale = _scale
     _base.Mobject.rotate = _rotate
     _base.Mobject.set_color = _set_color
+    _base.Mobject.set_object_opacity = _set_object_opacity
     _base.Mobject.become = _become
     _base.Mobject.replace = _replace
     _base.Mobject.next_to = _next_to
