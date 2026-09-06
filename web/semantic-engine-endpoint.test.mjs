@@ -28,7 +28,7 @@ function fixture(
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
-  let created = 0, resumed = 0, completedSegments = 0;
+  let created = 0, resumed = 0, completedSegments = 0, drained = 0, committedPhases = 0;
   let initialSnapshots = 0, resourceBundles = 0;
   const nativeInputs = [];
   const continuationDriveTimes = [];
@@ -43,8 +43,8 @@ function fixture(
       time = value;
       return null;
     },
-    drainDeltaJson: () => null,
-    commitCallbackPhaseJson: () => {},
+    drainDeltaJson: () => { drained += 1; return null; },
+    commitCallbackPhaseJson: () => { committedPhases += 1; },
     failCallbackPhaseJson: () => {},
     callbackTerminationJson: () => null,
     tickDeltaJson: () => null,
@@ -59,7 +59,7 @@ function fixture(
     driveLiveSegmentFromWallTime: (wallTime) => {
       continuationDriveTimes.push(wallTime);
       time = 1;
-      return true;
+      return { callbackPhaseJson: null, reachedEndpoint: true };
     },
     completeLiveSegment: () => { completedSegments += 1; },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
@@ -73,7 +73,7 @@ function fixture(
   };
   return { control, render, player, stats: () => ({
     returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
-    initialSnapshots, resourceBundles, continuationDriveTimes,
+    initialSnapshots, resourceBundles, continuationDriveTimes, drained, committedPhases,
   }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
@@ -180,6 +180,61 @@ test("semantic continuation returns one completed player before resuming and ret
     assert.equal(f.stats().returned, 2);
     assert.equal(wakes.at(-1), "idle");
     assert.throws(() => endpoint.startContinuation(8), /stale semantic continuation generation/);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("semantic continuation services Rust callback barriers before endpoint publication", async () => {
+  const callbacks = [];
+  const completions = [];
+  const f = fixture("transferable", async (phase) => {
+    callbacks.push(phase);
+    return JSON.stringify({ token: phase.token, writes: [] });
+  }, {
+    generation: 17,
+    onComplete: (generation) => completions.push(generation),
+    onError: (_generation, error) => { throw error; },
+  });
+  let endpoint;
+  try {
+    let step = 0;
+    f.player.driveLiveSegmentFromWallTime = (wallTime) => {
+      f.stats().continuationDriveTimes.push(wallTime);
+      if (step++ === 0) {
+        return {
+          callbackPhaseJson: JSON.stringify({
+            token: { runtime: 3, publication: { scene: 1 }, sequence: 4 },
+            invocations: [{ callback_id: 9 }],
+          }),
+          reachedEndpoint: false,
+        };
+      }
+      return { callbackPhaseJson: null, reachedEndpoint: true };
+    };
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    await turn();
+    await turn();
+
+    assert.equal(callbacks.length, 1);
+    assert.equal(f.stats().committedPhases, 1);
+    assert.equal(f.stats().completedSegments, 1);
+    assert.deepEqual(completions, [17]);
+    assert.equal(f.stats().drained, 2, "only ready endpoint and completion may publish");
+    assert.equal(f.stats().continuationDriveTimes.length, 2);
+    assert.equal(
+      f.stats().continuationDriveTimes[0],
+      f.stats().continuationDriveTimes[1],
+      "every phase retry preserves the one captured wall timestamp",
+    );
   } finally { endpoint?.stop(); f.close(); }
 });
 

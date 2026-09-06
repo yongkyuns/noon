@@ -335,9 +335,7 @@ class _SemanticContinuationAwaitable:
 
     async def _wait(self) -> _base.Scene:
         try:
-            from js import noonAwaitSemanticContinuation
-
-            await noonAwaitSemanticContinuation(_context(self._scene))
+            await _await_semantic_continuation(self._scene)
             if self._on_complete is not None:
                 self._on_complete()
             return self._scene
@@ -361,6 +359,88 @@ def _require_semantic_continuation_active(scene: _base.Scene) -> None:
     noonRequireSemanticContinuationActive(_context(scene))
 
 
+def _prepare_semantic_continuation_callbacks(
+    scene: _base.Scene, context: object
+) -> None:
+    """Publish Python callable identity before Rust lowers the live session.
+
+    Rust owns callback occurrence selection, phase timing, and the token that
+    accepts this one batch. Python supplies only its existing callable table so
+    a suspended source stack can service a Rust-issued phase without opening a
+    second interpreter turn.
+    """
+
+    import _manim_updaters
+
+    session_id = _manim_updaters.prepare_canonical_callbacks(scene, context)
+    if session_id is None:
+        return
+    from js import noonSetSemanticContinuationCallbackSession
+
+    noonSetSemanticContinuationCallbackSession(context, int(session_id))
+
+
+def _continuation_event(event_json: object) -> dict[str, object]:
+    try:
+        event = json.loads(str(event_json))
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("semantic continuation returned invalid event JSON") from error
+    if not isinstance(event, dict) or not isinstance(event.get("kind"), str):
+        raise RuntimeError("semantic continuation event is missing its kind")
+    return event
+
+
+def _service_semantic_continuation_event(
+    scene: _base.Scene, event_json: object
+) -> object | None:
+    """Service one Rust-issued callback phase on the suspended source stack.
+
+    The returned JavaScript promise resolves to the next Rust event. ``None``
+    means the segment completed and the user construct may continue. This keeps
+    no Python cursor, callback schedule, or phase identity.
+    """
+
+    event = _continuation_event(event_json)
+    kind = event["kind"]
+    if kind == "complete":
+        return None
+    if kind != "callback":
+        raise RuntimeError(f"unsupported semantic continuation event: {kind}")
+    phase = event.get("phase")
+    if not isinstance(phase, dict) or not isinstance(phase.get("token"), dict):
+        raise RuntimeError("semantic continuation callback event is missing its phase token")
+
+    import _manim_updaters
+    from js import (
+        noonCompleteSemanticContinuationCallback,
+        noonFailSemanticContinuationCallback,
+    )
+
+    session_id = _manim_updaters.canonical_callback_session_id(scene)
+    if session_id is None:
+        raise RuntimeError("semantic continuation callback event has no callable session")
+    context = _context(scene)
+    token_json = _json(phase["token"])
+    try:
+        batch_json = _manim_updaters.run_canonical_callback_phase(session_id, phase)
+    except Exception as error:
+        # Failing the exact pending phase latches terminal Rust state. Its
+        # returned promise rejects this suspended construct; no retry occurs.
+        return noonFailSemanticContinuationCallback(context, token_json, str(error))
+    return noonCompleteSemanticContinuationCallback(context, token_json, batch_json)
+
+
+async def _await_semantic_continuation(scene: _base.Scene) -> None:
+    from js import noonAwaitSemanticContinuation
+
+    event_json = await noonAwaitSemanticContinuation(_context(scene))
+    while True:
+        next_event = _service_semantic_continuation_event(scene, event_json)
+        if next_event is None:
+            return
+        event_json = await next_event
+
+
 def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
     """Suspend the current JSPI-enabled Python stack on the worker lease."""
     if not _synchronous_continuation_active(scene):
@@ -368,7 +448,12 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
     from js import noonAwaitSemanticContinuation
     from pyodide.ffi import run_sync
 
-    run_sync(noonAwaitSemanticContinuation(_context(scene)))
+    event_json = run_sync(noonAwaitSemanticContinuation(_context(scene)))
+    while True:
+        next_event = _service_semantic_continuation_event(scene, event_json)
+        if next_event is None:
+            break
+        event_json = run_sync(next_event)
     return scene
 
 
@@ -378,7 +463,9 @@ def _canonical_wait(
     if _semantic_continuation_active(scene):
         try:
             _require_semantic_continuation_active(scene)
-            _context(scene).beginOrdinaryWait(float(duration))
+            context = _context(scene)
+            _prepare_semantic_continuation_callbacks(scene, context)
+            context.beginOrdinaryWait(float(duration))
         except Exception as error:
             raise ValueError(str(error)) from None
         if _async_continuation_active(scene):
@@ -621,6 +708,8 @@ def _play_canonical_affine(
     context = _context(self)
     try:
         _require_semantic_continuation_active(self)
+        if _semantic_continuation_active(self):
+            _prepare_semantic_continuation_callbacks(self, context)
         method = (
             context.beginOrdinaryTransformTo
             if _semantic_continuation_active(self)

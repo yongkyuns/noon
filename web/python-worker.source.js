@@ -72,6 +72,26 @@ async function initializePyodide() {
     return token;
   };
   self.noonAwaitSemanticContinuation = (context) => awaitSemanticContinuation(context);
+  self.noonSetSemanticContinuationCallbackSession = (context, sessionId) => {
+    if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
+      throw new TypeError("semantic continuation callback session must be a non-negative safe integer");
+    }
+    if (activeAuthoringRun === null) {
+      throw new Error("semantic continuation callback session requires an active Python authoring run");
+    }
+    const existing = activeAuthoringRun.continuationCallbackSession;
+    if (existing !== null && (existing.context !== context || existing.sessionId !== sessionId)) {
+      throw new Error("semantic continuation callback session changed during authoring");
+    }
+    if (activeAuthoringRun.continuation !== null && activeAuthoringRun.continuation.context !== context) {
+      throw new Error("semantic continuation callback session belongs to another context");
+    }
+    activeAuthoringRun.continuationCallbackSession = { context, sessionId };
+  };
+  self.noonCompleteSemanticContinuationCallback = (context, tokenJson, patchBatchJson) =>
+    completeContinuationCallback(context, tokenJson, patchBatchJson);
+  self.noonFailSemanticContinuationCallback = (context, tokenJson, message) =>
+    failContinuationCallback(context, tokenJson, message);
   self.noonSemanticContinuationGeneration = (context) => {
     const continuation = activeAuthoringRun?.continuation;
     return continuation?.context === context ? continuation.generation : undefined;
@@ -306,9 +326,18 @@ function registerContinuationContext(context) {
     return activeAuthoringRun.continuation;
   }
   context.prepareExecutionRun();
+  const callbackSession = activeAuthoringRun.continuationCallbackSession;
+  if (callbackSession !== null && callbackSession.context !== context) {
+    throw new Error("semantic continuation callback session belongs to another context");
+  }
   const contextId = `semantic-${nextSemanticContext++}`;
   const generation = nextContinuationGeneration++;
-  const entry = { context, endpoints: new Set(), released: false };
+  const entry = {
+    context,
+    endpoints: new Set(),
+    released: false,
+    ...(callbackSession === null ? {} : { callbackSessionId: callbackSession.sessionId }),
+  };
   const continuation = {
     context,
     contextId,
@@ -316,6 +345,7 @@ function registerContinuationContext(context) {
     runRequestId: activeAuthoringRun.requestId,
     endpoint: null,
     pending: null,
+    callbackRequest: null,
     terminal: false,
   };
   semanticContexts.set(contextId, entry);
@@ -326,6 +356,7 @@ function registerContinuationContext(context) {
     semanticExecution: {
       context_id: contextId,
       continuation_generation: generation,
+      ...(callbackSession === null ? {} : { callback_session_id: callbackSession.sessionId }),
     },
     duration: Number(context.liveHandoffDuration()),
   });
@@ -358,19 +389,100 @@ function awaitSemanticContinuation(context) {
   return result;
 }
 
+function continuationEvent(kind, value = {}) {
+  return JSON.stringify({ kind, ...value });
+}
+
+function requestContinuationCallback(continuation, phase) {
+  if (continuation.terminal || continuation.pending === null) {
+    return Promise.reject(new Error("required callback reached a continuation without a suspended source"));
+  }
+  if (continuation.callbackRequest !== null) {
+    return Promise.reject(new Error("semantic continuation already has a required callback request"));
+  }
+  let phaseTokenJson;
+  try {
+    phaseTokenJson = JSON.stringify(phase?.token);
+  } catch (error) {
+    return Promise.reject(new Error(`canonical callback phase token is not serializable: ${error}`));
+  }
+  if (phaseTokenJson === undefined) {
+    return Promise.reject(new Error("canonical callback phase is missing its token"));
+  }
+  return new Promise((resolve, reject) => {
+    continuation.callbackRequest = { phaseTokenJson, resolve, reject };
+    const pending = continuation.pending;
+    continuation.pending = null;
+    pending.resolve(continuationEvent("callback", { phase }));
+  });
+}
+
+function continuationCallbackRequest(context, tokenJson) {
+  const continuation = activeAuthoringRun?.continuation;
+  if (!continuation || continuation.context !== context || continuation.terminal ||
+      continuation.callbackRequest === null) {
+    throw new Error("semantic continuation has no pending required callback");
+  }
+  if (typeof tokenJson !== "string" || tokenJson !== continuation.callbackRequest.phaseTokenJson) {
+    throw new Error("semantic continuation callback token is stale");
+  }
+  return continuation;
+}
+
+function awaitContinuationEvent(continuation) {
+  if (continuation.terminal) {
+    return Promise.reject(new Error("semantic continuation is terminal"));
+  }
+  if (continuation.pending !== null) {
+    return Promise.reject(new Error("semantic continuation already has a pending await"));
+  }
+  return new Promise((resolve, reject) => {
+    continuation.pending = { resolve, reject };
+  });
+}
+
+function completeContinuationCallback(context, tokenJson, patchBatchJson) {
+  if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
+    throw new TypeError("semantic continuation callback result must be non-empty JSON");
+  }
+  const continuation = continuationCallbackRequest(context, tokenJson);
+  const callback = continuation.callbackRequest;
+  const next = awaitContinuationEvent(continuation);
+  continuation.callbackRequest = null;
+  callback.resolve(patchBatchJson);
+  return next;
+}
+
+function failContinuationCallback(context, tokenJson, message) {
+  if (typeof message !== "string" || message.trim() === "") {
+    throw new TypeError("semantic continuation callback failure requires a message");
+  }
+  const continuation = continuationCallbackRequest(context, tokenJson);
+  const callback = continuation.callbackRequest;
+  const next = awaitContinuationEvent(continuation);
+  continuation.callbackRequest = null;
+  callback.reject(new Error(message));
+  return next;
+}
+
 function completeContinuation(continuation, generation) {
   if (continuation.terminal || generation !== continuation.generation ||
-      continuation.pending === null) {
+      continuation.pending === null || continuation.callbackRequest !== null) {
     throw new Error("stale semantic continuation completion");
   }
   const { resolve } = continuation.pending;
   continuation.pending = null;
-  resolve();
+  resolve(continuationEvent("complete"));
 }
 
 function failContinuation(continuation, error) {
   if (continuation.terminal) return;
   continuation.terminal = true;
+  if (continuation.callbackRequest !== null) {
+    const { reject } = continuation.callbackRequest;
+    continuation.callbackRequest = null;
+    reject(error instanceof Error ? error : new Error(String(error)));
+  }
   if (continuation.pending !== null) {
     const { reject } = continuation.pending;
     continuation.pending = null;
@@ -425,7 +537,7 @@ async function handleRequest(request) {
     requestId = request.requestId;
     const pyodide = await pyodidePromise;
     if (request.type === "run") {
-      const run = { requestId, continuation: null };
+      const run = { requestId, continuation: null, continuationCallbackSession: null };
       activeAuthoringRun = run;
       let completed = false;
       try {
@@ -504,9 +616,6 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
         continuation.terminal) {
       throw new Error("stale semantic continuation attachment");
     }
-    if (request.callbackSessionId !== null && request.callbackSessionId !== undefined) {
-      throw new Error("ordinary asynchronous continuation does not support Python callbacks");
-    }
     if (continuation.endpoint !== null) {
       throw new Error("semantic continuation endpoint is already attached");
     }
@@ -521,6 +630,8 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
   }
   const runRequiredCallbackPhase = entry.callbackSessionId === undefined
     ? null
+    : continuationOnly
+    ? (frame) => requestContinuationCallback(continuation, frame)
     : (frame) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame);
   let endpoint;
   endpoint = await attachSemanticEngine(

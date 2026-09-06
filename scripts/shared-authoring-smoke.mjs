@@ -684,6 +684,101 @@ try {
     window.sharedAuthoringSmoke.liveContinuationExecution = null;
   });
 
+  // A required callback phase is delivered to the already-suspended async
+  // source stack. Rust selects the phase and timing; Python returns one exact
+  // batch before the endpoint drives the same segment again. The user source
+  // remains pending until the completed player is returned.
+  const callbackContinuationSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_affine_callback_continuation.py"),
+    "utf8",
+  );
+  const callbackContinuation = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-ordinary-affine-callback-continuation";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let execution = null;
+    let registration = null;
+    let settled = false;
+    const authoredPromise = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(next) {
+        if (registration !== null) {
+          throw new Error("callback continuation source registered more than one semantic context");
+        }
+        registration = next;
+        execution = new harness.AuthoringExecutionClient(canvas);
+        harness.callbackContinuationExecution = execution;
+        await execution.startSemanticExecution(next.semanticExecution, {
+          authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, next.duration),
+          transportMode: "transferable",
+        });
+      },
+    });
+    authoredPromise.then(() => { settled = true; }, () => {});
+    harness.callbackContinuationAuthoredPromise = authoredPromise;
+
+    let midpoint = null;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (execution !== null && !settled) {
+        try {
+          const state = await execution.state();
+          if (state.time > 0.15 && state.time < 0.8) {
+            midpoint = state;
+            break;
+          }
+        } catch {
+          // The player may be returned only after a coherent segment endpoint.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (midpoint === null || settled) {
+      throw new Error("callback continuation source did not remain suspended at a live midpoint");
+    }
+    return { canvasId: canvas.id, midpoint };
+  }, callbackContinuationSource);
+  const callbackContinuationMidpointPixels = visiblePixelStats(
+    await page.locator(`#${callbackContinuation.canvasId}`).screenshot(),
+    (red, green, blue) => blue > red + 20 && blue > green + 10,
+  );
+  assert.ok(callbackContinuationMidpointPixels.count > 100, "callback continuation midpoint was blank");
+  assert.ok(
+    callbackContinuationMidpointPixels.centerX > 325 && callbackContinuationMidpointPixels.centerX < 410,
+    `callback continuation did not show a live affine midpoint: ${JSON.stringify(callbackContinuationMidpointPixels)}`,
+  );
+  assert.ok(
+    Math.abs(callbackContinuationMidpointPixels.centerY - 135) < 5,
+    "ordered callback did not lift the continuation circle",
+  );
+  const callbackContinuationResult = await page.evaluate(async () => {
+    const harness = window.sharedAuthoringSmoke;
+    const authored = await harness.callbackContinuationAuthoredPromise;
+    const metrics = (await harness.callbackContinuationExecution.metrics()).metrics;
+    return { authored, metrics };
+  });
+  assert.equal(callbackContinuationResult.authored.duration, 1);
+  assert.ok(
+    Number.isSafeInteger(callbackContinuationResult.authored.semanticExecution.callbackSessionId),
+    "callback continuation must retain the existing host callable session",
+  );
+  assert.equal(callbackContinuationResult.authored.document, undefined);
+  assert.equal(callbackContinuationResult.metrics.objectCount, 1);
+  const callbackContinuationFinalPixels = visiblePixelStats(
+    await page.locator(`#${callbackContinuation.canvasId}`).screenshot(),
+    (red, green, blue) => blue > red + 20 && blue > green + 10,
+  );
+  assert.ok(callbackContinuationFinalPixels.count > 100, "callback continuation endpoint was blank");
+  assert.ok(Math.abs(callbackContinuationFinalPixels.centerX - 410) < 5, "callback continuation endpoint x");
+  assert.ok(Math.abs(callbackContinuationFinalPixels.centerY - 135) < 5, "callback continuation ordered lift");
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.callbackContinuationExecution.terminate();
+    window.sharedAuthoringSmoke.callbackContinuationExecution = null;
+    window.sharedAuthoringSmoke.callbackContinuationAuthoredPromise = null;
+  });
+
   // A normal def construct opts into experimental Pyodide JSPI stack switching.
   // Its source promise remains pending while the same continuation endpoint owns
   // the Rust player and publishes a real intermediate frame.

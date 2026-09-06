@@ -35,6 +35,17 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.doesNotMatch(lane, /runPythonAsync/);
 });
 
+test("semantic continuation delivers required callback work to its suspended source", () => {
+  assert.match(source, /noonSetSemanticContinuationCallbackSession/);
+  assert.match(source, /noonCompleteSemanticContinuationCallback/);
+  assert.match(source, /noonFailSemanticContinuationCallback/);
+  assert.match(source, /continuation\.callbackRequest/);
+  assert.match(source, /pending\.resolve\(continuationEvent\("callback",\s*\{ phase \}\)\)/);
+  assert.match(source, /callback\.resolve\(patchBatchJson\)/);
+  assert.match(source, /callback\.reject\(new Error\(message\)\)/);
+  assert.match(source, /continuationOnly\s*\?\s*\(frame\)\s*=>\s*requestContinuationCallback/);
+});
+
 test("worker delegates every Scene construct lifecycle to the canonical adapter", () => {
   const authoring = source.slice(
     source.indexOf("async function runAuthoringSource"),

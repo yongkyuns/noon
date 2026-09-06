@@ -245,24 +245,60 @@ export async function attachSemanticEngine(
       emitContinuationWake(cadence, timerAfterMilliseconds);
       return;
     }
-    const reachedEndpoint = player.driveLiveSegmentFromWallTime(wallTime);
-    const endpointPublication = send(player.drainDeltaJson());
-    if (!reachedEndpoint) {
-      observeContinuationWake(wallTime, true);
+
+    // Rust chooses every barrier and retains the exact phase token. The source
+    // stack merely services it, then this loop asks Rust to continue with the
+    // same wall timestamp. It is deliberately not a JavaScript time cursor.
+    const phaseTokens = new Set();
+    let phaseCount = 0;
+    while (!stopped && continuationActive && player !== null) {
+      const drive = player.driveLiveSegmentFromWallTime(wallTime);
+      if (drive === null || typeof drive !== "object") {
+        throw new Error("semantic continuation drive returned an invalid result");
+      }
+      const phaseJson = drive.callbackPhaseJson;
+      const reachedEndpoint = drive.reachedEndpoint === true;
+      drive.free?.();
+
+      if (phaseJson !== null && phaseJson !== undefined) {
+        const result = await publishCallbackPhase(phaseJson, {
+          emitDelta: false,
+          onPhaseToken(token) {
+            if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE) {
+              throw new Error("semantic continuation exceeded its callback phase bound");
+            }
+            if (phaseTokens.has(token)) {
+              throw new Error("semantic continuation repeated a callback phase token");
+            }
+            phaseTokens.add(token);
+            phaseCount += 1;
+          },
+        });
+        if (result.interrupted) return;
+        continue;
+      }
+      if (!reachedEndpoint) {
+        observeContinuationWake(wallTime, true);
+        return;
+      }
+
+      const endpointPublication = send(player.drainDeltaJson());
+
+      emitContinuationWake("idle", null, true);
+      await awaitPresentation(endpointPublication);
+      if (stopped || player === null || !continuationActive) return;
+      player.completeLiveSegment();
+      const completionPublication = send(player.drainDeltaJson());
+      await awaitPresentation(completionPublication);
+      if (stopped || player === null || !continuationActive) return;
+      const completedPlayer = player;
+      player = null;
+      continuationActive = false;
+      context.returnExecutionPlayer(completedPlayer);
+      emitContinuationWake("idle", null);
+      continuation?.onComplete(continuationGeneration);
       return;
     }
-
-    emitContinuationWake("idle", null, true);
-    await awaitPresentation(endpointPublication);
-    player.completeLiveSegment();
-    const completionPublication = send(player.drainDeltaJson());
-    await awaitPresentation(completionPublication);
-    const completedPlayer = player;
-    player = null;
-    continuationActive = false;
-    context.returnExecutionPlayer(completedPlayer);
-    emitContinuationWake("idle", null);
-    continuation?.onComplete(continuationGeneration);
   }
 
   async function drain() {
