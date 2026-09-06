@@ -18,6 +18,7 @@ const {
   createDirectOrdinaryDifferentRotationsSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
+  createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
   createDirectOrdinarySuccessionSmokeRenderer,
   createDirectOrdinaryUncreatePlaySmokeRenderer,
   createDirectTypstTextSmokeRenderer,
@@ -97,8 +98,18 @@ async function directLivePrimitiveConstructionProof(expectedBackend) {
     }
     await presentDirectFrame(renderer);
     const before = renderer.objectCount();
+    const initialAnchor = await sampleRenderedColor(canvas, 0, 0);
+    const initialCircle = await sampleRenderedColor(canvas, 2, -1);
+    const initialSquare = await sampleRenderedColor(canvas, -2, 1);
+    if (initialAnchor.red < 150 || initialAnchor.green < 150 || initialAnchor.blue < 150 ||
+        initialCircle.red + initialCircle.green + initialCircle.blue > 90 ||
+        initialSquare.red + initialSquare.green + initialSquare.blue > 90) {
+      throw new Error(`direct primitive construction rendered detached paint before admission: ${JSON.stringify({ initialAnchor, initialCircle, initialSquare })}`);
+    }
     renderer.advanceDirectRealtime(1000);
     const finalDirective = await settleDirectPublication(renderer, 1000);
+    const finalCircle = await sampleRenderedColor(canvas, 2, -1);
+    const finalSquare = await sampleRenderedColor(canvas, -2, 1);
     const metrics = {
       backend: renderer.rendererBackend(),
       before,
@@ -106,9 +117,18 @@ async function directLivePrimitiveConstructionProof(expectedBackend) {
       drawCalls: renderer.lastDrawCalls(),
       time: renderer.time(),
       cadence: finalDirective.cadence,
+      initialAnchor,
+      initialCircle,
+      initialSquare,
+      finalCircle,
+      finalSquare,
     };
     if (metrics.backend !== expectedBackend || metrics.before !== 1 || metrics.after !== 3 ||
-        metrics.drawCalls <= 0 || metrics.time !== 1 || metrics.cadence !== "idle") {
+        metrics.drawCalls <= 0 || metrics.time !== 1 || metrics.cadence !== "idle" ||
+        metrics.finalCircle.blue <= metrics.finalCircle.red + 25 ||
+        metrics.finalCircle.blue <= metrics.finalCircle.green + 10 ||
+        metrics.finalSquare.green <= metrics.finalSquare.red + 20 ||
+        metrics.finalSquare.green <= metrics.finalSquare.blue + 5) {
       throw new Error(`direct primitive construction did not publish its final admitted frame: ${JSON.stringify(metrics)}`);
     }
     return metrics;
