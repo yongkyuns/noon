@@ -61,6 +61,7 @@ enum PreparedAnimationLifecycle {
     AffineRemove {
         root: SemanticNodeId,
         target: SemanticNodeId,
+        admitted: bool,
     },
 }
 
@@ -88,8 +89,16 @@ impl PreparedAnimationLifecycle {
 
     const fn removal(self) -> Option<(SemanticNodeId, SemanticNodeId)> {
         match self {
-            Self::AffineRemove { root, target } => Some((root, target)),
+            Self::AffineRemove { root, target, .. } => Some((root, target)),
             Self::Introduce(_) | Self::FadeOut(_) => None,
+        }
+    }
+
+    const fn admits(self) -> bool {
+        match self {
+            Self::Introduce(_) => true,
+            Self::AffineRemove { admitted, .. } => admitted,
+            Self::FadeOut(_) => false,
         }
     }
 }
@@ -1489,13 +1498,27 @@ impl ExecutionSession {
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
-        let membership_direction = match direction {
-            SemanticAffineLifecycleDirection::IntroduceFrom => SemanticFadeDirection::In,
-            SemanticAffineLifecycleDirection::RemoveTo => SemanticFadeDirection::Out,
+        let admitted = match direction {
+            SemanticAffineLifecycleDirection::IntroduceFrom => {
+                self.require_fade_target(store, root, target, SemanticFadeDirection::In)?;
+                true
+            }
+            SemanticAffineLifecycleDirection::RemoveTo => {
+                match self.require_fade_target(store, root, target, SemanticFadeDirection::Out) {
+                    Ok(()) => false,
+                    Err(ExecutionSessionAnimationError::FadeTarget {
+                        error: ExecutionSessionFadeError::TargetIsNotDirectRootMember,
+                        ..
+                    }) => {
+                        self.require_fade_target(store, root, target, SemanticFadeDirection::In)?;
+                        true
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
         };
-        self.require_fade_target(store, root, target, membership_direction)?;
         let mut declaration = SemanticMutationTransaction::new();
-        if direction == SemanticAffineLifecycleDirection::IntroduceFrom {
+        if admitted {
             declaration.add_member(root, target);
         }
         let animation =
@@ -1510,7 +1533,11 @@ impl ExecutionSession {
                     PreparedAnimationLifecycle::Introduce(root)
                 }
                 SemanticAffineLifecycleDirection::RemoveTo => {
-                    PreparedAnimationLifecycle::AffineRemove { root, target }
+                    PreparedAnimationLifecycle::AffineRemove {
+                        root,
+                        target,
+                        admitted,
+                    }
                 }
             }),
         )
@@ -1822,7 +1849,7 @@ impl ExecutionSession {
             next_track_id = raw_id.checked_add(1);
         }
 
-        if matches!(lifecycle, Some(PreparedAnimationLifecycle::Introduce(_))) {
+        if lifecycle.is_some_and(PreparedAnimationLifecycle::admits) {
             let existing_tracks = definitions
                 .iter()
                 .filter(|definition| self.runtime.contains_object(definition.object))

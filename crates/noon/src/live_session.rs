@@ -660,7 +660,11 @@ impl<'a> LiveSession<'a> {
                         "effective-center lifecycle endpoints require a live removal target".into(),
                     ));
                 }
-                let center = self.effective_layout(target)?.center;
+                let center = if self.contains(target)? {
+                    self.effective_layout(target)?.center
+                } else {
+                    target.center().map_err(LiveSessionError::Mobject)?
+                };
                 SemanticAffineLifecycleEndpoint {
                     point: SemanticVec3::new(center.0, center.1, 0.0),
                     rotation_offset: 0.0,
@@ -1810,6 +1814,75 @@ mod tests {
         live.complete_segment(shrink).unwrap();
         assert!(!live.contains(&square).unwrap());
         assert_eq!(square.state().unwrap(), authored);
+    }
+
+    #[test]
+    fn detached_effective_center_removal_admits_and_removes_one_identity_atomically() {
+        let scene = Scene::new();
+        let mut square = scene.square(1.0).unwrap();
+        square.set_translation(2.0, -1.0).unwrap();
+        let semantic_id = square.node_id();
+        let authored = square.state().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before_revision = session.publication_context().scene_revision();
+        let mut live = scene.live(&mut session);
+
+        let segment = live
+            .declare_and_activate_affine_lifecycle(
+                &square,
+                AffineLifecycleDirection::RemoveTo,
+                AffineLifecycleEndpoint::EffectiveCenter,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(square.node_id(), semantic_id);
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(live.authored(&square).unwrap(), authored);
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before_revision.checked_next().unwrap()
+        );
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        assert!(live.contains(&square).unwrap());
+        live.complete_segment(segment).unwrap();
+        assert!(!live.contains(&square).unwrap());
+        assert_eq!(square.node_id(), semantic_id);
+        assert_eq!(square.state().unwrap(), authored);
+    }
+
+    #[test]
+    fn invalid_detached_affine_removal_does_not_admit_or_publish() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = square.store().borrow().len();
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_affine_lifecycle(
+                &square,
+                AffineLifecycleDirection::RemoveTo,
+                AffineLifecycleEndpoint::Point {
+                    x: f64::NAN,
+                    y: 0.0,
+                    rotation_offset: 0.0,
+                    point_color: None,
+                },
+                AnimationOptions::new().run_time(1.0),
+            );
+
+        assert!(matches!(result, Err(LiveSessionError::Activation(_))));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(square.store().borrow().len(), before_nodes);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
     }
 
     #[test]
