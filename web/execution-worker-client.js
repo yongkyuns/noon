@@ -199,6 +199,10 @@ export class ExecutionWorkerClient {
     const continuationGeneration = validateOptionalContinuationGeneration(
       options.continuationGeneration,
     );
+    const initiallyPaused = validateInitiallyPaused(options.initiallyPaused);
+    if (initiallyPaused && continuationGeneration !== null) {
+      throw new Error("source-owned semantic continuations cannot start paused");
+    }
     if (this.#renderWorker === null) {
       await this.prepare({ transportMode, sharedSlotCapacity });
     }
@@ -214,6 +218,7 @@ export class ExecutionWorkerClient {
       validateLoopDurationSeconds(loopDurationSeconds),
       callbackSessionId,
       continuationGeneration,
+      initiallyPaused,
     );
   }
 
@@ -223,6 +228,7 @@ export class ExecutionWorkerClient {
     loopDurationSeconds,
     callbackSessionId,
     continuationGeneration,
+    initiallyPaused,
   ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
@@ -264,6 +270,7 @@ export class ExecutionWorkerClient {
           this.#session,
           callbackSessionId,
           continuationGeneration,
+          initiallyPaused,
         ),
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
@@ -281,7 +288,7 @@ export class ExecutionWorkerClient {
       this.#semanticCallbackSessionId = callbackSessionId;
       this.#hostAuthoringClient = null;
       this.#hostCallbacks = null;
-      this.#playing = true;
+      this.#playing = !initiallyPaused;
       this.#fatalOwner = null;
       return ready;
     } catch (error) {
@@ -511,12 +518,14 @@ export class ExecutionWorkerClient {
     session,
     callbackSessionId = null,
     continuationGeneration = null,
+    initiallyPaused = false,
   ) {
     const options = {
       transportMode: this.#transportMode,
       sharedSlotCapacity: this.#sharedSlotCapacity,
       loopDurationSeconds,
       session,
+      initiallyPaused,
     };
     if (callbackSessionId !== null) options.callbackSessionId = callbackSessionId;
     if (continuationGeneration !== null) {
@@ -648,7 +657,13 @@ export class ExecutionWorkerClient {
         contextId,
         control.port2,
         render.port1,
-        this.#semanticAttachmentOptions(duration, nextSession, callbackSessionId),
+        this.#semanticAttachmentOptions(
+          duration,
+          nextSession,
+          callbackSessionId,
+          null,
+          !wasPlaying,
+        ),
       );
       [candidateReady] = await Promise.all([candidateReadyPromise, attached]);
       this.#assertLifecycleCurrent(generation);
@@ -698,11 +713,7 @@ export class ExecutionWorkerClient {
       }));
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
-      this.#playing = true;
-      if (!wasPlaying) {
-        const paused = await this.#requestEngine("pause", {});
-        this.#rememberPlaying(paused);
-      }
+      this.#playing = wasPlaying;
       this.#mode = EXECUTION_MODE_SEMANTIC;
       this.#sceneJson = null;
       this.#sceneSpecJson = null;
@@ -1204,6 +1215,7 @@ export class ExecutionWorkerClient {
           transportMode,
           sharedSlotCapacity,
           callbackSessionId: semanticCallbackSessionId,
+          initiallyPaused: !wasPlaying,
           })
         : await this.#startMode(
             mode,
@@ -1211,7 +1223,7 @@ export class ExecutionWorkerClient {
             { loopDurationSeconds, transportMode, sharedSlotCapacity },
             sceneSpecJson,
           );
-    if (!wasPlaying) {
+    if (!wasPlaying && mode !== EXECUTION_MODE_SEMANTIC) {
       const paused = await this.#requestEngine("pause", {});
       this.#rememberPlaying(paused);
     }
@@ -1801,6 +1813,14 @@ function validateOptionalContinuationGeneration(generation) {
     throw new TypeError("semantic continuation generation must be a positive safe integer");
   }
   return generation;
+}
+
+function validateInitiallyPaused(initiallyPaused) {
+  if (initiallyPaused === null || initiallyPaused === undefined) return false;
+  if (typeof initiallyPaused !== "boolean") {
+    throw new TypeError("initiallyPaused must be a boolean");
+  }
+  return initiallyPaused;
 }
 
 function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {

@@ -180,6 +180,7 @@ export class AuthoringExecutionClient {
       loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
       transportMode = undefined,
       sharedSlotCapacity = undefined,
+      initiallyPaused = false,
     } = {},
   ) {
     if (this.#player !== null || this.#transition !== null) {
@@ -187,11 +188,18 @@ export class AuthoringExecutionClient {
     }
     const semantic = validateSemanticExecutionDescriptor(descriptor);
     validateSemanticAuthoringClient(authoringClient);
+    if (typeof initiallyPaused !== "boolean") {
+      throw new TypeError("initiallyPaused must be a boolean");
+    }
+    if (initiallyPaused && semantic.continuationGeneration !== null) {
+      throw new Error("source-owned semantic continuations cannot start paused");
+    }
     this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
     this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
     const options = {
       loopDurationSeconds: this.#loopDurationSeconds,
       sharedSlotCapacity: this.#sharedSlotCapacity,
+      initiallyPaused,
     };
     if (transportMode !== undefined) {
       options.transportMode = transportMode;

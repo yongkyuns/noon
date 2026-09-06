@@ -24,6 +24,7 @@ function fixture(
   transportMode = "transferable",
   runRequiredCallbackPhase = null,
   continuation = null,
+  requestOptions = {},
 ) {
   const control = new MessageChannel();
   const render = new MessageChannel();
@@ -81,7 +82,7 @@ function fixture(
   }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
-      loopDurationSeconds: 2, transportMode,
+      loopDurationSeconds: 2, transportMode, ...requestOptions,
     }, () => { stopped += 1; }, runRequiredCallbackPhase, continuation),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
@@ -181,6 +182,38 @@ test("semantic producer installs mixed resources before its retained snapshot an
     assert.equal(f.stats().returnedPlayer, f.player);
     assert.equal(f.stats().stopped, 1);
   } finally { f.close(); }
+});
+
+test("initially paused semantic execution presents time zero without automatic advancement", async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  let endpoint;
+  try {
+    f.player.tickCallbackPhaseJson = (timestamp) => {
+      if (f.player.isPlaying()) f.player.seekDeltaJson(timestamp / 1_000);
+      return null;
+    };
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const delta = await initial;
+    assert.equal(JSON.parse(decodeTransferableExecutionDelta(delta).json).time, 0);
+    assert.equal(f.player.isPlaying(), false);
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: delta.session,
+      sequence: delta.sequence,
+    });
+
+    f.render.port2.postMessage({ type: "tick", timestamp: 500 });
+    await turn();
+    await turn();
+    assert.equal(f.player.time(), 0, "renderer wakes must not advance an initially paused player");
+
+    const advanced = await request(f.control.port2, "advance_to", 79, { time: 0.25 });
+    assert.equal(advanced.time, 0.25);
+    assert.equal(advanced.playing, false);
+  } finally { endpoint?.stop(); f.close(); }
 });
 
 test("semantic continuation returns one completed player before resuming and retakes it later", async () => {
@@ -1053,10 +1086,14 @@ test("shared setup cannot expose a snapshot before its resource bundle", async (
 test("required initial callback withholds the first delta until its exact batch commits", async () => {
   let resolvePhase;
   const phase = new Promise((resolve) => { resolvePhase = resolve; });
-  const f = fixture("transferable", () => phase);
+  const f = fixture("transferable", () => phase, null, { initiallyPaused: true });
   let committed = 0;
+  let callbackObservedPaused = false;
   try {
-    f.player.initialCallbackPhaseJson = () => JSON.stringify({ token: { sequence: "0" } });
+    f.player.initialCallbackPhaseJson = () => {
+      callbackObservedPaused = !f.player.isPlaying();
+      return JSON.stringify({ token: { sequence: "0" } });
+    };
     f.player.commitCallbackPhaseJson = (batch) => {
       assert.equal(batch, "{\"token\":{\"sequence\":\"0\"},\"writes\":[]}");
       committed += 1;
@@ -1070,6 +1107,7 @@ test("required initial callback withholds the first delta until its exact batch 
     await turn();
     assert.equal(early, false);
     assert.equal(committed, 0);
+    assert.equal(callbackObservedPaused, true);
     resolvePhase("{\"token\":{\"sequence\":\"0\"},\"writes\":[]}");
     const endpoint = await attached;
     assert.equal(committed, 1);

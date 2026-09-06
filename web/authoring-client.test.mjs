@@ -454,6 +454,7 @@ test("semantic execution attachment transfers distinct control and render ports"
       sharedSlotCapacity: 1024,
       loopDurationSeconds: 3,
       session: 4,
+      initiallyPaused: true,
     },
   );
   await Promise.resolve();
@@ -463,6 +464,7 @@ test("semantic execution attachment transfers distinct control and render ports"
   assert.equal(request.controlPort, control.port1);
   assert.equal(request.renderPort, render.port1);
   assert.equal(request.session, 4);
+  assert.equal(request.initiallyPaused, true);
   worker.emit(
     "message",
     workerMessage("semantic_execution_attached", { requestId: request.requestId }),

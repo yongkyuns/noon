@@ -128,6 +128,7 @@ export class PythonAuthoringClient {
       session,
       callbackSessionId = null,
       continuationGeneration = null,
+      initiallyPaused = false,
     },
   ) {
     validateSemanticExecutionContextId(contextId);
@@ -154,6 +155,12 @@ export class PythonAuthoringClient {
         (!Number.isSafeInteger(continuationGeneration) || continuationGeneration <= 0)) {
       throw new TypeError("semantic continuation generation must be a positive safe integer");
     }
+    if (typeof initiallyPaused !== "boolean") {
+      throw new TypeError("initiallyPaused must be a boolean");
+    }
+    if (initiallyPaused && continuationGeneration !== null) {
+      throw new Error("source-owned semantic continuations cannot start paused");
+    }
     const continuation = continuationGeneration === null
       ? null
       : this.#matchingContinuation(contextId, continuationGeneration);
@@ -169,6 +176,7 @@ export class PythonAuthoringClient {
       sharedSlotCapacity,
       loopDurationSeconds,
       session,
+      initiallyPaused,
     };
     if (callbackSessionId !== null) payload.callbackSessionId = callbackSessionId;
     if (continuationGeneration !== null) {

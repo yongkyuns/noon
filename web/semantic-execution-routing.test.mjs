@@ -182,7 +182,7 @@ test("semantic startup uses context-owned ports without constructing an engine w
   const render = await prepare(client);
   const started = client.startSemanticExecution(
     { contextId: "semantic-1" },
-    { authoringClient: authoring, loopDurationSeconds: 2 },
+    { authoringClient: authoring, loopDurationSeconds: 2, initiallyPaused: true },
   );
   await Promise.resolve();
   replyRender(render, "start_engine", "engine_started", { mode: "legacy" });
@@ -192,6 +192,7 @@ test("semantic startup uses context-owned ports without constructing an engine w
   assert.equal(ready.session, 1);
   assert.equal(authoring.attachments.length, 1);
   assert.equal(authoring.attachments[0].options.session, 1);
+  assert.equal(authoring.attachments[0].options.initiallyPaused, true);
   assert.equal(authoring.attachments[0].controlPort === authoring.attachments[0].renderPort, false);
   assert.deepEqual(
     FakeWorker.instances.map(({ name }) => name),
@@ -210,6 +211,22 @@ test("semantic startup uses context-owned ports without constructing an engine w
   assert.equal(observedAdvance.time, 1.25);
   assert.equal(observedAdvance.observeRenderer, true);
   assert.equal((await client.resume()).playing, true);
+  client.terminate();
+});
+
+test("initially paused startup rejects a source-owned continuation before attachment", async () => {
+  FakeWorker.instances.length = 0;
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new AuthoringExecutionClient(new FakeCanvas());
+  await assert.rejects(
+    client.startSemanticExecution(
+      { contextId: "semantic-continuation", continuationGeneration: 7 },
+      { authoringClient: authoring, initiallyPaused: true },
+    ),
+    /source-owned semantic continuations cannot start paused/,
+  );
+  assert.equal(authoring.attachments.length, 0);
+  assert.deepEqual(FakeWorker.instances, []);
   client.terminate();
 });
 
@@ -481,7 +498,7 @@ test("semantic renderer recovery reattaches the same token with a fresh session"
   const firstRender = await prepare(client);
   const initial = client.startSemanticExecution(
     { contextId: "semantic-6" },
-    { authoringClient: authoring },
+    { authoringClient: authoring, initiallyPaused: true },
   );
   await Promise.resolve();
   replyRender(firstRender, "start_engine", "engine_started", { mode: "legacy" });
@@ -500,10 +517,12 @@ test("semantic renderer recovery reattaches the same token with a fresh session"
 
   assert.equal(ready.session, 2);
   assert.deepEqual(
-    authoring.attachments.map(({ contextId, options }) => [contextId, options.session]),
+    authoring.attachments.map(({ contextId, options }) => [
+      contextId, options.session, options.initiallyPaused,
+    ]),
     [
-      ["semantic-6", 1],
-      ["semantic-6", 2],
+      ["semantic-6", 1, true],
+      ["semantic-6", 2, true],
     ],
   );
   assert.deepEqual(authoring.stoppedContexts, ["semantic-6"]);

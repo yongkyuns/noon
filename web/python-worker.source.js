@@ -946,6 +946,12 @@ function validateRequest(request) {
          request.continuationGeneration <= 0)) {
       throw new Error("semantic attachment has an invalid continuation generation");
     }
+    if (typeof request.initiallyPaused !== "boolean") {
+      throw new Error("semantic attachment has an invalid initially-paused state");
+    }
+    if (request.initiallyPaused && request.continuationGeneration !== undefined) {
+      throw new Error("source-owned semantic continuations cannot start paused");
+    }
     if (request.continuationGeneration !== undefined &&
         (!Number.isSafeInteger(request.continuationRunRequestId) ||
          request.continuationRunRequestId < 0)) {

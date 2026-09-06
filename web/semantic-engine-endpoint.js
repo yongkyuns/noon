@@ -24,13 +24,26 @@ export async function attachSemanticEngine(
   runRequiredCallbackPhase = null,
   continuation = null,
 ) {
-  const { controlPort, renderPort, transportMode, loopDurationSeconds, session } = request;
+  const {
+    controlPort,
+    renderPort,
+    transportMode,
+    loopDurationSeconds,
+    session,
+    initiallyPaused = false,
+  } = request;
   if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
     throw new Error("semantic execution requires control and render ports");
   }
   if (typeof context?.createExecutionPlayer !== "function" ||
       typeof context.returnExecutionPlayer !== "function") {
     throw new Error("semantic execution requires a context player lease API");
+  }
+  if (typeof initiallyPaused !== "boolean") {
+    throw new Error("semantic execution has an invalid initially-paused state");
+  }
+  if (initiallyPaused && continuation !== null) {
+    throw new Error("source-owned semantic continuations cannot start paused");
   }
   let player = null;
   // A player is leased from the authoring context. The transport session only
@@ -581,6 +594,7 @@ export async function attachSemanticEngine(
       throw new Error("unsupported semantic execution transport");
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
+    if (initiallyPaused) player.pause();
     if (typeof player.resourceBundleBytes !== "function") {
       throw new Error("semantic execution requires retained resource bundle support");
     }
