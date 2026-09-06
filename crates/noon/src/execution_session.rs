@@ -373,9 +373,13 @@ impl ExecutionSession {
         &self,
         token: Option<ExecutionSegmentToken>,
     ) -> bool {
+        token.is_some() && self.pending_segment_token() == token
+    }
+
+    pub(crate) fn pending_segment_token(&self) -> Option<ExecutionSegmentToken> {
         self.pending_segment_completion
             .as_ref()
-            .is_some_and(|pending| Some(pending.token) == token)
+            .map(|pending| pending.token)
     }
 
     pub(crate) fn segment_was_completed(&self, token: ExecutionSegmentToken) -> bool {

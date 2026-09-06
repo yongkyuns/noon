@@ -303,12 +303,11 @@ impl ExecutionSession {
             return Ok(true);
         }
         let pending = self
-            .pending_segment_completion
-            .as_ref()
+            .pending_segment_token()
             .ok_or(ExecutionSegmentAdvanceError::NoPendingCompletion { actual: token })?;
-        if pending.token != token {
+        if pending != token {
             return Err(ExecutionSegmentAdvanceError::StaleSegment {
-                expected: pending.token,
+                expected: pending,
                 actual: token,
             });
         }
