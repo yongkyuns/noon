@@ -1458,7 +1458,7 @@ impl CanonicalAuthoringScene {
             let handle = noon::Mobject::from_node(std::rc::Rc::clone(self.scene.store()), node)?;
             let state = handle.state()?;
             if state.content.text().is_some() {
-                objects.push(canonical_native_text_export(
+                objects.push(canonical_text_export(
                     &self.scene.store().borrow(),
                     *self
                         .identities
@@ -1519,7 +1519,7 @@ fn authored_mobject_layout(handle: &noon::Mobject) -> Result<(f64, f64, f64, f64
 /// is unavailable (for example, callback/timeline execution). This #959 export
 /// seam reads immutable content and presentation from the shared store; Python
 /// wrappers never provide a parallel Text source or transform representation.
-fn canonical_native_text_export(
+fn canonical_text_export(
     store: &noon_core::SemanticStore,
     id: ObjectId,
     state: &SemanticObjectState,
@@ -1545,16 +1545,25 @@ fn canonical_native_text_export(
                     run.font_size,
                     native_line_spacing(resource)?,
                 ),
-                legacy_text_transform(state.transform)?,
+                text_export_transform(
+                    state.transform,
+                    f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE),
+                )?,
             )
         }
         TextSourceKind::Typst => (
             TextSpec::typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
-            legacy_typst_text_transform(state.transform)?,
+            text_export_transform(
+                state.transform,
+                f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT),
+            )?,
         ),
         TextSourceKind::MathTypst => (
             TextSpec::math_typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
-            legacy_typst_text_transform(state.transform)?,
+            text_export_transform(
+                state.transform,
+                f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT),
+            )?,
         ),
         kind => {
             return Err(format!(
@@ -1572,11 +1581,11 @@ fn canonical_native_text_export(
 /// state. This is only consumed when the normal live session cannot run; Python
 /// wrappers never retain a second text source or presentation model.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn canonical_native_text_authoring_spec(
+pub(crate) fn canonical_text_authoring_spec(
     store: &noon_core::SemanticStore,
     state: &SemanticObjectState,
 ) -> Result<RetainedTextAuthoringSpec, String> {
-    let object = canonical_native_text_export(store, ObjectId::new(0), state)?;
+    let object = canonical_text_export(store, ObjectId::new(0), state)?;
     let ObjectSpec {
         content: ObjectSpecContent::Text(text),
         transform,
@@ -1618,26 +1627,10 @@ pub(crate) fn canonical_native_text_authoring_spec(
     Ok(spec)
 }
 
-fn legacy_text_transform(transform: SemanticTransform2_5D) -> Result<Transform2D, String> {
-    let point_scale = f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE);
-    Ok(Transform2D {
-        translation: Vec2::new(
-            legacy_f32("text translation x", transform.translation.x)?,
-            legacy_f32("text translation y", transform.translation.y)?,
-        ),
-        scale: Vec2::new(
-            legacy_f32("text scale x", transform.scale.x / point_scale)?,
-            legacy_f32("text scale y", transform.scale.y / point_scale)?,
-        ),
-        rotation: legacy_f32("text rotation", transform.rotation_z)?,
-    })
-}
-
-/// Typst resources are fixed 10pt artifacts. The source-level TextSpec carries the
-/// stable public default size and this export derives its presentation scale from
-/// the authoritative effective transform, preserving the same retained output.
-fn legacy_typst_text_transform(transform: SemanticTransform2_5D) -> Result<Transform2D, String> {
-    let point_scale = f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT);
+fn text_export_transform(
+    transform: SemanticTransform2_5D,
+    point_scale: f64,
+) -> Result<Transform2D, String> {
     Ok(Transform2D {
         translation: Vec2::new(
             legacy_f32("text translation x", transform.translation.x)?,
@@ -3995,7 +3988,8 @@ mod tests {
         assert_eq!(label.source, "*Noon*");
         assert_eq!(label.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
         assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
-        assert_eq!(spec.objects[0].transform.scale, Vec2::new(1.5, 1.5));
+        let scale = spec.objects[0].transform.scale;
+        assert!((scale.x - 1.5).abs() < 1.0e-6 && (scale.y - 1.5).abs() < 1.0e-6);
         assert_eq!(spec.objects[0].style.fill, Some(noon_core::YELLOW));
 
         let ObjectSpecContent::Text(equation) = &spec.objects[1].content else {

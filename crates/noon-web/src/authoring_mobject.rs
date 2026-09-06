@@ -1728,9 +1728,8 @@ mod wasm {
         #[wasm_bindgen(js_name = textSpecJson)]
         pub fn text_spec_json(&self) -> Result<String, JsValue> {
             let state = self.handle.state().map_err(js_error)?;
-            let spec =
-                crate::canonical_native_text_authoring_spec(&self.handle.store().borrow(), &state)
-                    .map_err(js_error)?;
+            let spec = crate::canonical_text_authoring_spec(&self.handle.store().borrow(), &state)
+                .map_err(js_error)?;
             serde_json::to_string(&spec).map_err(|error| js_error(error.to_string()))
         }
 
