@@ -35,6 +35,7 @@ pub use execution_session::*;
 pub use host_callbacks::*;
 pub use live_session::{
     EffectiveMobjectLayout, EffectiveMobjectState, LiveSession, LiveSessionError,
+    TransformToRequest,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::*;

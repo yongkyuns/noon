@@ -18,9 +18,10 @@ use crate::{
     ExecutionSessionPublicationError, Mobject,
 };
 use noon_core::{
-    Bounds2D64, PublicationContext, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSignalValue,
-    SemanticStore, SemanticStyle, Style, Transform2D,
+    AnimationOptions, Bounds2D64, PublicationContext, SemanticAnimationCompositionKind,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeId,
+    SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
+    Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -46,6 +47,31 @@ pub struct EffectiveMobjectLayout {
     pub width: f64,
     pub height: f64,
     pub publication: PublicationContext,
+}
+
+/// One borrowed TransformTo leaf in an atomic live composition request.
+///
+/// This value contains no schedule or runtime state. The shared Rust compiler resolves all child
+/// intervals and captures effective properties when the request is consumed.
+#[derive(Clone, Copy)]
+pub struct TransformToRequest<'a> {
+    source: &'a Mobject,
+    target_state: &'a Mobject,
+    options: AnimationOptions,
+}
+
+impl<'a> TransformToRequest<'a> {
+    pub const fn new(
+        source: &'a Mobject,
+        target_state: &'a Mobject,
+        options: AnimationOptions,
+    ) -> Self {
+        Self {
+            source,
+            target_state,
+            options,
+        }
+    }
 }
 
 /// Errors while a semantic handle is used through a live execution session.
@@ -318,6 +344,44 @@ impl<'a> LiveSession<'a> {
                 source.node_id(),
                 target.node_id(),
                 options,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Atomically author and activate one flat Parallel or Sequence of TransformTo leaves.
+    ///
+    /// All handles are checked before the semantic transaction is built. Rust snapshots the target
+    /// states into that transaction, then completes schedule lowering, effective capture, and
+    /// runtime preflight before any target, leaf, or root receives permanent identity.
+    pub fn declare_and_activate_transform_composition(
+        &mut self,
+        kind: SemanticAnimationCompositionKind,
+        children: &[TransformToRequest<'_>],
+        composition_options: AnimationOptions,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        for child in children {
+            self.require_mobject(child.source)?;
+            self.require_mobject(child.target_state)?;
+        }
+        let children = children
+            .iter()
+            .map(|child| {
+                (
+                    child.source.node_id(),
+                    child.target_state.node_id(),
+                    child.options,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_transform_composition(
+                &mut store,
+                kind,
+                &children,
+                composition_options,
+                play_options,
             )
             .map_err(Into::into)
     }
@@ -891,6 +955,180 @@ mod tests {
     }
 
     #[test]
+    fn prepared_parallel_composition_publishes_one_revision_and_completes_both_leaves() {
+        let mut scene = Scene::new();
+        let mut left = scene.circle(1.0).unwrap();
+        left.set_translation(-2.0, 0.0).unwrap();
+        let mut right = scene.circle(1.0).unwrap();
+        right.set_translation(2.0, 0.0).unwrap();
+        let mut left_target = left.target_editor().unwrap();
+        left_target.set_translation(-2.0, 1.0).unwrap();
+        let mut right_target = right.target_editor().unwrap();
+        right_target.set_translation(2.0, -1.0).unwrap();
+        scene.add(&left).unwrap();
+        scene.add(&right).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = left.store().borrow().len();
+
+        let children = [
+            TransformToRequest::new(
+                &left,
+                &left_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            ),
+            TransformToRequest::new(
+                &right,
+                &right_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            ),
+        ];
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        // Two immutable target snapshots, two leaves, and one root share that commit.
+        assert_eq!(left.store().borrow().len(), before_nodes + 5);
+        let publication = live.session.last_structural_publication_stats();
+        assert_eq!(publication.preparation.object_states_lowered, 0);
+        assert_eq!(publication.entered_objects, 0);
+        assert_eq!(publication.exited_objects, 0);
+        live.advance_segment_to(segment, 1.0).unwrap();
+        assert_eq!(
+            live.effective(&left).unwrap().transform.translation,
+            noon_core::Vec2::new(-2.0, 0.5)
+        );
+        assert_eq!(
+            live.effective(&right).unwrap().transform.translation,
+            noon_core::Vec2::new(2.0, -0.5)
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.authored(&left).unwrap().transform.translation,
+            SemanticVec3::new(-2.0, 1.0, 0.0)
+        );
+        assert_eq!(
+            live.authored(&right).unwrap().transform.translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn prepared_sequence_uses_mapped_boundaries_and_releases_disjoint_style_channels() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut fill_target = circle.target_editor().unwrap();
+        fill_target.set_fill(1.0, 0.0, 0.0, 0.4).unwrap();
+        let mut opacity_target = circle.target_editor().unwrap();
+        opacity_target.set_object_opacity(0.5).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let children = [
+            TransformToRequest::new(
+                &circle,
+                &fill_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            ),
+            TransformToRequest::new(
+                &circle,
+                &opacity_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            ),
+        ];
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, 1.0).unwrap();
+        let boundary = live.effective(&circle).unwrap().style;
+        assert_eq!(boundary.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.4)));
+        assert_eq!(boundary.opacity, 1.0);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        let endpoint = live.effective(&circle).unwrap().style;
+        assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.4)));
+        assert_eq!(endpoint.opacity, 0.5);
+        live.complete_segment(segment).unwrap();
+        let authored = live.authored(&circle).unwrap().style;
+        assert_eq!(
+            authored.fill,
+            Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)))
+        );
+        assert_eq!(authored.fill_opacity, 0.4);
+        assert_eq!(authored.object_opacity, 0.5);
+    }
+
+    #[test]
+    fn duplicate_composition_driver_rolls_back_target_leaf_and_root_declarations() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut first_target = circle.target_editor().unwrap();
+        first_target.set_translation(1.0, 0.0).unwrap();
+        let mut second_target = circle.target_editor().unwrap();
+        second_target.set_translation(2.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_frame = session.frame().clone();
+        let before_nodes = circle.store().borrow().len();
+        let children = [
+            TransformToRequest::new(&circle, &first_target, AnimationOptions::new()),
+            TransformToRequest::new(&circle, &second_target, AnimationOptions::new()),
+        ];
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new(),
+                AnimationOptions::new().run_time(2.0),
+            );
+
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::PreparedAnimation(
+                    noon_compile::PreparedSemanticAnimationLoweringError::MultipleDrivers { .. }
+                )
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &before_frame);
+        assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
     fn invalid_or_conflicting_post_bootstrap_activation_does_not_publish() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
@@ -910,7 +1148,7 @@ mod tests {
         assert!(matches!(
             invalid,
             Err(LiveSessionError::Activation(
-                ExecutionSessionAnimationError::PreparedPayload(_)
+                ExecutionSessionAnimationError::PreparedAnimation(_)
             ))
         ));
         assert_eq!(session.publication_context(), before);

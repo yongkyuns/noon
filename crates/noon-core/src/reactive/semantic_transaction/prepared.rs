@@ -312,6 +312,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
 
     /// Publish the validated batch exactly once, without another preflight.
     pub fn commit(self) -> SemanticMutationTransactionResult {
+        self.commit_with_store().0
+    }
+
+    /// Publish the validated batch and return its still-exclusively-borrowed store.
+    ///
+    /// This supports one semantic-plus-execution publication suffix: callers can
+    /// prepare compiler/runtime work while the transaction holds the store, commit
+    /// semantic identity once, then bind those local names without reacquiring or
+    /// revalidating a separate store reference.
+    pub fn commit_with_store(self) -> (SemanticMutationTransactionResult, &'a mut SemanticStore) {
         let Self {
             store,
             transaction,
@@ -546,10 +556,13 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             store.publish_scene_revision(next_revision.expect("changed transaction preflighted"));
         }
 
-        SemanticMutationTransactionResult {
-            impacts,
-            committed_nodes,
-        }
+        (
+            SemanticMutationTransactionResult {
+                impacts,
+                committed_nodes,
+            },
+            store,
+        )
     }
 }
 

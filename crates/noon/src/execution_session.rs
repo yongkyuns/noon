@@ -16,18 +16,19 @@ use crate::execution_segment::{
     PendingSegmentCompletion, SegmentCompletionEntry,
 };
 use noon_compile::{
-    lower_prepared_semantic_transform_to, lower_semantic_affine_animation_tracks,
+    lower_prepared_semantic_animation_composition, lower_semantic_affine_animation_tracks,
     lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
     CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
-    PreparedSemanticTransformToError, SemanticAffineAnimationTrackError,
+    PreparedSemanticAnimationLoweringError, SemanticAffineAnimationTrackError,
     SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
     SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
     NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, ReactiveError, ReactiveValue,
-    Rect, SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeId, SemanticStore,
-    TrackId,
+    Rect, SemanticAnimationCompositionKind, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
+    SemanticSceneOperationError, SemanticStore, SemanticTransactionNodeRef, TimelineError, TrackId,
 };
 use noon_runtime::{
     EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, RendererPublication,
@@ -35,6 +36,18 @@ use noon_runtime::{
 };
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
+
+fn resolve_committed_node(
+    node: SemanticTransactionNodeRef,
+    result: &SemanticMutationTransactionResult,
+) -> SemanticNodeId {
+    match node {
+        SemanticTransactionNodeRef::Existing(node) => node,
+        SemanticTransactionNodeRef::Pending(token) => result
+            .resolve(token)
+            .expect("prepared animation reference must resolve through its semantic commit"),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExecutionEvaluationMode {
@@ -179,7 +192,12 @@ pub enum ExecutionSessionAnimationError {
     Schedule(SemanticAnimationScheduleError),
     Segment(ExecutionSegmentError),
     Payload(SemanticAffineAnimationTrackError),
-    PreparedPayload(PreparedSemanticTransformToError),
+    PreparedAnimation(PreparedSemanticAnimationLoweringError),
+    TargetState {
+        target: SemanticNodeId,
+        error: SemanticSceneOperationError,
+    },
+    PreparedTrack(TimelineError),
     Publication(CompilePatchError),
     AuthoredPublication(ExecutionSessionPublicationError),
     TrackIdExhausted,
@@ -215,7 +233,16 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
                 formatter,
                 "semantic animation payload lowering failed: {error}"
             ),
-            Self::PreparedPayload(error) => error.fmt(formatter),
+            Self::PreparedAnimation(error) => error.fmt(formatter),
+            Self::TargetState { target, error } => write!(
+                formatter,
+                "animation target-state node {}:{} is invalid: {error}",
+                target.slot(),
+                target.generation()
+            ),
+            Self::PreparedTrack(error) => {
+                write!(formatter, "prepared animation track failed: {error}")
+            }
             Self::Publication(error) => {
                 write!(formatter, "semantic animation publication failed: {error}")
             }
@@ -252,9 +279,9 @@ impl From<SemanticAffineAnimationTrackError> for ExecutionSessionAnimationError 
     }
 }
 
-impl From<PreparedSemanticTransformToError> for ExecutionSessionAnimationError {
-    fn from(value: PreparedSemanticTransformToError) -> Self {
-        Self::PreparedPayload(value)
+impl From<PreparedSemanticAnimationLoweringError> for ExecutionSessionAnimationError {
+    fn from(value: PreparedSemanticAnimationLoweringError) -> Self {
+        Self::PreparedAnimation(value)
     }
 }
 
@@ -795,6 +822,51 @@ impl ExecutionSession {
         target_state: SemanticNodeId,
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        let target_state =
+            self.stage_animation_target_state(store, &mut declaration, target_state)?;
+        let root = declaration.create_transform_animation(source, target_state, options);
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            root,
+            AnimationOptions::new(),
+        )
+    }
+
+    /// Atomically declare and activate one flat Parallel or Sequence composition.
+    ///
+    /// Each tuple is `(source, target_state, child_options)`. Immutable snapshots of every target,
+    /// all leaf declarations, and the root composition remain transaction-local while shared
+    /// schedule/payload lowering and runtime preflight run. Semantic identity is allocated once
+    /// only after every fallible step succeeds.
+    pub fn declare_and_activate_transform_composition(
+        &mut self,
+        store: &mut SemanticStore,
+        kind: SemanticAnimationCompositionKind,
+        children: &[(SemanticNodeId, SemanticNodeId, AnimationOptions)],
+        composition_options: AnimationOptions,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        let children = children
+            .iter()
+            .map(|(source, target_state, options)| {
+                let target_state =
+                    self.stage_animation_target_state(store, &mut declaration, *target_state)?;
+                Ok(declaration.create_transform_animation(*source, target_state, *options))
+            })
+            .collect::<Result<Vec<_>, ExecutionSessionAnimationError>>()?;
+        let root = declaration.create_animation_composition(kind, children, composition_options);
+        self.declare_and_activate_prepared_animation(store, declaration, root, play_options)
+    }
+
+    fn require_animation_declaration_context(
+        &self,
+        store: &SemanticStore,
+    ) -> Result<(), ExecutionSessionAnimationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionAnimationError::RequiredCallbackPending);
         }
@@ -809,14 +881,40 @@ impl ExecutionSession {
         if actual != expected {
             return Err(ExecutionSessionAnimationError::StaleSceneRevision { expected, actual });
         }
+        Ok(())
+    }
 
-        let projection = lower_prepared_semantic_transform_to(
-            store,
+    fn stage_animation_target_state(
+        &self,
+        store: &SemanticStore,
+        declaration: &mut SemanticMutationTransaction,
+        target: SemanticNodeId,
+    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        let state = store
+            .semantic_object_state_checked(target)
+            .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?
+            .clone();
+        Ok(declaration.create_node(SemanticNodeCreation::object(state)))
+    }
+
+    fn declare_and_activate_prepared_animation(
+        &mut self,
+        store: &mut SemanticStore,
+        declaration: SemanticMutationTransaction,
+        root: noon_core::SemanticLocalNodeToken,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        let prepared = declaration.prepare(store).map_err(|error| {
+            ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::Semantic(error),
+            )
+        })?;
+        let projection = lower_prepared_semantic_animation_composition(
+            &prepared,
             &self.execution_index,
-            source,
-            target_state,
-            options,
+            root,
             self.runtime.frame().time,
+            play_options,
             |object| {
                 let index = self.runtime.frame_index_for_object(object)?;
                 let row = self.runtime.frame().objects.get(index)?;
@@ -827,25 +925,31 @@ impl ExecutionSession {
             },
         )?;
         let mut segment =
-            ExecutionSegment::from_duration(self.runtime.frame().time, projection.run_time())?;
+            ExecutionSegment::from_duration(projection.start_time(), projection.run_time())?;
         let mut next_track_id = self.next_activation_track_id;
         let mut definitions = Vec::with_capacity(projection.tracks().len());
         let mut completions = Vec::with_capacity(projection.tracks().len());
         for track in projection.tracks() {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let track_id = TrackId::new(raw_id);
-            let definition = track.with_track_id(track_id)?;
-            completions.push(SegmentCompletionEntry {
-                semantic_object: track.target,
-                completion: track.completion.clone(),
-                execution_object: track.execution_object_id,
-                property: track.property,
-                track: track_id,
-                end_time: track.timing.start_time + track.timing.duration,
-            });
+            let definition = track
+                .with_track_id(track_id)
+                .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
+            completions.push((
+                track.target,
+                track.completion.clone(),
+                track.execution_object_id,
+                track.property,
+                track_id,
+                track.timing.start_time + track.timing.duration,
+            ));
             definitions.push(definition);
             next_track_id = raw_id.checked_add(1);
         }
+
+        self.runtime
+            .preflight_reconcilable_track_additions(&definitions)
+            .map_err(ExecutionSessionAnimationError::Publication)?;
 
         let (token, next_segment_sequence) = if definitions.is_empty() {
             (None, self.next_segment_sequence)
@@ -860,27 +964,39 @@ impl ExecutionSession {
             (Some(token), raw_sequence.checked_add(1))
         };
 
-        let mut declaration = SemanticMutationTransaction::new();
-        declaration.add_transform_animation(source, target_state, options);
         let execution_prefix = definitions
             .into_iter()
             .map(ExecutionPatch::AddTrack)
             .collect();
         let result = self
-            .apply_semantic_transaction_with_execution(store, declaration, execution_prefix, None)
+            .apply_prepared_semantic_transaction_with_execution(prepared, execution_prefix, None)
             .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
-        let [SemanticMutationImpact::AnimationAdded { .. }] = result.impacts() else {
-            unreachable!("one prepared TransformTo declaration has one exact semantic impact")
-        };
+        debug_assert!(result.resolve(root).is_some());
+        let activation_scene_revision = self.publication_context().scene_revision();
 
         self.next_activation_track_id = next_track_id;
         if let Some(token) = token {
+            let entries = completions
+                .into_iter()
+                .map(
+                    |(target, completion, execution_object, property, track, end_time)| {
+                        SegmentCompletionEntry {
+                            semantic_object: resolve_committed_node(target, &result),
+                            completion,
+                            execution_object,
+                            property,
+                            track,
+                            end_time,
+                        }
+                    },
+                )
+                .collect();
             segment = segment.with_completion_token(token);
             self.next_segment_sequence = next_segment_sequence;
             self.pending_segment_completion = Some(PendingSegmentCompletion {
                 token,
-                activation_scene_revision: store.scene_revision(),
-                entries: completions,
+                activation_scene_revision,
+                entries,
             });
         }
         Ok(segment)

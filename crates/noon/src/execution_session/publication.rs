@@ -3,9 +3,9 @@ use noon_compile::{
     ExecutionPatch, SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
 };
 use noon_core::{
-    PublicationContext, SceneRevision, SemanticMutationTransaction,
-    SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticStore,
+    PreparedSemanticMutationTransaction, PublicationContext, SceneRevision,
+    SemanticMutationTransaction, SemanticMutationTransactionError,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore,
 };
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
@@ -147,6 +147,31 @@ impl ExecutionSession {
         let prepared = transaction
             .prepare(store)
             .map_err(ExecutionSessionPublicationError::Semantic)?;
+        self.apply_prepared_semantic_transaction_with_execution(
+            prepared,
+            execution_prefix,
+            effective,
+        )
+    }
+
+    /// Publish an already-prepared semantic transaction with its preflighted execution prefix.
+    ///
+    /// This is the shared infallible suffix for callers that must inspect transaction-local
+    /// semantic references while preparing compiler/runtime work. All fallible work remains
+    /// before `commit_with_store`, and the returned result is the sole local-name mapping.
+    pub(crate) fn apply_prepared_semantic_transaction_with_execution(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
+        }
+        if self.pending_segment_completion.is_some() && execution_prefix.is_empty() {
+            return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+        }
+        self.require_published_store(prepared.store())?;
         let publication = prepare_semantic_publication(
             &prepared,
             &self.execution_index,
@@ -189,7 +214,7 @@ impl ExecutionSession {
         )
         .map_err(ExecutionSessionPublicationError::ExecutionSlot)?;
 
-        let result = prepared.commit();
+        let (result, store) = prepared.commit_with_store();
         let membership = self
             .reachability
             .apply_transaction_result(store, &result)
