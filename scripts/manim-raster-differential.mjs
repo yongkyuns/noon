@@ -333,19 +333,20 @@ async function captureHostFixture(
   backend,
 ) {
   const loaded = await page.evaluate(
-    ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
+    ({ source, loopDuration, mode }) => window.noonHostRaster.load(source, loopDuration, { mode }),
     {
       source: noonSourceFor(fixture),
       loopDuration: Math.max(1, fixture.expected_duration + 1),
+      mode: authored.hasCallbacks ? "semantic" : "document",
     },
   );
-  assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
-  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);
   if (authored.hasCallbacks) {
-    assert.ok(loaded.callbackSlots > 0, `${fixture.id}: host callback slots`);
+    assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: canonical callback execution`);
   } else {
-    assert.equal(loaded.callbackSlots, 0, `${fixture.id}: deterministic host callback slots`);
+    assert.equal(loaded.kind, "scene_document", `${fixture.id}: explicit camera/document codec`);
+    assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
   }
+  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);
   assert.equal(loaded.rendererBackend, expectedBackend, `${backend}: host renderer backend`);
 
   const captures = [];

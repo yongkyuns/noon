@@ -1,19 +1,18 @@
 import initNoonWeb, {
   EngineScenePlayer,
   ExecutionCanvasRenderer,
-  HostScenePlayer,
 } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 
 const canvas = document.querySelector("#scene");
-const offscreen = canvas.transferControlToOffscreen();
 const client = new PythonAuthoringClient();
 const readyPromise = Promise.all([initNoonWeb(), client.ready()]);
 
 let engine = null;
-let host = null;
+let execution = null;
+let sourceFailure = null;
 let renderer = null;
-let callbackSessionId = null;
 let currentFrameIndex = -1;
 let currentLogicalTime = 0;
 let activeFrameTimes = null;
@@ -40,7 +39,7 @@ async function presentDelta(deltaJson) {
   return true;
 }
 
-async function load(source, loopDurationSeconds) {
+async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
   await readyPromise;
   if (typeof source !== "string" || source.trim() === "") {
     throw new TypeError("host raster source must be non-empty");
@@ -49,9 +48,47 @@ async function load(source, loopDurationSeconds) {
   if (!Number.isFinite(loopDuration) || loopDuration <= 0) {
     throw new RangeError("host raster loop duration must be positive and finite");
   }
-  if (renderer !== null || engine !== null || host !== null) {
+  if (renderer !== null || engine !== null || execution !== null) {
     throw new Error("host raster page supports one authored scene per page");
   }
+
+  if (mode === "semantic") {
+    let resolveAttached;
+    let rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
+    });
+    const sourceRun = client.run(source, {}, {
+      async onSemanticContinuation(registration) {
+        if (execution !== null) throw new Error("raster source registered a second execution context");
+        execution = new AuthoringExecutionClient(canvas);
+        await execution.startSemanticExecution(registration.semanticExecution, {
+          authoringClient: client,
+          transportMode: "transferable",
+          pacing: "external_samples",
+        });
+        resolveAttached();
+      },
+    });
+    sourceRun.then((result) => {
+      authoredDuration = result.duration;
+      if (execution === null) rejectAttached(new Error("raster source produced no continuation"));
+    }, (error) => {
+      sourceFailure = error;
+      rejectAttached(error);
+    });
+    await attached;
+    await execution.sampleToAuthoredTime(0);
+    const metrics = (await execution.metrics()).metrics;
+    return {
+      kind: "semantic_execution",
+      duration: authoredDuration,
+      objectCount: metrics.objectCount,
+      rendererBackend: metrics.rendererBackend,
+    };
+  }
+  if (mode !== "document") throw new Error(`unsupported raster mode ${mode}`);
 
   // This #959-owned codec/renderer diagnostic explicitly consumes a scene
   // document. Canonical callback execution is qualified by the shared-authoring
@@ -64,8 +101,7 @@ async function load(source, loopDurationSeconds) {
   const sceneJson = JSON.stringify(result.document);
   engine = new EngineScenePlayer(sceneJson, loopDuration, 1);
   if (result.callbacks !== null) {
-    host = new HostScenePlayer(sceneJson, JSON.stringify(result.callbacks.slots));
-    callbackSessionId = result.callbacks.session_id;
+    throw new Error("document raster fixtures cannot execute host callbacks");
   }
   authoredDuration = Number(result.duration);
 
@@ -73,7 +109,7 @@ async function load(source, loopDurationSeconds) {
   // state or the shared default camera. Do not overwrite it with a harness-local
   // fixed camera; moving-camera fixtures must exercise the production camera role.
   const initialDelta = engine.initialDeltaJson();
-  renderer = await ExecutionCanvasRenderer.create(offscreen, initialDelta);
+  renderer = await ExecutionCanvasRenderer.create(canvas.transferControlToOffscreen(), initialDelta);
   renderer.resize(canvas.width, canvas.height);
   let presented = false;
   for (let attempt = 0; attempt < 4 && !presented; attempt += 1) {
@@ -89,32 +125,19 @@ async function load(source, loopDurationSeconds) {
     duration: authoredDuration,
     objectCount: result.document.objects.length,
     rendererBackend: renderer.rendererBackend(),
-    callbackSlots: result.callbacks?.slots.length ?? 0,
   };
 }
 
 async function advanceOneFrame(frameIndex, time) {
-  const deterministicDelta = engine.tickDeltaJson(time * 1000);
-  await presentDelta(deterministicDelta);
-
-  if (host !== null) {
-    host.advanceTo(time);
-    const frame = JSON.parse(host.callbackFrameJson());
-    if (Math.abs(Number(frame.time) - Number(time)) > 1e-9) {
-      throw new Error(
-        `host callback playhead mismatch at frame ${frameIndex}: expected ${time}, got ${frame.time}`,
-      );
-    }
-    const sequence = Number(host.nextSequence());
-    const batch = await client.runCallbackPhase(callbackSessionId, frame, sequence);
-    const batchJson = JSON.stringify(batch);
-    host.commitPatchBatch(batchJson);
-
-    const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
-    await presentDelta(hostDelta);
+  if (sourceFailure !== null) throw sourceFailure;
+  if (execution !== null) {
+    const sampled = await execution.sampleToAuthoredTime(time);
+    currentLogicalTime = sampled.time;
+  } else {
+    await presentDelta(engine.tickDeltaJson(time * 1000));
+    currentLogicalTime = time;
   }
   currentFrameIndex = frameIndex;
-  currentLogicalTime = time;
 }
 
 function normalizeFrameTimes(frameTimes, targetFrame) {
@@ -135,7 +158,7 @@ function normalizeFrameTimes(frameTimes, targetFrame) {
 }
 
 async function renderThrough(frameIndex, frameTimes) {
-  if (renderer === null || engine === null) {
+  if (execution === null && (renderer === null || engine === null)) {
     throw new Error("host raster scene has not been loaded");
   }
   const targetFrame = Number(frameIndex);
@@ -163,6 +186,20 @@ async function renderThrough(frameIndex, frameTimes) {
     await advanceOneFrame(frame, activeFrameTimes[frame]);
   }
   await waitForPaint();
+
+  if (execution !== null) {
+    const metrics = (await execution.metrics()).metrics;
+    return {
+      error: null,
+      presented: true,
+      time: currentLogicalTime,
+      objectCount: metrics.objectCount,
+      rendererBackend: metrics.rendererBackend,
+      drawCalls: metrics.drawCalls,
+      authoredDuration,
+      frameIndex: currentFrameIndex,
+    };
+  }
 
   return {
     error: null,
