@@ -152,6 +152,7 @@ for (const required of [
   "createDirectOrdinaryCompositionContinuationSmokeRenderer",
   "createDirectOrdinaryValueTrackerContinuationSmokeRenderer",
   "createDirectOrdinaryFadePlaySmokeRenderer",
+  "createDirectOrdinaryAffineFadeSmokeRenderer",
   "createDirectOrdinaryStylePlaySmokeRenderer",
   "createDirectOrdinaryPaintPlaySmokeRenderer",
   "createDirectNativeSignalsSmokeRenderer",

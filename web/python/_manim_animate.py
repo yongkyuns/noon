@@ -47,7 +47,7 @@ def _store_animation_args(animation: object, kwargs: dict[str, Any]) -> None:
 
 def _fade_authoring_options(
     target: object, kwargs: dict[str, Any]
-) -> tuple[dict[str, Any], _base.Vec2, float, bool]:
+) -> tuple[dict[str, Any], _base.Vec2, float, bool, _base.Vec2 | None]:
     """Separate `_Fade` endpoint options from generic Animation options.
 
     Manim resolves ``target_position`` during `_Fade.__init__`, while an explicitly
@@ -66,6 +66,7 @@ def _fade_authoring_options(
         raise ValueError("fade scale must be finite")
 
     point_target = False
+    point = None
     if shift is not None:
         shift_vector = _base._as_vec2(shift)
     elif target_position is not None:
@@ -78,7 +79,7 @@ def _fade_authoring_options(
     else:
         shift_vector = _base.ORIGIN
 
-    return animation_kwargs, shift_vector, scale_factor, point_target
+    return animation_kwargs, shift_vector, scale_factor, point_target, point
 
 
 def _store_fade_options(
@@ -87,10 +88,12 @@ def _store_fade_options(
     shift_vector: _base.Vec2,
     scale_factor: float,
     point_target: bool,
+    point: _base.Vec2 | None,
 ) -> None:
     object.__setattr__(animation, "_fade_shift_vector", shift_vector)
     object.__setattr__(animation, "_fade_scale_factor", scale_factor)
     object.__setattr__(animation, "_fade_point_target", point_target)
+    object.__setattr__(animation, "_fade_point", point)
 
 
 class Transform(_ORIGINAL_TRANSFORM):
@@ -187,8 +190,8 @@ class Uncreate(_ORIGINAL_UNCREATE):
 
 class FadeIn(_ORIGINAL_FADE_IN):
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
-        animation_kwargs, shift_vector, scale_factor, point_target = _fade_authoring_options(
-            target, kwargs
+        animation_kwargs, shift_vector, scale_factor, point_target, point = (
+            _fade_authoring_options(target, kwargs)
         )
         super().__init__(target, key)
         _store_animation_args(self, animation_kwargs)
@@ -197,13 +200,14 @@ class FadeIn(_ORIGINAL_FADE_IN):
             shift_vector=shift_vector,
             scale_factor=scale_factor,
             point_target=point_target,
+            point=point,
         )
 
 
 class FadeOut(_ORIGINAL_FADE_OUT):
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
-        animation_kwargs, shift_vector, scale_factor, point_target = _fade_authoring_options(
-            target, kwargs
+        animation_kwargs, shift_vector, scale_factor, point_target, point = (
+            _fade_authoring_options(target, kwargs)
         )
         super().__init__(target, key)
         _store_animation_args(self, animation_kwargs)
@@ -212,6 +216,7 @@ class FadeOut(_ORIGINAL_FADE_OUT):
             shift_vector=shift_vector,
             scale_factor=scale_factor,
             point_target=point_target,
+            point=point,
         )
 
 
@@ -504,7 +509,12 @@ def _fade_endpoint_snapshots(
     *,
     start_time: float,
 ) -> dict[int, dict[str, Any]]:
-    """Build Manim's faded copy endpoint for each leaf at play start."""
+    """Build the #959 legacy retained/group fade endpoint at play start.
+
+    Canonical ordinary leaves pass their typed endpoint to Rust and never enter
+    this migration scheduler. Delete this snapshot path with the remaining #959
+    retained/group compatibility consumer.
+    """
 
     if not isinstance(animation, (FadeIn, FadeOut)):
         return {}
@@ -551,7 +561,7 @@ def _schedule_fade_endpoint_transform(
     easing: str,
     key: str | None,
 ) -> None:
-    """Lower Fade shift/scale to the ordinary deterministic Transform channel."""
+    """Schedule only the #959 legacy retained/group fade transform channel."""
 
     if member._object is None:
         raise ValueError("fade target must be bound before endpoint scheduling")

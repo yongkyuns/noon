@@ -1212,6 +1212,34 @@ try {
     await stopSampledSource(page);
   }
 
+  const affineFadeSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_affine_fade.py"), "utf8",
+  );
+  await startSampledSource(page, affineFadeSource, "scene-shared-affine-fade");
+  try {
+    const canvas = page.locator("#scene-shared-affine-fade");
+    for (const [time, x] of [[0.5, -1], [1, 0], [1.5, 1]]) {
+      await page.evaluate(
+        (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
+        time,
+      );
+      const color = renderedWorldPixel(await canvas.screenshot(), x, 0);
+      assert.ok(
+        color.blue > color.red + 25,
+        `shared affine fade at ${time}s missed its Rust-resolved endpoint at ${x}`,
+      );
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(2), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 2);
+    assert.equal(result.metrics.objectCount, 0);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const mixedScalarSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_mixed_scalar_composition.py"), "utf8",
   );

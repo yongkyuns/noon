@@ -66,6 +66,7 @@ enum OrdinaryCompositionChild {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
         direction: SemanticFadeDirection,
+        endpoint: noon::FadeEndpoint,
         options: noon_core::AnimationOptions,
     },
     Create {
@@ -843,7 +844,7 @@ impl CanonicalAuthoringScene {
         self.scene.declare_transform_to(source, target, options)
     }
 
-    /// Run one basic ordinary leaf fade through the retained live session.
+    /// Run one ordinary leaf fade through the retained live session.
     ///
     /// Rust owns lifecycle membership, appearance tracks, activation, and
     /// completion. The object ID only records this wrapper's derived binding
@@ -854,9 +855,10 @@ impl CanonicalAuthoringScene {
         id: ObjectId,
         target: &noon::Mobject,
         direction: SemanticFadeDirection,
+        endpoint: noon::FadeEndpoint,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        let end_time = self.begin_ordinary_fade(id, target, direction, options)?;
+        let end_time = self.begin_ordinary_fade(id, target, direction, endpoint, options)?;
         let player = self.active_live_player()?;
         player.live_advance_segment_to(end_time)?;
         player.live_complete_segment()?;
@@ -1064,7 +1066,7 @@ impl CanonicalAuthoringScene {
         Ok(end_time)
     }
 
-    /// Atomically declare and activate one basic ordinary fade without advancing it.
+    /// Atomically declare and activate one ordinary fade without advancing it.
     ///
     /// A FadeIn may bind an existing detached semantic handle. A FadeOut retains
     /// its derived binding so that the exact same handle can later re-enter via
@@ -1075,6 +1077,7 @@ impl CanonicalAuthoringScene {
         id: ObjectId,
         target: &noon::Mobject,
         direction: SemanticFadeDirection,
+        endpoint: noon::FadeEndpoint,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
         if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
@@ -1112,7 +1115,8 @@ impl CanonicalAuthoringScene {
             // must not install a player or change context lease ownership.
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
-            let end_time = player.live_declare_and_activate_fade(target, direction, options)?;
+            let end_time =
+                player.live_declare_and_activate_fade(target, direction, endpoint, options)?;
             self.live_player = Some(player);
             self.live_player_returned = false;
             end_time
@@ -1121,7 +1125,7 @@ impl CanonicalAuthoringScene {
             // callbacks, bindings, membership, options, and lifecycle conflicts all
             // fail before its semantic/runtime publication.
             self.active_live_player()?
-                .live_declare_and_activate_fade(target, direction, options)?
+                .live_declare_and_activate_fade(target, direction, endpoint, options)?
         };
         if new_binding {
             self.bindings.insert(id, node);
@@ -1427,11 +1431,13 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::Fade {
                     target,
                     direction,
+                    endpoint,
                     options,
                     ..
                 } => noon::AnimationCompositionRequest::Fade {
                     target,
                     direction: *direction,
+                    endpoint: *endpoint,
                     options: *options,
                 },
                 OrdinaryCompositionChild::Create {
@@ -2301,6 +2307,25 @@ mod wasm {
                 "ordinary fade direction must be \"in\" or \"out\", got {value:?}"
             ))),
         }
+    }
+
+    fn parse_fade_endpoint(
+        scale_factor: f64,
+        translation: &str,
+        x: f64,
+        y: f64,
+    ) -> Result<noon::FadeEndpoint, JsValue> {
+        let vector = SemanticVec3::new(x, y, 0.0);
+        let translation = match translation {
+            "shift" => noon::FadeTranslation::Shift(vector),
+            "point" => noon::FadeTranslation::Point(vector),
+            _ => {
+                return Err(js_error(format!(
+                    "ordinary fade translation must be \"shift\" or \"point\", got {translation:?}"
+                )))
+            }
+        };
+        Ok(noon::FadeEndpoint::new(scale_factor, translation))
     }
 
     fn parse_affine_lifecycle_direction(
@@ -3198,10 +3223,15 @@ mod wasm {
             object_id: &str,
             target: &crate::WasmAuthoringMobjectHandle,
             direction: &str,
+            scale_factor: f64,
+            translation: &str,
+            x: f64,
+            y: f64,
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
             let direction = parse_fade_direction(direction)?;
+            let endpoint = parse_fade_endpoint(scale_factor, translation, x, y)?;
             let options = Self::options(child_run_time, rate_function)?;
             let entering_id = if object_id.is_empty() {
                 None
@@ -3212,6 +3242,7 @@ mod wasm {
                 entering_id,
                 target: target.semantic_mobject().clone(),
                 direction,
+                endpoint,
                 options,
             });
             Ok(())
@@ -4330,12 +4361,17 @@ mod wasm {
             object_id: &str,
             target: &crate::WasmAuthoringMobjectHandle,
             direction: &str,
+            scale_factor: f64,
+            translation: &str,
+            x: f64,
+            y: f64,
             run_time: f64,
             rate_function: &str,
         ) -> Result<f64, JsValue> {
             let id = parse_object_id("object ID", object_id)?;
             target.id_in_store(self.inner.scene.store(), "ordinary fade animation")?;
             let direction = parse_fade_direction(direction)?;
+            let endpoint = parse_fade_endpoint(scale_factor, translation, x, y)?;
             let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
                 .ok_or_else(|| {
                     js_error(format!(
@@ -4346,7 +4382,7 @@ mod wasm {
                 .run_time(run_time)
                 .rate_func(rate_function);
             self.inner
-                .ordinary_play_fade(id, target.semantic_mobject(), direction, options)
+                .ordinary_play_fade(id, target.semantic_mobject(), direction, endpoint, options)
                 .map_err(js_error)
         }
 
@@ -4360,12 +4396,17 @@ mod wasm {
             object_id: &str,
             target: &crate::WasmAuthoringMobjectHandle,
             direction: &str,
+            scale_factor: f64,
+            translation: &str,
+            x: f64,
+            y: f64,
             run_time: f64,
             rate_function: &str,
         ) -> Result<f64, JsValue> {
             let id = parse_object_id("object ID", object_id)?;
             target.id_in_store(self.inner.scene.store(), "ordinary fade animation")?;
             let direction = parse_fade_direction(direction)?;
+            let endpoint = parse_fade_endpoint(scale_factor, translation, x, y)?;
             let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
                 .ok_or_else(|| {
                     js_error(format!(
@@ -4376,7 +4417,7 @@ mod wasm {
                 .run_time(run_time)
                 .rate_func(rate_function);
             self.inner
-                .begin_ordinary_fade(id, target.semantic_mobject(), direction, options)
+                .begin_ordinary_fade(id, target.semantic_mobject(), direction, endpoint, options)
                 .map_err(js_error)
         }
 
@@ -5931,6 +5972,7 @@ mod tests {
                 entering_id: Some(ObjectId::new(3)),
                 target: fade_target.clone(),
                 direction: SemanticFadeDirection::In,
+                endpoint: noon::FadeEndpoint::default(),
                 options,
             },
             OrdinaryCompositionChild::AffineLifecycle {
@@ -7149,6 +7191,7 @@ mod tests {
                 ObjectId::new(0),
                 &circle,
                 SemanticFadeDirection::In,
+                noon::FadeEndpoint::default(),
                 options,
             )
             .unwrap();
@@ -7166,6 +7209,7 @@ mod tests {
                 ObjectId::new(0),
                 &circle,
                 SemanticFadeDirection::Out,
+                noon::FadeEndpoint::default(),
                 options,
             )
             .unwrap();
@@ -7367,6 +7411,7 @@ mod tests {
                 id,
                 &circle,
                 SemanticFadeDirection::In,
+                noon::FadeEndpoint::default(),
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear)
@@ -7386,6 +7431,7 @@ mod tests {
                 id,
                 &circle,
                 SemanticFadeDirection::In,
+                noon::FadeEndpoint::default(),
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
@@ -7410,6 +7456,7 @@ mod tests {
                 id,
                 &text,
                 SemanticFadeDirection::In,
+                noon::FadeEndpoint::default(),
                 AnimationOptions::new()
                     .run_time(-1.0)
                     .rate_func(RateFunction::Linear),

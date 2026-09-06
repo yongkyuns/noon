@@ -13,6 +13,7 @@ const {
   createDirectOrdinaryValueTrackerContinuationSmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryFadePlaySmokeRenderer,
+  createDirectOrdinaryAffineFadeSmokeRenderer,
   createDirectOrdinaryCreatePlaySmokeRenderer,
   createDirectOrdinarySquareToCircleSmokeRenderer,
   createDirectOrdinaryDifferentRotationsSmokeRenderer,
@@ -551,6 +552,40 @@ async function directOrdinaryFadePlayProof(expectedBackend) {
     throw new Error(`direct ordinary fade pixels or lifecycle are invalid ${JSON.stringify(metrics)}`);
   }
   return metrics;
+}
+
+async function directOrdinaryAffineFadeProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryAffineFadeSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    for (const [time, x] of [[500, -1], [1000, 0], [1500, 1]]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const color = await sampleRenderedColor(canvas, x, 0);
+      if (color.blue <= color.red + 25) {
+        throw new Error(
+          `direct affine fade at ${time}ms missed its Rust-resolved endpoint: ${JSON.stringify({ x, color })}`,
+        );
+      }
+      samples.push({ time, x, color });
+    }
+    renderer.advanceDirectRealtime(2000);
+    await settleDirectPublication(renderer, 2000);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(2000));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 2 ||
+        renderer.objectCount() !== 0 || wake.cadence !== "idle") {
+      throw new Error("direct affine fade did not complete its shared lifecycle");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
 }
 
 async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
@@ -1661,6 +1696,7 @@ async function start() {
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
   metrics.ordinaryFadePlay = await directOrdinaryFadePlayProof(expectedBackend);
+  metrics.ordinaryAffineFade = await directOrdinaryAffineFadeProof(expectedBackend);
   metrics.ordinaryAffineCallbackContinuation =
     await directOrdinaryAffineCallbackContinuationProof(expectedBackend);
   metrics.ordinaryCallbackSparseReads =

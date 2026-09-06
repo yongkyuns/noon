@@ -212,6 +212,15 @@ pub async fn create_direct_ordinary_fade_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct Rust/WASM execution of scaled shift and point fade endpoints.
+#[wasm_bindgen(js_name = createDirectOrdinaryAffineFadeSmokeRenderer)]
+pub async fn create_direct_ordinary_affine_fade_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::affine_fade::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that ordinary Create uses the same target-neutral Rust continuation.
 #[wasm_bindgen(js_name = createDirectOrdinaryCreatePlaySmokeRenderer)]
 pub async fn create_direct_ordinary_create_play_smoke_renderer(

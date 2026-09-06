@@ -219,14 +219,22 @@
       "migration_issue": "#61"
     },
     {
+      "id": "animation.affine-fade",
+      "surface": "Typed leaf FadeIn/FadeOut with scale, shift, or target_position",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_fade_with_endpoint"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_fade_endpoint/_play_canonical_fade"}],
+      "reason": "Python coerces the Manim call into scale plus a shift or point value. Rust resolves effective endpoint layout, authors the affine and appearance tracks, owns lifecycle membership, and schedules composition timing."
+    },
+    {
       "id": "animation.lifecycle",
-      "surface": "Create/Uncreate/FadeIn/FadeOut",
+      "surface": "Unconverted retained/group Create/Uncreate/FadeIn/FadeOut",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_lifecycle.py", "symbol": "_schedule_fade/_schedule_create/_subset_scene_play"},
       "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::append_create/append_fade_in/append_fade_out"},
-      "reason": "Shared lifecycle policy is consulted, but Python still constructs endpoint snapshots, presence tracks, and final handoff state.",
+      "reason": "The remaining #959 retained/group migration path still constructs endpoint snapshots, presence tracks, and final handoff state in Python; canonical typed leaf fades use the shared Rust operation.",
       "replacement": "Move deterministic endpoint and lifecycle track lowering to the shared Rust facade.",
-      "migration_issue": "#61"
+      "migration_issue": "#959"
     },
     {
       "id": "animation.composition",
