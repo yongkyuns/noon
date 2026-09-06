@@ -393,10 +393,7 @@ export async function attachSemanticEngine(
           } catch (error) {
             // Session progression errors are terminal for opaque callbacks too:
             // retrying the same tick could repeat externally visible Python work.
-            callbackFault = error instanceof Error ? error : new Error(String(error));
-            fail(callbackFault);
-            continuation?.onError(continuationGeneration, callbackFault);
-            stop();
+            terminateProgression(error);
           }
         }
       }
@@ -405,6 +402,16 @@ export async function attachSemanticEngine(
       if (!stopped && ((controls.length && writable()) || (latestTick !== null && writable()))) {
         void drain();
       }
+    }
+  }
+  function terminateProgression(error) {
+    if (stopped) return;
+    callbackFault = error instanceof Error ? error : new Error(String(error));
+    fail(callbackFault);
+    try {
+      continuation?.onError(continuationGeneration, callbackFault);
+    } finally {
+      stop();
     }
   }
   function stop() {
@@ -491,8 +498,12 @@ export async function attachSemanticEngine(
       else if (message?.type === "execution_presented") notePresentedPublication(message);
       else if (message?.type === "render_error") {
         const error = new Error(message.message);
-        rejectPendingPresentation(error);
-        fail(error);
+        if (continuation !== null) {
+          terminateProgression(error);
+        } else {
+          rejectPendingPresentation(error);
+          fail(error);
+        }
       }
     });
     const resources = Uint8Array.from(player.resourceBundleBytes());
