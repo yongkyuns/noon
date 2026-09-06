@@ -753,7 +753,7 @@ try {
     `scalar first track midpoint was not rendered from its captured state: ${JSON.stringify({ scalarFirstMidpoint, scalarFirstPixel })}`,
   );
 
-  const scalarHold = await observeScalarDuring(2.15, 2.85, "scalar persistent hold");
+  const scalarHold = await observeScalarDuring(2.0, 2.85, "scalar persistent hold");
   const scalarHoldPixels = await page.locator(`#${scalarContinuation.canvasId}`).screenshot();
   const scalarHoldPixel = renderedWorldPixel(scalarHoldPixels, 1, 0);
   assert.ok(

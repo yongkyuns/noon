@@ -661,34 +661,39 @@ async function directOrdinaryValueTrackerContinuationProof(expectedBackend) {
   if (!initial.presentNow || initial.cadence !== "animation-frame") {
     throw new Error(`direct scalar continuation did not start: ${JSON.stringify(initial)}`);
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 0);
 
   if (!renderer.advanceDirectRealtime(1000)) {
     throw new Error("direct scalar continuation did not publish its first midpoint");
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 1000);
   const firstMidpoint = await sampleRenderedColor(canvas, -1, 0);
 
   if (!renderer.advanceDirectRealtime(2000)) {
     throw new Error("direct scalar continuation did not complete its first track");
   }
-  await presentDirectFrame(renderer);
-  if (!renderer.advanceDirectRealtime(2500)) {
-    throw new Error("direct scalar continuation did not drive its persistent hold");
+  await settleDirectPublication(renderer, 2000);
+  if (renderer.advanceDirectRealtime(2500) || renderer.render()) {
+    throw new Error("direct scalar static hold produced unnecessary execution or draw work");
   }
-  await presentDirectFrame(renderer);
   const persistentHold = await sampleRenderedColor(canvas, 1, 0);
+  renderer.advanceDirectRealtime(3000);
+  const afterWait = JSON.parse(renderer.directWakeDirectiveJson(3000));
+  if (afterWait.presentNow) await settleDirectPublication(renderer, 3000);
+  if (afterWait.cadence !== "animation-frame") {
+    throw new Error("direct scalar wait did not resume its second track");
+  }
 
   if (!renderer.advanceDirectRealtime(3500)) {
     throw new Error("direct scalar continuation did not publish its second midpoint");
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 3500);
   const secondMidpoint = await sampleRenderedColor(canvas, 2, 0);
 
   if (!renderer.advanceDirectRealtime(4000)) {
     throw new Error("direct scalar continuation did not complete its second track");
   }
-  await presentDirectFrame(renderer);
+  await settleDirectPublication(renderer, 4000);
   const endpoint = await sampleRenderedColor(canvas, 3, 0);
   const finalDirective = JSON.parse(renderer.directWakeDirectiveJson(4000));
   const metrics = {
