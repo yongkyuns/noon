@@ -79,6 +79,9 @@ async function waitForPreloadedRuntime(page) {
     () => {
       const status = document.querySelector("#status");
       const patch = document.querySelector("#patch-status");
+      if (status?.dataset.state === "error" || patch?.dataset.state === "error") {
+        return true;
+      }
       return (
         status?.dataset.liveAuthoring === "ready" &&
         status?.dataset.state === "running" &&
@@ -91,6 +94,12 @@ async function waitForPreloadedRuntime(page) {
     { timeout: 120_000 },
   );
   const state = await snapshot(page);
+  assert.notEqual(
+    state.patchState,
+    "error",
+    `stress Run must succeed: ${state.patchText}`,
+  );
+  assert.notEqual(state.runtimeState, "error", "stress runtime must start successfully");
   assert.equal(
     state.runtimeStartup,
     "started-on-demand",

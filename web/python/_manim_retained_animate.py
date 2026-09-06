@@ -30,6 +30,15 @@ def _retained_copy_for_animate_target(
 ) -> _typst._RetainedTextMobject:
     """Clone a retained animation target without entering geometry-only cloning."""
 
+    if self._semantic_handle is not None:
+        # Ordinary Text owns a canonical semantic handle. Preserve Rust's live
+        # target-editor boundary instead of allocating a second Text identity
+        # through the retained-only copy constructor.
+        import _manim_semantic_handles as _semantic_handles
+
+        target = _semantic_handles._target_mobject(self)
+        target._retained_handle = target._semantic_handle
+        return target
     return self.copy()
 
 
@@ -181,7 +190,10 @@ def _retained_builder_getattr(
 
     invoke = _ORIGINAL_BUILDER_GETATTR(self, name)
     source = getattr(self, "source", None)
-    if not isinstance(source, _typst._RetainedTextMobject):
+    if (
+        not isinstance(source, _typst._RetainedTextMobject)
+        or source._semantic_handle is not None
+    ):
         return invoke
 
     def retained_invoke(*args: Any, **kwargs: Any):
@@ -204,7 +216,12 @@ def _retained_animation_source(
         source = getattr(animation, "target", None)
     else:
         return None
-    return source if isinstance(source, _typst._RetainedTextMobject) else None
+    return (
+        source
+        if isinstance(source, _typst._RetainedTextMobject)
+        and source._semantic_handle is None
+        else None
+    )
 
 
 def _retained_animation_plan(animation: object) -> list[dict[str, Any]] | None:
@@ -260,7 +277,10 @@ def _retained_family_fade_expansion(
 
     leaves = _compat._leaf_mobjects(target)
     retained = [
-        member for member in leaves if isinstance(member, _typst._RetainedTextMobject)
+        member
+        for member in leaves
+        if isinstance(member, _typst._RetainedTextMobject)
+        and member._semantic_handle is None
     ]
     if not retained:
         return None
