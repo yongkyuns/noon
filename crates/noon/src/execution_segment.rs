@@ -1,4 +1,7 @@
-use crate::{EvaluationError, ExecutionSession, FrameState, RuntimeIdentity, TimelineWakeState};
+use crate::{
+    CallbackAdvance, EvaluationError, ExecutionSession, ExecutionSessionCallbackError, FrameState,
+    RuntimeIdentity, TimelineWakeState,
+};
 use noon_compile::SemanticAnimationCompletion;
 use noon_core::{ObjectId, Property, SemanticNodeId, TrackId};
 
@@ -135,6 +138,65 @@ impl std::fmt::Display for ExecutionSegmentError {
 
 impl std::error::Error for ExecutionSegmentError {}
 
+/// Failure to drive one logical segment through its owning execution session.
+///
+/// Animated segments carry the existing runtime-derived completion token, so a
+/// foreign or superseded animated segment is rejected before it can advance the
+/// frame. A pure wait deliberately has no token: it has no driver-release work
+/// and is only a value boundary in authored time, so this operation does not
+/// manufacture a second identity space merely to tag it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExecutionSegmentAdvanceError {
+    ForeignSegment {
+        expected: RuntimeIdentity,
+        actual: RuntimeIdentity,
+    },
+    NoPendingCompletion {
+        actual: ExecutionSegmentToken,
+    },
+    StaleSegment {
+        expected: ExecutionSegmentToken,
+        actual: ExecutionSegmentToken,
+    },
+    Evaluation(EvaluationError),
+    Callback(ExecutionSessionCallbackError),
+}
+
+impl std::fmt::Display for ExecutionSegmentAdvanceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ForeignSegment { expected, actual } => write!(
+                formatter,
+                "execution segment belongs to runtime {actual:?}, expected {expected:?}"
+            ),
+            Self::NoPendingCompletion { actual } => write!(
+                formatter,
+                "execution segment token {actual:?} has no pending completion"
+            ),
+            Self::StaleSegment { expected, actual } => write!(
+                formatter,
+                "execution segment token {actual:?} is stale; expected {expected:?}"
+            ),
+            Self::Evaluation(error) => error.fmt(formatter),
+            Self::Callback(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionSegmentAdvanceError {}
+
+impl From<EvaluationError> for ExecutionSegmentAdvanceError {
+    fn from(value: EvaluationError) -> Self {
+        Self::Evaluation(value)
+    }
+}
+
+impl From<ExecutionSessionCallbackError> for ExecutionSegmentAdvanceError {
+    fn from(value: ExecutionSessionCallbackError) -> Self {
+        Self::Callback(value)
+    }
+}
+
 /// Target-neutral observation used while driving one logical authored segment.
 ///
 /// `timeline` is the existing runtime cadence clipped to the segment boundary. A
@@ -219,6 +281,62 @@ impl ExecutionSession {
         }
     }
 
+    /// Validate an animated segment's existing runtime-derived token before a
+    /// drive operation can change the frame. A previously completed receipt is
+    /// intentionally an idempotent no-op. Tokenless waits carry no driver
+    /// completion record and remain ordinary authored-time boundaries.
+    fn validate_segment_for_advance(
+        &self,
+        segment: ExecutionSegment,
+    ) -> Result<bool, ExecutionSegmentAdvanceError> {
+        let Some(token) = segment.token() else {
+            return Ok(false);
+        };
+        let runtime = self.runtime_identity();
+        if token.runtime() != runtime {
+            return Err(ExecutionSegmentAdvanceError::ForeignSegment {
+                expected: runtime,
+                actual: token.runtime(),
+            });
+        }
+        if self.segment_was_completed(token) {
+            return Ok(true);
+        }
+        let pending = self
+            .pending_segment_completion
+            .as_ref()
+            .ok_or(ExecutionSegmentAdvanceError::NoPendingCompletion { actual: token })?;
+        if pending.token != token {
+            return Err(ExecutionSegmentAdvanceError::StaleSegment {
+                expected: pending.token,
+                actual: token,
+            });
+        }
+        Ok(false)
+    }
+
+    /// Return the one forward, endpoint-clamped target shared by every segment
+    /// drive. `None` means an animated segment was already reconciled and is an
+    /// idempotent receipt; callers must not evaluate or invoke callbacks again.
+    fn segment_drive_target(
+        &self,
+        segment: ExecutionSegment,
+        requested_time: f64,
+    ) -> Result<Option<f64>, ExecutionSegmentAdvanceError> {
+        if !requested_time.is_finite() {
+            return Err(EvaluationError::InvalidTime(requested_time).into());
+        }
+        if self.validate_segment_for_advance(segment)? {
+            return Ok(None);
+        }
+        let current = self.frame().time;
+        Ok(Some(if current >= segment.end_time {
+            current
+        } else {
+            requested_time.max(current).min(segment.end_time)
+        }))
+    }
+
     /// Advance monotonically toward one logical segment boundary without overshoot.
     ///
     /// Wall/presentation clocks may request a time after the authored boundary. This
@@ -230,27 +348,42 @@ impl ExecutionSession {
         &mut self,
         segment: ExecutionSegment,
         requested_time: f64,
-    ) -> Result<&FrameState, EvaluationError> {
-        if !requested_time.is_finite() {
-            return Err(EvaluationError::InvalidTime(requested_time));
-        }
-        let current = self.frame().time;
-        if current >= segment.end_time {
+    ) -> Result<&FrameState, ExecutionSegmentAdvanceError> {
+        let Some(target) = self.segment_drive_target(segment, requested_time)? else {
             return Ok(self.frame());
-        }
-        let target = requested_time.max(current).min(segment.end_time);
+        };
+        let current = self.frame().time;
         if target == current {
             return Ok(self.frame());
         }
-        self.advance_to(target)
+        self.advance_to(target).map_err(Into::into)
+    }
+
+    /// Advance one logical segment through the existing callback barrier.
+    ///
+    /// This composes the normal segment clamp with
+    /// [`ExecutionSession::advance_to_callback_barrier`]. It owns no cursor or
+    /// scheduler: hosts retain only the returned segment and query
+    /// [`Self::segment_state`] for cadence. Unlike the frame-only drive, a
+    /// same-time request intentionally still enters the barrier so time-zero
+    /// and endpoint callbacks cannot be skipped.
+    pub fn advance_segment_to_callback_barrier(
+        &mut self,
+        segment: ExecutionSegment,
+        requested_time: f64,
+    ) -> Result<CallbackAdvance<'_>, ExecutionSegmentAdvanceError> {
+        let Some(target) = self.segment_drive_target(segment, requested_time)? else {
+            return Ok(CallbackAdvance::Ready(self.frame()));
+        };
+        self.advance_to_callback_barrier(target).map_err(Into::into)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, RateFunction, SemanticObjectState, SemanticStore, SemanticVec3,
-        StoredGeometry,
+        AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
+        SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry,
     };
 
     use super::*;
@@ -349,6 +482,183 @@ mod tests {
         session.advance_segment_to(segment, 1.0).unwrap();
         assert!(session.segment_state(segment).is_complete());
         assert_eq!(session.frame().objects[0].transform.translation.x, 4.0);
+    }
+
+    #[test]
+    fn callback_aware_segment_drive_clamps_overshoot_to_the_wait_endpoint() {
+        let mut session = static_session();
+        let wait = session.wait_segment(2.0).unwrap();
+
+        assert!(matches!(
+            session.advance_segment_to_callback_barrier(wait, 9.0).unwrap(),
+            CallbackAdvance::Ready(frame) if frame.time == 2.0
+        ));
+        assert!(session.segment_state(wait).is_complete());
+    }
+
+    #[test]
+    fn callback_aware_segment_drive_services_time_zero_callbacks_without_advancing_time() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut registration = SemanticMutationTransaction::new();
+        registration.add_updater(object, HostCallbackId::new(7), 0.0, None);
+        registration.apply(&mut store).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let wait = session.wait_segment(1.0).unwrap();
+        let before = session.frame().clone();
+        let publication = session.publication_context();
+
+        let overlay = match session
+            .advance_segment_to_callback_barrier(wait, 0.0)
+            .unwrap()
+        {
+            CallbackAdvance::HostRequired {
+                invocations,
+                overlay,
+            } => {
+                assert_eq!(invocations.len(), 1);
+                assert_eq!(overlay.time(), 0.0);
+                overlay
+            }
+            CallbackAdvance::Ready(_) => panic!("time-zero callback phase was skipped"),
+        };
+        assert_eq!(session.frame(), &before);
+        assert_eq!(session.publication_context(), publication);
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        assert!(matches!(
+            session.advance_segment_to_callback_barrier(wait, 0.0).unwrap(),
+            CallbackAdvance::Ready(frame) if frame.time == 0.0
+        ));
+    }
+
+    #[test]
+    fn callback_aware_segment_drive_requires_endpoint_callback_before_ready() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut registration = SemanticMutationTransaction::new();
+        registration.add_updater(object, HostCallbackId::new(8), 1.0, None);
+        registration.apply(&mut store).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let wait = session.wait_segment(1.0).unwrap();
+
+        let overlay = match session
+            .advance_segment_to_callback_barrier(wait, wait.end_time())
+            .unwrap()
+        {
+            CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            CallbackAdvance::Ready(_) => panic!("endpoint callback phase was skipped"),
+        };
+        assert_eq!(overlay.time(), wait.end_time());
+        assert_eq!(session.frame().time, 0.0);
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        assert!(matches!(
+            session
+                .advance_segment_to_callback_barrier(wait, wait.end_time())
+                .unwrap(),
+            CallbackAdvance::Ready(frame) if frame.time == wait.end_time()
+        ));
+    }
+
+    #[test]
+    fn animated_segment_drive_rejects_foreign_and_stale_tokens_without_frame_changes() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let before = session.frame().clone();
+        let publication = session.publication_context();
+
+        let mut clone = session.clone();
+        let clone_before = clone.frame().clone();
+        let clone_publication = clone.publication_context();
+        assert!(matches!(
+            clone.advance_segment_to(segment, 1.0),
+            Err(ExecutionSegmentAdvanceError::ForeignSegment { .. })
+        ));
+        assert_eq!(clone.frame(), &clone_before);
+        assert_eq!(clone.publication_context(), clone_publication);
+
+        let stale = ExecutionSegment::from_duration(0.0, 1.0)
+            .unwrap()
+            .with_completion_token(ExecutionSegmentToken::new(
+                session.runtime_identity(),
+                ExecutionSegmentSequence::new(99),
+            ));
+        assert!(matches!(
+            session.advance_segment_to_callback_barrier(stale, 1.0),
+            Err(ExecutionSegmentAdvanceError::StaleSegment { .. })
+        ));
+        assert_eq!(session.frame(), &before);
+        assert_eq!(session.publication_context(), publication);
+    }
+
+    #[test]
+    fn completed_animated_segment_drive_is_an_idempotent_receipt() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        session
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        let before = session.frame().clone();
+        let publication = session.publication_context();
+
+        assert!(matches!(
+            session.advance_segment_to_callback_barrier(segment, 0.0).unwrap(),
+            CallbackAdvance::Ready(frame) if frame == &before
+        ));
+        assert_eq!(session.frame(), &before);
+        assert_eq!(session.publication_context(), publication);
     }
 
     #[test]
