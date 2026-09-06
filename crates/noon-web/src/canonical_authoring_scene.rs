@@ -789,12 +789,11 @@ impl CanonicalAuthoringScene {
             play_options,
         )
         .map_err(|error| error.to_string())?;
+        let mut supported = true;
         for (source, target, options) in children {
-            if !self.can_ordinary_transform_to(source, target, *options)? {
-                return Ok(false);
-            }
+            supported &= self.can_ordinary_transform_to(source, target, *options)?;
         }
-        Ok(true)
+        Ok(supported)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2907,6 +2906,8 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let source = context.scene.circle(0.4).unwrap();
         context.bind_mobject(ObjectId::new(0), &source).unwrap();
+        let mut unsupported = source.target_editor().unwrap();
+        unsupported.set_stroke_width(3.0).unwrap();
         let foreign = noon::Scene::new().circle(0.4).unwrap();
         let child = AnimationOptions::new()
             .run_time(1.0)
@@ -2918,7 +2919,10 @@ mod tests {
 
         assert!(context
             .can_ordinary_transform_composition(
-                &[(source.clone(), foreign, child)],
+                &[
+                    (source.clone(), unsupported.clone(), child),
+                    (source.clone(), foreign, child),
+                ],
                 composition,
                 play,
             )
@@ -2933,7 +2937,11 @@ mod tests {
             .apply(&mut context.scene.store().borrow_mut())
             .unwrap();
         assert!(context
-            .can_ordinary_transform_composition(&[(source, stale, child)], composition, play,)
+            .can_ordinary_transform_composition(
+                &[(source.clone(), unsupported, child), (source, stale, child)],
+                composition,
+                play,
+            )
             .is_err());
         assert!(context.live_player.is_none());
     }
