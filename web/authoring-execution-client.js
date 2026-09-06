@@ -203,6 +203,7 @@ export class AuthoringExecutionClient {
       const ready = await player.startSemanticExecution(semantic.contextId, authoringClient, {
         ...options,
         callbackSessionId: semantic.callbackSessionId,
+        continuationGeneration: semantic.continuationGeneration,
       });
       this.#assertLifecycleCurrent(generation, terminateCandidate);
       if (this.#preparedPlayer === player) {
@@ -783,9 +784,16 @@ function validateSemanticExecutionDescriptor(descriptor) {
       (!Number.isSafeInteger(descriptor.callbackSessionId) || descriptor.callbackSessionId < 0)) {
     throw new TypeError("semantic callback session ID must be a non-negative safe integer");
   }
+  if (descriptor.continuationGeneration !== null &&
+      descriptor.continuationGeneration !== undefined &&
+      (!Number.isSafeInteger(descriptor.continuationGeneration) ||
+       descriptor.continuationGeneration <= 0)) {
+    throw new TypeError("semantic continuation generation must be a positive safe integer");
+  }
   return {
     contextId: descriptor.contextId,
     callbackSessionId: descriptor.callbackSessionId ?? null,
+    continuationGeneration: descriptor.continuationGeneration ?? null,
   };
 }
 

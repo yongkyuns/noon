@@ -934,6 +934,37 @@ impl CanonicalAuthoringScene {
         Ok(())
     }
 
+    /// Resume the exact returned player for a newly-authored continuation segment.
+    ///
+    /// Unlike a new endpoint/recovery handoff, this keeps the existing transport encoder,
+    /// resource bundle, session sequence, and snapshot state. The authoring continuation
+    /// may only resume a player after it has declared one supported pending segment.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn resume_execution_player(&mut self) -> Result<crate::SemanticExecutionPlayer, String> {
+        if self.live_player_transferred || !self.live_player_returned {
+            return Err("semantic continuation player is not returned to this context".into());
+        }
+        let player = self
+            .live_player
+            .as_ref()
+            .ok_or("semantic continuation context has no returned player")?;
+        if !player.has_pending_live_segment() {
+            return Err("semantic continuation has no pending segment to resume".into());
+        }
+        if player.has_required_callbacks() {
+            return Err(
+                "ordinary asynchronous continuation does not support required callbacks".into(),
+            );
+        }
+        let player = self
+            .live_player
+            .take()
+            .expect("validated returned player must remain installed");
+        self.live_player_transferred = true;
+        self.live_player_returned = false;
+        Ok(player)
+    }
+
     /// Derive the migration/export document from live semantic state at the boundary.
     pub fn finalize(
         &self,
@@ -2360,6 +2391,13 @@ mod wasm {
             self.inner.return_execution_player(player).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = resumeExecutionPlayer)]
+        pub fn resume_execution_player(
+            &mut self,
+        ) -> Result<crate::SemanticExecutionPlayer, JsValue> {
+            self.inner.resume_execution_player().map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = bindGeometry)]
         pub fn bind_geometry(
             &mut self,
@@ -3191,6 +3229,15 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "transferred");
 
         context.return_execution_player(player).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
+        assert!(context.resume_execution_player().is_err());
+
+        context.begin_ordinary_wait(0.25).unwrap();
+        let mut resumed = context.resume_execution_player().unwrap();
+        assert_eq!(context.live_execution_ownership(), "transferred");
+        resumed.live_advance_segment_to(0.25).unwrap();
+        resumed.live_complete_segment().unwrap();
+        context.return_execution_player(resumed).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
     }
 

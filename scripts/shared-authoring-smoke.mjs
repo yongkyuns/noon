@@ -616,6 +616,74 @@ try {
     }
   }
 
+  // Async Python construct suspends on the worker-owned semantic endpoint. The
+  // early descriptor starts the existing execution client while runPythonAsync
+  // remains unresolved; each endpoint publication returns the same player before
+  // the Python continuation authors its next operation.
+  const continuationSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_affine_continuation.py"),
+    "utf8",
+  );
+  const continuationResult = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-ordinary-affine-continuation";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let execution = null;
+    let registration = null;
+    const authored = await harness.authoring.run(source, {}, {
+      async onSemanticContinuation(next) {
+        if (registration !== null) {
+          throw new Error("async source registered more than one semantic context");
+        }
+        registration = next;
+        execution = new harness.AuthoringExecutionClient(canvas);
+        await execution.startSemanticExecution(next.semanticExecution, {
+          authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, next.duration),
+          transportMode: "transferable",
+        });
+      },
+    });
+    if (execution === null || registration === null) {
+      throw new Error("async source did not register its semantic continuation");
+    }
+    if (authored.semanticExecution.contextId !== registration.semanticExecution.contextId ||
+        authored.semanticExecution.continuationGeneration !== registration.generation) {
+      throw new Error("final authoring result did not retain its early continuation context");
+    }
+    let metrics;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      metrics = (await execution.metrics()).metrics;
+      if (metrics.objectCount === 1 && metrics.drawCalls > 0 && metrics.presentedFrames > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    harness.liveContinuationExecution = execution;
+    return { canvasId: canvas.id, duration: authored.duration, metrics };
+  }, continuationSource);
+  assert.equal(continuationResult.duration, 4);
+  assert.equal(continuationResult.metrics.objectCount, 1);
+  assert.ok(continuationResult.metrics.drawCalls > 0);
+  const continuationPixels = visiblePixelStats(
+    await page.locator(`#${continuationResult.canvasId}`).screenshot(),
+    (red, green, blue) => blue > red + 40 && blue > green,
+  );
+  assert.ok(continuationPixels.count > 100, "async continuation circle was not visible");
+  assert.ok(
+    Math.abs(continuationPixels.centerX - (320 + 5 * 45)) < 4,
+    `async continuation final x was not 5: ${JSON.stringify(continuationPixels)}`,
+  );
+  assert.ok(
+    Math.abs(continuationPixels.centerY - (180 + 45)) < 4,
+    `async continuation final y was not -1: ${JSON.stringify(continuationPixels)}`,
+  );
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.liveContinuationExecution.terminate();
+    window.sharedAuthoringSmoke.liveContinuationExecution = null;
+  });
+
   // Native hosts send normalized input occurrences across the genuine worker
   // control port. The Python scene owns no input values or event cursor; the
   // canonical Rust session evaluates the bindings and publishes each frame.

@@ -196,6 +196,9 @@ export class ExecutionWorkerClient {
       options.sharedSlotCapacity ??
       (this.#renderPrepared === null ? DEFAULT_SHARED_SLOT_CAPACITY : this.#sharedSlotCapacity);
     const callbackSessionId = validateOptionalCallbackSessionId(options.callbackSessionId);
+    const continuationGeneration = validateOptionalContinuationGeneration(
+      options.continuationGeneration,
+    );
     if (this.#renderWorker === null) {
       await this.prepare({ transportMode, sharedSlotCapacity });
     }
@@ -210,10 +213,17 @@ export class ExecutionWorkerClient {
       authoringClient,
       validateLoopDurationSeconds(loopDurationSeconds),
       callbackSessionId,
+      continuationGeneration,
     );
   }
 
-  async #startPreparedSemantic(contextId, authoringClient, loopDurationSeconds, callbackSessionId) {
+  async #startPreparedSemantic(
+    contextId,
+    authoringClient,
+    loopDurationSeconds,
+    callbackSessionId,
+    continuationGeneration,
+  ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
     }
@@ -249,7 +259,12 @@ export class ExecutionWorkerClient {
         contextId,
         control.port2,
         render.port1,
-        this.#semanticAttachmentOptions(loopDurationSeconds, this.#session, callbackSessionId),
+        this.#semanticAttachmentOptions(
+          loopDurationSeconds,
+          this.#session,
+          callbackSessionId,
+          continuationGeneration,
+        ),
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
         ([engine, renderResult]) => ({
@@ -491,7 +506,12 @@ export class ExecutionWorkerClient {
     this.#session = checkedNextSession(this.#session);
   }
 
-  #semanticAttachmentOptions(loopDurationSeconds, session, callbackSessionId = null) {
+  #semanticAttachmentOptions(
+    loopDurationSeconds,
+    session,
+    callbackSessionId = null,
+    continuationGeneration = null,
+  ) {
     const options = {
       transportMode: this.#transportMode,
       sharedSlotCapacity: this.#sharedSlotCapacity,
@@ -499,6 +519,9 @@ export class ExecutionWorkerClient {
       session,
     };
     if (callbackSessionId !== null) options.callbackSessionId = callbackSessionId;
+    if (continuationGeneration !== null) {
+      options.continuationGeneration = continuationGeneration;
+    }
     return options;
   }
 
@@ -1756,6 +1779,14 @@ function validateOptionalCallbackSessionId(callbackSessionId) {
     throw new TypeError("semantic callback session must be a non-negative safe integer");
   }
   return callbackSessionId;
+}
+
+function validateOptionalContinuationGeneration(generation) {
+  if (generation === null || generation === undefined) return null;
+  if (!Number.isSafeInteger(generation) || generation <= 0) {
+    throw new TypeError("semantic continuation generation must be a positive safe integer");
+  }
+  return generation;
 }
 
 function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {

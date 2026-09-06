@@ -785,6 +785,12 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn has_pending_live_segment(&self) -> bool {
+        self.live_segment
+            .is_some_and(|segment| !self.session.segment_state(segment).is_complete())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn reject_required_callback_segment(&self) -> Result<(), String> {
         if self.session.has_required_callbacks() {
             return Err(
@@ -802,7 +808,7 @@ impl SemanticExecutionPlayer {
     ) -> Result<WasmLiveSegmentWake, String> {
         self.reject_required_callback_segment()?;
         let segment = self.live_segment()?;
-        let plan = BrowserExecutionWakePlan::from_segment(&self.session, segment);
+        let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
         let directive = self
             .live_wake_clock
             .directive(plan, wall_time_ms, self.session.frame().time)

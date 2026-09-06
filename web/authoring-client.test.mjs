@@ -218,10 +218,127 @@ test("semantic execution descriptor bypasses legacy document and SceneSpec valid
   assert.deepEqual(validateSemanticExecutionDescriptor({ context_id: "semantic-8" }), {
     contextId: "semantic-8",
   });
+  assert.deepEqual(validateSemanticExecutionDescriptor({
+    context_id: "semantic-9",
+    continuation_generation: 4,
+  }), {
+    contextId: "semantic-9",
+    continuationGeneration: 4,
+  });
   assert.throws(
     () => validateSemanticExecutionDescriptor({ context_id: "" }),
     /non-empty string/,
   );
+});
+
+test("routes an early semantic continuation registration without settling the run", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  const registrations = [];
+  let settled = false;
+  const result = client.run("async scene", {}, {
+    onSemanticContinuation: (registration) => { registrations.push(registration); },
+  });
+  result.then(() => { settled = true; });
+  await Promise.resolve();
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0,
+    generation: 7,
+    duration: 2,
+    semanticExecution: {
+      context_id: "semantic-async",
+      continuation_generation: 7,
+    },
+  }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.deepEqual(registrations, [{
+    generation: 7,
+    duration: 2,
+    semanticExecution: {
+      contextId: "semantic-async",
+      continuationGeneration: 7,
+    },
+  }]);
+
+  const control = new MessageChannel();
+  const render = new MessageChannel();
+  const attached = client.attachSemanticExecution(
+    registrations[0].semanticExecution.contextId,
+    control.port1,
+    render.port1,
+    {
+      transportMode: "transferable",
+      sharedSlotCapacity: 1024,
+      loopDurationSeconds: 2,
+      session: 1,
+      continuationGeneration: registrations[0].generation,
+    },
+  );
+  await Promise.resolve();
+  const attachment = worker.messages.find(
+    (message) => message.type === "attach_semantic_execution",
+  );
+  assert.equal(attachment.continuationGeneration, 7);
+  assert.equal(attachment.continuationRunRequestId, 0);
+  worker.emit("message", workerMessage("semantic_execution_attached", {
+    requestId: attachment.requestId,
+  }));
+  await attached;
+
+  worker.emit("message", workerMessage("result", {
+    requestId: 0,
+    resultJson: JSON.stringify({
+      kind: "scene_document",
+      semantic_execution: {
+        context_id: "semantic-async",
+        continuation_generation: 7,
+      },
+      duration: 4,
+    }),
+  }));
+  assert.equal((await result).semanticExecution.continuationGeneration, 7);
+  control.port2.close();
+  render.port2.close();
+});
+
+test("cancels the matching suspended continuation when early startup rejects", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  const result = client.run("async scene", {}, {
+    onSemanticContinuation: () => { throw new Error("renderer startup failed"); },
+  });
+  await Promise.resolve();
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0,
+    generation: 11,
+    duration: 1,
+    semanticExecution: {
+      context_id: "semantic-cancel",
+      continuation_generation: 11,
+    },
+  }));
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  const cancellation = worker.messages.find(
+    (message) => message.type === "cancel_semantic_continuation",
+  );
+  assert.equal(cancellation.contextId, "semantic-cancel");
+  assert.equal(cancellation.continuationGeneration, 11);
+  assert.equal(cancellation.continuationRunRequestId, 0);
+  assert.equal(cancellation.reason, "renderer startup failed");
+  worker.emit("message", workerMessage("semantic_continuation_cancelled", {
+    requestId: cancellation.requestId,
+  }));
+  worker.emit("message", workerMessage("error", {
+    requestId: 0,
+    message: "renderer startup failed",
+  }));
+  await assert.rejects(result, /renderer startup failed/);
 });
 
 test("semantic execution attachment transfers distinct control and render ports", async () => {

@@ -14,6 +14,7 @@ export async function attachSemanticEngine(
   request,
   onStop = () => {},
   runRequiredCallbackPhase = null,
+  continuation = null,
 ) {
   const { controlPort, renderPort, transportMode, loopDurationSeconds, session } = request;
   if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
@@ -36,6 +37,8 @@ export async function attachSemanticEngine(
   let lastSentPublication = null;
   let lastPresentedPublication = null;
   let pendingPresentation = null;
+  let continuationActive = false;
+  let continuationGeneration = continuation?.generation ?? null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
@@ -97,7 +100,12 @@ export async function attachSemanticEngine(
       resolve();
     }
   };
-  const state = (type) => ({ type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" });
+  const state = (type) => {
+    if (player === null) {
+      throw new Error("semantic continuation is idle in its authoring context");
+    }
+    return { type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" };
+  };
   async function publishCallbackPhase(
     phaseJson,
     { initial = false, emitDelta = true, onPhaseToken = null } = {},
@@ -189,6 +197,32 @@ export async function attachSemanticEngine(
     return null;
   }
 
+  async function driveContinuation(wallTime) {
+    if (!continuationActive || player === null) return;
+    const wake = player.liveSegmentWake(wallTime);
+    const cadence = wake.cadence;
+    const timerAfterMilliseconds = wake.timerAfterMilliseconds;
+    wake.free?.();
+    if (cadence === "idle" ||
+        (cadence === "timer" && timerAfterMilliseconds > 0)) return;
+    if (cadence !== "animation_frame" && cadence !== "timer") {
+      throw new Error(`unknown semantic continuation wake cadence ${cadence}`);
+    }
+    const reachedEndpoint = player.driveLiveSegmentFromWallTime(wallTime);
+    const endpointPublication = send(player.drainDeltaJson());
+    if (!reachedEndpoint) return;
+
+    await awaitPresentation(endpointPublication);
+    player.completeLiveSegment();
+    const completionPublication = send(player.drainDeltaJson());
+    await awaitPresentation(completionPublication);
+    const completedPlayer = player;
+    player = null;
+    continuationActive = false;
+    context.returnExecutionPlayer(completedPlayer);
+    continuation?.onComplete(continuationGeneration);
+  }
+
   async function drain() {
     if (stopped || !transport || draining) return;
     draining = true;
@@ -239,12 +273,18 @@ export async function attachSemanticEngine(
         // side effects while this player is retained for recovery.
         if (callbackFault === null) {
           try {
-            await publishCallbackPhase(player.tickCallbackPhaseJson(timestamp));
+            if (continuationActive) {
+              await driveContinuation(timestamp);
+            } else if (player !== null) {
+              await publishCallbackPhase(player.tickCallbackPhaseJson(timestamp));
+            }
           } catch (error) {
             // Session progression errors are terminal for opaque callbacks too:
             // retrying the same tick could repeat externally visible Python work.
             callbackFault = error instanceof Error ? error : new Error(String(error));
             fail(callbackFault);
+            continuation?.onError(continuationGeneration, callbackFault);
+            stop();
           }
         }
       }
@@ -277,7 +317,7 @@ export async function attachSemanticEngine(
       }
       // The authoring context retains this exact runtime for renderer recovery
       // and setup retries. Dropping the context is the only genuine teardown.
-      context.returnExecutionPlayer(player);
+      if (!continuationActive) context.returnExecutionPlayer(player);
       player = null;
     }
     transport?.close?.();
@@ -349,7 +389,29 @@ export async function attachSemanticEngine(
     await publishCallbackPhase(player.initialCallbackPhaseJson(), { initial: true });
     controlPort.start();
     renderPort.start();
+    continuationActive = continuation !== null;
     post({ type: "ready", transportMode });
   } catch (error) { stop(); throw error; }
-  return { stop };
+  return {
+    stop,
+    startContinuation(generation) {
+      if (continuation === null) {
+        throw new Error("semantic endpoint was not attached for continuation execution");
+      }
+      if (stopped) throw new Error("semantic continuation endpoint is stopped");
+      if (continuationActive || player !== null) {
+        throw new Error("semantic continuation endpoint already owns an active segment");
+      }
+      if (!Number.isSafeInteger(generation) || generation !== continuation.generation) {
+        throw new Error("stale semantic continuation generation");
+      }
+      player = context.resumeExecutionPlayer();
+      continuationGeneration = generation;
+      continuationActive = true;
+      callbackFault = null;
+      latestTick = null;
+      send(player.drainDeltaJson());
+      void drain();
+    },
+  };
 }

@@ -19,3 +19,19 @@ test("Python authoring worker keeps shared sector constructors", () => {
   assert.match(source, /noonCreateAuthoringSectorHandle/);
   assert.match(source, /noonCreateAuthoringAnnulusHandle/);
 });
+
+test("semantic continuation control bypasses the blocked interpreter request queue", () => {
+  assert.match(source, /if\s*\(isContinuationControl\(event\.data\)\)/);
+  assert.match(source, /void\s+handleContinuationControl\(event\.data\)/);
+  assert.match(source, /requestQueue\s*=\s*requestQueue\.then\(\(\)\s*=>\s*handleRequest/);
+  assert.match(source, /inspect\.iscoroutinefunction\(__noon_result\.construct\)/);
+  assert.match(source, /await\s+__noon_result\.construct\(\)/);
+  assert.match(source, /continuation\.endpoint\.startContinuation\(continuation\.generation\)/);
+  assert.match(source, /continuation\.runRequestId\s*!==\s*request\.continuationRunRequestId/);
+  assert.match(source, /noonRequireSemanticContinuationActive/);
+  const lane = source.slice(
+    source.indexOf("async function handleContinuationControl"),
+    source.indexOf("async function handleRequest"),
+  );
+  assert.doesNotMatch(lane, /runPythonAsync/);
+});

@@ -49,6 +49,26 @@ impl BrowserExecutionWakePlan {
         )
     }
 
+    /// Derive wake mechanics while a host still owes completion for its current segment.
+    ///
+    /// A zero-length wait is already at its endpoint, so its ordinary timeline state is
+    /// quiescent even though the continuation must drive once to reconcile completion.
+    /// Keep [`Self::from_segment`] stable for completed-handle observations and add the
+    /// immediate deadline only at the live host's explicit pending-segment boundary.
+    pub(crate) fn from_pending_segment(
+        session: &ExecutionSession,
+        segment: ExecutionSegment,
+    ) -> Self {
+        let state = session.segment_state(segment);
+        let timeline =
+            if !state.is_complete() && matches!(state.timeline(), TimelineWakeState::Quiescent) {
+                TimelineWakeState::Deadline(session.frame().time)
+            } else {
+                state.timeline()
+            };
+        Self::from_parts(session.wake_state().frame_pending(), timeline)
+    }
+
     /// Project one target-neutral runtime wake observation into browser primitives.
     pub fn from_runtime(state: RuntimeWakeState) -> Self {
         Self::from_parts(state.frame_pending(), state.timeline())
@@ -302,6 +322,23 @@ mod tests {
         session.advance_segment_to(segment, 9.0).unwrap();
         assert!(BrowserExecutionWakePlan::from_segment(&session, segment).is_idle());
         assert_eq!(session.frame().time, 2.0);
+    }
+
+    #[test]
+    fn pending_zero_wait_requests_one_immediate_host_drive() {
+        let mut session = static_session();
+        session.take_frame_changes();
+        let segment = session.wait_segment(0.0).unwrap();
+
+        assert!(BrowserExecutionWakePlan::from_segment(&session, segment).is_idle());
+        assert_eq!(
+            BrowserExecutionWakePlan::from_pending_segment(&session, segment).cadence(),
+            BrowserExecutionCadence::TimerAtSceneTime(0.0)
+        );
+
+        session.advance_segment_to(segment, 0.0).unwrap();
+        session.complete_segment(segment).unwrap();
+        assert!(BrowserExecutionWakePlan::from_pending_segment(&session, segment).is_idle());
     }
 
     #[test]

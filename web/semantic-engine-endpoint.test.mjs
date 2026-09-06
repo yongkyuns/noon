@@ -20,16 +20,22 @@ const request = (port, type, requestId, fields = {}) => {
   port.postMessage({ channel: "noon.engine", protocolVersion: 1, type, requestId, ...fields });
   return result;
 };
-function fixture(transportMode = "transferable", runRequiredCallbackPhase = null) {
+function fixture(
+  transportMode = "transferable",
+  runRequiredCallbackPhase = null,
+  continuation = null,
+) {
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
+  let created = 0, resumed = 0, completedSegments = 0;
+  let initialSnapshots = 0, resourceBundles = 0;
   const nativeInputs = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
-    initialDeltaJson: json,
+    initialDeltaJson: () => { initialSnapshots += 1; return json(); },
     initialCallbackPhaseJson: () => null,
-    resourceBundleBytes: () => new Uint8Array([1]),
+    resourceBundleBytes: () => { resourceBundles += 1; return new Uint8Array([1]); },
     tickCallbackPhaseJson: () => null,
     advanceForwardToCallbackPhaseJson: (value) => {
       if (!Number.isFinite(value) || value < time) throw new Error("invalid forward time");
@@ -44,18 +50,26 @@ function fixture(transportMode = "transferable", runRequiredCallbackPhase = null
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setNativeStateInputJson: (value) => { nativeInputs.push({ type: "state", value: JSON.parse(value) }); },
     emitNativeEventJson: (value) => { nativeInputs.push({ type: "event", value: JSON.parse(value) }); },
+    liveSegmentWake: () => ({ presentNow: true, cadence: "animation_frame", timerAfterMilliseconds: undefined }),
+    driveLiveSegmentFromWallTime: () => { time = 1; return true; },
+    completeLiveSegment: () => { completedSegments += 1; },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
     time: () => time, isPlaying: () => playing,
   };
   const context = {
-    createExecutionPlayer: () => player,
+    createExecutionPlayer: () => { created += 1; return player; },
+    resumeExecutionPlayer: () => { resumed += 1; return player; },
     returnExecutionPlayer: (value) => { returned += 1; returnedPlayer = value; },
+    liveHandoffDuration: () => Math.max(time, 1),
   };
-  return { control, render, player, stats: () => ({ returned, returnedPlayer, stopped, nativeInputs }),
+  return { control, render, player, stats: () => ({
+    returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
+    initialSnapshots, resourceBundles,
+  }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode,
-    }, () => { stopped += 1; }, runRequiredCallbackPhase),
+    }, () => { stopped += 1; }, runRequiredCallbackPhase, continuation),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
 }
@@ -84,6 +98,110 @@ test("semantic producer installs mixed resources before its retained snapshot an
     assert.equal(f.stats().returned, 1);
     assert.equal(f.stats().returnedPlayer, f.player);
     assert.equal(f.stats().stopped, 1);
+  } finally { f.close(); }
+});
+
+test("semantic continuation returns one completed player before resuming and retakes it later", async () => {
+  const completions = [];
+  const failures = [];
+  const continuation = {
+    generation: 9,
+    onComplete: (generation) => { completions.push(generation); },
+    onError: (generation, error) => { failures.push({ generation, error }); },
+  };
+  const f = fixture("transferable", null, continuation);
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    await turn();
+    await turn();
+    assert.deepEqual(completions, [9]);
+    assert.deepEqual(failures, []);
+    assert.equal(f.stats().completedSegments, 1);
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().returnedPlayer, f.player);
+
+    endpoint.startContinuation(9);
+    assert.equal(f.stats().created, 1, "only the first attachment may bootstrap transport");
+    assert.equal(f.stats().resumed, 1, "later await must retake the returned player");
+    assert.equal(f.stats().resourceBundles, 1);
+    assert.equal(f.stats().initialSnapshots, 1);
+    f.render.port2.postMessage({ type: "tick", timestamp: 32 });
+    await turn();
+    await turn();
+    assert.deepEqual(completions, [9, 9]);
+    assert.equal(f.stats().completedSegments, 2);
+    assert.equal(f.stats().returned, 2);
+    assert.throws(() => endpoint.startContinuation(8), /stale semantic continuation generation/);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("semantic continuation drives a pure wait only when its Rust deadline is due", async () => {
+  const completions = [];
+  const f = fixture("transferable", null, {
+    generation: 4,
+    onComplete: (generation) => { completions.push(generation); },
+    onError: (_generation, error) => { throw error; },
+  });
+  let endpoint;
+  try {
+    let wakeCount = 0;
+    f.player.liveSegmentWake = () => ({
+      presentNow: false,
+      cadence: "timer",
+      timerAfterMilliseconds: wakeCount++ === 0 ? 1_000 : 0,
+    });
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+
+    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    await turn();
+    assert.deepEqual(completions, []);
+    assert.equal(f.stats().completedSegments, 0);
+
+    f.render.port2.postMessage({ type: "tick", timestamp: 1_016 });
+    await turn();
+    await turn();
+    assert.deepEqual(completions, [4]);
+    assert.equal(f.stats().completedSegments, 1);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("stopping an incomplete semantic continuation never returns its player", async () => {
+  const failures = [];
+  const continuation = {
+    generation: 12,
+    onComplete: () => { throw new Error("incomplete continuation must not complete"); },
+    onError: (generation, error) => { failures.push({ generation, error }); },
+  };
+  const f = fixture("transferable", null, continuation);
+  try {
+    const ready = next(f.control.port2);
+    const endpoint = await f.attach();
+    await ready;
+    endpoint.stop();
+    assert.equal(f.stats().returned, 0);
+    assert.equal(f.stats().completedSegments, 0);
+    assert.equal(f.stats().stopped, 1);
+    assert.deepEqual(failures, []);
   } finally { f.close(); }
 });
 

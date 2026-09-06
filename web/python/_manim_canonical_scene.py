@@ -46,6 +46,8 @@ _ORIGINAL_WAIT = _base.Scene.wait
 _ORIGINAL_TIME = _base.Scene.time
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
 _ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
+_ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
+_ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
 
 
 def _json(value: object) -> str:
@@ -210,7 +212,77 @@ def _canonical_scene_time(scene: _base.Scene) -> float:
     return _timing_authority(scene)[1]
 
 
-def _canonical_wait(scene: _base.Scene, duration: float = 1.0) -> _base.Scene:
+def _begin_async_continuation_construct(scene: _base.Scene) -> None:
+    if getattr(scene, _ASYNC_CONTINUATION_MODE, False):
+        raise RuntimeError("canonical async construct is already active")
+    setattr(scene, _ASYNC_CONTINUATION_MODE, True)
+    setattr(scene, _ASYNC_CONTINUATION_PENDING, set())
+
+
+def _finish_async_continuation_construct(scene: _base.Scene) -> None:
+    pending = getattr(scene, _ASYNC_CONTINUATION_PENDING, set())
+    try:
+        if pending:
+            raise RuntimeError(
+                "async construct must await every supported Scene.play/Scene.wait continuation"
+            )
+    finally:
+        setattr(scene, _ASYNC_CONTINUATION_MODE, False)
+        setattr(scene, _ASYNC_CONTINUATION_PENDING, set())
+
+
+def _async_continuation_active(scene: _base.Scene) -> bool:
+    return bool(getattr(scene, _ASYNC_CONTINUATION_MODE, False))
+
+
+class _SemanticContinuationAwaitable:
+    """One consumed Python await over the worker-owned semantic endpoint lease."""
+
+    def __init__(self, scene: _base.Scene) -> None:
+        self._scene = scene
+        self._consumed = False
+        getattr(scene, _ASYNC_CONTINUATION_PENDING).add(self)
+
+    def __await__(self):
+        if self._consumed:
+            raise RuntimeError("a Scene.play/Scene.wait continuation can be awaited only once")
+        self._consumed = True
+        return self._wait().__await__()
+
+    async def _wait(self) -> _base.Scene:
+        try:
+            from js import noonAwaitSemanticContinuation
+
+            await noonAwaitSemanticContinuation(_context(self._scene))
+            return self._scene
+        finally:
+            getattr(self._scene, _ASYNC_CONTINUATION_PENDING).discard(self)
+
+
+def _continuation_awaitable(scene: _base.Scene) -> _SemanticContinuationAwaitable:
+    if not _async_continuation_active(scene):
+        raise RuntimeError("semantic continuation awaitable requires async construct")
+    return _SemanticContinuationAwaitable(scene)
+
+
+def _require_async_continuation_active(scene: _base.Scene) -> None:
+    if not _async_continuation_active(scene):
+        return
+    from js import noonRequireSemanticContinuationActive
+
+    noonRequireSemanticContinuationActive(_context(scene))
+
+
+def _canonical_wait(
+    scene: _base.Scene, duration: float = 1.0
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    if _async_continuation_active(scene):
+        try:
+            _require_async_continuation_active(scene)
+            _context(scene).beginOrdinaryWait(float(duration))
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return _continuation_awaitable(scene)
     authority, _ = _timing_authority(scene)
     if authority == "canonical":
         context = _context(scene)
@@ -407,7 +479,7 @@ def _play_canonical_affine(
     rate_func: object | None,
     lag_ratio: float | None,
     kwargs: dict[str, object],
-) -> _base.Scene:
+) -> _base.Scene | _SemanticContinuationAwaitable:
     if duration is not None and run_time is not None:
         raise ValueError("use either duration or run_time, not both")
     if easing is not None and rate_func is not None:
@@ -442,7 +514,13 @@ def _play_canonical_affine(
         )
     context = _context(self)
     try:
-        context.ordinaryPlayTransformTo(
+        _require_async_continuation_active(self)
+        method = (
+            context.beginOrdinaryTransformTo
+            if _async_continuation_active(self)
+            else context.ordinaryPlayTransformTo
+        )
+        method(
             getattr(source, "_semantic_handle"),
             getattr(target, "_semantic_handle"),
             float(resolved.run_time),
@@ -450,7 +528,7 @@ def _play_canonical_affine(
         )
     except Exception as error:
         raise ValueError(str(error)) from None
-    return self
+    return _continuation_awaitable(self) if _async_continuation_active(self) else self
 
 
 def _canonical_composition_shape(args: tuple[object, ...]):
@@ -597,9 +675,17 @@ def _play(self, *args, **kwargs):
     # identity/export purposes, so they must not reclassify a later ordinary
     # compatibility play as a canonical live animation.
     if getattr(self, "_legacy_geometry_materialized", False):
+        if _async_continuation_active(self):
+            raise NotImplementedError(
+                "async construct supports only canonical affine Scene.play and Scene.wait"
+            )
         return _play_legacy_compatibility(self, *args, **kwargs)
 
     if (shape := _canonical_composition_shape(args)) is not None:
+        if _async_continuation_active(self):
+            raise NotImplementedError(
+                "async construct does not yet support animation composition"
+            )
         kind, animations, group = shape
         try:
             candidate = _build_canonical_composition_candidate(
@@ -628,11 +714,19 @@ def _play(self, *args, **kwargs):
     ]
     if canonical_affine:
         if len(canonical_affine) != 1 or len(args) != 1:
+            if _async_continuation_active(self):
+                raise NotImplementedError(
+                    "async construct supports one canonical affine animation per play"
+                )
             return _play_legacy_compatibility(self, *args, **kwargs)
         source, target, animation = canonical_affine[0]
         if not _canonical_affine_payload_is_supported(
             self, source, target, animation, kwargs
         ):
+            if _async_continuation_active(self):
+                raise NotImplementedError(
+                    "async construct animation is outside the canonical affine subset"
+                )
             return _play_legacy_compatibility(self, *args, **kwargs)
         return _play_canonical_affine(
             self,
@@ -649,6 +743,10 @@ def _play(self, *args, **kwargs):
         )
     canonical_builders = [argument for argument in args if _canonical_tracker_builder(argument)]
     if canonical_builders:
+        if _async_continuation_active(self):
+            raise NotImplementedError(
+                "async construct does not yet support ValueTracker play"
+            )
         if len(canonical_builders) != 1 or len(args) != 1:
             raise NotImplementedError(
                 "canonical ValueTracker.play currently supports one scalar track without ordinary animations"
@@ -663,6 +761,10 @@ def _play(self, *args, **kwargs):
             rate_func=kwargs.pop("rate_func", None),
             lag_ratio=kwargs.pop("lag_ratio", None),
             kwargs=kwargs,
+        )
+    if _async_continuation_active(self):
+        raise NotImplementedError(
+            "async construct supports only canonical affine Scene.play and Scene.wait"
         )
     return _play_legacy_compatibility(self, *args, **kwargs)
 
