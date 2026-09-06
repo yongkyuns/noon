@@ -638,6 +638,31 @@ mod wasm {
                 .map_err(|error| js_error(error.to_string()))
         }
 
+        /// Compile Typst or MathTypst into the same semantic store as geometry handles.
+        #[wasm_bindgen(js_name = createManimTypst)]
+        pub fn create_manim_typst(
+            &self,
+            source: &str,
+            math: bool,
+            font_size: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            let font_size = text_authoring_f32("font size", font_size)?;
+            let handle = if math {
+                Mobject::from_math_typst(
+                    Rc::clone(&self.semantics),
+                    noon::MathTypst::new(source).with_font_size(font_size),
+                )
+            } else {
+                Mobject::from_typst(
+                    Rc::clone(&self.semantics),
+                    noon::Typst::new(source).with_font_size(font_size),
+                )
+            };
+            handle
+                .map(|handle| WasmAuthoringMobjectHandle { handle })
+                .map_err(|error| js_error(error.to_string()))
+        }
+
         /// Allocate stable semantic identity for a non-geometry authoring object.
         #[wasm_bindgen(js_name = createFamilyMember)]
         pub fn create_family_member(&self) -> WasmAuthoringFamilyMemberHandle {

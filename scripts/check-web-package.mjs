@@ -21,6 +21,7 @@ const expectedJavascriptSurface = [
   "export class WasmAuthoringStore",
   "createManimCircle(",
   "createManimText(",
+  "createManimTypst(",
   "createManimSquare(",
   "createManimRectangle(",
   "createManimLine(",
@@ -186,6 +187,7 @@ const expectedTypeSurface = [
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
   "createManimText(source: string, font_family: string, font_size: number, line_spacing: number): WasmAuthoringMobjectHandle",
+  "createManimTypst(source: string, math: boolean, font_size: number): WasmAuthoringMobjectHandle",
   "createManimSquare(side_length: number): WasmAuthoringMobjectHandle",
   "createManimRectangle(width: number, height: number): WasmAuthoringMobjectHandle",
   "createManimLine(start_x: number, start_y: number, end_x: number, end_y: number): WasmAuthoringMobjectHandle",
@@ -339,6 +341,8 @@ const expectedTypeSurface = [
 if (process.env.NOON_WASM_PROFILE === "dev"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
+    "export function createDirectTypstTextSmokeRenderer(",
+    "export function createDirectMathTypstTextSmokeRenderer(",
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(",
     "export function createDirectCallbackPaintSmokeRenderer(",
     "export function createDirectOrdinaryAffineCallbackContinuationSmokeRenderer(",
@@ -354,6 +358,8 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
+    "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectCallbackPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryAffineCallbackContinuationSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",

@@ -135,6 +135,8 @@ for (const forbidden of [
 
 for (const required of [
   "createDirectExecutionSmokeRenderer",
+  "createDirectTypstTextSmokeRenderer",
+  "createDirectMathTypstTextSmokeRenderer",
   "createDirectExecutionWakeDriver",
   "new OffscreenCanvas",
   "renderer.time() >= 0.1",

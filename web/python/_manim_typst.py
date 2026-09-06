@@ -1,9 +1,9 @@
-"""ManimCE Text/Typst wrappers over Noon's retained source authoring handles.
+"""ManimCE Text/Typst wrappers over Noon's shared semantic text resources.
 
-Text is a normal scene object at the lifecycle/identity boundary and specializes only
-its content binding and retained-resource realization. It never synthesizes fake
-geometry; shaping, font bytes, glyph/vector resources, and GPU atlas state remain
-Rust-owned.
+Text, Typst, and MathTypst are normal semantic Mobjects in browser authoring. They
+never synthesize fake geometry; shaping, font bytes, glyph/vector resources, and GPU
+atlas state remain Rust-owned. Retained source handles remain only for explicit codec
+consumers and CPython source-level tests.
 """
 
 from __future__ import annotations
@@ -31,6 +31,11 @@ try:
     from js import noonCreateAuthoringTextHandle as _create_authoring_text_handle
 except ImportError:  # Native CPython tests use retained source fallbacks.
     _create_authoring_text_handle = None
+
+try:
+    from js import noonCreateAuthoringTypstHandle as _create_authoring_typst_handle
+except ImportError:  # Native CPython tests use retained source fallbacks.
+    _create_authoring_typst_handle = None
 
 
 _RETAINED_PROTOCOL_VERSION = 2
@@ -108,6 +113,8 @@ def _new_typst_handle(source: str, math_mode: bool, font_size: float):
     if not isinstance(source, str) or source == "":
         raise ValueError("Typst source must be a non-empty string")
     font_size = _validated_font_size(font_size)
+    if _create_authoring_typst_handle is not None:
+        return _create_authoring_typst_handle(source, bool(math_mode), font_size)
     if _create_typst_handle is None:
         return _FallbackRetainedHandle(
             _base_spec(source, {"kind": "typst", "math": bool(math_mode)}, font_size)
@@ -494,7 +501,10 @@ class _RetainedTypstMobject(_RetainedTextMobject):
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported Typst option(s): {unsupported}")
         handle = _new_typst_handle(source, self._math_mode, font_size)
-        self._initialize_retained(str(source), float(font_size), handle, color, opacity)
+        semantic_handle = handle if _create_authoring_typst_handle is not None else None
+        self._initialize_retained(
+            str(source), float(font_size), handle, color, opacity, semantic_handle
+        )
 
     def _copy_constructor(self) -> _RetainedTypstMobject:
         return type(self)(self._source, font_size=self._font_size, color=_base.WHITE)

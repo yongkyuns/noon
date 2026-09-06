@@ -11,6 +11,24 @@ use web_sys::OffscreenCanvas;
 
 use crate::WasmExecutionCanvasRenderer;
 
+/// Browser proof that static Typst uses the same direct semantic text-resource path.
+#[wasm_bindgen(js_name = createDirectTypstTextSmokeRenderer)]
+pub async fn create_direct_typst_text_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::typst_text_reference().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Browser proof that static MathTypst uses the same direct semantic text-resource path.
+#[wasm_bindgen(js_name = createDirectMathTypstTextSmokeRenderer)]
+pub async fn create_direct_math_typst_text_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::math_typst_text_reference().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Browser proof that typed Rust semantic animation, camera, and canonical text
 /// reach the direct mixed renderer without a scene document or execution mirror.
 #[wasm_bindgen(js_name = createDirectExecutionSmokeRenderer)]

@@ -1,11 +1,22 @@
 //! Canonical text authoring in the same semantic store as geometry.
-use super::{Text, TextAuthoringError, NATIVE_POINT_TO_SCENE_SCALE};
+use super::{MathTypst, Text, TextAuthoringError, Typst, NATIVE_POINT_TO_SCENE_SCALE};
 use noon_core::{GeometryResourceArena, Vec2};
+use noon_typst::{compile_typst_resource, TypstMode};
 
 impl crate::Scene {
-    /// Create an ordinary detached text Mobject in this scene's shared store.
+    /// Create an ordinary detached native text Mobject in this scene's shared store.
     pub fn text(&self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
         crate::Mobject::from_text(std::rc::Rc::clone(self.store()), text)
+    }
+
+    /// Create an ordinary detached Typst Mobject in this scene's shared store.
+    pub fn typst(&self, text: Typst) -> Result<crate::Mobject, TextAuthoringError> {
+        crate::Mobject::from_typst(std::rc::Rc::clone(self.store()), text)
+    }
+
+    /// Create an ordinary detached MathTypst Mobject in this scene's shared store.
+    pub fn math_typst(&self, text: MathTypst) -> Result<crate::Mobject, TextAuthoringError> {
+        crate::Mobject::from_math_typst(std::rc::Rc::clone(self.store()), text)
     }
 }
 
@@ -22,6 +33,64 @@ impl crate::Mobject {
             NATIVE_POINT_TO_SCENE_SCALE,
             NATIVE_POINT_TO_SCENE_SCALE,
         ));
+        let artifact = text.compile_artifact_with_fill(None)?;
+        Self::from_text_artifact(
+            store,
+            transform,
+            text.presentation.color,
+            text.presentation.opacity,
+            artifact.resource,
+            artifact.fonts,
+            GeometryResourceArena::new(),
+        )
+    }
+
+    /// Compile Typst into the shared retained text resource and return its ordinary semantic handle.
+    pub fn from_typst(
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        text: Typst,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        Self::from_typst_spec(store, text.0, TypstMode::Markup)
+    }
+
+    /// Compile MathTypst into the shared retained text resource and return its ordinary semantic handle.
+    pub fn from_math_typst(
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        text: MathTypst,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        Self::from_typst_spec(store, text.0, TypstMode::Math)
+    }
+
+    fn from_typst_spec(
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        text: super::TypstSpec,
+        mode: TypstMode,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        if !text.font_size.is_finite() || text.font_size <= 0.0 {
+            return Err(TextAuthoringError::InvalidFontSize(text.font_size));
+        }
+        text.presentation.validate()?;
+        let artifact = compile_typst_resource(text.source.as_ref(), mode)?;
+        Self::from_text_artifact(
+            store,
+            text.authored_transform(),
+            text.presentation.color,
+            text.presentation.opacity,
+            artifact.resource,
+            artifact.fonts,
+            artifact.geometry,
+        )
+    }
+
+    fn from_text_artifact(
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        transform: noon_core::Transform2D,
+        color: noon_core::Color,
+        opacity: f32,
+        resource: noon_core::TextResource,
+        fonts: noon_core::FontResourceArena,
+        geometries: GeometryResourceArena,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
         let semantic_transform = noon_core::SemanticTransform2_5D {
             translation: noon_core::SemanticVec3::new(
                 transform.translation.x as f64,
@@ -44,11 +113,11 @@ impl crate::Mobject {
             ));
         }
         let style = noon_core::SemanticStyle {
-            fill: Some(noon_core::SemanticPaint::Solid(text.presentation.color)),
+            fill: Some(noon_core::SemanticPaint::Solid(color)),
             fill_opacity: 1.0,
             stroke: None,
             stroke_width: 0.0,
-            object_opacity: text.presentation.opacity as f64,
+            object_opacity: opacity as f64,
             ..Default::default()
         };
         if !style.is_finite() {
@@ -56,16 +125,9 @@ impl crate::Mobject {
                 "text style is not finite".into(),
             ));
         }
-        // Ordinary plain text inherits live object style. Explicit styled spans
-        // may override it, but an initial object color must not freeze glyph fill.
-        let artifact = text.compile_artifact_with_fill(None)?;
         let handle = store
             .borrow_mut()
-            .import_text_resource(
-                artifact.resource,
-                &artifact.fonts,
-                &GeometryResourceArena::new(),
-            )
+            .import_text_resource(resource, &fonts, &geometries)
             .map_err(TextAuthoringError::Semantic)?;
         let mut state = noon_core::SemanticObjectState::new(handle);
         state.transform = semantic_transform;
@@ -125,6 +187,57 @@ mod tests {
             Some(noon_core::RED)
         );
         assert_eq!(scene.store().borrow().text_resources().stats(), before);
+    }
+
+    #[test]
+    fn typst_and_math_typst_use_shared_semantic_text_resources() {
+        let mut scene = crate::Scene::new();
+        let label = scene
+            .typst(
+                super::Typst::new("*Hello* from _Typst!_")
+                    .with_font_size(72.0)
+                    .color(noon_core::YELLOW),
+            )
+            .unwrap();
+        let equation = scene
+            .math_typst(
+                super::MathTypst::new("sum_(k=1)^n k = frac(n(n + 1), 2)").with_font_size(72.0),
+            )
+            .unwrap();
+        let label_resource = label.state().unwrap().content.text().unwrap();
+        let equation_resource = equation.state().unwrap().content.text().unwrap();
+        assert_ne!(label.node_id(), equation.node_id());
+        assert_eq!(
+            scene
+                .store()
+                .borrow()
+                .text_resources()
+                .get(label_resource)
+                .unwrap()
+                .kind,
+            noon_core::TextSourceKind::Typst
+        );
+        assert_eq!(
+            scene
+                .store()
+                .borrow()
+                .text_resources()
+                .get(equation_resource)
+                .unwrap()
+                .kind,
+            noon_core::TextSourceKind::MathTypst
+        );
+        assert_eq!(
+            label.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::YELLOW))
+        );
+
+        scene.add(&label).unwrap();
+        scene.add(&equation).unwrap();
+        let session = scene.execution_session().unwrap();
+        assert_eq!(session.frame().objects.len(), 2);
+        assert_eq!(session.frame().objects[0].text(), Some(label_resource));
+        assert_eq!(session.frame().objects[1].text(), Some(equation_resource));
     }
 
     #[test]

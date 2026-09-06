@@ -4,10 +4,10 @@ use std::{error::Error, rc::Rc};
 
 use crate::{
     AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    LiveSession, MathTypst, Mobject, RateFunction, RustHostCallbackTable, Scene,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
     SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, TransformToRequest,
-    ValueTracker, Vec2,
+    Typst, ValueTracker, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -283,6 +283,32 @@ pub fn live_line_match_callback(
         callbacks.add_updater(&mut store, line.node_id(), MATCH_LINE_ENDPOINTS, 0.0, None)?;
     }
     Ok((scene.execution_session()?, callbacks))
+}
+
+/// Build the static Typst reference scene through the shared semantic text resource path.
+pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let label = scene.typst(
+        Typst::new("*Hello* from _Typst!_")
+            .with_font_size(72.0)
+            .color(Color::rgba(
+                247.0 / 255.0,
+                217.0 / 255.0,
+                111.0 / 255.0,
+                1.0,
+            )),
+    )?;
+    scene.add(&label)?;
+    Ok(scene.execution_session()?)
+}
+
+/// Build the static MathTypst reference scene through the shared semantic text resource path.
+pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let equation = scene
+        .math_typst(MathTypst::new("sum_(k=1)^n k = frac(n(n + 1), 2)").with_font_size(72.0))?;
+    scene.add(&equation)?;
+    Ok(scene.execution_session()?)
 }
 
 /// Execute the paired affine-completion example and return its settled session.

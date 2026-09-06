@@ -2127,9 +2127,9 @@ def _bind_retained_text(
 ) -> object:
     if self._scene is scene and self._object is not None:
         return self._object
-    # Native Text now owns an ordinary shared semantic Mobject handle. Bind it
-    # through the same scene operation as geometry; the retained source adapter
-    # remains only for Typst until that backend reaches this resource path.
+    # Native Text, Typst, and MathTypst own ordinary shared semantic Mobject
+    # handles. Bind them through the same scene operation as geometry. The
+    # retained source branch below remains only for explicit export consumers.
     if getattr(self, "_semantic_handle", None) is not None:
         obj = _bind_mobject(self, scene, key=key)
         self._retained_object_id = int(obj.id)
