@@ -1528,6 +1528,12 @@ impl SemanticExecutionPlayer {
         }
     }
 
+    fn callback_token_from_json(token_json: &str) -> Result<CallbackPhaseToken, String> {
+        let token: CallbackTokenWire = serde_json::from_str(token_json)
+            .map_err(|error| format!("invalid callback token JSON: {error}"))?;
+        token.try_into()
+    }
+
     fn phase_token_from_json(phase_json: &str) -> Result<CallbackPhaseToken, String> {
         let phase: CallbackPhaseTokenEnvelope = serde_json::from_str(phase_json)
             .map_err(|error| format!("invalid callback phase JSON: {error}"))?;
@@ -1636,7 +1642,7 @@ impl SemanticExecutionPlayer {
         token_json: &str,
         request_json: &str,
     ) -> Result<String, String> {
-        let token = Self::phase_token_from_json(token_json)?;
+        let token = Self::callback_token_from_json(token_json)?;
         self.pending_callback_phase
             .filter(|(pending, _)| *pending == token)
             .ok_or("callback read does not match the player pending phase")?;
@@ -2379,6 +2385,56 @@ mod tests {
             1.0
         );
         assert_eq!(publication["observation"]["committed"]["dirty"], "all");
+    }
+
+    #[test]
+    fn callback_sparse_read_accepts_the_raw_pending_token_and_rejects_a_foreign_one() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
+        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            1.0,
+            13,
+        )
+        .unwrap();
+
+        let phase: serde_json::Value = serde_json::from_str(
+            &player
+                .initial_callback_phase_json()
+                .unwrap()
+                .expect("time-zero callbacks require one phase"),
+        )
+        .unwrap();
+        let raw_token = phase["token"].to_string();
+        let object_request = serde_json::json!({
+            "kind": "object",
+            "node": phase["objects"][0]["node"].clone(),
+        })
+        .to_string();
+
+        let response: serde_json::Value = serde_json::from_str(
+            &player
+                .required_callback_read_json(&raw_token, &object_request)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(response["kind"], "object");
+        assert_eq!(response["object"]["node"], phase["objects"][0]["node"]);
+        assert!(player.pending_callback_phase.is_some());
+
+        let mut foreign_token = phase["token"].clone();
+        foreign_token["sequence"] = serde_json::json!("999");
+        assert!(player
+            .required_callback_read_json(&foreign_token.to_string(), &object_request)
+            .is_err());
+        assert!(player.pending_callback_phase.is_some());
     }
 
     #[test]
