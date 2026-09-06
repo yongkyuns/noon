@@ -7,12 +7,16 @@ from typing import Any
 import noon as _base
 import _manim_compat as _compat
 import _manim_family_creation as _family_creation
-import _manim_phase_b as _phase_b
 import _manim_retained_family_fade_batch as _retained_family_fade_batch
 
 
 class _CameraFrame(_compat.Rectangle):
     """Invisible semantic frame object consumed by the Rust execution pipeline."""
+
+    def __init__(self, scene: _compat.Scene) -> None:
+        self.width_value = float(_base.DEFAULT_FRAME_WIDTH)
+        self.height_value = float(_base.DEFAULT_FRAME_HEIGHT)
+        scene._bind_camera_frame(self)
 
     def move_to(self, point: object) -> _CameraFrame:
         if isinstance(point, (_base.Mobject, _compat.Group)):
@@ -36,14 +40,7 @@ class MovingCameraScene(_compat.Scene):
                 f"unsupported MovingCameraScene option(s): {unsupported}"
             )
         super().__init__()
-        # Author invisibility in the detached snapshot itself so Python, Rust, and
-        # JavaScript serialize the same camera control object before it is bound.
-        frame = _CameraFrame(
-            _base.DEFAULT_FRAME_WIDTH,
-            _base.DEFAULT_FRAME_HEIGHT,
-            opacity=0.0,
-        )
-        _phase_b._bind_raw(self, frame)
+        frame = _CameraFrame(self)
         self.camera = _MovingCamera(frame)
 
     def to_document(self) -> dict[str, Any]:

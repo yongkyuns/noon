@@ -73,6 +73,22 @@ impl CanonicalAuthoringScene {
         self.bind_node(id, handle.node_id())
     }
 
+    /// Create and bind this scene's camera frame through the shared semantic transaction.
+    ///
+    /// The returned handle is only an alias of the scene-owned semantic identity. It carries no
+    /// camera state or frontend allocation authority.
+    pub fn create_camera_frame(&mut self, id: ObjectId) -> Result<noon::Mobject, String> {
+        if self.bindings.contains_key(&id) {
+            return Err(format!("canonical object {} is already bound", id.get()));
+        }
+        let frame = self.scene.camera_frame()?;
+        let node = frame.node_id();
+        debug_assert!(!self.identities.contains_key(&node));
+        self.bindings.insert(id, node);
+        self.identities.insert(node, id);
+        Ok(frame)
+    }
+
     fn bind_node(&mut self, id: ObjectId, node: noon_core::SemanticNodeId) -> Result<(), String> {
         if self.bindings.contains_key(&id) || self.identities.contains_key(&node) {
             return Err(format!("canonical object {} is already bound", id.get()));
@@ -2442,6 +2458,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Create the scene-owned invisible 2D camera frame and return its opaque semantic handle.
+        #[wasm_bindgen(js_name = createCameraFrame)]
+        pub fn create_camera_frame(
+            &mut self,
+            object_id: &str,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            let id = parse_object_id("camera frame object ID", object_id)?;
+            self.inner
+                .create_camera_frame(id)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = createValueTracker)]
         pub fn create_value_tracker(
             &mut self,
@@ -3758,6 +3787,36 @@ mod tests {
         assert_eq!(
             context.lower_execution().unwrap().execution_object_id(id),
             execution.execution_object_id(id)
+        );
+    }
+
+    #[test]
+    fn camera_factory_binds_one_scene_local_role_before_execution() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
+        let mut first = CanonicalAuthoringScene::with_store(Rc::clone(&store));
+        let frame = first.create_camera_frame(ObjectId::new(4)).unwrap();
+        assert_eq!(
+            first.lower_execution().unwrap().camera().unwrap(),
+            noon_core::Camera2DState::default()
+        );
+        let checkpoint = first.checkpoint();
+        let revision = store.borrow().scene_revision();
+        assert!(first.create_camera_frame(ObjectId::new(5)).is_err());
+        assert_eq!(first.checkpoint(), checkpoint);
+        assert_eq!(store.borrow().scene_revision(), revision);
+        assert_eq!(
+            first.bindings.get(&ObjectId::new(4)),
+            Some(&frame.node_id())
+        );
+
+        // Store identity is shared, while camera uniqueness is scoped to each scene root.
+        let mut second = CanonicalAuthoringScene::with_store(store);
+        second.create_camera_frame(ObjectId::new(4)).unwrap();
+        assert_eq!(
+            second.lower_execution().unwrap().camera().unwrap(),
+            noon_core::Camera2DState::default()
         );
     }
 
