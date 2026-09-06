@@ -2212,6 +2212,28 @@ mod wasm {
         pub fn height(&self) -> f64 {
             self.height
         }
+
+        #[wasm_bindgen(js_name = criticalX)]
+        pub fn critical_x(&self, direction_x: f64, _direction_y: f64) -> f64 {
+            if direction_x < 0.0 {
+                self.center_x - self.width * 0.5
+            } else if direction_x > 0.0 {
+                self.center_x + self.width * 0.5
+            } else {
+                self.center_x
+            }
+        }
+
+        #[wasm_bindgen(js_name = criticalY)]
+        pub fn critical_y(&self, _direction_x: f64, direction_y: f64) -> f64 {
+            if direction_y < 0.0 {
+                self.center_y - self.height * 0.5
+            } else if direction_y > 0.0 {
+                self.center_y + self.height * 0.5
+            } else {
+                self.center_y
+            }
+        }
     }
 
     #[wasm_bindgen]
@@ -4425,6 +4447,20 @@ mod tests {
             interpolation: noon_core::SemanticTransformInterpolation::Affine,
             options,
         }
+    }
+
+    #[test]
+    fn layout_observation_projects_critical_points_in_rust() {
+        let layout = WasmMobjectLayoutObservation {
+            center_x: 3.0,
+            center_y: -2.0,
+            width: 8.0,
+            height: 6.0,
+        };
+        assert_eq!(layout.critical_x(-1.0, 0.0), -1.0);
+        assert_eq!(layout.critical_x(0.0, 0.0), 3.0);
+        assert_eq!(layout.critical_y(0.0, 1.0), 1.0);
+        assert_eq!(layout.critical_y(0.0, 0.0), -2.0);
     }
 
     #[test]

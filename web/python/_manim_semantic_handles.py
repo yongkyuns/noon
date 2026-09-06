@@ -780,13 +780,9 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     axis = _compat._as_vec2(direction)
     observed = _bound_layout_observation(self)
     if observed is not None:
-        center_x = float(observed.centerX)
-        center_y = float(observed.centerY)
-        half_width = float(observed.width) * 0.5
-        half_height = float(observed.height) * 0.5
         return _base.Vec2(
-            center_x - half_width if axis.x < 0.0 else center_x + half_width if axis.x > 0.0 else center_x,
-            center_y - half_height if axis.y < 0.0 else center_y + half_height if axis.y > 0.0 else center_y,
+            float(observed.criticalX(axis.x, axis.y)),
+            float(observed.criticalY(axis.x, axis.y)),
         )
     return _critical(self, axis)
 
