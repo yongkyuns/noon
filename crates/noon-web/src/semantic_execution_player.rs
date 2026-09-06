@@ -36,6 +36,34 @@ pub struct WasmLiveSegmentWake {
     timer_after_milliseconds: Option<f64>,
 }
 
+/// One callback-aware step while driving the current continuation segment.
+///
+/// A required phase carries the existing cross-context callback payload and
+/// leaves the public frame and presentation clock pinned. The host commits that
+/// exact token through `commitCallbackPhaseJson`, then retries with the same wall
+/// timestamp. Only a ready step can report the segment endpoint.
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+#[derive(Debug)]
+pub struct WasmLiveSegmentDrive {
+    callback_phase_json: Option<String>,
+    reached_endpoint: bool,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+impl WasmLiveSegmentDrive {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = callbackPhaseJson))]
+    pub fn callback_phase_json(&self) -> Option<String> {
+        self.callback_phase_json.clone()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = reachedEndpoint))]
+    pub fn reached_endpoint(&self) -> bool {
+        self.reached_endpoint
+    }
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl WasmLiveSegmentWake {
@@ -118,6 +146,26 @@ impl SemanticExecutionPlayer {
         } else {
             PlaybackClock::looping(duration).map_err(|error| error.to_string())
         }
+    }
+
+    fn retain_callback_phase(
+        &mut self,
+        invocations: Vec<noon::RequiredCallbackInvocation>,
+        overlay: noon::CallbackPhaseOverlay,
+    ) -> Result<String, String> {
+        let token = overlay.token();
+        let phase_time = overlay.time();
+        let json = match Self::callback_phase_json(&overlay, &invocations) {
+            Ok(json) => json,
+            Err(error) => {
+                self.session
+                    .fail_required_callback_phase(token)
+                    .map_err(|termination| termination.to_string())?;
+                return Err(error);
+            }
+        };
+        self.pending_callback_phase = Some((token, phase_time));
+        Ok(json)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -638,8 +686,23 @@ impl SemanticExecutionPlayer {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn require_completed_live_segment(&self) -> Result<(), String> {
+        self.require_callback_progression_available()?;
         if self.has_pending_live_segment() {
             return Err("complete the current live segment before continuing".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn require_callback_progression_available(&self) -> Result<(), String> {
+        if let Some(termination) = self.session.callback_termination() {
+            return Err(format!(
+                "required callback progression terminated: {:?}",
+                termination.kind()
+            ));
+        }
+        if self.pending_callback_phase.is_some() {
+            return Err("a required callback phase is pending host completion".into());
         }
         Ok(())
     }
@@ -858,7 +921,8 @@ impl SemanticExecutionPlayer {
     fn reject_required_callback_segment(&self) -> Result<(), String> {
         if self.session.has_required_callbacks() {
             return Err(
-                "ordinary asynchronous continuation does not support required callbacks".into(),
+                "ordinary endpoint-only execution cannot run required callbacks; use a continuation"
+                    .into(),
             );
         }
         Ok(())
@@ -870,7 +934,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         wall_time_ms: f64,
     ) -> Result<WasmLiveSegmentWake, String> {
-        self.reject_required_callback_segment()?;
+        self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
         let directive = self
@@ -891,13 +955,14 @@ impl SemanticExecutionPlayer {
     /// Drive the current segment from one Rust-derived browser wall-time mapping.
     ///
     /// The session clamps this target to the segment boundary and owns all timeline work.
-    /// A required callback is rejected before an async Python continuation can be resumed.
+    /// If it reaches a required callback boundary, the returned phase must be committed
+    /// before the host retries this operation with the same wall timestamp.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_drive_segment_from_wall_time(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<bool, String> {
-        self.reject_required_callback_segment()?;
+    ) -> Result<WasmLiveSegmentDrive, String> {
+        self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let requested_time = self
             .live_wake_clock
@@ -911,7 +976,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         segment: noon::ExecutionSegment,
         requested_time: f64,
-    ) -> Result<bool, String> {
+    ) -> Result<WasmLiveSegmentDrive, String> {
         let current_time = self.session.frame().time;
         let mut clock = self.live_clock_at(current_time, segment.end_time(), false)?;
         match self
@@ -919,29 +984,35 @@ impl SemanticExecutionPlayer {
             .advance_segment_to_callback_barrier(segment, requested_time)
             .map_err(|error| error.to_string())?
         {
-            CallbackAdvance::Ready(_) => {}
-            CallbackAdvance::HostRequired { overlay, .. } => {
-                let token = overlay.token();
-                self.session
-                    .fail_required_callback_phase(token)
-                    .map_err(|error| error.to_string())?;
-                return Err(
-                    "ordinary asynchronous continuation reached an unsupported required callback"
-                        .into(),
+            CallbackAdvance::Ready(_) => {
+                clock.seek(self.session.frame().time).expect(
+                    "published live time must remain within the preflighted segment extent",
                 );
+                self.clock = clock;
+                Ok(WasmLiveSegmentDrive {
+                    callback_phase_json: None,
+                    reached_endpoint: self.session.frame().time >= segment.end_time(),
+                })
+            }
+            CallbackAdvance::HostRequired {
+                invocations,
+                overlay,
+            } => {
+                let callback_phase_json = self.retain_callback_phase(invocations, overlay)?;
+                Ok(WasmLiveSegmentDrive {
+                    callback_phase_json: Some(callback_phase_json),
+                    reached_endpoint: false,
+                })
             }
         }
-        clock
-            .seek(self.session.frame().time)
-            .expect("published live time must remain within the preflighted segment extent");
-        self.clock = clock;
-        Ok(self.session.frame().time >= segment.end_time())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_advance_segment_to(&mut self, requested_time: f64) -> Result<bool, String> {
+        self.reject_required_callback_segment()?;
         let segment = self.live_segment()?;
-        self.live_drive_segment_to(segment, requested_time)?;
+        let drive = self.live_drive_segment_to(segment, requested_time)?;
+        debug_assert!(drive.callback_phase_json.is_none());
         // Preserve the established wrapper contract: this reports completion
         // reconciliation, not merely reaching an animation endpoint. The async
         // wall-time drive above deliberately exposes the latter so its owner can
@@ -1370,21 +1441,7 @@ impl SemanticExecutionPlayer {
             CallbackAdvance::HostRequired {
                 invocations,
                 overlay,
-            } => {
-                let token = overlay.token();
-                let phase_time = overlay.time();
-                let json = match Self::callback_phase_json(&overlay, &invocations) {
-                    Ok(json) => json,
-                    Err(error) => {
-                        self.session
-                            .fail_required_callback_phase(token)
-                            .map_err(|termination| termination.to_string())?;
-                        return Err(error);
-                    }
-                };
-                self.pending_callback_phase = Some((token, phase_time));
-                Ok(Some(json))
-            }
+            } => self.retain_callback_phase(invocations, overlay).map(Some),
         }
     }
 
@@ -1459,14 +1516,15 @@ impl SemanticExecutionPlayer {
 
     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
     ///
-    /// `true` means the endpoint was reached; shared completion is still a separate
-    /// operation so authored reconciliation cannot be skipped.
+    /// A callback phase must be committed before this is retried with the same wall
+    /// timestamp. `reachedEndpoint` means shared completion is now permitted but
+    /// remains a separate operation so authored reconciliation cannot be skipped.
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentFromWallTime))]
     pub fn drive_live_segment_from_wall_time_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<bool, String> {
+    ) -> Result<WasmLiveSegmentDrive, String> {
         self.live_drive_segment_from_wall_time(wall_time_ms)
     }
 
@@ -1627,6 +1685,30 @@ mod tests {
         AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
         SemanticObjectProperty, SemanticObjectState, SemanticStore, StoredGeometry,
     };
+
+    fn callback_batch_with_y_and_opacity(phase: &serde_json::Value) -> String {
+        let row = &phase["objects"][0];
+        let mut transform = row["transform"].clone();
+        transform["translation"]["y"] = serde_json::json!(1.0);
+        let mut style = row["style"].clone();
+        style["opacity"] = serde_json::json!(0.5);
+        serde_json::json!({
+            "token": phase["token"].clone(),
+            "writes": [
+                {
+                    "kind": "transform",
+                    "object": row["node"].clone(),
+                    "transform": transform,
+                },
+                {
+                    "kind": "style",
+                    "object": row["node"].clone(),
+                    "style": style,
+                },
+            ],
+        })
+        .to_string()
+    }
 
     #[test]
     fn membership_snapshot_omits_retired_rows_and_preserves_incremental_order() {
@@ -1813,7 +1895,10 @@ mod tests {
         let wake = player.live_segment_wake(1_000.0).unwrap();
         assert_eq!(wake.cadence(), "animation_frame");
         assert_eq!(wake.timer_after_milliseconds(), None);
-        assert!(!player.live_drive_segment_from_wall_time(2_000.0).unwrap());
+        assert!(!player
+            .live_drive_segment_from_wall_time(2_000.0)
+            .unwrap()
+            .reached_endpoint());
         assert_eq!(
             player
                 .live_effective(&circle)
@@ -1823,7 +1908,10 @@ mod tests {
             Vec2::new(1.0, -0.5)
         );
 
-        assert!(player.live_drive_segment_from_wall_time(4_000.0).unwrap());
+        assert!(player
+            .live_drive_segment_from_wall_time(4_000.0)
+            .unwrap()
+            .reached_endpoint());
         assert_eq!(player.time(), endpoint);
         player.live_complete_segment().unwrap();
         assert_eq!(
@@ -1840,18 +1928,24 @@ mod tests {
         let wait_wake = player.live_segment_wake(5_000.0).unwrap();
         assert_eq!(wait_wake.cadence(), "timer");
         assert_eq!(wait_wake.timer_after_milliseconds(), Some(1_000.0));
-        assert!(player.live_drive_segment_from_wall_time(6_000.0).unwrap());
+        assert!(player
+            .live_drive_segment_from_wall_time(6_000.0)
+            .unwrap()
+            .reached_endpoint());
         player.live_complete_segment().unwrap();
         assert_eq!(player.time(), 3.0);
     }
 
     #[test]
-    fn live_segment_wake_rejects_required_callbacks_without_advancing() {
+    fn callback_segment_drive_pins_time_until_exact_phase_commit() {
         let mut scene = noon::Scene::new();
         let circle = scene.circle(0.4).unwrap();
         scene.add(&circle).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(2.0, 0.0).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(7), 0.0, None);
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(8), 0.0, None);
         transaction.apply(&mut scene.store().borrow_mut()).unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
@@ -1862,13 +1956,85 @@ mod tests {
             64,
         )
         .unwrap();
-        let frame = player.session.frame().clone();
+        player
+            .live_declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
 
-        player.live_wait(1.0).unwrap();
-        let error = player.live_segment_wake(1_000.0).unwrap_err();
+        assert_eq!(
+            player.live_segment_wake(1_000.0).unwrap().cadence(),
+            "animation_frame"
+        );
+        let initial = player.live_drive_segment_from_wall_time(1_000.0).unwrap();
+        assert!(!initial.reached_endpoint());
+        let initial_phase: serde_json::Value =
+            serde_json::from_str(&initial.callback_phase_json().unwrap()).unwrap();
+        assert_eq!(initial_phase["time"], serde_json::json!(0.0));
+        assert_eq!(
+            initial_phase["invocations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["callback_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["7", "8"]
+        );
+        assert_eq!(player.time(), 0.0);
+        assert!(player.live_drive_segment_from_wall_time(1_000.0).is_err());
 
-        assert!(error.contains("does not support required callbacks"));
-        assert_eq!(player.session.frame(), &frame);
+        player
+            .commit_callback_phase_json(&callback_batch_with_y_and_opacity(&initial_phase))
+            .unwrap();
+        let ready = player.live_drive_segment_from_wall_time(1_000.0).unwrap();
+        assert!(ready.callback_phase_json().is_none());
+        assert!(!ready.reached_endpoint());
+        assert_eq!(player.time(), 0.0);
+
+        // A mid-segment sample stays pinned while its host callback is
+        // outstanding. Retrying the same sample reaches exactly 0.5 rather
+        // than charging callback latency into authored time.
+        let midpoint = player.live_drive_segment_from_wall_time(1_500.0).unwrap();
+        let midpoint_phase: serde_json::Value =
+            serde_json::from_str(&midpoint.callback_phase_json().unwrap()).unwrap();
+        assert_eq!(midpoint_phase["time"], serde_json::json!(0.5));
+        assert_eq!(player.time(), 0.0);
+        player
+            .commit_callback_phase_json(&callback_batch_with_y_and_opacity(&midpoint_phase))
+            .unwrap();
+        let ready = player.live_drive_segment_from_wall_time(1_500.0).unwrap();
+        assert!(ready.callback_phase_json().is_none());
+        assert!(!ready.reached_endpoint());
+        assert_eq!(player.time(), 0.5);
+
+        // The endpoint follows the same phase/commit protocol before reporting
+        // readiness for completion and source resumption.
+        let endpoint = player.live_drive_segment_from_wall_time(2_000.0).unwrap();
+        let endpoint_phase: serde_json::Value =
+            serde_json::from_str(&endpoint.callback_phase_json().unwrap()).unwrap();
+        assert_eq!(endpoint_phase["time"], serde_json::json!(1.0));
+        assert_eq!(player.time(), 0.5);
+        player
+            .commit_callback_phase_json(&callback_batch_with_y_and_opacity(&endpoint_phase))
+            .unwrap();
+        let ready = player.live_drive_segment_from_wall_time(2_000.0).unwrap();
+        assert!(ready.callback_phase_json().is_none());
+        assert!(ready.reached_endpoint());
+        assert_eq!(player.time(), 1.0);
+        player.live_complete_segment().unwrap();
+        assert_eq!(
+            player.session.frame().objects[0].transform.translation.x,
+            2.0
+        );
+        assert_eq!(
+            player.session.frame().objects[0].transform.translation.y,
+            1.0
+        );
+        assert_eq!(player.session.frame().objects[0].style.opacity, 0.5);
     }
 
     #[test]

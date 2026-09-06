@@ -13,6 +13,23 @@ const SET_Y: HostCallbackId = HostCallbackId::new(1);
 const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
 const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
 
+fn ordered_affine_callbacks() -> Result<RustHostCallbackTable, Box<dyn Error>> {
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks.insert(SET_Y, |context| {
+        let mut transform = context.target_state().transform;
+        transform.translation.y = 1.0;
+        context.set_target_transform(transform)
+    })?;
+    callbacks.insert(SET_OPACITY, |context| {
+        let prior_y = context.target_state().transform.translation.y;
+        let mut style = context.target_state().style;
+        // The visible result depends on reading SET_Y from this same phase overlay.
+        style.opacity = if prior_y == 1.0 { 0.5 } else { 0.0 };
+        context.set_target_style(style)
+    })?;
+    Ok(callbacks)
+}
+
 /// Build the paired affine callback example without selecting a platform host.
 ///
 /// Both native and direct single-context Rust/WASM examples consume these typed
@@ -39,19 +56,7 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
             .rate_func(RateFunction::Linear),
     )?;
 
-    let mut callbacks = RustHostCallbackTable::new();
-    callbacks.insert(SET_Y, |context| {
-        let mut transform = context.target_state().transform;
-        transform.translation.y = 1.0;
-        context.set_target_transform(transform)
-    })?;
-    callbacks.insert(SET_OPACITY, |context| {
-        let prior_y = context.target_state().transform.translation.y;
-        let mut style = context.target_state().style;
-        // The visible result depends on reading SET_Y from this same phase overlay.
-        style.opacity = if prior_y == 1.0 { 0.5 } else { 0.0 };
-        context.set_target_style(style)
-    })?;
+    let mut callbacks = ordered_affine_callbacks()?;
     callbacks.insert(ACCUMULATE_DT, |context| {
         let mut transform = context.target_state().transform;
         transform.translation.y += context.delta_time() as f32;
@@ -303,6 +308,88 @@ pub fn ordinary_affine_continuation_program(
             stage: 0,
         })
         .map_err(|error| error.to_string())
+}
+
+/// One ordinary transform continuation whose effective frame is completed by
+/// two ordered host callbacks at every required phase.
+pub struct OrdinaryCallbackContinuation {
+    circle: Mobject,
+    target: Mobject,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryCallbackContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.declare_and_activate_transform_to(
+                    &self.circle,
+                    &self.target,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                self.stage = 2;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary callback continuation resumed after it finished".to_owned()),
+        }
+    }
+}
+
+/// Build the paired callback-aware continuation for direct Rust hosts.
+///
+/// The blue circle moves to `(2, 0)` over one second. At each compiler-selected
+/// phase, callback A moves the effective row to `y=1`; callback B observes A's
+/// write and sets object opacity to `0.5`. The returned callable table owns only
+/// opaque Rust functions; the program/session retains schedule and timeline state.
+pub fn ordinary_callback_continuation_program() -> Result<
+    (
+        LiveProgram<OrdinaryCallbackContinuation>,
+        RustHostCallbackTable,
+    ),
+    String,
+> {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.4).map_err(|error| error.to_string())?;
+    circle
+        .set_fill(0.0, 0.4, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
+    let mut target = circle.target_editor().map_err(|error| error.to_string())?;
+    target
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+
+    let mut callbacks = ordered_affine_callbacks().map_err(|error| error.to_string())?;
+    {
+        let mut store = scene.store().borrow_mut();
+        callbacks
+            .add_updater(&mut store, circle.node_id(), SET_Y, 0.0, None)
+            .map_err(|error| error.to_string())?;
+        callbacks
+            .add_updater(&mut store, circle.node_id(), SET_OPACITY, 0.0, None)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let program = scene
+        .into_live_program(OrdinaryCallbackContinuation {
+            circle,
+            target,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())?;
+    Ok((program, callbacks))
 }
 
 /// Ordinary FadeIn/FadeOut continuation used unchanged by native and direct Rust/WASM hosts.
@@ -796,7 +883,7 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
 #[cfg(test)]
 mod continuation_tests {
     use super::*;
-    use crate::{LiveProgramStatus, TimelineWakeState};
+    use crate::LiveProgramStatus;
 
     #[test]
     fn ordinary_affine_continuation_uses_shared_segments_and_publication_admission() {
@@ -862,6 +949,36 @@ mod continuation_tests {
         );
     }
 
+    #[test]
+    fn ordinary_callback_continuation_uses_ordered_shared_barriers() {
+        let (mut program, mut callbacks) = ordinary_callback_continuation_program().unwrap();
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        let midpoint = &program.session().frame().objects[0];
+        assert_eq!(midpoint.transform.translation, Vec2::new(1.0, 1.0));
+        assert_eq!(midpoint.style.opacity, 0.5);
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let endpoint = &program.session().frame().objects[0];
+        assert_eq!(endpoint.transform.translation, Vec2::new(2.0, 1.0));
+        assert_eq!(endpoint.style.opacity, 0.5);
+        let publication = program.take_renderer_publication().context();
+        assert_eq!(
+            program.admit_publication(publication).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        );
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
     #[test]
     fn ordinary_fade_continuation_exposes_absent_boundary_then_readds() {
         let mut program = ordinary_fade_continuation_program().unwrap();

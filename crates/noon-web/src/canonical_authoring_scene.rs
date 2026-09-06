@@ -630,6 +630,12 @@ impl CanonicalAuthoringScene {
         if self.live_player.is_none() {
             return self.authored_wait(duration);
         }
+        if self.active_live_player()?.has_required_callbacks() {
+            return Err(
+                "ordinary endpoint-only wait cannot execute required callbacks; use a continuation"
+                    .into(),
+            );
+        }
         let end_time = self.begin_ordinary_wait(duration)?;
         let player = self.active_live_player()?;
         player.live_advance_segment_to(end_time)?;
@@ -657,9 +663,6 @@ impl CanonicalAuthoringScene {
             self.live_player(duration.max(1.0))?;
         }
         let player = self.active_live_player()?;
-        if player.has_required_callbacks() {
-            return Err("ordinary asynchronous wait does not support required callbacks".into());
-        }
         player.live_wait(duration)
     }
 
@@ -803,6 +806,27 @@ impl CanonicalAuthoringScene {
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
+        if !self.can_ordinary_transform_to(source, target, options)? {
+            return Err("ordinary affine animation payload is not yet supported".into());
+        }
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(options.run_time.unwrap_or(1.0));
+        let bootstrapped = self.live_player.is_none();
+        if bootstrapped {
+            self.live_player(bootstrap_duration)?;
+        }
+        if self.active_live_player()?.has_required_callbacks() {
+            if bootstrapped {
+                self.live_player = None;
+                self.live_player_returned = false;
+            }
+            return Err(
+                "ordinary endpoint-only animation cannot execute required callbacks; use a continuation"
+                    .into(),
+            );
+        }
         let end_time = self.begin_ordinary_transform_to(source, target, options)?;
         let player = self.active_live_player()?;
         // Reaching the endpoint still has completion reconciliation pending.
@@ -837,11 +861,6 @@ impl CanonicalAuthoringScene {
             .unwrap_or_else(|| self.scene.time())
             .max(options.run_time.unwrap_or(1.0));
         let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
-        if player.has_required_callbacks() {
-            return Err(
-                "ordinary asynchronous affine animation does not support required callbacks".into(),
-            );
-        }
         player.live_declare_and_activate_transform_to(source, target, options)
     }
 
@@ -1069,11 +1088,7 @@ impl CanonicalAuthoringScene {
         if !player.has_pending_live_segment() {
             return Err("semantic continuation has no pending segment to resume".into());
         }
-        if player.has_required_callbacks() {
-            return Err(
-                "ordinary asynchronous continuation does not support required callbacks".into(),
-            );
-        }
+        player.require_callback_progression_available()?;
         let player = self
             .live_player
             .take()
@@ -2682,7 +2697,10 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{AnimationOptions, GeometryRef, RateFunction, SemanticVec3, Transform2D, Vec2};
+    use noon_core::{
+        AnimationOptions, GeometryRef, HostCallbackId, RateFunction, SemanticMutationTransaction,
+        SemanticVec3, Transform2D, Vec2,
+    };
     use noon_ir::{ObjectSpecContent, TextSpecKind};
 
     use super::*;
@@ -3446,12 +3464,40 @@ mod tests {
         assert_eq!(wake.timer_after_milliseconds(), Some(0.0));
         assert!(zero_wait
             .live_drive_segment_from_wall_time(1_000.0)
-            .unwrap());
+            .unwrap()
+            .reached_endpoint());
         zero_wait.live_complete_segment().unwrap();
         assert!(!zero_wait.has_pending_live_segment());
         assert!(zero_wait.live_segment_wake(1_000.0).is_err());
         context.return_execution_player(zero_wait).unwrap();
         assert!(context.resume_execution_player().is_err());
+    }
+
+    #[test]
+    fn callback_continuation_can_resume_but_terminal_failure_cannot_reenter_source() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(circle.node_id(), HostCallbackId::new(7), 0.0, None);
+        callbacks
+            .apply(&mut context.scene.store().borrow_mut())
+            .unwrap();
+
+        context.begin_ordinary_wait(0.25).unwrap();
+        let leased = context.take_execution_player(0.25, 91).unwrap();
+        context.return_execution_player(leased).unwrap();
+        let mut resumed = context.resume_execution_player().unwrap();
+        resumed.live_segment_wake(1_000.0).unwrap();
+        let drive = resumed.live_drive_segment_from_wall_time(1_000.0).unwrap();
+        let phase = drive.callback_phase_json().unwrap();
+        resumed.fail_callback_phase_json(&phase).unwrap();
+        assert!(resumed.live_complete_segment().is_err());
+
+        context.return_execution_player(resumed).unwrap();
+        let error = context.resume_execution_player().err().unwrap();
+        assert!(error.contains("callback progression terminated"));
+        assert_eq!(context.live_execution_ownership(), "returned");
     }
 
     #[test]
@@ -3480,7 +3526,10 @@ mod tests {
             player.live_segment_wake(1_000.0).unwrap().cadence(),
             "animation_frame"
         );
-        assert!(!player.live_drive_segment_from_wall_time(2_000.0).unwrap());
+        assert!(!player
+            .live_drive_segment_from_wall_time(2_000.0)
+            .unwrap()
+            .reached_endpoint());
         assert_eq!(
             player
                 .live_effective(&circle)
@@ -3489,7 +3538,10 @@ mod tests {
                 .translation,
             Vec2::new(1.0, -0.5)
         );
-        assert!(player.live_drive_segment_from_wall_time(3_000.0).unwrap());
+        assert!(player
+            .live_drive_segment_from_wall_time(3_000.0)
+            .unwrap()
+            .reached_endpoint());
         player.live_complete_segment().unwrap();
 
         context.return_execution_player(player).unwrap();
