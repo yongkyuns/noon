@@ -739,6 +739,7 @@ result = scene
     harness.liveExampleExecution = execution;
     await execution.startSemanticExecution(authored.semanticExecution, {
       authoringClient: harness.authoring,
+      loopDurationSeconds: 8,
       transportMode: "transferable",
     });
     let latest;
@@ -751,35 +752,37 @@ result = scene
       throw new Error(`required callbacks did not progress: ${JSON.stringify(latest)}`);
     }
     const paused = await execution.pause();
+    const requestedTime = paused.time + 0.5;
+    const advanced = await execution.advanceTo(requestedTime);
+    if (advanced.time !== requestedTime || advanced.playing !== false) {
+      throw new Error(
+        `exact callback advance did not remain paused at ${requestedTime}: ${JSON.stringify(advanced)}`,
+      );
+    }
     const metrics = (await execution.metrics()).metrics;
-    return { canvasId: canvas.id, paused, metrics };
+    return { canvasId: canvas.id, paused, requestedTime, advanced, metrics };
   }, callbackSource);
   assert.equal(callbackResult.paused.playing, false);
+  assert.equal(callbackResult.advanced.playing, false);
+  assert.equal(callbackResult.advanced.time, callbackResult.requestedTime);
   assert.equal(callbackResult.metrics.objectCount, 2);
   assert.ok(callbackResult.metrics.drawCalls > 0);
-  // Renderer delivery is asynchronous. Await the coherent paused publication,
-  // without seeking or re-running either opaque callback.
-  let callbackPixels;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const screenshot = await page.locator(`#${callbackResult.canvasId}`).screenshot();
-    const animated = visiblePixelStats(screenshot,
-      (r, g, b, x) => x > 300 && Math.min(r, g, b) > 35);
-    const drift = visiblePixelStats(screenshot,
-      (r, g, b, x) => x < 250 && Math.min(r, g, b) > 35);
-    callbackPixels = { animated, drift };
-    if (animated.count > 500 && drift.count > 100
-      && Math.abs(animated.centerX - 410) < 4
-      && Math.abs(animated.centerY - 135) < 4
-      && Math.abs(drift.centerX - 185) < 4
-      && Math.abs(drift.centerY - (180 - 45 * callbackResult.paused.time)) < 4) break;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  // `advanceTo` resolves only after the matching publication reached the
+  // renderer surface. Capture that exact coherent frame: no seek, replay, or
+  // browser-frame polling may advance opaque callbacks past it.
+  const callbackScreenshot = await page.locator(`#${callbackResult.canvasId}`).screenshot();
+  const callbackPixels = {
+    animated: visiblePixelStats(callbackScreenshot,
+      (r, g, b, x) => x > 300 && Math.min(r, g, b) > 35),
+    drift: visiblePixelStats(callbackScreenshot,
+      (r, g, b, x) => x < 250 && Math.min(r, g, b) > 35),
+  };
   assert.ok(callbackPixels.animated.count > 500, "ordered callback circle was blank");
   assert.ok(callbackPixels.drift.count > 100, "accumulating callback circle was blank");
   assert.ok(Math.abs(callbackPixels.animated.centerX - 410) < 4, "timeline endpoint x");
   assert.ok(Math.abs(callbackPixels.animated.centerY - 135) < 4, "ordered callback lift y");
   assert.ok(Math.abs(callbackPixels.drift.centerX - 185) < 4, "unowned callback x");
-  assert.ok(Math.abs(callbackPixels.drift.centerY - (180 - 45 * callbackResult.paused.time)) < 4,
+  assert.ok(Math.abs(callbackPixels.drift.centerY - (180 - 45 * callbackResult.advanced.time)) < 4,
     "dt callback did not accumulate coherent forward time");
   assert.ok(callbackPixels.drift.meanRed > callbackPixels.animated.meanRed + 30,
     "second ordered callback did not apply half opacity");
