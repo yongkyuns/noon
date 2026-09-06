@@ -875,13 +875,56 @@ impl CanonicalAuthoringScene {
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
+        let end_time = self.activate_ordinary_composition(
+            kind,
+            children,
+            composition_options,
+            play_options,
+            false,
+        )?;
+        let player = self.active_live_player()?;
+        player.live_advance_segment_to(end_time)?;
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
+    /// Atomically declare and activate one flat Parallel/Sequence candidate
+    /// without advancing its shared execution segment.
+    ///
+    /// Handle provenance and option support are checked before a first player
+    /// bootstrap. Required callbacks remain part of that one lowered session;
+    /// the continuation host services their barriers while driving the retained
+    /// segment.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_composition(
+        &mut self,
+        kind: noon_core::SemanticAnimationCompositionKind,
+        children: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        composition_options: noon_core::AnimationOptions,
+        play_options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        self.activate_ordinary_composition(kind, children, composition_options, play_options, true)
+    }
+
+    /// Shared activation path for endpoint-only and continuation composition.
+    /// A first execution player remains provisional until activation succeeds.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn activate_ordinary_composition(
+        &mut self,
+        kind: noon_core::SemanticAnimationCompositionKind,
+        children: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        composition_options: noon_core::AnimationOptions,
+        play_options: noon_core::AnimationOptions,
+        allow_required_callbacks: bool,
+    ) -> Result<f64, String> {
         if !self.can_ordinary_transform_composition(children, composition_options, play_options)? {
             return Err("ordinary transform composition payload is not yet supported".into());
         }
 
-        // This extent only bootstraps a player when one does not exist. The
-        // returned Rust segment immediately replaces it with the authoritative
-        // duration derived by the shared composition schedule.
+        // The provisional extent is replaced immediately by the authoritative
+        // endpoint returned from the shared prepared composition schedule.
         let bootstrap_duration = self
             .live_handoff_duration()
             .unwrap_or_else(|| self.scene.time())
@@ -891,30 +934,45 @@ impl CanonicalAuthoringScene {
                     .or(composition_options.run_time)
                     .unwrap_or(1.0),
             );
-        let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
-        if player.has_required_callbacks() {
-            return Err(
-                "ordinary composition with required callbacks needs an asynchronous continuation"
-                    .into(),
-            );
-        }
         let requests = children
             .iter()
             .map(|(source, target, options)| {
                 noon::TransformToRequest::new(source, target, *options)
             })
             .collect::<Vec<_>>();
-        let end_time = player.live_declare_and_activate_transform_composition(
+        if self.live_player.is_none() {
+            self.prepare_local_player_for_run()?;
+            let mut player = self.build_live_player(bootstrap_duration, 0)?;
+            if !allow_required_callbacks && player.has_required_callbacks() {
+                return Err(
+                    "ordinary composition with required callbacks needs an asynchronous continuation"
+                        .into(),
+                );
+            }
+            let end_time = player.live_declare_and_activate_transform_composition(
+                kind,
+                &requests,
+                composition_options,
+                play_options,
+            )?;
+            self.live_player = Some(player);
+            self.live_player_returned = false;
+            return Ok(end_time);
+        }
+
+        let player = self.active_live_player()?;
+        if !allow_required_callbacks && player.has_required_callbacks() {
+            return Err(
+                "ordinary composition with required callbacks needs an asynchronous continuation"
+                    .into(),
+            );
+        }
+        player.live_declare_and_activate_transform_composition(
             kind,
             &requests,
             composition_options,
             play_options,
-        )?;
-        player.live_advance_segment_to(end_time)?;
-        player.live_complete_segment()?;
-        player
-            .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1934,6 +1992,24 @@ mod wasm {
         ) -> Result<f64, JsValue> {
             self.inner
                 .ordinary_play_transform_composition(
+                    candidate.kind,
+                    &candidate.children,
+                    candidate.composition_options,
+                    candidate.play_options,
+                )
+                .map_err(js_error)
+        }
+
+        /// Consume and activate one inert composition candidate without
+        /// advancing it. The returned endpoint belongs to the segment retained
+        /// by this context's single execution player.
+        #[wasm_bindgen(js_name = beginOrdinaryComposition)]
+        pub fn begin_ordinary_composition(
+            &mut self,
+            candidate: WasmOrdinaryTransformCompositionBuilder,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .begin_ordinary_composition(
                     candidate.kind,
                     &candidate.children,
                     candidate.composition_options,
@@ -3225,6 +3301,241 @@ mod tests {
             player.live_effective(&right).unwrap().transform.translation,
             Vec2::new(2.0, -1.0)
         );
+    }
+
+    #[test]
+    fn begun_composition_stays_unadvanced_and_uses_required_callback_barriers() {
+        let mut context = CanonicalAuthoringScene::default();
+        let mut left = context.scene.circle(0.4).unwrap();
+        left.set_translation(-2.0, 0.0).unwrap();
+        let mut right = context.scene.circle(0.4).unwrap();
+        right.set_translation(2.0, 0.0).unwrap();
+        let mut left_target = left.target_editor().unwrap();
+        left_target.set_translation(-2.0, 1.0).unwrap();
+        let mut right_target = right.target_editor().unwrap();
+        right_target.set_translation(2.0, -1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &left).unwrap();
+        context.bind_mobject(ObjectId::new(1), &right).unwrap();
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(left.node_id(), HostCallbackId::new(7), 0.0, None);
+        callbacks.add_updater(left.node_id(), HostCallbackId::new(8), 0.0, None);
+        callbacks
+            .apply(&mut context.scene.store().borrow_mut())
+            .unwrap();
+        let child = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            (left.clone(), left_target, child),
+            (right.clone(), right_target, child),
+        ];
+        let composition = AnimationOptions::new()
+            .lag_ratio(0.0)
+            .rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        let revision = context.scene.store().borrow().scene_revision();
+        let endpoint_only_error = context
+            .ordinary_play_transform_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &children,
+                composition,
+                play,
+            )
+            .unwrap_err();
+        assert!(endpoint_only_error.contains("needs an asynchronous continuation"));
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let end_time = context
+            .begin_ordinary_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &children,
+                composition,
+                play,
+            )
+            .unwrap();
+        assert_eq!(end_time, 2.0);
+        let player = context.active_live_player().unwrap();
+        assert_eq!(
+            player.time(),
+            0.0,
+            "activation must not advance the segment"
+        );
+        assert!(player.has_pending_live_segment());
+        assert_eq!(
+            player.live_effective(&left).unwrap().transform.translation,
+            Vec2::new(-2.0, 0.0)
+        );
+
+        player.live_segment_wake(1_000.0).unwrap();
+        let initial = player.live_drive_segment_from_wall_time(1_000.0).unwrap();
+        let initial_phase: serde_json::Value =
+            serde_json::from_str(&initial.callback_phase_json().unwrap()).unwrap();
+        assert_eq!(initial_phase["time"], serde_json::json!(0.0));
+        assert_eq!(
+            initial_phase["invocations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|invocation| invocation["callback_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["7", "8"]
+        );
+        player
+            .commit_callback_phase_json(
+                &serde_json::json!({
+                    "token": initial_phase["token"].clone(),
+                    "writes": [],
+                })
+                .to_string(),
+            )
+            .unwrap();
+        let ready = player.live_drive_segment_from_wall_time(1_000.0).unwrap();
+        assert!(ready.callback_phase_json().is_none());
+        assert!(!ready.reached_endpoint());
+        assert_eq!(player.time(), 0.0);
+
+        let endpoint = player.live_drive_segment_from_wall_time(3_000.0).unwrap();
+        let endpoint_phase: serde_json::Value =
+            serde_json::from_str(&endpoint.callback_phase_json().unwrap()).unwrap();
+        assert_eq!(endpoint_phase["time"], serde_json::json!(2.0));
+        player
+            .commit_callback_phase_json(
+                &serde_json::json!({
+                    "token": endpoint_phase["token"].clone(),
+                    "writes": [],
+                })
+                .to_string(),
+            )
+            .unwrap();
+        let ready = player.live_drive_segment_from_wall_time(3_000.0).unwrap();
+        assert!(ready.reached_endpoint());
+        player.live_complete_segment().unwrap();
+        assert_eq!(
+            player.live_effective(&left).unwrap().transform.translation,
+            Vec2::new(-2.0, 1.0)
+        );
+        assert_eq!(
+            player.live_effective(&right).unwrap().transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn begun_composition_duplicate_driver_leaves_no_first_player_and_valid_retry_works() {
+        let mut context = CanonicalAuthoringScene::default();
+        let source = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &source).unwrap();
+        let mut first_target = source.target_editor().unwrap();
+        first_target.set_translation(1.0, 0.0).unwrap();
+        let mut second_target = source.target_editor().unwrap();
+        second_target.set_translation(2.0, 0.0).unwrap();
+        let child = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            (source.clone(), first_target, child),
+            (source.clone(), second_target, child),
+        ];
+        let composition = AnimationOptions::new()
+            .lag_ratio(0.0)
+            .rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let revision = context.scene.store().borrow().scene_revision();
+
+        assert!(context
+            .begin_ordinary_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &children,
+                composition,
+                play,
+            )
+            .is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.live_player.is_none());
+        assert_eq!(context.live_execution_ownership(), "none");
+
+        let mut valid_target = source.target_editor().unwrap();
+        valid_target.set_translation(3.0, 0.0).unwrap();
+        assert_eq!(
+            context
+                .begin_ordinary_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &[(source.clone(), valid_target, child)],
+                    composition,
+                    play,
+                )
+                .unwrap(),
+            1.0
+        );
+        let player = context.active_live_player().unwrap();
+        assert!(player.has_pending_live_segment());
+        assert_eq!(player.time(), 0.0);
+        assert_eq!(
+            player
+                .live_effective(&source)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::ZERO
+        );
+    }
+
+    #[test]
+    fn rejected_composition_preserves_an_exact_returned_player() {
+        let mut context = CanonicalAuthoringScene::default();
+        let source = context.scene.circle(0.4).unwrap();
+        let mut setup_target = source.target_editor().unwrap();
+        setup_target.set_translation(1.0, 0.0).unwrap();
+        let mut first_target = source.target_editor().unwrap();
+        first_target.set_translation(2.0, 0.0).unwrap();
+        let mut second_target = source.target_editor().unwrap();
+        second_target.set_translation(3.0, 0.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &source).unwrap();
+        let child = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        context
+            .ordinary_play_transform_to(&source, &setup_target, child)
+            .unwrap();
+        let player = context.take_execution_player(1.0, 73).unwrap();
+        context.return_execution_player(player).unwrap();
+        let composition = AnimationOptions::new()
+            .lag_ratio(0.0)
+            .rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let revision = context.scene.store().borrow().scene_revision();
+        let (publication, frame, handoff_duration) = {
+            let player = context.live_player.as_mut().unwrap();
+            let handoff_duration = player.live_handoff_duration();
+            let session = player.session_mut_for_test();
+            (
+                session.publication_context(),
+                session.frame().clone(),
+                handoff_duration,
+            )
+        };
+
+        assert!(context
+            .begin_ordinary_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &[
+                    (source.clone(), first_target, child),
+                    (source, second_target, child),
+                ],
+                composition,
+                play,
+            )
+            .is_err());
+        assert_eq!(context.live_execution_ownership(), "returned");
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        let player = context.live_player.as_mut().unwrap();
+        assert_eq!(player.live_handoff_duration(), handoff_duration);
+        assert!(!player.has_pending_live_segment());
+        let session = player.session_mut_for_test();
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
     }
 
     #[test]
