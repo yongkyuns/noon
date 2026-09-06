@@ -168,6 +168,15 @@ def _scale_in_place_builder(
                 target = source._copy_for_animate_target()
                 target.scale(self.scale_factor)
                 return target
+            if (
+                getattr(source, "_semantic_handle", None) is not None
+                and getattr(source, "_semantic_handle_fresh", False)
+                and getattr(getattr(source, "_scene", None), "_canonical_authoring_context", None)
+                is not None
+            ):
+                target = source._copy_for_animate_target()
+                target.scale(self.scale_factor)
+                return target
             scene = source._scene
             obj = source._object
             if scene is not None and obj is not None:

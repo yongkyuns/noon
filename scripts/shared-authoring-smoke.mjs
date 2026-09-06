@@ -1240,6 +1240,51 @@ try {
     await stopSampledSource(page);
   }
 
+  const familyTransformIndicateSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_family_transform_indicate.py"), "utf8",
+  );
+  await startSampledSource(page, familyTransformIndicateSource, "scene-shared-family-transform-indicate");
+  try {
+    const canvas = page.locator("#scene-shared-family-transform-indicate");
+    for (const [time, leftX, rightX, highlighted] of [
+      [0, -2, 0], [0.5, -1.625, 0], [1, -1.25, 0.25], [2, -1, 1],
+      [8 / 3, -1.2, 1, "left"], [10 / 3, -1, 1.2, "right"],
+      [4, -1, 1], [4.25, 0, 1], [4.5, 0, 1],
+    ]) {
+      await page.evaluate(
+        (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
+        time,
+      );
+      const screenshot = await canvas.screenshot();
+      const left = renderedWorldPixel(screenshot, leftX, 0);
+      const right = renderedWorldPixel(screenshot, rightX, 0);
+      assert.ok(Math.max(left.red, left.green, left.blue) > 80,
+        `family transform/Indicate at ${time}s missed left member at ${leftX}`);
+      assert.ok(Math.max(right.red, right.green, right.blue) > 80,
+        `family transform/Indicate at ${time}s missed right member at ${rightX}`);
+      if (highlighted !== undefined) {
+        const color = highlighted === "left" ? left : right;
+        assert.ok(color.red > 180 && color.green > 150 && color.blue < color.green - 40,
+          `family Indicate ${highlighted} member did not reach yellow outward state`);
+      }
+      if (time === 4 || time === 4.5) {
+        assert.ok(left.red > left.green + 40 && left.blue > left.green + 40,
+          "family Indicate did not restore the transformed pink left member");
+        assert.ok(right.blue > right.red + 25,
+          "family Indicate did not restore the transformed blue right member");
+      }
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(4.5), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 4.5);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   // Scalar tracker continuation keeps both values and timing in the returned
   // Rust player. Python remains suspended through both tracks and the wait.
   const externalSamples = await page.evaluate(async (source) => {

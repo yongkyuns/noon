@@ -296,6 +296,15 @@ pub async fn create_direct_mixed_scalar_composition_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for the shared Rust/Python family transform and restoring Indicate example.
+#[wasm_bindgen(js_name = createDirectFamilyTransformIndicateSmokeRenderer)]
+pub async fn create_direct_family_transform_indicate_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::family_transform_indicate::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that the paired ordinary continuation and its ordered Rust
 /// callback table execute through the normal direct single-context WASM host.
 #[wasm_bindgen(js_name = createDirectOrdinaryAffineCallbackContinuationSmokeRenderer)]

@@ -1804,6 +1804,19 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_family(
+        &mut self,
+        members: &[noon::MobjectFamilyMember<'_>],
+    ) -> Result<noon::MobjectFamily, String> {
+        match self.live_execution_ownership() {
+            "active" | "returned" => self.active_live_player()?.live_family(members),
+            "none" => Err("live family creation requires an active canonical session".into()),
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn live_create_manim_primitive(
         &mut self,
@@ -4563,6 +4576,96 @@ mod wasm {
             self.inner
                 .live_target_editor(source.semantic_mobject())
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
+        /// Begin an inert ordered family target. Member targets may be built
+        /// bottom-up before the family node and edges publish through this context.
+        #[wasm_bindgen(js_name = beginLiveFamilyTarget)]
+        pub fn begin_live_family_target(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<crate::WasmAuthoringFamilyTargetEditor, JsValue> {
+            let family = source.semantic_family()?;
+            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), family.store()) {
+                return Err(js_error(
+                    "family target and canonical context belong to different authoring stores"
+                        .into(),
+                ));
+            }
+            if self.inner.live_execution_ownership() == "transferred" {
+                return Err(js_error(
+                    "live execution session is running in the semantic engine".into(),
+                ));
+            }
+            source.target_editor()
+        }
+
+        /// Atomically publish one completed family target through the current
+        /// live owner. Before bootstrap, the editor uses its ordinary one-transaction finish.
+        #[wasm_bindgen(js_name = finishLiveFamilyTarget)]
+        pub fn finish_live_family_target(
+            &mut self,
+            editor: &crate::WasmAuthoringFamilyTargetEditor,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), editor.store()) {
+                return Err(js_error(
+                    "family target and canonical context belong to different authoring stores"
+                        .into(),
+                ));
+            }
+            if self.inner.live_execution_ownership() == "none" {
+                return editor.finish();
+            }
+
+            enum OwnedMember {
+                Mobject(noon::Mobject),
+                Family(noon::MobjectFamily),
+            }
+
+            let store = std::rc::Rc::clone(self.inner.scene.store());
+            let mut owned = Vec::new();
+            for &id in editor.target_member_ids()? {
+                let is_family = {
+                    let store = store.borrow();
+                    match store.node(id).map(|node| node.kind()) {
+                        Some(noon_core::SemanticNodeKind::Object(_)) => false,
+                        Some(noon_core::SemanticNodeKind::Family) => true,
+                        Some(_) => {
+                            return Err(js_error(
+                                "live family targets require ordinary mobjects or nested families"
+                                    .into(),
+                            ));
+                        }
+                        None => {
+                            return Err(js_error(format!(
+                                "unknown live family target member {id:?}"
+                            )));
+                        }
+                    }
+                };
+                owned.push(if is_family {
+                    OwnedMember::Family(
+                        noon::MobjectFamily::from_node(std::rc::Rc::clone(&store), id)
+                            .map_err(js_error)?,
+                    )
+                } else {
+                    OwnedMember::Mobject(
+                        noon::Mobject::from_node(std::rc::Rc::clone(&store), id)
+                            .map_err(js_error)?,
+                    )
+                });
+            }
+            let members = owned
+                .iter()
+                .map(|member| match member {
+                    OwnedMember::Mobject(mobject) => noon::MobjectFamilyMember::Mobject(mobject),
+                    OwnedMember::Family(family) => noon::MobjectFamilyMember::Family(family),
+                })
+                .collect::<Vec<_>>();
+            self.inner
+                .live_family(&members)
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
 

@@ -2,7 +2,10 @@ use noon::semantic_mobject::{
     authoring_render_f64 as render_f64, authoring_xy_f64 as semantic_xy_f64,
 };
 pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
-use noon_core::{Bounds2D64, SemanticNodeId, SemanticNodeKind, SemanticStore};
+use noon_core::{
+    Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
+    SemanticNodeKind, SemanticStore,
+};
 
 /// Shared target-family construction used by frontend Group/VGroup animation builders.
 ///
@@ -13,12 +16,12 @@ use noon_core::{Bounds2D64, SemanticNodeId, SemanticNodeKind, SemanticStore};
 #[derive(Clone, Debug)]
 pub struct FrontendFamilyTargetEditor {
     source_members: Vec<SemanticNodeId>,
-    target: SemanticNodeId,
+    target_members: Vec<SemanticNodeId>,
     next_index: usize,
 }
 
 impl FrontendFamilyTargetEditor {
-    pub fn begin(store: &mut SemanticStore, source: SemanticNodeId) -> Result<Self, String> {
+    pub fn begin(store: &SemanticStore, source: SemanticNodeId) -> Result<Self, String> {
         let source_members = {
             let source_node = store
                 .node(source)
@@ -28,21 +31,15 @@ impl FrontendFamilyTargetEditor {
             }
             source_node.members().to_vec()
         };
-        let target = store.insert_family();
         Ok(Self {
             source_members,
-            target,
+            target_members: Vec::new(),
             next_index: 0,
         })
     }
 
-    pub const fn target_id(&self) -> SemanticNodeId {
-        self.target
-    }
-
     pub fn accept_member(
         &mut self,
-        store: &mut SemanticStore,
         source_member: SemanticNodeId,
         target_member: SemanticNodeId,
     ) -> Result<(), String> {
@@ -57,14 +54,12 @@ impl FrontendFamilyTargetEditor {
                 self.next_index
             ));
         }
-        store
-            .add_member(self.target, target_member)
-            .map_err(|error| error.to_string())?;
+        self.target_members.push(target_member);
         self.next_index += 1;
         Ok(())
     }
 
-    pub fn finish(&self) -> Result<SemanticNodeId, String> {
+    pub fn target_members(&self) -> Result<&[SemanticNodeId], String> {
         if self.next_index != self.source_members.len() {
             return Err(format!(
                 "family target editor is incomplete: accepted {} of {} members",
@@ -72,7 +67,23 @@ impl FrontendFamilyTargetEditor {
                 self.source_members.len()
             ));
         }
-        Ok(self.target)
+        Ok(&self.target_members)
+    }
+
+    pub fn finish(&self, store: &mut SemanticStore) -> Result<SemanticNodeId, String> {
+        let members = self.target_members()?;
+        let mut transaction = SemanticMutationTransaction::new();
+        let family = transaction.create_node(SemanticNodeCreation::family());
+        for &member in members {
+            transaction.add_member(family, member);
+        }
+        let result = transaction
+            .apply(store)
+            .map_err(|error| error.to_string())?;
+        let node = result
+            .resolve(family)
+            .expect("committed target family token resolves to one semantic identity");
+        Ok(node)
     }
 }
 
@@ -1352,6 +1363,14 @@ mod wasm {
     }
 
     impl WasmAuthoringFamilyTargetEditor {
+        pub(crate) fn store(&self) -> &SharedSemanticStore {
+            &self.semantics
+        }
+
+        pub(crate) fn target_member_ids(&self) -> Result<&[SemanticNodeId], JsValue> {
+            self.editor.target_members().map_err(js_error)
+        }
+
         fn mobject_member_id(
             &self,
             member: &WasmAuthoringMobjectHandle,
@@ -1395,7 +1414,7 @@ mod wasm {
             let source_id = self.mobject_member_id(source)?;
             let target_id = self.mobject_member_id(target)?;
             self.editor
-                .accept_member(&mut self.semantics.borrow_mut(), source_id, target_id)
+                .accept_member(source_id, target_id)
                 .map_err(js_error)
         }
 
@@ -1408,7 +1427,7 @@ mod wasm {
             let source_id = self.identity_member_id(source)?;
             let target_id = self.identity_member_id(target)?;
             self.editor
-                .accept_member(&mut self.semantics.borrow_mut(), source_id, target_id)
+                .accept_member(source_id, target_id)
                 .map_err(js_error)
         }
 
@@ -1421,12 +1440,15 @@ mod wasm {
             let source_id = self.family_member_id(source)?;
             let target_id = self.family_member_id(target)?;
             self.editor
-                .accept_member(&mut self.semantics.borrow_mut(), source_id, target_id)
+                .accept_member(source_id, target_id)
                 .map_err(js_error)
         }
 
         pub fn finish(&self) -> Result<WasmAuthoringFamilyHandle, JsValue> {
-            let id = self.editor.finish().map_err(js_error)?;
+            let id = self
+                .editor
+                .finish(&mut self.semantics.borrow_mut())
+                .map_err(js_error)?;
             Ok(WasmAuthoringFamilyHandle {
                 semantics: Rc::clone(&self.semantics),
                 id,
@@ -1435,6 +1457,13 @@ mod wasm {
     }
 
     impl WasmAuthoringFamilyHandle {
+        pub(crate) fn from_semantic_family(family: noon::MobjectFamily) -> Self {
+            Self {
+                semantics: Rc::clone(family.store()),
+                id: family.node_id(),
+            }
+        }
+
         pub(crate) fn semantic_family(&self) -> Result<noon::MobjectFamily, JsValue> {
             noon::MobjectFamily::from_node(Rc::clone(&self.semantics), self.id).map_err(js_error)
         }
@@ -1558,9 +1587,8 @@ mod wasm {
 
         #[wasm_bindgen(js_name = targetEditor)]
         pub fn target_editor(&self) -> Result<WasmAuthoringFamilyTargetEditor, JsValue> {
-            let editor =
-                FrontendFamilyTargetEditor::begin(&mut self.semantics.borrow_mut(), self.id)
-                    .map_err(js_error)?;
+            let editor = FrontendFamilyTargetEditor::begin(&self.semantics.borrow(), self.id)
+                .map_err(js_error)?;
             Ok(WasmAuthoringFamilyTargetEditor {
                 semantics: Rc::clone(&self.semantics),
                 editor,
@@ -2822,16 +2850,11 @@ mod tests {
 
         let target_a = store.insert_authoring_object();
         let target_b = store.insert_authoring_object();
-        let mut editor = FrontendFamilyTargetEditor::begin(&mut store, source_family).unwrap();
-        assert!(store.node(editor.target_id()).unwrap().members().is_empty());
+        let mut editor = FrontendFamilyTargetEditor::begin(&store, source_family).unwrap();
 
-        editor
-            .accept_member(&mut store, source_a, target_a)
-            .unwrap();
-        editor
-            .accept_member(&mut store, source_b, target_b)
-            .unwrap();
-        let target_family = editor.finish().unwrap();
+        editor.accept_member(source_a, target_a).unwrap();
+        editor.accept_member(source_b, target_b).unwrap();
+        let target_family = editor.finish(&mut store).unwrap();
 
         assert_eq!(
             store.node(source_family).unwrap().members(),
@@ -2863,13 +2886,13 @@ mod tests {
         store.add_member(source_family, source_b).unwrap();
         let target_a = store.insert_authoring_object();
 
-        let mut editor = FrontendFamilyTargetEditor::begin(&mut store, source_family).unwrap();
-        let error = editor
-            .accept_member(&mut store, source_b, target_a)
-            .unwrap_err();
+        let mut editor = FrontendFamilyTargetEditor::begin(&store, source_family).unwrap();
+        let error = editor.accept_member(source_b, target_a).unwrap_err();
         assert!(error.contains("mismatch at index 0"));
-        assert!(store.node(editor.target_id()).unwrap().members().is_empty());
-        assert!(editor.finish().unwrap_err().contains("accepted 0 of 2"));
+        assert!(editor
+            .finish(&mut store)
+            .unwrap_err()
+            .contains("accepted 0 of 2"));
     }
 
     #[test]
