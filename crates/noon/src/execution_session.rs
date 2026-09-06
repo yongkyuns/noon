@@ -2415,6 +2415,52 @@ mod tests {
     }
 
     #[test]
+    fn first_positive_time_hold_preserves_initial_history_and_same_time_track_order() {
+        let mut store = SemanticStore::new();
+        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.advance_to(1.0).unwrap();
+        session
+            .set_scalar_signal_value(&mut store, tracker, 3.0)
+            .unwrap();
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 0.0), Ok(0.0));
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.0), Ok(3.0));
+
+        session.seek(0.0).unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(0.0))
+        );
+        session.advance_to(1.0).unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(3.0))
+        );
+
+        let fresh = ExecutionSession::from_semantic_store(&store).unwrap();
+        assert_eq!(fresh.frame().time, 0.0);
+        assert_eq!(
+            fresh.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(0.0))
+        );
+
+        let segment = session
+            .declare_and_activate_value_tracker(&mut store, tracker, 5.0, 1.0, RateFunction::Linear)
+            .unwrap();
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.0), Ok(3.0));
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(3.0))
+        );
+        session.advance_segment_to(segment, 1.5).unwrap();
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.5), Ok(4.0));
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(4.0))
+        );
+    }
+
+    #[test]
     fn one_native_occurrence_updates_shared_closure_atomically() {
         let mut store = SemanticStore::new();
         let source = NativeStateSource::Control {

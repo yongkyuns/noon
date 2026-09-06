@@ -34,6 +34,7 @@ pub struct SemanticReactiveProjection {
 pub struct CompiledScalarSignalTrack {
     semantic_signal: SemanticNodeId,
     execution_signal: SignalId,
+    initial_value: f32,
     from: f32,
     to: f32,
     timing: noon_core::TrackTiming,
@@ -43,6 +44,7 @@ pub struct CompiledScalarSignalTrack {
 pub struct CompiledScalarSignalHold {
     semantic_signal: SemanticNodeId,
     execution_signal: SignalId,
+    initial_value: f32,
     value: f32,
     start_time: f64,
 }
@@ -58,6 +60,10 @@ impl CompiledScalarSignalHold {
 
     pub const fn value(self) -> f32 {
         self.value
+    }
+
+    pub const fn initial_value(self) -> f32 {
+        self.initial_value
     }
 
     pub const fn start_time(self) -> f64 {
@@ -76,6 +82,13 @@ impl CompiledScalarSignalTimelineEntry {
         match self {
             Self::Track(track) => track.semantic_signal(),
             Self::Hold(hold) => hold.semantic_signal(),
+        }
+    }
+
+    pub const fn initial_value(self) -> f32 {
+        match self {
+            Self::Track(track) => track.initial_value(),
+            Self::Hold(hold) => hold.initial_value(),
         }
     }
 
@@ -105,6 +118,10 @@ impl CompiledScalarSignalTrack {
 
     pub const fn from(self) -> f32 {
         self.from
+    }
+
+    pub const fn initial_value(self) -> f32 {
+        self.initial_value
     }
 
     pub const fn to(self) -> f32 {
@@ -256,7 +273,19 @@ pub fn lower_prepared_scalar_signal_timeline_entry(
         let execution_signal = projection.execution_signal_id(entry.signal()).ok_or(
             PreparedScalarSignalTimelineError::UnknownExecutionSignal(entry.signal()),
         )?;
-        lowered = Some(lower_scalar_timeline_entry(entry, execution_signal)?);
+        let state = prepared
+            .store()
+            .semantic_signal_state(entry.signal())
+            .map_err(SemanticReactiveLoweringError::from)?;
+        let initial = match state.source() {
+            SemanticSignalSource::Input(SemanticSignalValue::Scalar(initial)) => *initial,
+            _ => unreachable!("prepared scalar timeline entry validates one scalar input signal"),
+        };
+        lowered = Some(lower_scalar_timeline_entry(
+            entry,
+            execution_signal,
+            initial,
+        )?);
     }
     lowered.ok_or(PreparedScalarSignalTimelineError::ExpectedSingleEntry)
 }
@@ -354,20 +383,28 @@ pub fn lower_semantic_reactive_projection(
     let mut scalar_timeline = Vec::new();
     for semantic_signal in lowered_signals {
         let execution_signal = lowerer.signal_ids[&semantic_signal];
-        let semantic_timeline = store
-            .semantic_signal_state(semantic_signal)?
-            .scalar_timeline();
-        if !semantic_timeline.is_empty() {
-            let initial = store
-                .semantic_input_scalar_value_at(semantic_signal, 0.0)
-                .expect("validated scalar tracks remain attached to a scalar input signal");
-            let definition_index = definition_indices[&execution_signal];
-            lowerer.definitions[definition_index].source = SignalSource::Input(
-                ReactiveValue::Scalar(lower_scalar(semantic_signal, initial)?),
-            );
+        let state = store.semantic_signal_state(semantic_signal)?;
+        let semantic_timeline = state.scalar_timeline();
+        if semantic_timeline.is_empty() {
+            continue;
         }
+        let authored_initial = match state.source() {
+            SemanticSignalSource::Input(SemanticSignalValue::Scalar(initial)) => *initial,
+            _ => unreachable!("validated scalar timeline belongs to one scalar input signal"),
+        };
+        let effective_at_zero = store
+            .semantic_input_scalar_value_at(semantic_signal, 0.0)
+            .expect("validated scalar tracks remain attached to a scalar input signal");
+        let definition_index = definition_indices[&execution_signal];
+        lowerer.definitions[definition_index].source = SignalSource::Input(ReactiveValue::Scalar(
+            lower_scalar(semantic_signal, effective_at_zero)?,
+        ));
         for entry in semantic_timeline {
-            scalar_timeline.push(lower_scalar_timeline_entry(*entry, execution_signal)?);
+            scalar_timeline.push(lower_scalar_timeline_entry(
+                *entry,
+                execution_signal,
+                authored_initial,
+            )?);
         }
     }
     let graph = ReactiveGraphDefinition::from_parts(lowerer.definitions, lowerer.bindings)?;
@@ -529,13 +566,16 @@ fn lower_scalar(signal: SemanticNodeId, value: f64) -> Result<f32, SemanticReact
 fn lower_scalar_timeline_entry(
     entry: SemanticScalarSignalTimelineEntry,
     execution_signal: SignalId,
+    initial: f64,
 ) -> Result<CompiledScalarSignalTimelineEntry, SemanticReactiveLoweringError> {
     let semantic_signal = entry.signal();
+    let initial_value = lower_scalar(semantic_signal, initial)?;
     Ok(match entry {
         SemanticScalarSignalTimelineEntry::Track(track) => {
             CompiledScalarSignalTimelineEntry::Track(CompiledScalarSignalTrack {
                 semantic_signal,
                 execution_signal,
+                initial_value,
                 from: lower_scalar(semantic_signal, track.from())?,
                 to: lower_scalar(semantic_signal, track.to())?,
                 timing: track.timing(),
@@ -545,6 +585,7 @@ fn lower_scalar_timeline_entry(
             CompiledScalarSignalTimelineEntry::Hold(CompiledScalarSignalHold {
                 semantic_signal,
                 execution_signal,
+                initial_value,
                 value: lower_scalar(semantic_signal, hold.value())?,
                 start_time: hold.start_time(),
             })

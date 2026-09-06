@@ -8,6 +8,7 @@ use noon_runtime::TimelineWakeState;
 struct SignalTimelineGroup {
     semantic: SemanticNodeId,
     execution: SignalId,
+    initial: f32,
     entries: Vec<CompiledScalarSignalTimelineEntry>,
 }
 
@@ -43,6 +44,7 @@ pub enum SignalTimelineAppendError {
     NotAtCurrentTime { current: f64, entry: f64 },
     EventInterleaving { current: f64, tail: f64 },
     SignalExecutionMismatch { signal: SemanticNodeId },
+    SignalInitialMismatch { signal: SemanticNodeId },
 }
 
 impl std::fmt::Display for SignalTimelineAppendError {
@@ -59,6 +61,12 @@ impl std::fmt::Display for SignalTimelineAppendError {
             Self::SignalExecutionMismatch { signal } => write!(
                 formatter,
                 "semantic signal {}:{} changed its derived execution identity",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::SignalInitialMismatch { signal } => write!(
+                formatter,
+                "semantic signal {}:{} changed its compiled initial value",
                 signal.slot(),
                 signal.generation()
             ),
@@ -98,6 +106,7 @@ impl SignalTimelineSchedule {
                 groups.push(SignalTimelineGroup {
                     semantic,
                     execution,
+                    initial: entry.initial_value(),
                     entries: Vec::new(),
                 });
                 group
@@ -174,6 +183,11 @@ impl SignalTimelineSchedule {
                 signal: entry.semantic_signal(),
             });
         }
+        if group.is_some_and(|group| self.groups[group].initial != entry.initial_value()) {
+            return Err(SignalTimelineAppendError::SignalInitialMismatch {
+                signal: entry.semantic_signal(),
+            });
+        }
         Ok(PreparedSignalTimelineAppend {
             entry,
             group,
@@ -190,6 +204,7 @@ impl SignalTimelineSchedule {
             self.groups.push(SignalTimelineGroup {
                 semantic: prepared.entry.semantic_signal(),
                 execution: prepared.entry.execution_signal(),
+                initial: prepared.entry.initial_value(),
                 entries: Vec::new(),
             });
             self.group_by_signal
@@ -244,7 +259,7 @@ impl SignalTimelineSchedule {
                     let group = &self.groups[group];
                     (
                         group.execution,
-                        ReactiveValue::Scalar(value_at(&group.entries, time)),
+                        ReactiveValue::Scalar(value_at(&group.entries, group.initial, time)),
                     )
                 })
                 .collect(),
@@ -276,7 +291,7 @@ impl SignalTimelineSchedule {
                 .map(|group| {
                     (
                         group.execution,
-                        ReactiveValue::Scalar(value_at(&group.entries, time)),
+                        ReactiveValue::Scalar(value_at(&group.entries, group.initial, time)),
                     )
                 })
                 .collect(),
@@ -347,13 +362,10 @@ fn track_end(track: CompiledScalarSignalTrack) -> f64 {
     track.timing().start_time + track.timing().duration
 }
 
-fn value_at(entries: &[CompiledScalarSignalTimelineEntry], time: f64) -> f32 {
+fn value_at(entries: &[CompiledScalarSignalTimelineEntry], initial: f32, time: f64) -> f32 {
     let next = entries.partition_point(|entry| entry.start_time() <= time);
     if next == 0 {
-        return match entries[0] {
-            CompiledScalarSignalTimelineEntry::Track(track) => track.from(),
-            CompiledScalarSignalTimelineEntry::Hold(hold) => hold.value(),
-        };
+        return initial;
     }
     match entries[next - 1] {
         CompiledScalarSignalTimelineEntry::Track(track) => {
