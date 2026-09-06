@@ -17,6 +17,8 @@ const ACCUMULATE_TEXT_DT: HostCallbackId = HostCallbackId::new(4);
 const ROTATE_LINE_FORWARD: HostCallbackId = HostCallbackId::new(5);
 const ROTATE_LINE_BACKWARD: HostCallbackId = HostCallbackId::new(6);
 const FOLLOW_SPARSE_READS: HostCallbackId = HostCallbackId::new(7);
+const RECOLOR_PAINT: HostCallbackId = HostCallbackId::new(8);
+const FILL_AND_COMPOSITE_OPACITY: HostCallbackId = HostCallbackId::new(9);
 
 fn ordered_affine_callbacks() -> Result<RustHostCallbackTable, Box<dyn Error>> {
     let mut callbacks = RustHostCallbackTable::new();
@@ -89,6 +91,74 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
         let mut live = scene.live(&mut session);
         live.play_animation(&animation)?;
     }
+    Ok((session, callbacks))
+}
+
+/// Build the paired callback paint example over the canonical effective-style batch.
+///
+/// The first callback recolors both enabled paint layers while retaining their
+/// independent alpha. The second observes that write, changes only fill alpha,
+/// and separately changes object-composite opacity.
+pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut source = scene.circle(1.0)?;
+    source.set_fill(0.1, 0.2, 0.8, 0.25)?;
+    source.set_stroke_color(0.9, 0.9, 0.9, 0.75)?;
+    source.set_stroke_opacity(0.75)?;
+    source.set_stroke_width(0.12)?;
+    scene.add(&source)?;
+
+    let mut target = source.target_editor()?;
+    target.set_translation(2.0, 0.0)?;
+    let animation = scene.declare_transform_to(
+        &source,
+        &target,
+        AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    )?;
+
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks.insert(RECOLOR_PAINT, |context| {
+        let style = context
+            .target_style_with_color(0.8, 0.4, 0.2, 0.9)
+            .map_err(std::io::Error::other)?;
+        context
+            .set_target_style(style)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    })?;
+    callbacks.insert(FILL_AND_COMPOSITE_OPACITY, |context| {
+        let before = context.target_state().style;
+        let expected_fill_alpha = if context.time() == 0.0 { 0.25 } else { 0.4 };
+        if before.fill.map(|color| color.alpha) != Some(expected_fill_alpha)
+            || before.stroke.map(|color| color.alpha) != Some(0.75)
+        {
+            return Err(std::io::Error::other(
+                "ordered paint callback did not observe preserved layer alpha",
+            ));
+        }
+        let mut style = context
+            .target_style_with_fill_opacity(0.4)
+            .map_err(std::io::Error::other)?;
+        style.opacity = 0.5;
+        context
+            .set_target_style(style)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    })?;
+    {
+        let mut store = scene.store().borrow_mut();
+        callbacks.add_updater(&mut store, source.node_id(), RECOLOR_PAINT, 0.0, None)?;
+        callbacks.add_updater(
+            &mut store,
+            source.node_id(),
+            FILL_AND_COMPOSITE_OPACITY,
+            0.0,
+            None,
+        )?;
+    }
+
+    let mut session = scene.execution_session()?;
+    scene.live(&mut session).play_animation(&animation)?;
     Ok((session, callbacks))
 }
 
@@ -1562,6 +1632,32 @@ mod continuation_tests {
             LiveProgramStatus::ReadyToResume
         );
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+}
+
+#[cfg(test)]
+mod callback_paint_tests {
+    use super::*;
+
+    #[test]
+    fn paired_callback_paint_preserves_layer_alpha_and_composite_domain() {
+        let (mut session, mut callbacks) = live_callback_paint().unwrap();
+        callbacks.advance_to(&mut session, 0.0).unwrap();
+        let initial = &session.frame().objects[0];
+        let initial_style = initial.style;
+        assert_eq!(initial.transform.translation, Vec2::ZERO);
+        assert_eq!(initial.style.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
+        assert_eq!(initial.style.stroke, Some(Color::rgba(0.8, 0.4, 0.2, 0.75)));
+        assert_eq!(initial.style.stroke_width, 0.12);
+        assert_eq!(initial.style.opacity, 0.5);
+
+        callbacks.advance_to(&mut session, 1.0).unwrap();
+        let endpoint = &session.frame().objects[0];
+        assert_eq!(endpoint.transform.translation, Vec2::new(2.0, 0.0));
+        assert_eq!(endpoint.style.fill, initial_style.fill);
+        assert_eq!(endpoint.style.stroke, initial_style.stroke);
+        assert_eq!(endpoint.style.opacity, 0.5);
+        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
     }
 }
 

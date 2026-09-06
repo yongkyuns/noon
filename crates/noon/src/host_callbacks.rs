@@ -162,6 +162,58 @@ impl RustHostCallbackContext<'_> {
         rotate_effective_transform_about_point(self.target_state().transform, angle, pivot)
     }
 
+    /// Derive Manim `set_color` paint from the current effective target style.
+    ///
+    /// Existing fill and stroke alpha remain attached to their enabled layers.
+    /// If neither layer is enabled, the requested color enables fill.
+    pub fn target_style_with_color(
+        &self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<Style, String> {
+        effective_style_with_color(self.target_state().style, red, green, blue, alpha)
+    }
+
+    /// Derive a fill-color edit while retaining an already enabled fill alpha.
+    pub fn target_style_with_fill_color(
+        &self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<Style, String> {
+        effective_style_with_fill_color(self.target_state().style, red, green, blue, alpha)
+    }
+
+    /// Derive an opacity-only fill edit, enabling white fill when absent.
+    pub fn target_style_with_fill_opacity(&self, opacity: f64) -> Result<Style, String> {
+        effective_style_with_fill_opacity(self.target_state().style, opacity)
+    }
+
+    /// Derive an explicit fill color and layer opacity edit.
+    pub fn target_style_with_fill(
+        &self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<Style, String> {
+        effective_style_with_fill(self.target_state().style, red, green, blue, opacity)
+    }
+
+    /// Derive a stroke-color edit while retaining an already enabled stroke alpha.
+    pub fn target_style_with_stroke_color(
+        &self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<Style, String> {
+        effective_style_with_stroke_color(self.target_state().style, red, green, blue, alpha)
+    }
+
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
         self.overlay.set_style(self.target, style)
     }
@@ -202,6 +254,63 @@ pub fn rotate_effective_transform_about_point(
         rotation: rotation as f32,
         scale: transform.scale,
     })
+}
+
+/// Apply shared Manim `set_color` semantics to one effective runtime style.
+///
+/// This is a pure callback-local property operation. It does not publish a
+/// frame; callers write its result through the existing effective-style batch.
+pub fn effective_style_with_color(
+    mut style: Style,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Style, String> {
+    crate::semantic_mobject::edit_color(&mut style, red, green, blue, alpha)?;
+    Ok(style)
+}
+
+/// Apply shared Manim fill-color semantics to an effective runtime style.
+pub fn effective_style_with_fill_color(
+    mut style: Style,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Style, String> {
+    crate::semantic_mobject::edit_fill_color(&mut style, red, green, blue, alpha)?;
+    Ok(style)
+}
+
+/// Apply shared Manim opacity-only fill semantics to an effective runtime style.
+pub fn effective_style_with_fill_opacity(mut style: Style, opacity: f64) -> Result<Style, String> {
+    crate::semantic_mobject::edit_fill_opacity(&mut style, opacity)?;
+    Ok(style)
+}
+
+/// Apply shared Manim explicit fill color and opacity semantics.
+pub fn effective_style_with_fill(
+    mut style: Style,
+    red: f64,
+    green: f64,
+    blue: f64,
+    opacity: f64,
+) -> Result<Style, String> {
+    crate::semantic_mobject::edit_fill(&mut style, red, green, blue, opacity)?;
+    Ok(style)
+}
+
+/// Apply shared Manim stroke-color semantics to an effective runtime style.
+pub fn effective_style_with_stroke_color(
+    mut style: Style,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Style, String> {
+    crate::semantic_mobject::edit_stroke_color(&mut style, red, green, blue, alpha)?;
+    Ok(style)
 }
 
 /// Host-owned callable lookup for direct Rust execution.
@@ -475,6 +584,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::{AnimationOptions, RateFunction, Scene, Vec2};
+    use noon_core::Color;
 
     use super::*;
 
@@ -500,6 +610,47 @@ mod tests {
         assert!((rotated.rotation - (0.25 + std::f32::consts::FRAC_PI_2)).abs() < 1.0e-6);
         assert_eq!(rotated.scale, transform.scale);
         assert!(rotate_effective_transform_about_point(transform, f64::NAN, Vec2::ZERO).is_err());
+    }
+
+    #[test]
+    fn effective_paint_edits_share_authored_layer_alpha_semantics() {
+        let style = Style {
+            fill: Some(Color::rgba(0.1, 0.2, 0.3, 0.25)),
+            stroke: Some(Color::rgba(0.4, 0.5, 0.6, 0.75)),
+            stroke_width: 3.0,
+            opacity: 0.6,
+            ..Style::default()
+        };
+        let recolored = effective_style_with_color(style, 0.8, 0.4, 0.2, 0.9).unwrap();
+        assert_eq!(recolored.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.25)));
+        assert_eq!(recolored.stroke, Some(Color::rgba(0.8, 0.4, 0.2, 0.75)));
+        assert_eq!(recolored.stroke_width, 3.0);
+        assert_eq!(recolored.opacity, 0.6);
+
+        let filled = effective_style_with_fill_opacity(recolored, 0.4).unwrap();
+        assert_eq!(filled.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
+        assert_eq!(filled.stroke, recolored.stroke);
+        assert_eq!(filled.opacity, recolored.opacity);
+
+        let restroked = effective_style_with_stroke_color(filled, 0.2, 0.7, 0.4, 0.9).unwrap();
+        assert_eq!(restroked.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
+        assert_eq!(restroked.stroke, Some(Color::rgba(0.2, 0.7, 0.4, 0.75)));
+        assert_eq!(restroked.stroke_width, 3.0);
+        assert_eq!(restroked.opacity, 0.6);
+
+        let disabled = Style {
+            fill: None,
+            stroke: Some(Color::rgba(0.3, 0.2, 0.1, 0.7)),
+            opacity: 0.5,
+            ..Style::default()
+        };
+        let enabled = effective_style_with_fill_opacity(disabled, 0.35).unwrap();
+        assert_eq!(enabled.fill, Some(Color::rgba(1.0, 1.0, 1.0, 0.35)));
+        assert_eq!(enabled.stroke, disabled.stroke);
+        assert_eq!(enabled.opacity, disabled.opacity);
+
+        assert!(effective_style_with_fill_opacity(style, f64::NAN).is_err());
+        assert_eq!(style.fill.unwrap().alpha, 0.25);
     }
 
     #[test]
@@ -727,6 +878,47 @@ mod tests {
         assert_eq!(session.frame(), &frame);
         assert_eq!(session.publication_context(), publication);
         assert!(session.callback_termination().is_some());
+    }
+
+    #[test]
+    fn invalid_effective_paint_edit_terminates_without_publishing() {
+        let mut scene = Scene::new();
+        let target = scene.circle(1.0).unwrap();
+        scene.add(&target).unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(SET_OPACITY, |context| {
+                let style = context
+                    .target_style_with_fill_opacity(2.0)
+                    .map_err(std::io::Error::other)?;
+                context
+                    .set_target_style(style)
+                    .map_err(|error| std::io::Error::other(error.to_string()))
+            })
+            .unwrap();
+        callbacks
+            .add_updater(
+                &mut scene.store().borrow_mut(),
+                target.node_id(),
+                SET_OPACITY,
+                0.0,
+                None,
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let frame = session.frame().clone();
+        let publication = session.publication_context();
+
+        assert!(matches!(
+            callbacks.advance_to(&mut session, 0.0),
+            Err(RustHostCallbackError::CallbackFailed {
+                callback: SET_OPACITY,
+                occurrence_index: 0,
+                ..
+            })
+        ));
+        assert_eq!(session.frame(), &frame);
+        assert_eq!(session.publication_context(), publication);
     }
 
     fn effective_pair(
