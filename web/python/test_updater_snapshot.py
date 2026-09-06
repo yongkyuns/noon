@@ -226,7 +226,14 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         scene._canonical_authoring_context = context
         circle._semantic_handle = source_handle
         circle._semantic_handle_fresh = True
+        class SourceRegistration:
+            def __deepcopy__(self, memo):
+                raise AssertionError("target copy traversed source callback ownership")
+
+        registration = SourceRegistration()
         circle._noon_updaters = [object()]
+        circle._noon_updater_registrations = [registration]
+        circle._noon_updater_registration_history = [registration]
 
         target = semantic_handles._clone_mobject(circle, target_state=True)
 
@@ -236,6 +243,9 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertIsNone(target._scene)
         self.assertIsNone(target._object)
         self.assertFalse(hasattr(target, "_noon_updaters"))
+        self.assertFalse(hasattr(target, "_noon_updater_registrations"))
+        self.assertFalse(hasattr(target, "_noon_updater_registration_history"))
+        self.assertIs(circle._noon_updater_registrations[0], registration)
 
     def test_callback_bound_copy_rejects_inside_the_active_phase(self) -> None:
         scene, mobject, context = self._mobject_and_context()

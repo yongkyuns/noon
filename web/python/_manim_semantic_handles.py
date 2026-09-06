@@ -632,7 +632,11 @@ def _clone_mobject(
     # A callback registry belongs to its source occurrence. The detached target
     # carries only its opaque semantic handle, never copied callback ownership.
     if target_context is not None:
-        excluded.add("_noon_updaters")
+        excluded.update({
+            "_noon_updaters",
+            "_noon_updater_registrations",
+            "_noon_updater_registration_history",
+        })
     for name, value in self.__dict__.items():
         if name not in excluded:
             if isinstance(value, _base.Mobject):
