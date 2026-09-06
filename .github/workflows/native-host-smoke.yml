@@ -55,3 +55,9 @@ jobs:
           xvfb-run -a -s "-screen 0 1280x720x24" \
             cargo test -p noon-native native_surface_smoke_presents_typed_semantic_frame \
               -- --ignored --nocapture --test-threads=1
+
+      - name: Present typed Rust continuation endpoint through native host
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_affine_continuation_endpoint \
+              -- --ignored --nocapture --test-threads=1

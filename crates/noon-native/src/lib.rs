@@ -258,9 +258,9 @@ struct NativeApp {
     force_full_redraw: bool,
     error: Option<NativeHostError>,
     #[cfg(test)]
-    exit_after_present: bool,
+    exit_after_present: Option<f64>,
     #[cfg(test)]
-    presented_frame: bool,
+    presented_frame_time: Option<f64>,
     #[cfg(test)]
     last_geometry_draw_calls: usize,
     #[cfg(test)]
@@ -302,9 +302,9 @@ impl NativeApp {
             force_full_redraw: false,
             error: None,
             #[cfg(test)]
-            exit_after_present: false,
+            exit_after_present: None,
             #[cfg(test)]
-            presented_frame: false,
+            presented_frame_time: None,
             #[cfg(test)]
             last_geometry_draw_calls: 0,
             #[cfg(test)]
@@ -322,6 +322,16 @@ impl NativeApp {
         self.execution
             .static_session_mut()
             .expect("static native test must own an execution session")
+    }
+
+    #[cfg(test)]
+    fn exit_after_requested_present(&self) -> bool {
+        self.exit_after_present
+            .zip(self.presented_frame_time)
+            .is_some_and(|(requested_time, presented_time)| {
+                presented_time >= requested_time
+                    && matches!(self.execution.timeline(), TimelineWakeState::Quiescent)
+            })
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: NativeHostError) {
@@ -539,15 +549,15 @@ impl NativeApp {
         window.pre_present_notify();
         gpu.queue.submit(Some(encoder.finish()));
         gpu.queue.present(surface_texture);
-        #[cfg(test)]
-        {
-            self.presented_frame = true;
-        }
         if reconfigure_after_present {
             gpu.surface.configure(&gpu.device, &gpu.config);
         }
         let presented = publication.context();
         self.execution.admit_presented_publication(presented)?;
+        #[cfg(test)]
+        {
+            self.presented_frame_time = Some(self.execution.frame_time());
+        }
         self.force_full_redraw = false;
         Ok(())
     }
@@ -667,7 +677,7 @@ impl ApplicationHandler for NativeApp {
                     self.fail(event_loop, error);
                 }
                 #[cfg(test)]
-                if self.exit_after_present && self.presented_frame {
+                if self.exit_after_requested_present() {
                     event_loop.exit();
                 }
             }
@@ -687,6 +697,11 @@ impl ApplicationHandler for NativeApp {
 
         if let Err(error) = self.resume_ready_and_reanchor(Instant::now()) {
             self.fail(event_loop, error);
+            return;
+        }
+        #[cfg(test)]
+        if self.exit_after_requested_present() {
+            event_loop.exit();
             return;
         }
         if self.force_full_redraw || self.execution.frame_pending() {
@@ -1432,14 +1447,14 @@ mod tests {
                 height: 180,
             },
         );
-        app.exit_after_present = true;
+        app.exit_after_present = Some(0.0);
         event_loop.run_app(&mut app).unwrap();
 
         if let Some(error) = app.error.take() {
             panic!("native surface smoke failed before presentation: {error}");
         }
         assert!(
-            app.presented_frame,
+            app.presented_frame_time.is_some(),
             "native host exited without presenting a frame"
         );
         assert!(
@@ -1449,6 +1464,52 @@ mod tests {
         assert!(
             app.last_text_draw_calls > 0,
             "native mixed renderer emitted no text draw calls"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an X11 display and a working native wgpu adapter"]
+    fn native_surface_smoke_presents_affine_continuation_endpoint() {
+        use noon::example_scenes::ordinary_affine_continuation_program;
+        use winit::platform::x11::EventLoopBuilderExtX11;
+
+        let program = ordinary_affine_continuation_program().unwrap();
+        let source =
+            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let mut event_loop_builder = EventLoop::builder();
+        event_loop_builder.with_any_thread(true);
+        let event_loop = event_loop_builder.build().unwrap();
+        event_loop.set_control_flow(ControlFlow::Wait);
+
+        let mut app = NativeApp::from_source(
+            Box::new(source),
+            NativeViewportConfig {
+                title: "Noon native affine continuation smoke".to_owned(),
+                width: 320,
+                height: 180,
+            },
+        );
+        app.exit_after_present = Some(4.0);
+        event_loop.run_app(&mut app).unwrap();
+
+        if let Some(error) = app.error.take() {
+            panic!("native continuation surface smoke failed before its endpoint: {error}");
+        }
+        assert_eq!(
+            app.presented_frame_time,
+            Some(4.0),
+            "native continuation must present its final authored endpoint"
+        );
+        assert_eq!(app.session().frame().time, 4.0);
+        assert_eq!(
+            app.session().frame().render_transform(0).translation,
+            Vec2::new(5.0, -1.0),
+            "native continuation must expose its final effective geometry state"
+        );
+        assert!(
+            app.last_geometry_draw_calls > 0,
+            "native continuation endpoint emitted no geometry draw calls"
         );
     }
 }
