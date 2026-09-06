@@ -1348,7 +1348,7 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
     return None
 
 
-def _canonical_linear_play_options(kwargs: dict[str, object]) -> float | None:
+def _canonical_play_options(kwargs: dict[str, object]) -> float | None:
     duration = kwargs.pop("duration", None)
     run_time = kwargs.pop("run_time", None)
     start_time = kwargs.pop("start_time", None)
@@ -1408,7 +1408,7 @@ def _build_canonical_composition_candidate(
     """Build one inert recursive composition tree owned by the WASM context."""
     import _manim_rotate as _rotate
 
-    play_run_time = _canonical_linear_play_options(dict(kwargs))
+    play_run_time = _canonical_play_options(dict(kwargs))
     composition_run_time = None if group is None else group.run_time
     composition_lag_ratio = 0.0 if group is None else float(group.lag_ratio)
     context = _context(self)
@@ -1529,7 +1529,7 @@ def _build_canonical_composition_candidate(
             root_kind,
             None if root_group is None else root_group.run_time,
             0.0 if root_group is None else float(root_group.lag_ratio),
-            None if root_group is not None else _canonical_linear_play_options(dict(root_kwargs)),
+            None if root_group is not None else _canonical_play_options(dict(root_kwargs)),
         )
         nested.setCompositionRateFunction(
             _compat._easing_from_rate_func(root_group.rate_func) if root_group is not None else "linear"
