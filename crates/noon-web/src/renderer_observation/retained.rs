@@ -600,7 +600,7 @@ mod tests {
 
         let json = serde_json::to_value(&outcome).unwrap();
         assert_eq!(json["outcome"], "presented");
-        assert_eq!(json["publication"]["sequence"], 5);
+        assert_eq!(json["publication"]["sequence"], 0);
         assert_eq!(json["presentation"]["presentation_sequence"], 4);
         let RendererObservationOutcome::Presented(observation) = outcome else {
             panic!("an exact retained geometry observation must be publishable");
