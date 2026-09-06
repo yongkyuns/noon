@@ -43,7 +43,8 @@ class NativeTrackers(Scene):
     async def construct(self):
         square = Square(side_length=0.8, color=BLUE)
         circle = Circle(radius=0.3, color=PINK)
-        self.add(square, circle)
+        mover = Square(side_length=0.4, color=GREEN)
+        self.add(square, circle, mover)
         angle = ValueTracker(0.25)
         angle.increment_value(0.5).set_value(1.5)
         self.bind_rotation(square, angle)
@@ -56,11 +57,15 @@ class NativeTrackers(Scene):
         progress.set_value(1.0)
         assert abs(progress.get_value() - 1.0) < 1e-9
         await self.wait(1.0)
+        # The mixed transform uses an independently authored leaf. Capturing
+        # a reactive-bound target into a detached transform remains deferred.
         await self.play(
             progress.animate(run_time=5.0, rate_func=linear).set_value(2.0),
-            square.animate.shift(UP), run_time=1.0, rate_func=smooth,
+            mover.animate.shift(UP), run_time=1.0, rate_func=smooth,
         )
         assert abs(progress.get_value() - 2.0) < 1e-9
+        center = mover.get_center()
+        assert abs(center.y - 1.0) < 1e-9
 `;
 
 await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
@@ -103,7 +108,7 @@ try {
   }, source);
   assert.equal(result.authored.duration, 4);
   assert.ok(result.authored.semanticExecution, "tracker source should publish shared execution");
-  assert.equal(result.metrics.objectCount, 2);
+  assert.equal(result.metrics.objectCount, 3);
   assert.ok(result.metrics.drawCalls > 0, "mixed tracker/object scene did not render");
   assert.equal(errors.length, 0, errors.join("\n"));
   console.log("reactive authoring smoke test passed");
