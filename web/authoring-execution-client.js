@@ -180,18 +180,26 @@ export class AuthoringExecutionClient {
       loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
       transportMode = undefined,
       sharedSlotCapacity = undefined,
+      initiallyPaused = false,
     } = {},
   ) {
     if (this.#player !== null || this.#transition !== null) {
       throw new Error("AuthoringExecutionClient is already started");
     }
-    const contextId = validateSemanticExecutionDescriptor(descriptor);
+    const semantic = validateSemanticExecutionDescriptor(descriptor);
     validateSemanticAuthoringClient(authoringClient);
+    if (typeof initiallyPaused !== "boolean") {
+      throw new TypeError("initiallyPaused must be a boolean");
+    }
+    if (initiallyPaused && semantic.continuationGeneration !== null) {
+      throw new Error("source-owned semantic continuations cannot start paused");
+    }
     this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
     this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
     const options = {
       loopDurationSeconds: this.#loopDurationSeconds,
       sharedSlotCapacity: this.#sharedSlotCapacity,
+      initiallyPaused,
     };
     if (transportMode !== undefined) {
       options.transportMode = transportMode;
@@ -200,7 +208,11 @@ export class AuthoringExecutionClient {
     const player = this.#preparedPlayer ?? this.#createPlayer();
     const terminateCandidate = createIdempotentTerminator(player);
     try {
-      const ready = await player.startSemanticExecution(contextId, authoringClient, options);
+      const ready = await player.startSemanticExecution(semantic.contextId, authoringClient, {
+        ...options,
+        callbackSessionId: semantic.callbackSessionId,
+        continuationGeneration: semantic.continuationGeneration,
+      });
       this.#assertLifecycleCurrent(generation, terminateCandidate);
       if (this.#preparedPlayer === player) {
         this.#preparedPlayer = null;
@@ -234,15 +246,16 @@ export class AuthoringExecutionClient {
       await this.#transition;
     }
     this.#requireStarted();
-    const contextId = validateSemanticExecutionDescriptor(descriptor);
+    const semantic = validateSemanticExecutionDescriptor(descriptor);
     validateSemanticAuthoringClient(authoringClient);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
     if (duration !== null) {
       this.#loopDurationSeconds = duration;
     }
     return this.#runTransition(async () => {
-      const ready = await this.#player.switchToSemanticExecution(contextId, authoringClient, {
+      const ready = await this.#player.switchToSemanticExecution(semantic.contextId, authoringClient, {
         loopDurationSeconds: duration,
+        callbackSessionId: semantic.callbackSessionId,
       });
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
@@ -354,6 +367,42 @@ export class AuthoringExecutionClient {
 
   async seek(timeSeconds) {
     return this.#withStablePlayer((player) => player.seek(timeSeconds));
+  }
+
+  async advanceTo(timeSeconds) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("forward authored-time advancement requires semantic execution mode");
+      }
+      return player.advanceTo(timeSeconds);
+    });
+  }
+
+  async advanceToWithRendererObservation(timeSeconds) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("callback renderer observation requires semantic execution mode");
+      }
+      return player.advanceToWithRendererObservation(timeSeconds);
+    });
+  }
+
+  async setNativeStateInput(source, value) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("native state input requires semantic execution mode");
+      }
+      return player.setNativeStateInput(source, value);
+    });
+  }
+
+  async emitNativeEvent(source) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("native event input requires semantic execution mode");
+      }
+      return player.emitNativeEvent(source);
+    });
   }
 
   async restartPlayback() {
@@ -748,7 +797,21 @@ function validateSemanticExecutionDescriptor(descriptor) {
   if (typeof descriptor.contextId !== "string" || descriptor.contextId.trim() === "") {
     throw new TypeError("semantic execution context ID must be a non-empty string");
   }
-  return descriptor.contextId;
+  if (descriptor.callbackSessionId !== null && descriptor.callbackSessionId !== undefined &&
+      (!Number.isSafeInteger(descriptor.callbackSessionId) || descriptor.callbackSessionId < 0)) {
+    throw new TypeError("semantic callback session ID must be a non-negative safe integer");
+  }
+  if (descriptor.continuationGeneration !== null &&
+      descriptor.continuationGeneration !== undefined &&
+      (!Number.isSafeInteger(descriptor.continuationGeneration) ||
+       descriptor.continuationGeneration <= 0)) {
+    throw new TypeError("semantic continuation generation must be a positive safe integer");
+  }
+  return {
+    contextId: descriptor.contextId,
+    callbackSessionId: descriptor.callbackSessionId ?? null,
+    continuationGeneration: descriptor.continuationGeneration ?? null,
+  };
 }
 
 function validateSemanticAuthoringClient(authoringClient) {

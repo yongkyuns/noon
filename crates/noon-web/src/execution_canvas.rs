@@ -13,16 +13,18 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 mod wasm {
     use std::mem;
 
-    use noon::ExecutionSession;
+    use noon::{
+        ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RendererPublication,
+        RustHostCallbackTable,
+    };
     use noon_core::{
-        Camera2DState, GeometryRef, ObjectId, ReactiveValue, Rect, SemanticNodeId, Transform2D,
-        Vec2,
+        Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue,
+        NativeStateSource, ReactiveValue, Rect, SemanticNodeId, Vec2,
     };
     use noon_render_wgpu::{
-        Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
-        RenderPrimitive, RetainedFramePreparer, RetainedTextGpuState, UploadStats, UploadWrite,
+        Camera2D, FramePreparer, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,
     };
-    use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+    use noon_runtime::{FrameChanges, FrameState};
     use noon_text_render_wgpu::TextDeviceMetrics;
     use serde::Serialize;
     use wasm_bindgen::prelude::*;
@@ -32,7 +34,7 @@ mod wasm {
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
         gpu_timestamps::GpuTimestampProfiler,
         BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan,
-        BrowserHostWake, ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
+        BrowserHostWake, ExecutionFrameMirror, TransportApplyOutcome,
     };
 
     use super::MANIM_DEFAULT_CLEAR_COLOR;
@@ -44,102 +46,6 @@ mod wasm {
         fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
             Ok(wgpu::rwh::DisplayHandle::web())
         }
-    }
-
-    #[derive(Clone, Copy, Debug, Serialize)]
-    struct DiagnosticRange {
-        start: usize,
-        end: usize,
-    }
-
-    impl From<&std::ops::Range<usize>> for DiagnosticRange {
-        fn from(value: &std::ops::Range<usize>) -> Self {
-            Self {
-                start: value.start,
-                end: value.end,
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticExecution {
-        session: Option<u32>,
-        sequence: u64,
-        layout_generation: u64,
-        time: f64,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticObjectState {
-        object: u64,
-        frame_index: usize,
-        slot: Option<TransportSlotId>,
-        transform: Transform2D,
-        world_endpoints: Option<[Vec2; 2]>,
-        dirty_classification: &'static str,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticPreparedState {
-        state: DiagnosticObjectState,
-        instance_kind: Option<&'static str>,
-        instance_index: Option<usize>,
-        instance_range: Option<DiagnosticRange>,
-        full_rebuilds: usize,
-        instances_repacked: usize,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticUploadWrite {
-        buffer: &'static str,
-        instance_range: DiagnosticRange,
-        byte_offset: u64,
-        byte_length: usize,
-        payload_hash: u64,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticUploadState {
-        target_write: Option<DiagnosticUploadWrite>,
-        writes: Vec<DiagnosticUploadWrite>,
-        instance_generation: u64,
-        bytes_uploaded: usize,
-        total_bytes_uploaded: usize,
-        buffer_reallocations: usize,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticDrawBatch {
-        primitive: &'static str,
-        instance_range: DiagnosticRange,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticDrawPlan {
-        state: DiagnosticObjectState,
-        submission_membership: bool,
-        batches: Vec<DiagnosticDrawBatch>,
-        draw_calls: usize,
-        instances_drawn: usize,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticPresentationCall {
-        surface_status: &'static str,
-        submit_called: bool,
-        present_called: bool,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct HostUpdaterDiagnostic {
-        schema_version: u32,
-        backend: &'static str,
-        execution: DiagnosticExecution,
-        committed: DiagnosticObjectState,
-        prepared: DiagnosticPreparedState,
-        upload: DiagnosticUploadState,
-        draw_plan: DiagnosticDrawPlan,
-        present_call: DiagnosticPresentationCall,
     }
 
     #[derive(Clone, Copy, Debug, Serialize)]
@@ -160,35 +66,297 @@ mod wasm {
         timestamp_query_supported: bool,
     }
 
+    #[derive(Clone, Copy, Debug, Default)]
+    struct DirectDriveOutcome {
+        resumed: bool,
+        completed_callback_phase: bool,
+    }
+
+    /// Narrow direct-host view of a shared live continuation program.
+    ///
+    /// A continuation keeps its scene and session encapsulated; the canvas may
+    /// only drive its current segment, consume a renderer publication, admit that
+    /// exact publication after presentation, and forward typed platform input.
+    trait DirectLiveProgram {
+        fn session(&self) -> &ExecutionSession;
+        fn wake_plan(&self) -> BrowserExecutionWakePlan;
+        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery;
+        /// Returns whether this operation resumed a subsequent continuation stage.
+        fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue>;
+        fn take_renderer_publication(&mut self) -> RendererPublication<'_>;
+        fn admit_rendered_publication(
+            &mut self,
+            publication: noon_core::PublicationContext,
+        ) -> Result<bool, JsValue>;
+        fn set_native_state_input(
+            &mut self,
+            source: NativeStateSource,
+            value: NativeInputValue,
+        ) -> Result<(), JsValue>;
+        fn emit_native_event(&mut self, occurrence: NativeEventOccurrence) -> Result<(), JsValue>;
+    }
+
+    struct DirectLiveProgramAdapter<C> {
+        program: LiveProgram<C>,
+        callbacks: RustHostCallbackTable,
+    }
+
+    impl<C> DirectLiveProgramAdapter<C>
+    where
+        C: LiveContinuation + 'static,
+        C::Error: std::fmt::Display,
+    {
+        fn new_with_callbacks(
+            mut program: LiveProgram<C>,
+            callbacks: RustHostCallbackTable,
+        ) -> Result<Self, JsValue> {
+            let status = program.resume().map_err(js_error)?;
+            if !matches!(
+                status,
+                LiveProgramStatus::Awaiting(_) | LiveProgramStatus::Finished
+            ) {
+                return Err(js_message(
+                    "direct live continuation did not begin at an await or finished state",
+                ));
+            }
+            Ok(Self { program, callbacks })
+        }
+
+        fn resume_if_ready(&mut self) -> Result<bool, JsValue> {
+            if matches!(self.program.status(), LiveProgramStatus::ReadyToResume) {
+                self.program.resume().map_err(js_error)?;
+                return Ok(true);
+            }
+            Ok(false)
+        }
+    }
+
+    impl<C> DirectLiveProgram for DirectLiveProgramAdapter<C>
+    where
+        C: LiveContinuation + 'static,
+        C::Error: std::fmt::Display,
+    {
+        fn session(&self) -> &ExecutionSession {
+            self.program.session()
+        }
+
+        fn wake_plan(&self) -> BrowserExecutionWakePlan {
+            BrowserExecutionWakePlan::from_runtime(self.program.wake_state())
+        }
+
+        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery {
+            self.program.query_viewport(bounds)
+        }
+
+        fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue> {
+            self.program
+                .drive_to(&mut self.callbacks, requested_time)
+                .map_err(js_error)?;
+            Ok(DirectDriveOutcome {
+                resumed: self.resume_if_ready()?,
+                completed_callback_phase: self.callbacks.last_advance_completed_callback_phase(),
+            })
+        }
+
+        fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+            self.program.take_renderer_publication()
+        }
+
+        fn admit_rendered_publication(
+            &mut self,
+            publication: noon_core::PublicationContext,
+        ) -> Result<bool, JsValue> {
+            if !matches!(
+                self.program.status(),
+                LiveProgramStatus::PublicationPending(_)
+            ) {
+                return Ok(false);
+            }
+            self.program
+                .admit_publication(publication)
+                .map_err(js_error)?;
+            self.resume_if_ready()
+        }
+
+        fn set_native_state_input(
+            &mut self,
+            source: NativeStateSource,
+            value: NativeInputValue,
+        ) -> Result<(), JsValue> {
+            self.program
+                .set_native_state_input(source, value)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+
+        fn emit_native_event(&mut self, occurrence: NativeEventOccurrence) -> Result<(), JsValue> {
+            self.program
+                .emit_native_event(occurrence)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+    }
+
+    enum DirectSourceAuthority {
+        Session {
+            session: ExecutionSession,
+            callbacks: RustHostCallbackTable,
+        },
+        Program(Box<dyn DirectLiveProgram>),
+    }
+
+    struct DirectExecutionSource {
+        authority: DirectSourceAuthority,
+        next_native_event_sequence: u64,
+    }
+
+    impl DirectExecutionSource {
+        fn from_session(session: ExecutionSession, callbacks: RustHostCallbackTable) -> Self {
+            Self {
+                authority: DirectSourceAuthority::Session { session, callbacks },
+                next_native_event_sequence: 0,
+            }
+        }
+
+        fn from_live_program_with_callbacks<C>(
+            program: LiveProgram<C>,
+            callbacks: RustHostCallbackTable,
+        ) -> Result<Self, JsValue>
+        where
+            C: LiveContinuation + 'static,
+            C::Error: std::fmt::Display,
+        {
+            Ok(Self {
+                authority: DirectSourceAuthority::Program(Box::new(
+                    DirectLiveProgramAdapter::new_with_callbacks(program, callbacks)?,
+                )),
+                next_native_event_sequence: 0,
+            })
+        }
+
+        fn session(&self) -> &ExecutionSession {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => session,
+                DirectSourceAuthority::Program(program) => program.session(),
+            }
+        }
+
+        fn session_mut(&mut self) -> Option<&mut ExecutionSession> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => Some(session),
+                DirectSourceAuthority::Program(_) => None,
+            }
+        }
+
+        fn wake_plan(&self) -> BrowserExecutionWakePlan {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    BrowserExecutionWakePlan::from_session(session)
+                }
+                DirectSourceAuthority::Program(program) => program.wake_plan(),
+            }
+        }
+
+        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session.query_viewport(bounds),
+                DirectSourceAuthority::Program(program) => program.query_viewport(bounds),
+            }
+        }
+
+        fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, callbacks } => {
+                    callbacks
+                        .advance_to(session, requested_time)
+                        .map_err(js_error)?;
+                    Ok(DirectDriveOutcome {
+                        resumed: false,
+                        completed_callback_phase: callbacks.last_advance_completed_callback_phase(),
+                    })
+                }
+                DirectSourceAuthority::Program(program) => program.drive_to(requested_time),
+            }
+        }
+
+        fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.take_renderer_publication()
+                }
+                DirectSourceAuthority::Program(program) => program.take_renderer_publication(),
+            }
+        }
+
+        fn admit_rendered_publication(
+            &mut self,
+            publication: noon_core::PublicationContext,
+        ) -> Result<bool, JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { .. } => Ok(false),
+                DirectSourceAuthority::Program(program) => {
+                    program.admit_rendered_publication(publication)
+                }
+            }
+        }
+
+        fn set_native_state_input(
+            &mut self,
+            source: NativeStateSource,
+            value: NativeInputValue,
+        ) -> Result<(), JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session
+                    .set_native_state_input(source, value)
+                    .map(|_| ())
+                    .map_err(js_error),
+                DirectSourceAuthority::Program(program) => {
+                    program.set_native_state_input(source, value)
+                }
+            }
+        }
+
+        fn emit_native_event(&mut self, source: NativeEventSource) -> Result<(), JsValue> {
+            let sequence = self.next_native_event_sequence;
+            let next = sequence
+                .checked_add(1)
+                .ok_or_else(|| js_message("native input event sequence exhausted"))?;
+            let occurrence = NativeEventOccurrence::new(sequence, source);
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session
+                    .emit_native_event(occurrence)
+                    .map(|_| ())
+                    .map_err(js_error)?,
+                DirectSourceAuthority::Program(program) => program.emit_native_event(occurrence)?,
+            }
+            self.next_native_event_sequence = next;
+            Ok(())
+        }
+    }
+
     enum CanvasExecutionSource {
         Transport(ExecutionFrameMirror),
-        Direct(ExecutionSession),
+        Direct(DirectExecutionSource),
     }
 
     impl CanvasExecutionSource {
         fn frame(&self) -> Option<&FrameState> {
             match self {
                 Self::Transport(mirror) => mirror.frame(),
-                Self::Direct(session) => Some(session.frame()),
+                Self::Direct(direct) => Some(direct.session().frame()),
             }
         }
 
         fn live_object_count(&self) -> usize {
             match self {
                 Self::Transport(mirror) => mirror.live_object_count(),
-                Self::Direct(session) => session
+                Self::Direct(direct) => direct
+                    .session()
                     .frame()
                     .presences
                     .iter()
                     .filter(|present| **present)
                     .count(),
-            }
-        }
-
-        fn transport(&self) -> Option<&ExecutionFrameMirror> {
-            match self {
-                Self::Transport(mirror) => Some(mirror),
-                Self::Direct(_) => None,
             }
         }
 
@@ -202,14 +370,21 @@ mod wasm {
         fn direct(&self) -> Option<&ExecutionSession> {
             match self {
                 Self::Transport(_) => None,
-                Self::Direct(session) => Some(session),
+                Self::Direct(direct) => Some(direct.session()),
             }
         }
 
         fn direct_mut(&mut self) -> Option<&mut ExecutionSession> {
             match self {
                 Self::Transport(_) => None,
-                Self::Direct(session) => Some(session),
+                Self::Direct(direct) => direct.session_mut(),
+            }
+        }
+
+        fn direct_source_mut(&mut self) -> Option<&mut DirectExecutionSource> {
+            match self {
+                Self::Transport(_) => None,
+                Self::Direct(direct) => Some(direct),
             }
         }
     }
@@ -243,9 +418,6 @@ mod wasm {
         last_geometry_cache_misses: usize,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
-        host_updater_diagnostic_object: Option<ObjectId>,
-        last_host_updater_diagnostic: Option<HostUpdaterDiagnostic>,
-        gpu_instance_generation: u64,
     }
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
@@ -298,38 +470,21 @@ mod wasm {
             }
         }
 
-        /// Enables the bounded RotationUpdater diagnostic seam used by the
-        /// deterministic host-updater regression harness. It only records the
-        /// selected object while a normal incremental render is already running.
-        #[wasm_bindgen(js_name = setHostUpdaterDiagnosticObject)]
-        pub fn set_host_updater_diagnostic_object(&mut self, object: u64) {
-            self.host_updater_diagnostic_object = Some(ObjectId::new(object));
-            self.last_host_updater_diagnostic = None;
-        }
-
-        #[wasm_bindgen(js_name = takeHostUpdaterDiagnosticJson)]
-        pub fn take_host_updater_diagnostic_json(&mut self) -> Result<Option<String>, JsValue> {
-            self.last_host_updater_diagnostic
-                .take()
-                .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))
-                .transpose()
-        }
-
         pub fn render(&mut self) -> Result<bool, JsValue> {
             let changes_pending = match &self.source {
                 CanvasExecutionSource::Transport(_) => !self.pending_changes.is_empty(),
-                CanvasExecutionSource::Direct(session) => session.wake_state().frame_pending(),
+                CanvasExecutionSource::Direct(direct) => {
+                    direct.session().wake_state().frame_pending()
+                }
             };
             if !self.drawable || !changes_pending {
                 return Ok(false);
             }
 
-            let (surface_texture, reconfigure_after_present, surface_status) =
+            let (surface_texture, reconfigure_after_present) =
                 match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false, "success"),
-                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                        (texture, true, "suboptimal")
-                    }
+                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
+                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
                     wgpu::CurrentSurfaceTexture::Timeout
                     | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
                     wgpu::CurrentSurfaceTexture::Outdated => {
@@ -358,21 +513,8 @@ mod wasm {
                 .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
             let prepared = self.preparer.prepare_incremental(frame, &changes);
             self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
-            let mut upload_writes = Vec::new();
-            let diagnostic_enabled =
-                self.host_updater_diagnostic_object.is_some() && self.source.transport().is_some();
-            let upload = if diagnostic_enabled {
-                self.renderer.upload_with_trace(
-                    &self.device,
-                    &self.queue,
-                    &prepared,
-                    &mut upload_writes,
-                )
-            } else {
-                self.renderer.upload(&self.device, &self.queue, &prepared)
-            };
+            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
             self.last_bytes_uploaded = upload.bytes_uploaded;
-            self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
 
             let view = surface_texture
                 .texture
@@ -417,24 +559,6 @@ mod wasm {
             self.queue.present(surface_texture);
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
-            if let (Some(object), Some(mirror)) =
-                (self.host_updater_diagnostic_object, self.source.transport())
-            {
-                self.last_host_updater_diagnostic = build_host_updater_diagnostic(
-                    self.backend,
-                    mirror,
-                    &changes,
-                    &prepared,
-                    upload,
-                    &upload_writes,
-                    draw,
-                    self.gpu_instance_generation,
-                    surface_status,
-                    true,
-                    true,
-                    object,
-                );
-            }
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
@@ -596,21 +720,117 @@ mod wasm {
             let Some(target_time) = target_time else {
                 return Ok(false);
             };
-            let (pending, camera) = {
-                let session = self.source.direct_mut().ok_or_else(|| {
+            let (pending, camera, outcome) = {
+                let direct = self.source.direct_source_mut().ok_or_else(|| {
                     js_message("direct realtime APIs require a direct ExecutionSession source")
                 })?;
-                session.advance_to(target_time).map_err(js_error)?;
-                let camera = session.camera().map_err(js_error)?;
-                (session.wake_state().frame_pending(), camera)
+                let outcome = direct.drive_to(target_time)?;
+                let camera = direct.session().camera().map_err(js_error)?;
+                (
+                    direct.session().wake_state().frame_pending(),
+                    camera,
+                    outcome,
+                )
             };
+            if outcome.resumed || outcome.completed_callback_phase {
+                // The program has started a distinct canonical segment. Re-anchor
+                // after that transition or a required callback phase so neither
+                // continuation setup nor opaque host latency is charged to the
+                // next authored interval.
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            }
             self.sync_camera(camera)?;
 
             let (next_plan, next_scene_time) = self.direct_wake_observation()?;
-            self.direct_wake_clock
-                .directive(next_plan, wall_time_ms, next_scene_time)
-                .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
+            if !outcome.completed_callback_phase {
+                self.direct_wake_clock
+                    .directive(next_plan, wall_time_ms, next_scene_time)
+                    .ok_or_else(|| {
+                        js_message("direct execution wake clock received invalid time")
+                    })?;
+            }
             Ok(pending)
+        }
+
+        /// Deliver a DOM-normalized pointer position through the current typed
+        /// camera into the canonical session.
+        #[wasm_bindgen(js_name = nativePointerPosition)]
+        pub fn native_pointer_position(
+            &mut self,
+            normalized_x: f32,
+            normalized_y: f32,
+        ) -> Result<bool, JsValue> {
+            let position = self.normalized_pointer_world_position(normalized_x, normalized_y)?;
+            self.set_native_state_input(
+                NativeStateSource::PointerPosition,
+                NativeInputValue::Vec2(position),
+            )
+        }
+
+        /// Deliver one pointer button sample followed by its ordered edge event.
+        #[wasm_bindgen(js_name = nativePointerButton)]
+        pub fn native_pointer_button(
+            &mut self,
+            button: u8,
+            pressed: bool,
+        ) -> Result<bool, JsValue> {
+            self.apply_direct_native_input(move |direct| {
+                direct.set_native_state_input(
+                    NativeStateSource::PointerButton { button },
+                    NativeInputValue::Bool(pressed),
+                )?;
+                direct.emit_native_event(if pressed {
+                    NativeEventSource::PointerDown { button }
+                } else {
+                    NativeEventSource::PointerUp { button }
+                })
+            })
+        }
+
+        /// Deliver one keyboard state sample followed by its ordered edge event.
+        #[wasm_bindgen(js_name = nativeKey)]
+        pub fn native_key(&mut self, code: String, pressed: bool) -> Result<bool, JsValue> {
+            validate_native_name("key code", &code)?;
+            self.apply_direct_native_input(move |direct| {
+                direct.set_native_state_input(
+                    NativeStateSource::Key { code: code.clone() },
+                    NativeInputValue::Bool(pressed),
+                )?;
+                direct.emit_native_event(if pressed {
+                    NativeEventSource::KeyPress { code }
+                } else {
+                    NativeEventSource::KeyRelease { code }
+                })
+            })
+        }
+
+        /// Deliver one CSS-pixel wheel sample followed by its ordered event.
+        #[wasm_bindgen(js_name = nativeWheel)]
+        pub fn native_wheel(&mut self, x: f32, y: f32) -> Result<bool, JsValue> {
+            self.apply_direct_native_input(move |direct| {
+                direct.set_native_state_input(
+                    NativeStateSource::WheelDelta,
+                    NativeInputValue::Vec2(Vec2::new(x, y)),
+                )?;
+                direct.emit_native_event(NativeEventSource::Wheel)
+            })
+        }
+
+        /// Deliver one named scalar control sample.
+        #[wasm_bindgen(js_name = nativeControl)]
+        pub fn native_control(&mut self, name: String, value: f32) -> Result<bool, JsValue> {
+            validate_native_name("control name", &name)?;
+            self.set_native_state_input(
+                NativeStateSource::Control { name },
+                NativeInputValue::Scalar(value),
+            )
+        }
+
+        /// Deliver one ordered named-control commit event.
+        #[wasm_bindgen(js_name = nativeControlCommit)]
+        pub fn native_control_commit(&mut self, name: String) -> Result<bool, JsValue> {
+            validate_native_name("control name", &name)?;
+            self.emit_native_event(NativeEventSource::ControlCommit { name })
         }
 
         #[wasm_bindgen(js_name = objectCount)]
@@ -645,251 +865,6 @@ mod wasm {
         }
     }
 
-    fn build_host_updater_diagnostic(
-        backend: wgpu::Backend,
-        mirror: &ExecutionFrameMirror,
-        changes: &FrameChanges,
-        prepared: &PreparedFrame<'_>,
-        upload: UploadStats,
-        upload_writes: &[UploadWrite],
-        draw: DrawStats,
-        instance_generation: u64,
-        surface_status: &'static str,
-        submitted: bool,
-        presented: bool,
-        target: ObjectId,
-    ) -> Option<HostUpdaterDiagnostic> {
-        let frame = mirror.frame()?;
-        let frame_index = frame
-            .objects
-            .iter()
-            .position(|object| object.id == target)?;
-        let committed_object = &frame.objects[frame_index];
-        let execution = DiagnosticExecution {
-            session: mirror.session(),
-            sequence: mirror.next_sequence().saturating_sub(1),
-            layout_generation: mirror.layout_generation(),
-            time: frame.time,
-        };
-        let committed = diagnostic_object_state(
-            frame,
-            mirror,
-            changes,
-            frame_index,
-            target,
-            committed_object.transform,
-            world_endpoints(committed_object),
-        );
-
-        let (instance_kind, instance_index, instance_range, prepared_transform, prepared_endpoints) =
-            prepared_line_state(prepared, target);
-        let prepared_state = DiagnosticPreparedState {
-            state: diagnostic_object_state(
-                frame,
-                mirror,
-                changes,
-                frame_index,
-                target,
-                prepared_transform.unwrap_or(committed_object.transform),
-                prepared_endpoints,
-            ),
-            instance_kind,
-            instance_index,
-            instance_range,
-            full_rebuilds: prepared.stats.full_rebuilds,
-            instances_repacked: prepared.stats.instances_repacked,
-        };
-
-        let writes = upload_writes
-            .iter()
-            .map(diagnostic_upload_write)
-            .collect::<Vec<_>>();
-        let target_write = instance_index.and_then(|instance_index| {
-            upload_writes
-                .iter()
-                .filter(|write| write.buffer == "line")
-                .find(|write| write.instance_range.contains(&instance_index))
-                .map(diagnostic_upload_write)
-        });
-        let upload = DiagnosticUploadState {
-            target_write,
-            writes,
-            instance_generation,
-            bytes_uploaded: upload_writes.iter().map(|write| write.byte_length).sum(),
-            total_bytes_uploaded: upload.bytes_uploaded,
-            buffer_reallocations: upload.buffer_reallocations,
-        };
-
-        let mut batches = Vec::new();
-        for batch in prepared.render_batches {
-            let RenderPrimitive::Line = batch.primitive else {
-                continue;
-            };
-            let contains_target = instance_index
-                .map(|index| batch.instance_range.contains(&(index as u32)))
-                .unwrap_or(false);
-            if contains_target {
-                batches.push(DiagnosticDrawBatch {
-                    primitive: "line",
-                    instance_range: DiagnosticRange {
-                        start: batch.instance_range.start as usize,
-                        end: batch.instance_range.end as usize,
-                    },
-                });
-            }
-        }
-        let draw_plan = DiagnosticDrawPlan {
-            state: diagnostic_object_state(
-                frame,
-                mirror,
-                changes,
-                frame_index,
-                target,
-                prepared_transform.unwrap_or(committed_object.transform),
-                prepared_endpoints,
-            ),
-            submission_membership: !batches.is_empty(),
-            batches,
-            draw_calls: draw.draw_calls,
-            instances_drawn: draw.instances_drawn,
-        };
-
-        Some(HostUpdaterDiagnostic {
-            schema_version: 1,
-            backend: backend_label(backend),
-            execution,
-            committed,
-            prepared: prepared_state,
-            upload,
-            draw_plan,
-            present_call: DiagnosticPresentationCall {
-                surface_status,
-                submit_called: submitted,
-                present_called: presented,
-            },
-        })
-    }
-
-    fn diagnostic_upload_write(write: &UploadWrite) -> DiagnosticUploadWrite {
-        DiagnosticUploadWrite {
-            buffer: write.buffer,
-            instance_range: DiagnosticRange {
-                start: write.instance_range.start,
-                end: write.instance_range.end,
-            },
-            byte_offset: write.byte_offset,
-            byte_length: write.byte_length,
-            payload_hash: write.payload_hash,
-        }
-    }
-
-    fn diagnostic_object_state(
-        frame: &noon_runtime::FrameState,
-        mirror: &ExecutionFrameMirror,
-        changes: &FrameChanges,
-        frame_index: usize,
-        target: ObjectId,
-        transform: Transform2D,
-        world_endpoints: Option<[Vec2; 2]>,
-    ) -> DiagnosticObjectState {
-        DiagnosticObjectState {
-            object: target.get(),
-            frame_index,
-            slot: mirror.slot_for_frame_index(frame_index),
-            transform,
-            world_endpoints,
-            dirty_classification: dirty_classification(changes, frame_index, frame),
-        }
-    }
-
-    fn dirty_classification(
-        changes: &FrameChanges,
-        frame_index: usize,
-        frame: &noon_runtime::FrameState,
-    ) -> &'static str {
-        if changes.is_all() {
-            return "all";
-        }
-        if changes
-            .removed_indices()
-            .binary_search(&frame_index)
-            .is_ok()
-            || !frame.is_present(frame_index)
-        {
-            return "removed";
-        }
-        if changes.added_indices().binary_search(&frame_index).is_ok() {
-            return "added";
-        }
-        if changes.object_indices().binary_search(&frame_index).is_ok() {
-            return "updated";
-        }
-        "unchanged"
-    }
-
-    fn prepared_line_state(
-        prepared: &PreparedFrame<'_>,
-        target: ObjectId,
-    ) -> (
-        Option<&'static str>,
-        Option<usize>,
-        Option<DiagnosticRange>,
-        Option<Transform2D>,
-        Option<[Vec2; 2]>,
-    ) {
-        let Some(index) = prepared
-            .line_ids
-            .iter()
-            .position(|object| *object == target)
-        else {
-            return (None, None, None, None, None);
-        };
-        let Some(instance) = prepared.lines.get(index).copied() else {
-            return (Some("line"), Some(index), None, None, None);
-        };
-        let transform = transform_from_packed(instance.transform);
-        let endpoints = [
-            transform.transform_point(Vec2::new(instance.start[0], instance.start[1])),
-            transform.transform_point(Vec2::new(instance.end[0], instance.end[1])),
-        ];
-        (
-            Some("line"),
-            Some(index),
-            Some(DiagnosticRange {
-                start: index,
-                end: index.saturating_add(1),
-            }),
-            Some(transform),
-            Some(endpoints),
-        )
-    }
-
-    fn transform_from_packed(value: PackedTransform) -> Transform2D {
-        Transform2D {
-            translation: Vec2::new(value.translation[0], value.translation[1]),
-            rotation: value.rotation,
-            scale: Vec2::new(value.scale[0], value.scale[1]),
-        }
-    }
-
-    fn world_endpoints(object: &FrameObjectState) -> Option<[Vec2; 2]> {
-        let GeometryRef::Line { start, end } = object.geometry()? else {
-            return None;
-        };
-        Some([
-            object.transform.transform_point(*start),
-            object.transform.transform_point(*end),
-        ])
-    }
-
-    const fn backend_label(backend: wgpu::Backend) -> &'static str {
-        match backend {
-            wgpu::Backend::BrowserWebGpu => "WebGPU",
-            wgpu::Backend::Gl => "WebGL2",
-            _ => "Other",
-        }
-    }
-
     impl WasmExecutionCanvasRenderer {
         /// Build the browser canvas host directly from the typed in-process execution session.
         ///
@@ -899,10 +874,82 @@ mod wasm {
             canvas: OffscreenCanvas,
             session: ExecutionSession,
         ) -> Result<Self, JsValue> {
+            Self::create_from_execution_session_with_callbacks(
+                canvas,
+                session,
+                RustHostCallbackTable::new(),
+            )
+            .await
+        }
+
+        /// Build the browser canvas host from one typed session and its Rust callables.
+        ///
+        /// The callable table stays in the same WASM execution context. JavaScript
+        /// receives neither callback requests nor effective-property overlays.
+        pub async fn create_from_execution_session_with_callbacks(
+            canvas: OffscreenCanvas,
+            mut session: ExecutionSession,
+            mut callbacks: RustHostCallbackTable,
+        ) -> Result<Self, JsValue> {
+            let initial_time = session.frame().time;
+            callbacks
+                .advance_to(&mut session, initial_time)
+                .map_err(js_error)?;
             let camera = session.camera().map_err(js_error)?;
             Self::create_with_source(
                 canvas,
-                CanvasExecutionSource::Direct(session),
+                CanvasExecutionSource::Direct(DirectExecutionSource::from_session(
+                    session, callbacks,
+                )),
+                FrameChanges::default(),
+                camera.center,
+                camera.height,
+            )
+            .await
+        }
+
+        /// Build the browser canvas host from one shared Rust continuation program.
+        ///
+        /// The program owns its consumed semantic scene, matching execution session,
+        /// continuation state, completion, and resume gates. JavaScript receives only
+        /// the normal canvas renderer and its derived RAF/timer directives.
+        pub async fn create_from_live_program<C>(
+            canvas: OffscreenCanvas,
+            program: LiveProgram<C>,
+        ) -> Result<Self, JsValue>
+        where
+            C: LiveContinuation + 'static,
+            C::Error: std::fmt::Display,
+        {
+            Self::create_from_live_program_with_callbacks(
+                canvas,
+                program,
+                RustHostCallbackTable::new(),
+            )
+            .await
+        }
+
+        /// Build the browser canvas host from one shared Rust continuation and
+        /// its target-native callable table.
+        ///
+        /// Callback phases are selected and committed by the program's execution
+        /// session in the same WASM context. JavaScript receives only the canvas
+        /// renderer and its derived wake directives.
+        pub async fn create_from_live_program_with_callbacks<C>(
+            canvas: OffscreenCanvas,
+            program: LiveProgram<C>,
+            callbacks: RustHostCallbackTable,
+        ) -> Result<Self, JsValue>
+        where
+            C: LiveContinuation + 'static,
+            C::Error: std::fmt::Display,
+        {
+            let source =
+                DirectExecutionSource::from_live_program_with_callbacks(program, callbacks)?;
+            let camera = source.session().camera().map_err(js_error)?;
+            Self::create_with_source(
+                canvas,
+                CanvasExecutionSource::Direct(source),
                 FrameChanges::default(),
                 camera.center,
                 camera.height,
@@ -917,6 +964,11 @@ mod wasm {
                 let session = self.source.direct_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
+                if session.has_required_callbacks() {
+                    return Err(js_message(
+                        "opaque host callback sessions require monotonic realtime advancement",
+                    ));
+                }
                 session.evaluate(time).map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
@@ -933,6 +985,11 @@ mod wasm {
                 let session = self.source.direct_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
+                if session.has_required_callbacks() {
+                    return Err(js_message(
+                        "opaque host callback sessions do not support seek or replay",
+                    ));
+                }
                 session.seek(time).map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
@@ -963,6 +1020,66 @@ mod wasm {
             Ok(pending)
         }
 
+        /// Deliver one typed native state sample to this direct Rust/WASM session.
+        ///
+        /// Unlike timeline advancement, native input may accumulate while a
+        /// renderer publication is pending. `ExecutionSession` unions those
+        /// local changes and the next `render` consumes them once, matching the
+        /// native host's pointer-state plus button-event delivery without a
+        /// browser-owned queue or runtime mirror.
+        pub fn set_native_state_input(
+            &mut self,
+            source: NativeStateSource,
+            value: NativeInputValue,
+        ) -> Result<bool, JsValue> {
+            self.apply_direct_native_input(move |direct| {
+                direct.set_native_state_input(source, value)
+            })
+        }
+
+        /// Deliver one typed, ordered native event to this direct Rust/WASM session.
+        ///
+        /// The canvas host allocates only an occurrence serial. The semantic
+        /// source routing and event-counter update remain session-owned, and a
+        /// rejected occurrence does not consume the serial.
+        pub fn emit_native_event(&mut self, source: NativeEventSource) -> Result<bool, JsValue> {
+            self.apply_direct_native_input(move |direct| direct.emit_native_event(source))
+        }
+
+        fn apply_direct_native_input(
+            &mut self,
+            apply: impl FnOnce(&mut DirectExecutionSource) -> Result<(), JsValue>,
+        ) -> Result<bool, JsValue> {
+            let (pending, camera) = {
+                let direct = self.source.direct_source_mut().ok_or_else(|| {
+                    js_message("typed native input requires a direct ExecutionSession source")
+                })?;
+                apply(direct)?;
+                let camera = direct.session().camera().map_err(js_error)?;
+                (direct.session().wake_state().frame_pending(), camera)
+            };
+            self.sync_camera(camera)?;
+            Ok(pending)
+        }
+
+        fn normalized_pointer_world_position(
+            &self,
+            normalized_x: f32,
+            normalized_y: f32,
+        ) -> Result<Vec2, JsValue> {
+            if !normalized_x.is_finite() || !normalized_y.is_finite() {
+                return Err(js_message("normalized pointer coordinates must be finite"));
+            }
+            let x = normalized_x.clamp(0.0, 1.0);
+            let y = normalized_y.clamp(0.0, 1.0);
+            let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
+            let world_width = self.camera_height * aspect;
+            Ok(Vec2::new(
+                self.camera_center.x + (x - 0.5) * world_width,
+                self.camera_center.y + (0.5 - y) * self.camera_height,
+            ))
+        }
+
         fn ensure_direct_source_idle(&self) -> Result<(), JsValue> {
             let session = self.source.direct().ok_or_else(|| {
                 js_message("typed execution APIs require a direct ExecutionSession source")
@@ -976,13 +1093,15 @@ mod wasm {
         }
 
         fn direct_wake_observation(&self) -> Result<(BrowserExecutionWakePlan, f64), JsValue> {
-            let session = self.source.direct().ok_or_else(|| {
-                js_message("direct wake APIs require a direct ExecutionSession source")
-            })?;
-            Ok((
-                BrowserExecutionWakePlan::from_session(session),
-                session.frame().time,
-            ))
+            let direct = match &self.source {
+                CanvasExecutionSource::Transport(_) => {
+                    return Err(js_message(
+                        "direct wake APIs require a direct ExecutionSession source",
+                    ));
+                }
+                CanvasExecutionSource::Direct(direct) => direct,
+            };
+            Ok((direct.wake_plan(), direct.session().frame().time))
         }
 
         fn direct_scene_time_at(&self, wall_time_ms: f64) -> Result<f64, JsValue> {
@@ -1043,9 +1162,6 @@ mod wasm {
                 last_geometry_cache_misses: 0,
                 gpu_generation,
                 gpu_diagnostics,
-                host_updater_diagnostic_object: None,
-                last_host_updater_diagnostic: None,
-                gpu_instance_generation: 0,
             };
             result.update_camera()?;
             Ok(result)
@@ -1064,58 +1180,64 @@ mod wasm {
                 ))
                 .map_err(js_error)?
             };
-            let session = self.source.direct_mut().ok_or_else(|| {
-                js_message("direct retained rendering requires a direct ExecutionSession source")
-            })?;
             let camera = self.renderer.camera();
             let half_extent = camera.world_size * 0.5;
-            let visibility = session.query_viewport(Rect::new(
-                camera.center - half_extent,
-                camera.center + half_extent,
-            ));
-            let publication = session.take_renderer_publication();
-            let prepared = self
-                .direct_preparer
-                .prepare_publication_visible(
+            let publication_context;
+            let draw = {
+                let direct = self.source.direct_source_mut().ok_or_else(|| {
+                    js_message(
+                        "direct retained rendering requires a direct ExecutionSession source",
+                    )
+                })?;
+                let visibility = direct.query_viewport(Rect::new(
+                    camera.center - half_extent,
+                    camera.center + half_extent,
+                ));
+                let publication = direct.take_renderer_publication();
+                publication_context = publication.context();
+                let prepared = self
+                    .direct_preparer
+                    .prepare_publication_visible(
+                        &self.device,
+                        &self.queue,
+                        &publication,
+                        visibility.object_indices(),
+                        metrics,
+                    )
+                    .map_err(js_error)?;
+                let upload = self.renderer.upload_retained(
                     &self.device,
                     &self.queue,
-                    &publication,
-                    visibility.object_indices(),
-                    metrics,
-                )
-                .map_err(js_error)?;
-            let upload = self.renderer.upload_retained(
-                &self.device,
-                &self.queue,
-                &prepared,
-                &mut self.direct_text_gpu,
-            );
-            self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
-            self.last_bytes_uploaded = upload
-                .geometry
-                .bytes_uploaded
-                .saturating_add(upload.text.bytes_uploaded);
-            self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
-
-            let view = surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Noon direct execution render frame"),
-                });
-            let draw = self
-                .renderer
-                .encode_retained(
-                    &mut encoder,
-                    &view,
                     &prepared,
-                    &self.direct_text_gpu,
-                    self.clear_color,
-                )
-                .map_err(js_error)?;
-            self.queue.submit(Some(encoder.finish()));
+                    &mut self.direct_text_gpu,
+                );
+                self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
+                self.last_bytes_uploaded = upload
+                    .geometry
+                    .bytes_uploaded
+                    .saturating_add(upload.text.bytes_uploaded);
+
+                let view = surface_texture
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let mut encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Noon direct execution render frame"),
+                        });
+                let draw = self
+                    .renderer
+                    .encode_retained(
+                        &mut encoder,
+                        &view,
+                        &prepared,
+                        &self.direct_text_gpu,
+                        self.clear_color,
+                    )
+                    .map_err(js_error)?;
+                self.queue.submit(Some(encoder.finish()));
+                draw
+            };
             self.queue.present(surface_texture);
             self.last_draw_calls = draw
                 .geometry
@@ -1128,6 +1250,16 @@ mod wasm {
                 .saturating_add(draw.text.instances_drawn);
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
+            }
+            let resumed = self
+                .source
+                .direct_source_mut()
+                .expect("direct renderer source was checked before rendering")
+                .admit_rendered_publication(publication_context)?;
+            if resumed {
+                // Endpoint admission is the only place presentation may release a
+                // continuation. Its next wake must start from that host boundary.
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
             }
             Ok(true)
         }
@@ -1312,6 +1444,13 @@ mod wasm {
 
     fn js_value_message(value: JsValue) -> String {
         value.as_string().unwrap_or_else(|| format!("{value:?}"))
+    }
+
+    fn validate_native_name(kind: &str, value: &str) -> Result<(), JsValue> {
+        if value.trim().is_empty() {
+            return Err(js_message(&format!("{kind} must be a non-empty string")));
+        }
+        Ok(())
     }
 
     fn js_error(error: impl std::fmt::Display) -> JsValue {

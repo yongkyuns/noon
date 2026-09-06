@@ -52,19 +52,6 @@ class ParityComposition(Scene):
         )
         self.play(group, run_time=3.0)
 `,
-  value_tracker: `
-from noon import *
-
-class ParityTracker(Scene):
-    def construct(self):
-        circle = Circle(radius=0.3)
-        self.add(circle)
-        tracker = ValueTracker(0.0)
-        self.bind_position(circle, tracker, direction=RIGHT, offset=UP)
-        self.play(
-            tracker.animate(run_time=2.0, rate_func=linear).set_value(2.0)
-        )
-`,
 };
 
 const movingAroundPython = readFileSync(
@@ -85,7 +72,6 @@ const movingCameraPython = readFileSync(
 const javascriptParityCases = new Set([
   "animate_options",
   "lifecycle",
-  "value_tracker",
 ]);
 
 const quickstartEquivalentCases = new Set([
@@ -159,7 +145,6 @@ function cameraProjection(document) {
 async function javascriptCorpora(page) {
   return page.evaluate(async () => {
     const noon = await import("/web/noon-authoring.js");
-    const reactiveNoon = await import("/web/noon-reactive-authoring.js");
     await noon.initNoon();
 
     const parity = {};
@@ -183,18 +168,6 @@ async function javascriptCorpora(page) {
       scene.play(noon.FadeOut(circle), { runTime: 0.5 });
       scene.play(noon.FadeIn(circle), { runTime: 0.5 });
       parity.lifecycle = scene.toJSON();
-    }
-
-    {
-      const scene = new reactiveNoon.ReactiveScene();
-      const circle = scene.addCircle(0.3);
-      const tracker = scene.valueTracker(0.0);
-      scene.bindPosition(circle, tracker, noon.RIGHT, noon.UP);
-      scene.play(
-        tracker.animate().setValue(2.0),
-        { runTime: 2.0, rateFunc: noon.linear },
-      );
-      parity.value_tracker = scene.toJSON();
     }
 
     const examples = await import("/web/js/examples/manim-quickstart-equivalents.js");

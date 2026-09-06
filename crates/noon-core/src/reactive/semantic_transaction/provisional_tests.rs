@@ -1,5 +1,5 @@
 use super::*;
-use crate::{AnimationOptions, SemanticNodeResidency, SemanticVec3};
+use crate::{AnimationOptions, SemanticAnimationIntent, SemanticNodeResidency, SemanticVec3};
 
 fn object_state(radius: f32) -> SemanticObjectState {
     SemanticObjectState::new(StoredGeometry::Circle { radius })

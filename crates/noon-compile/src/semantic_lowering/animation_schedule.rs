@@ -1,9 +1,11 @@
 use noon_core::{
     resolve_animation_options, resolve_composition_schedule, AnimationDefaults, AnimationOptions,
     AnimationOptionsError, CompositionError, CompositionInterval, CompositionTimeMap,
-    CompositionTimeMapStep, ObjectId, RateFunction, ResolvedAnimationOptions,
-    SemanticAnimationCompositionKind, SemanticAnimationError, SemanticAnimationIntent,
-    SemanticNodeId, SemanticStore, TrackTiming,
+    CompositionTimeMapStep, ObjectId, PreparedSemanticMutationTransaction, RateFunction,
+    ResolvedAnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationError,
+    SemanticAnimationIntent, SemanticFadeDirection, SemanticNodeId, SemanticStore,
+    SemanticTransactionAnimationIntent, SemanticTransactionNodeRef, SemanticTransactionReadError,
+    TrackTiming,
 };
 
 use super::SemanticExecutionIndex;
@@ -48,13 +50,20 @@ impl SemanticAnimationScheduleProjection {
     }
 }
 
+/// Payload kind retained by one scheduled published animation leaf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticScheduledAnimationPayload {
+    TransformTo { target_state: SemanticNodeId },
+    Fade { direction: SemanticFadeDirection },
+}
+
 /// One scheduled semantic animation leaf ready for payload-specific track lowering.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticScheduledAnimationLeaf {
     pub animation: SemanticNodeId,
     pub target: SemanticNodeId,
     pub execution_object_id: ObjectId,
-    pub target_state: SemanticNodeId,
+    pub payload: SemanticScheduledAnimationPayload,
     /// Every leaf uses the activated root interval. Nested child intervals are carried
     /// by `time_map`, matching the existing compiled-track evaluation contract.
     pub timing: TrackTiming,
@@ -63,6 +72,115 @@ pub struct SemanticScheduledAnimationLeaf {
     /// silently discarded before the payload/lifecycle lowering slice consumes them.
     pub options: ResolvedAnimationOptions,
 }
+
+/// Compiler scheduling result for an animation graph held by one prepared semantic transaction.
+///
+/// References remain transaction-local until the caller commits the prepared transaction. This
+/// projection allocates no semantic identity and carries the same root timing and time-map values
+/// as the published-store lowering path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedSemanticAnimationScheduleProjection {
+    root: SemanticTransactionNodeRef,
+    start_time: f64,
+    run_time: f64,
+    leaves: Vec<PreparedSemanticScheduledAnimationLeaf>,
+}
+
+impl PreparedSemanticAnimationScheduleProjection {
+    pub const fn root(&self) -> SemanticTransactionNodeRef {
+        self.root
+    }
+
+    pub const fn start_time(&self) -> f64 {
+        self.start_time
+    }
+
+    pub const fn run_time(&self) -> f64 {
+        self.run_time
+    }
+
+    pub fn leaves(&self) -> &[PreparedSemanticScheduledAnimationLeaf] {
+        &self.leaves
+    }
+
+    pub fn len(&self) -> usize {
+        self.leaves.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.leaves.is_empty()
+    }
+}
+
+/// Payload kind retained by one scheduled transaction-local animation leaf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparedSemanticScheduledAnimationPayload {
+    TransformTo {
+        target_state: SemanticTransactionNodeRef,
+    },
+    Fade {
+        direction: SemanticFadeDirection,
+    },
+}
+
+/// One scheduled leaf whose authored identities are still transaction-local.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedSemanticScheduledAnimationLeaf {
+    pub animation: SemanticTransactionNodeRef,
+    pub target: SemanticTransactionNodeRef,
+    pub execution_object_id: ObjectId,
+    pub payload: PreparedSemanticScheduledAnimationPayload,
+    pub timing: TrackTiming,
+    pub time_map: CompositionTimeMap,
+    pub options: ResolvedAnimationOptions,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreparedSemanticAnimationLookupError {
+    Transaction(SemanticTransactionReadError),
+    Existing(SemanticAnimationError),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreparedSemanticAnimationScheduleError {
+    InvalidStartTime(f64),
+    Lookup {
+        animation: SemanticTransactionNodeRef,
+        error: PreparedSemanticAnimationLookupError,
+    },
+    Options {
+        animation: SemanticTransactionNodeRef,
+        error: AnimationOptionsError,
+    },
+    Composition {
+        animation: SemanticTransactionNodeRef,
+        error: CompositionError,
+    },
+    MissingExecutionTarget {
+        animation: SemanticTransactionNodeRef,
+        target: SemanticTransactionNodeRef,
+    },
+    UnsupportedCompositionLifecycle {
+        animation: SemanticTransactionNodeRef,
+        remover: bool,
+        introducer: bool,
+    },
+    InvalidResolvedInterval {
+        animation: SemanticTransactionNodeRef,
+        child_index: usize,
+    },
+}
+
+impl std::fmt::Display for PreparedSemanticAnimationScheduleError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "prepared semantic animation scheduling failed: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for PreparedSemanticAnimationScheduleError {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationScheduleError {
@@ -157,11 +275,366 @@ pub fn lower_semantic_animation_schedule(
     start_time: f64,
     play_options: AnimationOptions,
 ) -> Result<SemanticAnimationScheduleProjection, SemanticAnimationScheduleError> {
-    if !start_time.is_finite() {
-        return Err(SemanticAnimationScheduleError::InvalidStartTime(start_time));
+    let lookup = PublishedAnimationLookup { store, index };
+    let projection = lower_animation_schedule(&lookup, root, start_time, play_options)
+        .map_err(published_schedule_error)?;
+
+    Ok(SemanticAnimationScheduleProjection {
+        root,
+        start_time: projection.start_time,
+        run_time: projection.run_time,
+        leaves: projection
+            .leaves
+            .into_iter()
+            .map(|leaf| SemanticScheduledAnimationLeaf {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+                payload: match leaf.payload {
+                    ScheduledAnimationPayload::TransformTo { target_state } => {
+                        SemanticScheduledAnimationPayload::TransformTo { target_state }
+                    }
+                    ScheduledAnimationPayload::Fade { direction } => {
+                        SemanticScheduledAnimationPayload::Fade { direction }
+                    }
+                },
+                timing: leaf.timing,
+                time_map: leaf.time_map,
+                options: leaf.options,
+            })
+            .collect(),
+    })
+}
+
+/// Resolve one not-yet-committed animation graph through the same scheduler used for published
+/// declarations. Object reads use the prepared transaction's final staged view. Existing members
+/// use the semantic-to-execution index; one entering existing object uses the same deterministic
+/// execution identity that membership lowering will publish after commit.
+pub fn lower_prepared_semantic_animation_schedule(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    index: &SemanticExecutionIndex,
+    root: impl Into<SemanticTransactionNodeRef>,
+    start_time: f64,
+    play_options: AnimationOptions,
+) -> Result<PreparedSemanticAnimationScheduleProjection, PreparedSemanticAnimationScheduleError> {
+    let root = root.into();
+    let lookup = PreparedAnimationLookup { prepared, index };
+    let projection = lower_animation_schedule(&lookup, root, start_time, play_options)
+        .map_err(prepared_schedule_error)?;
+    Ok(PreparedSemanticAnimationScheduleProjection {
+        root,
+        start_time: projection.start_time,
+        run_time: projection.run_time,
+        leaves: projection
+            .leaves
+            .into_iter()
+            .map(|leaf| PreparedSemanticScheduledAnimationLeaf {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+                payload: match leaf.payload {
+                    ScheduledAnimationPayload::TransformTo { target_state } => {
+                        PreparedSemanticScheduledAnimationPayload::TransformTo { target_state }
+                    }
+                    ScheduledAnimationPayload::Fade { direction } => {
+                        PreparedSemanticScheduledAnimationPayload::Fade { direction }
+                    }
+                },
+                timing: leaf.timing,
+                time_map: leaf.time_map,
+                options: leaf.options,
+            })
+            .collect(),
+    })
+}
+
+#[derive(Clone, Debug)]
+struct AnimationDeclaration<R> {
+    intent: AnimationDeclarationIntent<R>,
+    options: AnimationOptions,
+}
+
+#[derive(Clone, Debug)]
+enum AnimationDeclarationIntent<R> {
+    TransformTo {
+        target: R,
+        target_state: R,
+    },
+    Fade {
+        target: R,
+        direction: SemanticFadeDirection,
+    },
+    Composition {
+        kind: SemanticAnimationCompositionKind,
+        children: Vec<R>,
+    },
+}
+
+trait AnimationScheduleLookup {
+    type Reference: Copy;
+    type Error;
+
+    fn animation(
+        &self,
+        animation: Self::Reference,
+    ) -> Result<AnimationDeclaration<Self::Reference>, Self::Error>;
+
+    fn execution_object_id(&self, target: Self::Reference) -> Option<ObjectId>;
+
+    fn entering_execution_object_id(&self, _target: Self::Reference) -> Option<ObjectId> {
+        None
+    }
+}
+
+struct PublishedAnimationLookup<'a> {
+    store: &'a SemanticStore,
+    index: &'a SemanticExecutionIndex,
+}
+
+impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
+    type Reference = SemanticNodeId;
+    type Error = SemanticAnimationError;
+
+    fn animation(
+        &self,
+        animation: Self::Reference,
+    ) -> Result<AnimationDeclaration<Self::Reference>, Self::Error> {
+        let state = self.store.semantic_animation_state(animation)?;
+        let intent = match state.intent() {
+            SemanticAnimationIntent::TransformTo {
+                target,
+                target_state,
+            } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                self.store
+                    .semantic_object_state_checked(*target_state)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::TransformTo {
+                    target: *target,
+                    target_state: *target_state,
+                }
+            }
+            SemanticAnimationIntent::Fade { target, direction } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::Fade {
+                    target: *target,
+                    direction: *direction,
+                }
+            }
+            SemanticAnimationIntent::Composition { kind, children } => {
+                AnimationDeclarationIntent::Composition {
+                    kind: *kind,
+                    children: children.clone(),
+                }
+            }
+        };
+        Ok(AnimationDeclaration {
+            intent,
+            options: state.options(),
+        })
     }
 
-    let plan = plan_animation(store, index, root, play_options)?;
+    fn execution_object_id(&self, target: Self::Reference) -> Option<ObjectId> {
+        self.index.execution_object_id(target)
+    }
+}
+
+struct PreparedAnimationLookup<'a, 'store> {
+    prepared: &'a PreparedSemanticMutationTransaction<'store>,
+    index: &'a SemanticExecutionIndex,
+}
+
+impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
+    type Reference = SemanticTransactionNodeRef;
+    type Error = PreparedSemanticAnimationLookupError;
+
+    fn animation(
+        &self,
+        animation: Self::Reference,
+    ) -> Result<AnimationDeclaration<Self::Reference>, Self::Error> {
+        if self.prepared.node_is_removed(animation) {
+            return Err(PreparedSemanticAnimationLookupError::Transaction(
+                match animation {
+                    SemanticTransactionNodeRef::Existing(node) => {
+                        SemanticTransactionReadError::RemovedExistingNode(node)
+                    }
+                    SemanticTransactionNodeRef::Pending(token) => {
+                        SemanticTransactionReadError::RemovedPendingNode(token)
+                    }
+                },
+            ));
+        }
+        let (intent, options) = match animation {
+            SemanticTransactionNodeRef::Existing(node) => {
+                let state = self
+                    .prepared
+                    .store()
+                    .semantic_animation_state(node)
+                    .map_err(PreparedSemanticAnimationLookupError::Existing)?;
+                let intent = match state.intent() {
+                    SemanticAnimationIntent::TransformTo {
+                        target,
+                        target_state,
+                    } => AnimationDeclarationIntent::TransformTo {
+                        target: (*target).into(),
+                        target_state: (*target_state).into(),
+                    },
+                    SemanticAnimationIntent::Fade { target, direction } => {
+                        AnimationDeclarationIntent::Fade {
+                            target: (*target).into(),
+                            direction: *direction,
+                        }
+                    }
+                    SemanticAnimationIntent::Composition { kind, children } => {
+                        AnimationDeclarationIntent::Composition {
+                            kind: *kind,
+                            children: children.iter().copied().map(Into::into).collect(),
+                        }
+                    }
+                };
+                (intent, state.options())
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                let state = self
+                    .prepared
+                    .pending_animation(token)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+                let intent = match state.intent() {
+                    SemanticTransactionAnimationIntent::TransformTo {
+                        target,
+                        target_state,
+                    } => AnimationDeclarationIntent::TransformTo {
+                        target: *target,
+                        target_state: *target_state,
+                    },
+                    SemanticTransactionAnimationIntent::Fade { target, direction } => {
+                        AnimationDeclarationIntent::Fade {
+                            target: *target,
+                            direction: *direction,
+                        }
+                    }
+                    SemanticTransactionAnimationIntent::Composition { kind, children } => {
+                        AnimationDeclarationIntent::Composition {
+                            kind: *kind,
+                            children: children.clone(),
+                        }
+                    }
+                };
+                (intent, state.options())
+            }
+        };
+        match &intent {
+            AnimationDeclarationIntent::TransformTo {
+                target,
+                target_state,
+            } => {
+                self.prepared
+                    .object_state(*target)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+                self.prepared
+                    .object_state(*target_state)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
+            AnimationDeclarationIntent::Fade { target, .. } => {
+                self.prepared
+                    .object_state(*target)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
+            AnimationDeclarationIntent::Composition { .. } => {}
+        }
+        Ok(AnimationDeclaration { intent, options })
+    }
+
+    fn execution_object_id(&self, target: Self::Reference) -> Option<ObjectId> {
+        target
+            .existing()
+            .and_then(|target| self.index.execution_object_id(target))
+    }
+
+    fn entering_execution_object_id(&self, target: Self::Reference) -> Option<ObjectId> {
+        target.existing().map(super::semantic_execution_object_id)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AnimationScheduleProjection<R> {
+    start_time: f64,
+    run_time: f64,
+    leaves: Vec<ScheduledAnimationLeaf<R>>,
+}
+
+#[derive(Clone, Debug)]
+struct ScheduledAnimationLeaf<R> {
+    animation: R,
+    target: R,
+    execution_object_id: ObjectId,
+    payload: ScheduledAnimationPayload<R>,
+    timing: TrackTiming,
+    time_map: CompositionTimeMap,
+    options: ResolvedAnimationOptions,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ScheduledAnimationPayload<R> {
+    TransformTo { target_state: R },
+    Fade { direction: SemanticFadeDirection },
+}
+
+#[derive(Clone, Debug)]
+enum AnimationSchedulePlanError<R, E> {
+    InvalidStartTime(f64),
+    Lookup {
+        animation: R,
+        error: E,
+    },
+    Options {
+        animation: R,
+        error: AnimationOptionsError,
+    },
+    Composition {
+        animation: R,
+        error: CompositionError,
+    },
+    MissingExecutionTarget {
+        animation: R,
+        target: R,
+    },
+    UnsupportedCompositionLifecycle {
+        animation: R,
+        remover: bool,
+        introducer: bool,
+    },
+    InvalidResolvedInterval {
+        animation: R,
+        child_index: usize,
+    },
+}
+
+type SchedulePlanResult<L, T> = Result<
+    T,
+    AnimationSchedulePlanError<
+        <L as AnimationScheduleLookup>::Reference,
+        <L as AnimationScheduleLookup>::Error,
+    >,
+>;
+
+fn lower_animation_schedule<L>(
+    lookup: &L,
+    root: L::Reference,
+    start_time: f64,
+    play_options: AnimationOptions,
+) -> SchedulePlanResult<L, AnimationScheduleProjection<L::Reference>>
+where
+    L: AnimationScheduleLookup,
+{
+    if !start_time.is_finite() {
+        return Err(AnimationSchedulePlanError::InvalidStartTime(start_time));
+    }
+    let plan = plan_animation(lookup, root, play_options)?;
     let mut leaves = Vec::new();
     collect_leaves(
         &plan,
@@ -170,9 +643,7 @@ pub fn lower_semantic_animation_schedule(
         &mut Vec::new(),
         &mut leaves,
     );
-
-    Ok(SemanticAnimationScheduleProjection {
-        root,
+    Ok(AnimationScheduleProjection {
         start_time,
         run_time: plan.run_time,
         leaves,
@@ -180,88 +651,110 @@ pub fn lower_semantic_animation_schedule(
 }
 
 #[derive(Clone, Debug)]
-struct PlannedAnimation {
-    animation: SemanticNodeId,
+struct PlannedAnimation<R> {
+    animation: R,
     run_time: f64,
-    kind: PlannedAnimationKind,
+    kind: PlannedAnimationKind<R>,
 }
 
 #[derive(Clone, Debug)]
-enum PlannedAnimationKind {
+enum PlannedAnimationKind<R> {
     Leaf {
-        target: SemanticNodeId,
+        target: R,
         execution_object_id: ObjectId,
-        target_state: SemanticNodeId,
+        payload: ScheduledAnimationPayload<R>,
         options: ResolvedAnimationOptions,
     },
     Composition {
         rate_func: RateFunction,
-        children: Vec<PlannedCompositionChild>,
+        children: Vec<PlannedCompositionChild<R>>,
     },
 }
 
 #[derive(Clone, Debug)]
-struct PlannedCompositionChild {
+struct PlannedCompositionChild<R> {
     interval: CompositionInterval,
-    animation: PlannedAnimation,
+    animation: PlannedAnimation<R>,
 }
 
-fn plan_animation(
-    store: &SemanticStore,
-    index: &SemanticExecutionIndex,
-    animation: SemanticNodeId,
+fn plan_animation<L>(
+    lookup: &L,
+    animation: L::Reference,
     play_options: AnimationOptions,
-) -> Result<PlannedAnimation, SemanticAnimationScheduleError> {
-    let state = store
-        .semantic_animation_state(animation)
-        .map_err(SemanticAnimationScheduleError::Animation)?;
+) -> SchedulePlanResult<L, PlannedAnimation<L::Reference>>
+where
+    L: AnimationScheduleLookup,
+{
+    let state = lookup
+        .animation(animation)
+        .map_err(|error| AnimationSchedulePlanError::Lookup { animation, error })?;
 
-    match state.intent() {
-        SemanticAnimationIntent::TransformTo {
+    match state.intent {
+        AnimationDeclarationIntent::TransformTo {
             target,
             target_state,
         } => {
-            store
-                .semantic_object_state_checked(*target)
-                .map_err(SemanticAnimationError::Target)
-                .map_err(SemanticAnimationScheduleError::Animation)?;
-            store
-                .semantic_object_state_checked(*target_state)
-                .map_err(SemanticAnimationError::Target)
-                .map_err(SemanticAnimationScheduleError::Animation)?;
-            let execution_object_id = index.execution_object_id(*target).ok_or(
-                SemanticAnimationScheduleError::MissingExecutionTarget {
-                    animation,
-                    target: *target,
-                },
-            )?;
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
             let options =
-                resolve_animation_options(AnimationDefaults::MANIM, state.options(), play_options)
-                    .map_err(|error| SemanticAnimationScheduleError::Options {
-                        animation,
-                        error,
-                    })?;
+                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
+                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
 
             Ok(PlannedAnimation {
                 animation,
                 run_time: options.run_time,
                 kind: PlannedAnimationKind::Leaf {
-                    target: *target,
+                    target,
                     execution_object_id,
-                    target_state: *target_state,
+                    payload: ScheduledAnimationPayload::TransformTo { target_state },
                     options,
                 },
             })
         }
-        SemanticAnimationIntent::Composition { kind, children } => {
+        AnimationDeclarationIntent::Fade { target, direction } => {
+            let options = resolve_animation_options(
+                AnimationDefaults {
+                    introducer: matches!(direction, SemanticFadeDirection::In),
+                    remover: matches!(direction, SemanticFadeDirection::Out),
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            let lifecycle_matches = match direction {
+                SemanticFadeDirection::In => options.introducer && !options.remover,
+                SemanticFadeDirection::Out => options.remover && !options.introducer,
+            };
+            if !lifecycle_matches {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::Fade { direction },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::Composition { kind, children } => {
             let mut planned_children = Vec::with_capacity(children.len());
-            for &child in children {
-                planned_children.push(plan_animation(
-                    store,
-                    index,
-                    child,
-                    AnimationOptions::new(),
-                )?);
+            for child in children {
+                planned_children.push(plan_animation(lookup, child, AnimationOptions::new())?);
             }
             let child_run_times = planned_children
                 .iter()
@@ -273,11 +766,11 @@ fn plan_animation(
             };
             let requested_lag_ratio = play_options
                 .lag_ratio
-                .or(state.options().lag_ratio)
+                .or(state.options.lag_ratio)
                 .unwrap_or(default_lag_ratio);
             let intrinsic =
                 resolve_composition_schedule(&child_run_times, requested_lag_ratio, None).map_err(
-                    |error| SemanticAnimationScheduleError::Composition { animation, error },
+                    |error| AnimationSchedulePlanError::Composition { animation, error },
                 )?;
             let defaults = AnimationDefaults {
                 run_time: intrinsic.run_time,
@@ -288,11 +781,11 @@ fn plan_animation(
                 remover: false,
                 introducer: false,
             };
-            let options = resolve_animation_options(defaults, state.options(), play_options)
-                .map_err(|error| SemanticAnimationScheduleError::Options { animation, error })?;
+            let options = resolve_animation_options(defaults, state.options, play_options)
+                .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
             if options.remover || options.introducer {
                 return Err(
-                    SemanticAnimationScheduleError::UnsupportedCompositionLifecycle {
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
                         animation,
                         remover: options.remover,
                         introducer: options.introducer,
@@ -304,7 +797,7 @@ fn plan_animation(
                 options.lag_ratio,
                 Some(options.run_time),
             )
-            .map_err(|error| SemanticAnimationScheduleError::Composition { animation, error })?;
+            .map_err(|error| AnimationSchedulePlanError::Composition { animation, error })?;
 
             let children = planned_children
                 .into_iter()
@@ -315,7 +808,7 @@ fn plan_animation(
                         || !interval.duration.is_finite()
                         || interval.duration <= 0.0
                     {
-                        return Err(SemanticAnimationScheduleError::InvalidResolvedInterval {
+                        return Err(AnimationSchedulePlanError::InvalidResolvedInterval {
                             animation,
                             child_index,
                         });
@@ -339,24 +832,24 @@ fn plan_animation(
     }
 }
 
-fn collect_leaves(
-    plan: &PlannedAnimation,
+fn collect_leaves<R: Copy>(
+    plan: &PlannedAnimation<R>,
     root_start_time: f64,
     root_run_time: f64,
     steps: &mut Vec<CompositionTimeMapStep>,
-    leaves: &mut Vec<SemanticScheduledAnimationLeaf>,
+    leaves: &mut Vec<ScheduledAnimationLeaf<R>>,
 ) {
     match &plan.kind {
         PlannedAnimationKind::Leaf {
             target,
             execution_object_id,
-            target_state,
+            payload,
             options,
-        } => leaves.push(SemanticScheduledAnimationLeaf {
+        } => leaves.push(ScheduledAnimationLeaf {
             animation: plan.animation,
             target: *target,
             execution_object_id: *execution_object_id,
-            target_state: *target_state,
+            payload: *payload,
             timing: TrackTiming::new(root_start_time, root_run_time, options.rate_func),
             time_map: CompositionTimeMap::from_steps(steps.clone()),
             options: *options,
@@ -381,6 +874,85 @@ fn collect_leaves(
                 steps.pop();
             }
         }
+    }
+}
+
+fn published_schedule_error(
+    error: AnimationSchedulePlanError<SemanticNodeId, SemanticAnimationError>,
+) -> SemanticAnimationScheduleError {
+    match error {
+        AnimationSchedulePlanError::InvalidStartTime(value) => {
+            SemanticAnimationScheduleError::InvalidStartTime(value)
+        }
+        AnimationSchedulePlanError::Lookup { error, .. } => {
+            SemanticAnimationScheduleError::Animation(error)
+        }
+        AnimationSchedulePlanError::Options { animation, error } => {
+            SemanticAnimationScheduleError::Options { animation, error }
+        }
+        AnimationSchedulePlanError::Composition { animation, error } => {
+            SemanticAnimationScheduleError::Composition { animation, error }
+        }
+        AnimationSchedulePlanError::MissingExecutionTarget { animation, target } => {
+            SemanticAnimationScheduleError::MissingExecutionTarget { animation, target }
+        }
+        AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+            animation,
+            remover,
+            introducer,
+        } => SemanticAnimationScheduleError::UnsupportedCompositionLifecycle {
+            animation,
+            remover,
+            introducer,
+        },
+        AnimationSchedulePlanError::InvalidResolvedInterval {
+            animation,
+            child_index,
+        } => SemanticAnimationScheduleError::InvalidResolvedInterval {
+            animation,
+            child_index,
+        },
+    }
+}
+
+fn prepared_schedule_error(
+    error: AnimationSchedulePlanError<
+        SemanticTransactionNodeRef,
+        PreparedSemanticAnimationLookupError,
+    >,
+) -> PreparedSemanticAnimationScheduleError {
+    match error {
+        AnimationSchedulePlanError::InvalidStartTime(value) => {
+            PreparedSemanticAnimationScheduleError::InvalidStartTime(value)
+        }
+        AnimationSchedulePlanError::Lookup { animation, error } => {
+            PreparedSemanticAnimationScheduleError::Lookup { animation, error }
+        }
+        AnimationSchedulePlanError::Options { animation, error } => {
+            PreparedSemanticAnimationScheduleError::Options { animation, error }
+        }
+        AnimationSchedulePlanError::Composition { animation, error } => {
+            PreparedSemanticAnimationScheduleError::Composition { animation, error }
+        }
+        AnimationSchedulePlanError::MissingExecutionTarget { animation, target } => {
+            PreparedSemanticAnimationScheduleError::MissingExecutionTarget { animation, target }
+        }
+        AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+            animation,
+            remover,
+            introducer,
+        } => PreparedSemanticAnimationScheduleError::UnsupportedCompositionLifecycle {
+            animation,
+            remover,
+            introducer,
+        },
+        AnimationSchedulePlanError::InvalidResolvedInterval {
+            animation,
+            child_index,
+        } => PreparedSemanticAnimationScheduleError::InvalidResolvedInterval {
+            animation,
+            child_index,
+        },
     }
 }
 
@@ -440,7 +1012,10 @@ mod tests {
         let leaf = &schedule.leaves()[0];
         assert_eq!(leaf.animation, animation);
         assert_eq!(leaf.target, target);
-        assert_eq!(leaf.target_state, target_state);
+        assert_eq!(
+            leaf.payload,
+            SemanticScheduledAnimationPayload::TransformTo { target_state }
+        );
         assert_eq!(
             leaf.execution_object_id,
             index.execution_object_id(target).unwrap()

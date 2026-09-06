@@ -197,6 +197,8 @@ impl RetainedFramePreparer {
             text,
             render_items: &self.render_items,
             stats,
+            source_geometry_slots: None,
+            render_item_ranges: None,
         })
     }
 

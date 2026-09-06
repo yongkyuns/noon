@@ -132,6 +132,8 @@ mod tests {
         );
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
+        assert!(!live.segment_state(segment).is_complete());
+        live.complete_segment(segment).unwrap();
         assert!(live.segment_state(segment).is_complete());
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation,
@@ -141,6 +143,7 @@ mod tests {
         let wait = live.wait_segment(0.5).unwrap();
         live.advance_segment_to(wait, wait.end_time()).unwrap();
         assert!(live.segment_state(wait).is_complete());
+        live.complete_segment(wait).unwrap();
     }
 
     #[test]

@@ -169,6 +169,10 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                         if self.snapshot["style"][name] is not None:
                             self.snapshot["style"][name]["alpha"] = float(opacity)
 
+                def setObjectOpacity(self, opacity):
+                    self.calls.append(("setObjectOpacity", float(opacity)))
+                    self.snapshot["style"]["opacity"] = float(opacity)
+
                 def disableFill(self):
                     self.snapshot["style"]["fill"] = None
 
@@ -251,9 +255,78 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             assert stored["transform"]["translation"] == {"x": 1.0, "y": 0.0}
             assert square.get_center().x == 1.0
 
+            class EffectiveLayout:
+                centerX = 2.5
+                centerY = -1.5
+                width = 6.0
+                height = 4.0
+
+            class CanonicalContext:
+                def __init__(self):
+                    self.transferred = False
+                    self.queries = []
+
+                def queryMobjectLayout(self, queried):
+                    self.queries.append(queried)
+                    if self.transferred:
+                        raise RuntimeError("live execution session is running in the semantic engine")
+                    return EffectiveLayout()
+
+            context = CanonicalContext()
+            scene._canonical_authoring_context = context
+            assert square.get_center() == (2.5, -1.5)
+            assert square.width == 6.0
+            assert square.height == 4.0
+            assert context.queries == [handle, handle, handle]
+
+            # Merely registering an updater does not make its last callback frame
+            # authoritative outside an active phase. Ordinary reads still query
+            # the canonical runtime through the fresh raw semantic handle.
+            square._noon_updaters = [lambda mobject: mobject]
+            context.queries.clear()
+            assert handles._handle_for(square) is None
+            assert square.get_center() == (2.5, -1.5)
+            assert square.width == 6.0
+            assert square.height == 4.0
+            assert context.queries == [handle, handle, handle]
+
+            # The explicit legacy materialization boundary keeps its existing raw
+            # fallback rather than consulting an unrelated canonical runtime.
+            scene._legacy_geometry_materialized = True
+            assert square.get_center() == (1.0, 0.0)
+            del scene._legacy_geometry_materialized
+            del square._noon_updaters
+
+            context.transferred = True
+            try:
+                square.get_center()
+            except RuntimeError as error:
+                assert "running in the semantic engine" in str(error)
+            else:
+                raise AssertionError("transferred live layout read returned stale authored state")
+            # A returned player remains the shared mutation authority between
+            # continuation awaits. Neither the source nor a new target may edit
+            # its handle behind the runtime's publication revision.
+            context.transferred = False
+            context.liveExecutionOwnership = lambda: "returned"
+            live_calls = []
+            context.liveShift = lambda target, x, y: live_calls.append((target, x, y))
+            context.liveTargetEditor = lambda target: FakeHandle(json.dumps(target.snapshot))
+            square.shift(RIGHT)
+            target = square.copy()
+            target.shift(RIGHT)
+            assert live_calls == [(handle, 1.0, 0.0), (target._semantic_handle, 1.0, 0.0)]
+            assert target._canonical_live_target_context is context
+            assert handle.centerX == 1.0, "returned edits must not bypass the live session"
+            del scene._canonical_authoring_context
+
             square.set_fill(GREEN, opacity=0.25)
             assert handle.snapshot_requests == 0
             assert abs(stored["style"]["fill"]["alpha"] - 0.25) < 1e-12
+            square.set_object_opacity(0.4)
+            assert handle.calls[-1] == ("setObjectOpacity", 0.4)
+            assert handle.snapshot_requests == 0
+            assert abs(stored["style"]["opacity"] - 0.4) < 1e-12
 
             first = animate._AlignedAnimationBuilder(square)
             first_target = first.target

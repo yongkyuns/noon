@@ -750,6 +750,21 @@ async function discardSemanticExecution(authored, client) {
   }
 }
 
+function discardEarlyContinuationRuntime(attachedPlayer) {
+  attachedPlayer?.terminate();
+  if (player !== attachedPlayer) return;
+  playbackControls?.destroy();
+  playbackControls = null;
+  player = null;
+  playerNeedsRestart = false;
+  stopMetricsPolling();
+}
+
+function sameSemanticContinuation(left, right) {
+  return left?.contextId === right?.contextId &&
+    left?.continuationGeneration === right?.continuationGeneration;
+}
+
 async function runScene() {
   if (sceneRunPromise !== null) return sceneRunPromise;
   const example = currentExample();
@@ -759,6 +774,7 @@ async function runScene() {
   const source = sceneSourceEditor.value;
   const releaseBusy = beginBusy();
   const task = (async () => {
+    let earlyContinuation = null;
     try {
       setRuntimeStatus("Preparing animation…", "running");
       patchStatus.value = `Building ${example.title} in the Python worker…`;
@@ -773,6 +789,48 @@ async function runScene() {
             example_id: example.id,
             selection_generation: runToken.selectionGeneration,
             run_generation: runToken.runGeneration,
+          },
+        }, {
+          async onSemanticContinuation(registration) {
+            if (earlyContinuation !== null) {
+              throw new Error("Python source registered more than one semantic continuation");
+            }
+            if (!isCurrentRun(runToken)) {
+              throw new Error("Python semantic continuation belongs to a stale playground run");
+            }
+            const loopDurationSeconds = registration.duration > 0
+              ? registration.duration
+              : playbackDurationSeconds;
+            let result;
+            if (player === null) {
+              result = await ensureRuntimeReady({
+                preparation,
+                semanticExecution: registration.semanticExecution,
+                sceneJson: null,
+                sceneSpecJson: null,
+                startRetained: false,
+                callbacks: null,
+                authoringClient: client,
+                loopDurationSeconds,
+              });
+            } else {
+              await ensureExecutionReady();
+              result = await player.reconcileSemanticExecution(
+                registration.semanticExecution,
+                {
+                  authoringClient: client,
+                  loopDurationSeconds: registration.duration > 0
+                    ? registration.duration
+                    : null,
+                },
+              );
+            }
+            const attachedPlayer = player;
+            if (!isCurrentRun(runToken)) {
+              discardEarlyContinuationRuntime(attachedPlayer);
+              throw new Error("Python semantic continuation was superseded during startup");
+            }
+            earlyContinuation = { registration, attachedPlayer, result };
           },
         });
         status.dataset.authoringWarmup = "ready";
@@ -790,6 +848,7 @@ async function runScene() {
         runGeneration: runToken.runGeneration,
       });
       if (!isCurrentRun(runToken)) {
+        discardEarlyContinuationRuntime(earlyContinuation?.attachedPlayer);
         await discardSemanticExecution(authored, client);
         return recordStale(runToken, "after-authoring");
       }
@@ -821,12 +880,30 @@ async function runScene() {
         runGeneration: runToken.runGeneration,
       });
       if (!isCurrentRun(runToken)) {
+        discardEarlyContinuationRuntime(earlyContinuation?.attachedPlayer);
         await discardSemanticExecution(authored, client);
         return recordStale(runToken, "before-reconcile");
       }
 
       let result;
-      if (player === null) {
+      if (earlyContinuation !== null) {
+        if (!sameSemanticContinuation(
+          authored.semanticExecution,
+          earlyContinuation.registration.semanticExecution,
+        )) {
+          discardEarlyContinuationRuntime(earlyContinuation.attachedPlayer);
+          throw new Error("final Python result does not match its early semantic continuation");
+        }
+        if (player !== earlyContinuation.attachedPlayer) {
+          throw new Error("semantic continuation runtime changed before final adoption");
+        }
+        const finalState = await player.state();
+        result = {
+          ...earlyContinuation.result,
+          ...finalState,
+        };
+        earlyContinuation = null;
+      } else if (player === null) {
         result = await ensureRuntimeReady({
           preparation,
           semanticExecution,
@@ -881,6 +958,7 @@ async function runScene() {
       patchStatus.dataset.sequence = String(result.nextPatchSequence);
       return { stale: false, result };
     } catch (error) {
+      discardEarlyContinuationRuntime(earlyContinuation?.attachedPlayer);
       if (!isCurrentRun(runToken)) {
         return recordStale(runToken, "error");
       }

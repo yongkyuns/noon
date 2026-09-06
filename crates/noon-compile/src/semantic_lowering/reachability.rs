@@ -132,6 +132,15 @@ impl SemanticExecutionReachability {
             .is_some_and(ReachabilityNode::is_reachable)
     }
 
+    /// Whether `id` is one of the roots that defines this execution domain.
+    ///
+    /// This is derived execution metadata. Lifecycle operations use it to reject
+    /// a caller-supplied family outside the session without scanning authored
+    /// scene roots or retaining another root list.
+    pub fn is_execution_root(&self, id: SemanticNodeId) -> bool {
+        self.nodes.get(&id).is_some_and(|node| node.scene_root)
+    }
+
     pub fn is_object_reachable(&self, id: SemanticNodeId) -> bool {
         self.nodes
             .get(&id)
@@ -211,10 +220,12 @@ impl SemanticExecutionReachability {
                     self.remove_node(node, &mut journal);
                 }
                 SemanticMutationImpact::SignalValue { .. }
+                | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::Subscription { .. }
+                | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }
                 | SemanticMutationImpact::NodeAdded { .. }
                 | SemanticMutationImpact::AnimationAdded { .. } => {}

@@ -457,6 +457,18 @@ class Mobject:
         raw.style["opacity"] = float(opacity)
         return self._apply(raw)
 
+    def set_object_opacity(self, opacity: float) -> Mobject:
+        """Set Noon's object-composite opacity independently of paint opacity.
+
+        Manim ``VMobject.set_opacity`` controls the enabled fill and stroke paint
+        alpha channels. This explicit Noon operation controls the separate opacity
+        multiplier applied to the complete object through the shared semantic handle.
+        """
+        del opacity
+        raise NotImplementedError(
+            "set_object_opacity requires Noon's shared semantic authoring handle"
+        )
+
     def next_to(
         self,
         other: Mobject | Vec2 | tuple[float, float],
@@ -756,6 +768,10 @@ class _AnimationBuilder:
 
     def set_opacity(self, opacity: float) -> _AnimationBuilder:
         self.target.set_opacity(opacity)
+        return self
+
+    def set_object_opacity(self, opacity: float) -> _AnimationBuilder:
+        self.target.set_object_opacity(opacity)
         return self
 
 

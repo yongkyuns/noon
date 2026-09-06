@@ -25,14 +25,14 @@ test("renderer transition keeps the active renderer until replacement bootstrap 
   const consume = functionSlice("consumeDelta", "commitRendererTransition");
   assert.match(
     consume,
-    /if \(transitionMode !== null\) \{\s*return commitRendererTransition\(json\);/s,
+    /if \(transitionMode !== null\) \{\s*return commitRendererTransition\(json, publication\);/s,
   );
 
   const commit = functionSlice("commitRendererTransition", "bootstrapRenderer");
   const disposeIndex = commit.indexOf("disposeRenderer();");
   const publishModeIndex = commit.indexOf("mode = nextMode;");
   const bootstrapIndex = commit.indexOf(
-    "bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop);",
+    "bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);",
   );
   assert.ok(disposeIndex >= 0, "transition commit must retire the previous renderer");
   assert.ok(
@@ -69,7 +69,7 @@ test("renderer transitions suspend ticks until delayed bootstrap publishes ready
 
   const commit = functionSlice("commitRendererTransition", "bootstrapRenderer");
   assert.match(commit, /const resumeFrameLoop = transitionFrameLoopWasRunning;/);
-  assert.match(commit, /bootstrapRenderer\(initial, resumeFrameLoop\)/);
+  assert.match(commit, /bootstrapRenderer\(initial, resumeFrameLoop, publication\)/);
 
   const bootstrap = functionSlice("bootstrapRenderer", "tryPresent");
   const create = bootstrap.indexOf("await RetainedExecutionCanvasRenderer.create");
@@ -114,7 +114,7 @@ test("retained readiness publishes preload telemetry before playback ticks begin
 
 test("stale frame callbacks cannot tick or spawn a second loop after transition", () => {
   const schedule = functionSlice("scheduleFrame", "frame");
-  assert.match(schedule, /frame\(timestamp, generation\)/);
+  assert.match(schedule, /frame\(timestamp, generation, ticket\)/);
   const frame = functionSlice("frame", "drainGpuDiagnostics");
   const staleGuard = frame.indexOf("generation !== frameLoopGeneration");
   const tick = frame.indexOf('renderPort?.postMessage({ type: "tick", timestamp });');

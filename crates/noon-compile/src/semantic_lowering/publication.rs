@@ -155,6 +155,22 @@ impl PreparedSemanticPublication {
         self.entries.len()
     }
 
+    /// Conservative create patches for existing detached identities.
+    ///
+    /// Prepared animation activation uses these only for fallible runtime shape validation before
+    /// semantic commit. Exact net entry remains bound from the committed membership update.
+    pub fn conservative_existing_entry_patches(&self) -> Vec<ExecutionPatch> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                let semantic = entry.object.existing()?;
+                let mut compiled = entry.compiled.clone();
+                compiled.id = semantic_execution_object_id(semantic);
+                Some(ExecutionPatch::CreateObject(compiled))
+            })
+            .collect()
+    }
+
     pub const fn stats(&self) -> SemanticPublicationPreparationStats {
         self.stats
     }
@@ -235,7 +251,6 @@ fn validate_mutations(
                 | SemanticMutation::RemoveMember { .. }
                 | SemanticMutation::AddNode { .. }
                 | SemanticMutation::AddAnimation { .. }
-                | SemanticMutation::AddTransformAnimation { .. }
                 | SemanticMutation::RemoveNode { .. }
         ) {
             return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
@@ -252,7 +267,7 @@ pub fn prepare_semantic_publication(
     live_painter_tail: Option<(i32, u64)>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations())?;
-    let (values, resource_additions) = lower_semantic_publication(prepared, index)?;
+    let (values, resource_additions) = lower_semantic_publication(prepared, index, reachability)?;
     let mut possible_entry_refs = Vec::new();
     let mut seen_entries = HashSet::new();
     let mut possible_exit_nodes = Vec::new();
@@ -463,6 +478,7 @@ fn lower_prepared_entry(
 fn lower_semantic_publication(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     index: &SemanticExecutionIndex,
+    reachability: &SemanticExecutionReachability,
 ) -> Result<(ExecutionMutationTransaction, CompiledResources), SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations())?;
     let mut domains: HashMap<SemanticNodeId, (bool, bool, bool)> = HashMap::new();
@@ -496,7 +512,6 @@ fn lower_semantic_publication(
             | SemanticMutation::RemoveMember { .. }
             | SemanticMutation::AddNode { .. }
             | SemanticMutation::AddAnimation { .. }
-            | SemanticMutation::AddTransformAnimation { .. }
             | SemanticMutation::RemoveNode { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
@@ -504,6 +519,9 @@ fn lower_semantic_publication(
     let mut mutations = Vec::with_capacity(domains.len() * 3);
     let mut resource_additions = CompiledResources::default();
     for (node, state) in prepared.object_updates() {
+        if !reachability.is_reachable(node) {
+            continue;
+        }
         let Some(object) = index.execution_object_id(node) else {
             continue;
         };

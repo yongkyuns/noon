@@ -20,8 +20,10 @@ impl std::hash::Hash for SemanticStoreIdentity {
     }
 }
 
-use crate::{HostCallbackId, SemanticAnimationState, SemanticObjectState, SemanticSignalState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
+use crate::{
+    SemanticAnimationState, SemanticObjectState, SemanticSignalState, SemanticUpdaterRegistration,
+};
 
 mod semantic_references;
 mod semantic_text_resources;
@@ -292,7 +294,7 @@ pub struct SemanticNode {
     /// belongs to the Semantic Scene and therefore follows this node across
     /// detach/re-attach. Lowering decides how these declarations become runtime
     /// callback slots.
-    host_updaters: Vec<HostCallbackId>,
+    host_updaters: Vec<SemanticUpdaterRegistration>,
 }
 
 impl SemanticNode {
@@ -379,11 +381,11 @@ impl SemanticNode {
         self.members.len()
     }
 
-    pub fn host_updaters(&self) -> &[HostCallbackId] {
+    pub fn host_updaters(&self) -> &[SemanticUpdaterRegistration] {
         &self.host_updaters
     }
 
-    pub(crate) fn host_updaters_mut(&mut self) -> &mut Vec<HostCallbackId> {
+    pub(crate) fn host_updaters_mut(&mut self) -> &mut Vec<SemanticUpdaterRegistration> {
         &mut self.host_updaters
     }
 }
@@ -925,6 +927,25 @@ impl SemanticStore {
 
     pub const fn scene_root_count(&self) -> usize {
         self.scene_nodes
+    }
+
+    /// Check one direct family edge without materializing or scanning its ordered members.
+    pub fn is_direct_member(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<bool, SemanticStoreError> {
+        let family_id = family;
+        let family = self
+            .node(family_id)
+            .ok_or(SemanticStoreError::UnknownNode(family_id))?;
+        if !matches!(family.kind(), SemanticNodeKind::Family) {
+            return Err(SemanticStoreError::NotFamily(family_id));
+        }
+        if self.node(member).is_none() {
+            return Err(SemanticStoreError::UnknownNode(member));
+        }
+        Ok(family.members.contains(member))
     }
 
     /// Add an ordered family edge. A member may belong to multiple families.

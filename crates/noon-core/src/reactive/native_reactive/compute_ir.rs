@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BinaryHeap},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::{SignalId, ValueKind, Vec2};
@@ -278,6 +279,8 @@ impl ComputeProgram {
         let values = self.reference.initial_values.clone();
         let max_registers = self.max_registers;
         ComputeState {
+            identity: next_compute_identity(),
+            revision: 0,
             program: self,
             values,
             scratch: vec![ReactiveValue::Scalar(0.0); max_registers],
@@ -292,14 +295,77 @@ impl ComputeProgram {
 /// Scheduling uses a dense adjacency table, a reusable queued-bitset, and a
 /// vector-backed min-heap keyed by topological rank. It performs no recursive AST
 /// evaluation and uses no ordered maps/sets to schedule dirty work.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ComputeState {
+    identity: u64,
+    revision: u64,
     program: ComputeProgram,
     values: Vec<ReactiveValue>,
     scratch: Vec<ReactiveValue>,
     queued: Vec<bool>,
     pending: BinaryHeap<Reverse<(usize, usize)>>,
 }
+
+impl Clone for ComputeState {
+    fn clone(&self) -> Self {
+        Self {
+            identity: next_compute_identity(),
+            revision: self.revision,
+            program: self.program.clone(),
+            values: self.values.clone(),
+            scratch: self.scratch.clone(),
+            queued: vec![false; self.queued.len()],
+            pending: BinaryHeap::new(),
+        }
+    }
+}
+
+static NEXT_COMPUTE_IDENTITY: AtomicU64 = AtomicU64::new(1);
+
+fn next_compute_identity() -> u64 {
+    NEXT_COMPUTE_IDENTITY
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .expect("Noon compute-state identity space exhausted")
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedComputeInputBatch {
+    identity: u64,
+    expected_revision: u64,
+    changed_values: Vec<(usize, ReactiveValue)>,
+    update: ReactiveUpdate,
+}
+
+impl PreparedComputeInputBatch {
+    pub fn update(&self) -> &ReactiveUpdate {
+        &self.update
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.changed_values.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparedComputeCommitError {
+    ForeignState,
+    StaleRevision,
+    RevisionExhausted,
+}
+
+impl std::fmt::Display for PreparedComputeCommitError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::ForeignState => "prepared reactive batch belongs to another compute state",
+            Self::StaleRevision => "prepared reactive batch targets a stale compute revision",
+            Self::RevisionExhausted => "Noon compute-state revision space exhausted",
+        })
+    }
+}
+
+impl std::error::Error for PreparedComputeCommitError {}
 
 impl ComputeState {
     pub fn value(&self, signal: SignalId) -> Option<&ReactiveValue> {
@@ -312,73 +378,129 @@ impl ComputeState {
         signal: SignalId,
         value: impl Into<ReactiveValue>,
     ) -> Result<ReactiveUpdate, ReactiveError> {
-        debug_assert!(self.pending.is_empty());
-        debug_assert!(!self.queued.iter().any(|queued| *queued));
+        let prepared = self.prepare_input_batch(&[(signal, value.into())])?;
+        self.commit_prepared_input_batch(prepared)
+            .map_err(unreachable_same_state_commit)
+    }
 
-        let value = value.into();
-        let index = *self
-            .program
-            .reference
-            .signal_indices
-            .get(&signal)
-            .ok_or(ReactiveError::UnknownSignal(signal))?;
-        if !matches!(
-            self.program.reference.signals[index].source,
-            SignalSource::Input(_)
-        ) {
-            return Err(ReactiveError::NotInputSignal(signal));
+    /// Evaluate an ordered input batch against sparse journaled state, then restore
+    /// the coherent live values. Commit reapplies only values in the dependency closure.
+    pub fn prepare_input_batch(
+        &mut self,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<PreparedComputeInputBatch, ReactiveError> {
+        debug_assert!(self.pending.is_empty());
+        let mut staged_inputs = BTreeMap::new();
+        for (signal, value) in inputs {
+            let index = *self
+                .program
+                .reference
+                .signal_indices
+                .get(signal)
+                .ok_or(ReactiveError::UnknownSignal(*signal))?;
+            if !matches!(
+                self.program.reference.signals[index].source,
+                SignalSource::Input(_)
+            ) {
+                return Err(ReactiveError::NotInputSignal(*signal));
+            }
+            validate_reactive_value(*signal, value)?;
+            let expected = self.values[index].value_kind();
+            let actual = value.value_kind();
+            if expected != actual {
+                return Err(ReactiveError::InputTypeMismatch {
+                    signal: *signal,
+                    expected,
+                    actual,
+                });
+            }
+            staged_inputs.insert(index, value.clone());
         }
-        validate_reactive_value(signal, &value)?;
-        let expected = self.values[index].value_kind();
-        let actual = value.value_kind();
-        if expected != actual {
-            return Err(ReactiveError::InputTypeMismatch {
-                signal,
-                expected,
-                actual,
+        staged_inputs.retain(|index, value| self.values[*index] != *value);
+        if staged_inputs.is_empty() {
+            return Ok(PreparedComputeInputBatch {
+                identity: self.identity,
+                expected_revision: self.revision,
+                changed_values: Vec::new(),
+                update: ReactiveUpdate::default(),
             });
         }
-        if self.values[index] == value {
-            return Ok(ReactiveUpdate::default());
+        if self.revision.checked_add(1).is_none() {
+            return Err(ReactiveError::ComputeRevisionExhausted);
         }
 
-        self.values[index] = value.clone();
-        let mut changed = vec![index];
-        enqueue_dependents(
-            &self.program.reference.dependents[index],
-            &self.program.reference.topological_rank,
-            &mut self.queued,
-            &mut self.pending,
-        );
-
-        let mut stats = ReactiveEvaluationStats::default();
-        while let Some(Reverse((rank, current))) = self.pending.pop() {
-            self.queued[current] = false;
-            debug_assert_eq!(rank, self.program.reference.topological_rank[current]);
-            let kernel = self.program.kernels[current]
-                .as_ref()
-                .expect("only derived signals can be scheduled");
-            stats.derived_signals_evaluated += 1;
-            let signal_id = self.program.reference.signals[current].id;
-            let next = kernel.evaluate(&self.values, &mut self.scratch)?;
-            validate_reactive_value(signal_id, &next)?;
-            if self.values[current] == next {
+        let mut affected = std::collections::BTreeSet::new();
+        let mut stack = Vec::new();
+        for &index in staged_inputs.keys() {
+            stack.push(index);
+        }
+        while let Some(index) = stack.pop() {
+            if !affected.insert(index) {
                 continue;
             }
-            self.values[current] = next;
-            changed.push(current);
+            stack.extend(self.program.reference.dependents[index].iter().copied());
+        }
+        let journal = affected
+            .iter()
+            .map(|&index| (index, self.values[index].clone()))
+            .collect::<Vec<_>>();
+        let mut changed = Vec::new();
+        for (index, value) in staged_inputs {
+            if self.values[index] == value {
+                continue;
+            }
+            self.values[index] = value;
+            changed.push(index);
             enqueue_dependents(
-                &self.program.reference.dependents[current],
+                &self.program.reference.dependents[index],
                 &self.program.reference.topological_rank,
                 &mut self.queued,
                 &mut self.pending,
             );
         }
 
+        let mut stats = ReactiveEvaluationStats::default();
+        let evaluation = (|| {
+            while let Some(Reverse((rank, current))) = self.pending.pop() {
+                self.queued[current] = false;
+                debug_assert_eq!(rank, self.program.reference.topological_rank[current]);
+                let kernel = self.program.kernels[current]
+                    .as_ref()
+                    .expect("only derived signals can be scheduled");
+                stats.derived_signals_evaluated += 1;
+                let signal_id = self.program.reference.signals[current].id;
+                let next = kernel.evaluate(&self.values, &mut self.scratch)?;
+                validate_reactive_value(signal_id, &next)?;
+                if self.values[current] == next {
+                    continue;
+                }
+                self.values[current] = next;
+                changed.push(current);
+                enqueue_dependents(
+                    &self.program.reference.dependents[current],
+                    &self.program.reference.topological_rank,
+                    &mut self.queued,
+                    &mut self.pending,
+                );
+            }
+            Ok::<(), ReactiveError>(())
+        })();
+
+        if let Err(error) = evaluation {
+            while let Some(Reverse((_, index))) = self.pending.pop() {
+                self.queued[index] = false;
+            }
+            for (index, value) in journal {
+                self.values[index] = value;
+            }
+            return Err(error);
+        }
+
         changed.sort_by_key(|index| self.program.reference.topological_rank[*index]);
+        changed.dedup();
         let mut signal_changes = Vec::with_capacity(changed.len());
         let mut property_changes = Vec::new();
-        for changed_index in changed {
+        for &changed_index in &changed {
             let changed_signal = self.program.reference.signals[changed_index].id;
             let changed_value = self.values[changed_index].clone();
             signal_changes.push(SignalChange {
@@ -394,12 +516,59 @@ impl ComputeState {
             }
         }
         stats.bindings_invalidated = property_changes.len();
-        Ok(ReactiveUpdate {
+        let update = ReactiveUpdate {
             signal_changes,
             property_changes,
             stats,
+        };
+        let changed_values = journal
+            .iter()
+            .filter(|(index, previous)| self.values[*index] != *previous)
+            .map(|(index, _)| (*index, self.values[*index].clone()))
+            .collect();
+        for (index, value) in journal {
+            self.values[index] = value;
+        }
+        Ok(PreparedComputeInputBatch {
+            identity: self.identity,
+            expected_revision: self.revision,
+            changed_values,
+            update,
         })
     }
+
+    pub fn commit_prepared_input_batch(
+        &mut self,
+        prepared: PreparedComputeInputBatch,
+    ) -> Result<ReactiveUpdate, PreparedComputeCommitError> {
+        if prepared.identity != self.identity {
+            return Err(PreparedComputeCommitError::ForeignState);
+        }
+        if prepared.expected_revision != self.revision {
+            return Err(PreparedComputeCommitError::StaleRevision);
+        }
+        let changed = !prepared.changed_values.is_empty();
+        let next_revision = if changed {
+            Some(
+                self.revision
+                    .checked_add(1)
+                    .ok_or(PreparedComputeCommitError::RevisionExhausted)?,
+            )
+        } else {
+            None
+        };
+        for (index, value) in prepared.changed_values {
+            self.values[index] = value;
+        }
+        if let Some(revision) = next_revision {
+            self.revision = revision;
+        }
+        Ok(prepared.update)
+    }
+}
+
+fn unreachable_same_state_commit(_: PreparedComputeCommitError) -> ReactiveError {
+    unreachable!("a batch prepared and immediately committed on one compute state must be valid")
 }
 
 fn enqueue_dependents(
@@ -872,6 +1041,112 @@ mod tests {
         assert_eq!(update.stats().derived_signals_evaluated, 1);
         assert_eq!(update.stats().bindings_invalidated, 0);
         assert_eq!(state.value(downstream), Some(&ReactiveValue::Scalar(1.0)));
+    }
+
+    #[test]
+    fn prepared_batch_stages_all_inputs_before_one_shared_closure_evaluation() {
+        let mut scene = SemanticScene::new();
+        let first = scene.add_input(0.0_f32);
+        let second = scene.add_input(0.0_f32);
+        let sum = scene.add_derived(ReactiveExpr::Add(
+            Box::new(ReactiveExpr::signal(first)),
+            Box::new(ReactiveExpr::signal(second)),
+        ));
+        let mut state = scene
+            .compile_reactive()
+            .unwrap()
+            .into_compute()
+            .unwrap()
+            .instantiate();
+
+        let prepared = state
+            .prepare_input_batch(&[
+                (first, ReactiveValue::Scalar(2.0)),
+                (second, ReactiveValue::Scalar(3.0)),
+            ])
+            .unwrap();
+        assert_eq!(prepared.update().stats().derived_signals_evaluated, 1);
+        assert_eq!(state.value(sum), Some(&ReactiveValue::Scalar(0.0)));
+        state.commit_prepared_input_batch(prepared).unwrap();
+        assert_eq!(state.value(sum), Some(&ReactiveValue::Scalar(5.0)));
+    }
+
+    #[test]
+    fn prepared_batch_failure_restores_values_and_scheduler_scratch() {
+        let mut scene = SemanticScene::new();
+        let first = scene.add_input(1.0_f32);
+        let second = scene.add_input(1.0_f32);
+        let sum = scene.add_derived(ReactiveExpr::Add(
+            Box::new(ReactiveExpr::signal(first)),
+            Box::new(ReactiveExpr::signal(second)),
+        ));
+        let square = scene.add_derived(ReactiveExpr::Mul(
+            Box::new(ReactiveExpr::signal(sum)),
+            Box::new(ReactiveExpr::signal(sum)),
+        ));
+        let downstream =
+            scene.add_derived(ReactiveExpr::Sin(Box::new(ReactiveExpr::signal(square))));
+        let mut state = scene
+            .compile_reactive()
+            .unwrap()
+            .into_compute()
+            .unwrap()
+            .instantiate();
+
+        assert!(matches!(
+            state.prepare_input_batch(&[
+                (first, ReactiveValue::Scalar(1.0e20)),
+                (second, ReactiveValue::Scalar(1.0e20)),
+            ]),
+            Err(ReactiveError::NonFiniteValue(signal)) if signal == square
+        ));
+        assert_eq!(state.value(first), Some(&ReactiveValue::Scalar(1.0)));
+        assert_eq!(
+            state.value(downstream),
+            Some(&ReactiveValue::Scalar(4.0_f32.sin()))
+        );
+
+        let prepared = state
+            .prepare_input_batch(&[
+                (first, ReactiveValue::Scalar(2.0)),
+                (second, ReactiveValue::Scalar(3.0)),
+            ])
+            .unwrap();
+        state.commit_prepared_input_batch(prepared).unwrap();
+        assert_eq!(state.value(sum), Some(&ReactiveValue::Scalar(5.0)));
+        assert_eq!(state.value(square), Some(&ReactiveValue::Scalar(25.0)));
+        assert_eq!(
+            state.value(downstream),
+            Some(&ReactiveValue::Scalar(25.0_f32.sin()))
+        );
+    }
+
+    #[test]
+    fn prepared_batches_are_bound_to_one_compute_incarnation_and_revision() {
+        let mut scene = SemanticScene::new();
+        let input = scene.add_input(0.0_f32);
+        let program = scene.compile_reactive().unwrap().into_compute().unwrap();
+        let mut first = program.clone().instantiate();
+        let mut second = program.instantiate();
+        let foreign = first
+            .prepare_input_batch(&[(input, ReactiveValue::Scalar(1.0))])
+            .unwrap();
+        assert_eq!(
+            second.commit_prepared_input_batch(foreign),
+            Err(PreparedComputeCommitError::ForeignState)
+        );
+
+        let current = first
+            .prepare_input_batch(&[(input, ReactiveValue::Scalar(2.0))])
+            .unwrap();
+        let stale = first
+            .prepare_input_batch(&[(input, ReactiveValue::Scalar(3.0))])
+            .unwrap();
+        first.commit_prepared_input_batch(current).unwrap();
+        assert_eq!(
+            first.commit_prepared_input_batch(stale),
+            Err(PreparedComputeCommitError::StaleRevision)
+        );
     }
 
     fn next(state: &mut u64) -> u64 {

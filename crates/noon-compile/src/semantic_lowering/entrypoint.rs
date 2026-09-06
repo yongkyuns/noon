@@ -6,9 +6,9 @@ use noon_core::{
 use crate::CompiledScene;
 
 use super::{
-    lower_semantic_reactive_projection, SemanticCompiledSceneError, SemanticExecutionIndex,
-    SemanticExecutionProjection, SemanticLoweringError, SemanticReactiveLoweringError,
-    SemanticReactiveProjection,
+    lower_semantic_host_callbacks, lower_semantic_reactive_projection, SemanticCompiledSceneError,
+    SemanticExecutionIndex, SemanticExecutionProjection, SemanticHostCallbackPlan,
+    SemanticLoweringError, SemanticReactiveLoweringError, SemanticReactiveProjection,
 };
 
 /// One typed compiler handoff from the authoritative semantic scene into Noon's
@@ -22,6 +22,7 @@ pub struct SemanticExecutionLoweringOutput {
     compiled: CompiledScene,
     reactive: SemanticReactiveProjection,
     compute: ComputeProgram,
+    host_callbacks: SemanticHostCallbackPlan,
     camera_object: Option<ObjectId>,
     publication: PublicationContext,
 }
@@ -37,6 +38,10 @@ impl SemanticExecutionLoweringOutput {
 
     pub fn compute(&self) -> &ComputeProgram {
         &self.compute
+    }
+
+    pub fn host_callbacks(&self) -> &SemanticHostCallbackPlan {
+        &self.host_callbacks
     }
 
     /// Publication context of the exact semantic snapshot from which this handoff
@@ -146,9 +151,10 @@ pub fn lower_semantic_execution(
     store: &SemanticStore,
     index: &mut SemanticExecutionIndex,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
+    let roots = store.scene_roots().collect::<Vec<_>>();
     let mut staged_index = index.clone();
     let projection = staged_index.lower_scene(store)?;
-    finish_semantic_execution(store, index, staged_index, projection)
+    finish_semantic_execution(store, &roots, index, staged_index, projection)
 }
 
 /// Canonical initial lowering scoped to one semantic scene family.
@@ -166,17 +172,19 @@ pub fn lower_semantic_execution_root(
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let mut staged_index = index.clone();
     let projection = staged_index.lower_root(store, root)?;
-    finish_semantic_execution(store, index, staged_index, projection)
+    finish_semantic_execution(store, &[root], index, staged_index, projection)
 }
 
 fn finish_semantic_execution(
     store: &SemanticStore,
+    roots: &[SemanticNodeId],
     index: &mut SemanticExecutionIndex,
     staged_index: SemanticExecutionIndex,
     projection: SemanticExecutionProjection,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection(store, &projection)?;
+    let host_callbacks = lower_semantic_host_callbacks(store, roots);
     let compiled =
         CompiledScene::from_semantic_projection_after_reactive_lowering(&projection, store)?;
     let camera_object = validate_camera_object(camera, &compiled)?;
@@ -204,6 +212,7 @@ fn finish_semantic_execution(
         compiled,
         reactive,
         compute,
+        host_callbacks,
         camera_object,
         publication: PublicationContext::new(
             store.scene_revision(),

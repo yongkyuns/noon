@@ -1,3 +1,5 @@
+import { MAX_PENDING_SEMANTIC_CONTROLS } from "./semantic-engine-endpoint.js";
+
 function normalizedPointer(canvas, event) {
   const rect = canvas.getBoundingClientRect();
   if (!(rect.width > 0) || !(rect.height > 0)) return null;
@@ -38,33 +40,40 @@ function wheelDeltaCssPixels(canvas, event, resolveLinePixels) {
 }
 
 /**
- * Attach browser pointer/keyboard/wheel input to a ReactiveCanvasPlayer.
+ * Attach browser pointer/keyboard/wheel input to one canonical execution host.
  *
- * The collector only forwards semantic source samples/events. It never calls
- * Python and never renders synchronously; the existing render loop presents the
- * resulting native reactive state on its next frame.
+ * The collector owns DOM normalization and listener lifetime only. Source
+ * routing, semantic identity, reactive evaluation, and rendering remain in the
+ * canonical Rust session behind the host methods.
  */
 export function attachNativeInputs(
-  player,
+  host,
   canvas,
-  { keyboardTarget = window, preventWheelDefault = false } = {},
+  {
+    keyboardTarget = window,
+    preventWheelDefault = false,
+    onError = defaultInputError,
+  } = {},
 ) {
-  if (!player || !canvas) throw new TypeError("player and canvas are required");
+  validateHost(host);
+  if (!canvas) throw new TypeError("host and canvas are required");
+  if (typeof onError !== "function") throw new TypeError("onError must be a function");
+  const invoke = (method, ...args) => invokeHost(host, method, args, onError);
 
   const pointerMove = (event) => {
     const point = normalizedPointer(canvas, event);
-    if (point !== null) player.dispatchPointerPosition(point.x, point.y);
+    if (point !== null) invoke("nativePointerPosition", point.x, point.y);
   };
   const pointerDown = (event) => {
     pointerMove(event);
-    player.dispatchPointerButton(event.button, true);
+    invoke("nativePointerButton", event.button, true);
   };
   const pointerUp = (event) => {
     pointerMove(event);
-    player.dispatchPointerButton(event.button, false);
+    invoke("nativePointerButton", event.button, false);
   };
-  const keyDown = (event) => player.dispatchKey(event.code, true);
-  const keyUp = (event) => player.dispatchKey(event.code, false);
+  const keyDown = (event) => invoke("nativeKey", event.code, true);
+  const keyUp = (event) => invoke("nativeKey", event.code, false);
   let cachedLinePixels = null;
   const resolveLinePixels = () => {
     cachedLinePixels ??= wheelLinePixels(canvas);
@@ -73,7 +82,7 @@ export function attachNativeInputs(
   const wheel = (event) => {
     if (preventWheelDefault) event.preventDefault();
     const delta = wheelDeltaCssPixels(canvas, event, resolveLinePixels);
-    player.dispatchWheel(delta.x, delta.y);
+    invoke("nativeWheel", delta.x, delta.y);
   };
 
   canvas.addEventListener("pointermove", pointerMove);
@@ -94,8 +103,15 @@ export function attachNativeInputs(
 }
 
 /** Bind a numeric input/range element to a named native scalar control. */
-export function bindNativeControl(player, element, name) {
-  if (!player || !element) throw new TypeError("player and element are required");
+export function bindNativeControl(
+  player,
+  element,
+  name,
+  { onError = defaultInputError } = {},
+) {
+  validateHost(player);
+  if (!element) throw new TypeError("host and element are required");
+  if (typeof onError !== "function") throw new TypeError("onError must be a function");
   if (typeof name !== "string" || name.trim().length === 0) {
     throw new TypeError("control name must be a non-empty string");
   }
@@ -103,11 +119,11 @@ export function bindNativeControl(player, element, name) {
   const sample = () => {
     const value = Number(element.value);
     if (!Number.isFinite(value)) throw new TypeError("control value must be finite");
-    player.dispatchControl(name, value);
+    invokeHost(player, "nativeControl", [name, value], onError);
   };
   const commit = () => {
     sample();
-    player.dispatchControlCommit(name);
+    invokeHost(player, "nativeControlCommit", [name], onError);
   };
 
   element.addEventListener("input", sample);
@@ -118,4 +134,124 @@ export function bindNativeControl(player, element, name) {
     element.removeEventListener("input", sample);
     element.removeEventListener("change", commit);
   };
+}
+
+/**
+ * Adapt the genuine semantic execution-worker boundary to the DOM host shape.
+ *
+ * Pointer conversion is supplied by the platform integration because canonical
+ * pointer signals carry scene coordinates. Calls are admitted synchronously and
+ * then forwarded immediately; the endpoint's bounded control queue remains the
+ * only ordered queue.
+ */
+export function createExecutionWorkerNativeInputHost(
+  client,
+  { pointerToScene, maxInFlight = MAX_PENDING_SEMANTIC_CONTROLS } = {},
+) {
+  if (
+    typeof client?.setNativeStateInput !== "function" ||
+    typeof client?.emitNativeEvent !== "function"
+  ) {
+    throw new TypeError("worker native input requires a canonical execution client");
+  }
+  if (typeof pointerToScene !== "function") {
+    throw new TypeError("worker native input requires pointerToScene");
+  }
+  if (!Number.isSafeInteger(maxInFlight) || maxInFlight <= 0) {
+    throw new TypeError("maxInFlight must be a positive safe integer");
+  }
+  let inFlight = 0;
+  const submit = (operations) => {
+    if (inFlight + operations.length > maxInFlight) {
+      return Promise.reject(new Error(
+        "native input admission is full; wait for pending commands before retrying",
+      ));
+    }
+    inFlight += operations.length;
+    const results = operations.map((operation) => {
+      try {
+        return Promise.resolve(operation());
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }).map((result) => result.finally(() => {
+      inFlight -= 1;
+    }));
+    return results.length === 1 ? results[0] : Promise.all(results);
+  };
+  const state = (source, value) => () => client.setNativeStateInput(source, value);
+  const event = (source) => () => client.emitNativeEvent(source);
+
+  return Object.freeze({
+    nativePointerPosition(normalizedX, normalizedY) {
+      const point = pointerToScene(normalizedX, normalizedY);
+      if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
+        throw new TypeError("pointerToScene must return finite x and y coordinates");
+      }
+      return submit([state(
+        { kind: "pointer_position" },
+        { kind: "vec2", x: point.x, y: point.y },
+      )]);
+    },
+    nativePointerButton(button, pressed) {
+      return submit([
+        state(
+          { kind: "pointer_button", button },
+          { kind: "bool", value: pressed },
+        ),
+        event({ kind: pressed ? "pointer_down" : "pointer_up", button }),
+      ]);
+    },
+    nativeKey(code, pressed) {
+      return submit([
+        state({ kind: "key", code }, { kind: "bool", value: pressed }),
+        event({ kind: pressed ? "key_press" : "key_release", code }),
+      ]);
+    },
+    nativeWheel(x, y) {
+      return submit([
+        state({ kind: "wheel_delta" }, { kind: "vec2", x, y }),
+        event({ kind: "wheel" }),
+      ]);
+    },
+    nativeControl(name, value) {
+      return submit([state({ kind: "control", name }, { kind: "scalar", value })]);
+    },
+    nativeControlCommit(name) {
+      return submit([event({ kind: "control_commit", name })]);
+    },
+  });
+}
+
+function validateHost(host) {
+  if (!host) throw new TypeError("canonical native input host is required");
+  for (const method of [
+    "nativePointerPosition",
+    "nativePointerButton",
+    "nativeKey",
+    "nativeWheel",
+    "nativeControl",
+    "nativeControlCommit",
+  ]) {
+    if (typeof host[method] !== "function") {
+      throw new TypeError(`canonical native input host requires ${method}`);
+    }
+  }
+}
+
+function invokeHost(host, method, args, onError) {
+  try {
+    const result = host[method](...args);
+    if (result && typeof result.then === "function") {
+      result.catch(onError);
+    }
+  } catch (error) {
+    onError(error);
+  }
+}
+
+function defaultInputError(error) {
+  queueMicrotask(() => {
+    throw error;
+  });
 }

@@ -33,9 +33,21 @@ class FakePort {
 function createRenderer(renderResults) {
   return {
     freed: false,
+    renderCalls: 0,
+    observationRequests: [],
+    observationResult: null,
     applyDeltaJson: () => true,
+    setRendererObservationRequestJson(json) { this.observationRequests.push(json); },
+    takeRendererObservationJson() {
+      const result = this.observationResult;
+      this.observationResult = null;
+      return result;
+    },
     resize() {},
-    render: () => renderResults.shift() ?? true,
+    render() {
+      this.renderCalls += 1;
+      return renderResults.shift() ?? true;
+    },
     rendererBackend: () => "WebGPU",
     gpuGeneration: () => 1,
     time: () => 0,
@@ -148,4 +160,242 @@ test("stop during presentation retry disposes renderer without ready or tick", a
   assert.equal(harness.mainMessages.some((message) => message.type === "mode_switched"), false);
   assert.equal(harness.nextPort.messages.some((message) => message.type === "tick"), false);
   assert.equal(harness.animationFrames.length, 0);
+});
+
+test("retained transport acknowledges an exact publication only after it presents", async () => {
+  const harness = createWorkerHarness([true]);
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  // The stale callback belongs to the retired renderer transition; the current
+  // callback presents the bootstrap snapshot and installs the retained port.
+  harness.animationFrames.shift()(10);
+  harness.animationFrames.shift()(20);
+  await flushTasks();
+
+  vm.runInContext(
+    'consumeDelta("incremental", { session: 11, sequence: 9 });',
+    harness.context,
+  );
+  const acknowledgement = harness.nextPort.messages.find(
+    (message) => message.type === "execution_presented",
+  );
+  assert.equal(acknowledgement.session, 11);
+  assert.equal(acknowledgement.sequence, 9);
+});
+
+test("a stale no-op cannot acknowledge ahead of a pending present", async () => {
+  const harness = createWorkerHarness([true, false, true]);
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  // Retire the old frame callback and leave the current render loop available
+  // to retry the failed incremental present below.
+  harness.animationFrames.shift()(10);
+
+  vm.runInContext(
+    'consumeDelta("first", { session: 12, sequence: 4 });',
+    harness.context,
+  );
+  vm.runInContext(
+    'consumeDelta("stale", { session: 12, sequence: 4 });',
+    harness.context,
+  );
+  assert.equal(
+    harness.nextPort.messages.filter((message) => message.type === "execution_presented").length,
+    0,
+    "a no-op must not acknowledge before the pending frame reaches the surface",
+  );
+
+  harness.animationFrames.shift()(20);
+  await flushTasks();
+  assert.equal(
+    harness.nextPort.messages.filter((message) => message.type === "execution_presented").length,
+    1,
+  );
+  const renderCalls = harness.createdRenderer.renderCalls;
+  harness.createdRenderer.applyDeltaJson = () => false;
+  vm.runInContext(
+    'consumeDelta("already-presented", { session: 12, sequence: 4 });',
+    harness.context,
+  );
+  assert.equal(harness.createdRenderer.renderCalls, renderCalls, "stale duplicate must not redraw");
+  assert.equal(
+    harness.nextPort.messages.filter((message) => message.type === "execution_presented").length,
+    2,
+    "the exact already-presented publication may acknowledge without a redraw",
+  );
+});
+
+async function createManagedWakeHarness(renderResults = [true]) {
+  const harness = createWorkerHarness(renderResults);
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
+  for (const callback of harness.animationFrames.splice(0)) callback(0);
+  let clock = 0;
+  let timerId = 0;
+  const timers = new Map();
+  harness.context.performance = { now: () => clock };
+  harness.context.setTimeout = (callback, delay) => {
+    const id = ++timerId;
+    timers.set(id, { callback, delay });
+    return id;
+  };
+  harness.context.clearTimeout = (id) => timers.delete(id);
+  return { ...harness, timers, setClock(value) { clock = value; } };
+}
+
+test("Rust wake directives admit one animation drive and one deadline without idle polling", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  assert.equal(harness.animationFrames.length, 1);
+  harness.animationFrames.shift()(10);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.animationFrames.length, 0, "next engine response owns the next wake");
+
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:1000});', harness.context);
+  assert.equal(harness.animationFrames.length, 0);
+  assert.equal(harness.timers.size, 1);
+  const [timerId, timer] = [...harness.timers][0];
+  assert.equal(timer.delay, 1000);
+  harness.setClock(1000);
+  harness.timers.delete(timerId);
+  timer.callback();
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 2);
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.animationFrames.length, 0);
+
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.animationFrames.length, 0);
+});
+
+test("idle continuation retries a pending surface publication without advancing the engine", async () => {
+  const harness = await createManagedWakeHarness([true, false, true]);
+  vm.runInContext('consumeDelta("endpoint", {session:12, sequence:4});', harness.context);
+  assert.equal(harness.animationFrames.length, 1, "transient surface failure requests a draw retry");
+  harness.animationFrames.shift()(10);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "execution_presented").length, 1);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
+  assert.equal(harness.animationFrames.length, 0);
+});
+
+test("paused semantic wake presents exact samples without leaving an animation-frame poll", async () => {
+  const harness = await createManagedWakeHarness([true, true]);
+  assert.equal(vm.runInContext("presentedFrames", harness.context), 1);
+  assert.equal(harness.animationFrames.length, 0, "the initial dirty frame settles to idle");
+  assert.equal(harness.nextPort.messages.filter((message) => message.type === "tick").length, 0);
+
+  vm.runInContext(
+    'consumeDelta("exact-paused-sample", {session:14, sequence:3});',
+    harness.context,
+  );
+  assert.equal(vm.runInContext("presentedFrames", harness.context), 2);
+  assert.equal(
+    harness.nextPort.messages.filter((message) => message.type === "execution_presented").at(-1)
+      .sequence,
+    3,
+  );
+  assert.equal(harness.animationFrames.length, 0, "an exact paused sample does not restart RAF");
+  assert.equal(harness.nextPort.messages.filter((message) => message.type === "tick").length, 0);
+
+  vm.runInContext(
+    'handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});',
+    harness.context,
+  );
+  assert.equal(harness.animationFrames.length, 1, "resume cadence schedules one engine drive");
+  harness.animationFrames.shift()(25);
+  assert.equal(harness.nextPort.messages.filter((message) => message.type === "tick").length, 1);
+  assert.equal(
+    harness.animationFrames.length,
+    0,
+    "the engine response must authorize any later animation-frame drive",
+  );
+});
+
+test("replacement cancels an obsolete continuation deadline before it can tick the next engine", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:1000});', harness.context);
+  const timer = [...harness.timers.values()][0];
+  vm.runInContext('detachRenderPort();', harness.context);
+  assert.equal(harness.timers.size, 0);
+  harness.setClock(1000);
+  timer.callback();
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
+});
+
+
+test("reconnecting a non-wake engine restores one frame request on its replacement port", async () => {
+  const harness = await createManagedWakeHarness();
+  const replacement = new FakePort();
+  harness.context.replacementPort = replacement;
+  vm.runInContext(`
+    attachEngine({port:replacementPort, transportMode, requestId:8, mode:MODE_RETAINED});
+    handleRetainedResources({bytes:new Uint8Array([1])});
+    consumeDelta("reconnected", {session:13, sequence:0});
+  `, harness.context);
+  assert.equal(harness.animationFrames.length, 1);
+  harness.animationFrames.shift()(10);
+  assert.equal(replacement.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.animationFrames.length, 1);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
+  for (const callback of harness.animationFrames.splice(0)) callback(20);
+  assert.equal(replacement.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.animationFrames.length, 0);
+});
+
+test("retained renderer forwards one observation only after its matching presentation", async () => {
+  const harness = createWorkerHarness([true, false, true]);
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  harness.animationFrames.shift()(10);
+
+  const publication = { session: 15, sequence: 6 };
+  const request = {
+    schema_version: 1,
+    publication,
+    slot: { slot: 4, generation: 2 },
+    committed: {},
+  };
+  const result = {
+    outcome: "presented",
+    publication,
+    presentation: {
+      presentation_sequence: 2,
+      submit_called: true,
+      present_called: true,
+    },
+  };
+  harness.createdRenderer.observationResult = JSON.stringify(result);
+  harness.context.observationRequest = {
+    type: "renderer_observation_request",
+    ...publication,
+    json: JSON.stringify(request),
+  };
+  harness.context.observationPublication = publication;
+  vm.runInContext(
+    "handleEngineMessage(observationRequest); consumeDelta('observed', observationPublication);",
+    harness.context,
+  );
+
+  assert.deepEqual(
+    harness.createdRenderer.observationRequests.map(JSON.parse),
+    [request],
+  );
+  assert.equal(
+    harness.nextPort.messages.some((message) => message.type === "renderer_observation"),
+    false,
+    "a failed surface attempt cannot acknowledge prepared/uploaded state as presented",
+  );
+  harness.animationFrames.shift()(20);
+  await flushTasks();
+  const messages = harness.nextPort.messages.filter((message) =>
+    message.type === "renderer_observation" || message.type === "execution_presented");
+  assert.deepEqual(
+    messages.map(({ type, session, sequence }) => ({ type, session, sequence })),
+    [
+      { type: "renderer_observation", ...publication },
+      { type: "execution_presented", ...publication },
+    ],
+  );
+  assert.deepEqual(JSON.parse(messages[0].json), result);
 });

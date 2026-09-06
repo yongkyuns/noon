@@ -222,6 +222,148 @@ pub struct PreparedFrame<'a> {
     pub mega_path_index_dirty: bool,
     pub path_geometry_dirty: bool,
     pub stats: RenderStats,
+    slots: &'a [PreparedSlot],
+    complete_submission: bool,
+}
+
+/// Packed geometry state for one exact source-frame row.
+///
+/// This is a disposable renderer observation. It exposes the already-prepared
+/// instance selected by `FramePreparer`'s indexed slot table and never becomes
+/// semantic or runtime state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreparedGeometryObjectObservation {
+    pub object: ObjectId,
+    pub primitive: RenderPrimitive,
+    pub instance_index: usize,
+    /// Exact packed instance span selected for this object.
+    pub instance_start: usize,
+    pub instance_end: usize,
+    pub transform: PackedTransform,
+    pub style: PackedStyle,
+    pub instance_dirty: bool,
+    /// `None` means this frame uses a visibility projection whose target
+    /// membership is not represented by the canonical all-live slot table.
+    pub submission_membership: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparedGeometryObjectOutcome {
+    Absent,
+    Unsupported(ObjectId),
+}
+
+impl PreparedFrame<'_> {
+    /// Observe one prepared row through the existing source-index-to-instance map.
+    ///
+    /// The lookup is O(1). Dirty classification visits only the coalesced dirty
+    /// ranges for that packed primitive.
+    pub fn observe_object(
+        &self,
+        object_index: usize,
+    ) -> Result<PreparedGeometryObjectObservation, PreparedGeometryObjectOutcome> {
+        let slot = self
+            .slots
+            .get(object_index)
+            .copied()
+            .ok_or(PreparedGeometryObjectOutcome::Absent)?;
+        let (object, primitive, instance_index, transform, style, dirty_ranges) = match slot {
+            PreparedSlot::Absent => return Err(PreparedGeometryObjectOutcome::Absent),
+            PreparedSlot::Unsupported(index) => {
+                return Err(PreparedGeometryObjectOutcome::Unsupported(
+                    *self
+                        .unsupported
+                        .get(index)
+                        .ok_or(PreparedGeometryObjectOutcome::Absent)?,
+                ));
+            }
+            PreparedSlot::Circle(index) => {
+                let instance = self
+                    .circles
+                    .get(index)
+                    .copied()
+                    .ok_or(PreparedGeometryObjectOutcome::Absent)?;
+                (
+                    *self
+                        .circle_ids
+                        .get(index)
+                        .ok_or(PreparedGeometryObjectOutcome::Absent)?,
+                    RenderPrimitive::Circle,
+                    index,
+                    instance.transform,
+                    instance.style,
+                    self.circle_dirty_ranges,
+                )
+            }
+            PreparedSlot::Rectangle(index) => {
+                let instance = self
+                    .rectangles
+                    .get(index)
+                    .copied()
+                    .ok_or(PreparedGeometryObjectOutcome::Absent)?;
+                (
+                    *self
+                        .rectangle_ids
+                        .get(index)
+                        .ok_or(PreparedGeometryObjectOutcome::Absent)?,
+                    RenderPrimitive::Rectangle,
+                    index,
+                    instance.transform,
+                    instance.style,
+                    self.rectangle_dirty_ranges,
+                )
+            }
+            PreparedSlot::Line(index) => {
+                let instance = self
+                    .lines
+                    .get(index)
+                    .copied()
+                    .ok_or(PreparedGeometryObjectOutcome::Absent)?;
+                (
+                    *self
+                        .line_ids
+                        .get(index)
+                        .ok_or(PreparedGeometryObjectOutcome::Absent)?,
+                    RenderPrimitive::Line,
+                    index,
+                    instance.transform,
+                    instance.style,
+                    self.line_dirty_ranges,
+                )
+            }
+            PreparedSlot::Path { index, batch, .. } => {
+                let instance = self
+                    .paths
+                    .get(index)
+                    .copied()
+                    .ok_or(PreparedGeometryObjectOutcome::Absent)?;
+                (
+                    *self
+                        .path_ids
+                        .get(index)
+                        .ok_or(PreparedGeometryObjectOutcome::Absent)?,
+                    RenderPrimitive::Path { batch },
+                    index,
+                    instance.transform,
+                    instance.style,
+                    self.path_dirty_ranges,
+                )
+            }
+        };
+        Ok(PreparedGeometryObjectObservation {
+            object,
+            primitive,
+            instance_index,
+            instance_start: instance_index,
+            instance_end: instance_index + 1,
+            transform,
+            style,
+            instance_dirty: dirty_ranges
+                .iter()
+                .any(|range| range.contains(&instance_index)),
+            submission_membership: self.complete_submission.then_some(true),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1367,6 +1509,8 @@ impl FramePreparer {
                 structural_slots_retired,
                 full_rebuilds,
             },
+            slots: &self.slots,
+            complete_submission: true,
         }
     }
 
@@ -2552,6 +2696,55 @@ mod tests {
         assert_eq!(prepared.circles[0].style.stroke_enabled, 3);
         assert_eq!(prepared.circles[0].style.stroke_width, 0.04);
         assert_eq!(std::mem::size_of::<PackedStyle>(), 48);
+    }
+
+    #[test]
+    fn prepared_object_observation_uses_indexed_slot_and_local_dirty_ranges() {
+        let mut frame = frame(vec![
+            object(41, GeometryRef::circle(1.0)),
+            object(
+                42,
+                GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+            ),
+        ]);
+        let mut preparer = FramePreparer::new();
+        let _ = preparer.prepare(&frame);
+
+        frame.objects[1].transform.translation = Vec2::new(2.0, -3.0);
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let unchanged = prepared.observe_object(0).unwrap();
+        let changed = prepared.observe_object(1).unwrap();
+
+        assert_eq!(unchanged.object, ObjectId::new(41));
+        assert_eq!(unchanged.primitive, RenderPrimitive::Circle);
+        assert!(!unchanged.instance_dirty);
+        assert_eq!(changed.object, ObjectId::new(42));
+        assert_eq!(changed.primitive, RenderPrimitive::Line);
+        assert_eq!((changed.instance_start, changed.instance_end), (0, 1));
+        assert_eq!(changed.transform.translation, [2.0, -3.0]);
+        assert!(changed.instance_dirty);
+        assert_eq!(changed.submission_membership, Some(true));
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+    }
+
+    #[test]
+    fn visibility_projection_does_not_claim_full_submission_membership() {
+        let frame = frame(vec![
+            object(51, GeometryRef::circle(1.0)),
+            object(52, GeometryRef::rectangle(1.0, 1.0)),
+        ]);
+        let mut preparer = FramePreparer::new();
+        let _ = preparer.prepare(&frame);
+
+        let prepared = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::default(), &[1])
+            .unwrap();
+
+        assert_eq!(
+            prepared.observe_object(1).unwrap().submission_membership,
+            None
+        );
     }
 
     #[test]

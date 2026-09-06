@@ -34,3 +34,6 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Event", "EventTarget", "HtmlCanvasElement", "OffscreenCanvas", "Performance", "Window"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "webgpu", "webgl"], optional = true }
+
+[dev-dependencies]
+noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["ci-noop"] }

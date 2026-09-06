@@ -42,10 +42,31 @@ impl BrowserExecutionWakePlan {
     /// boundary. A pure `wait()` can therefore request a timer without manufacturing
     /// a no-op runtime track or giving the browser its own timeline model.
     pub fn from_segment(session: &ExecutionSession, segment: ExecutionSegment) -> Self {
+        let wake = session.wake_state();
         Self::from_parts(
-            session.wake_state().frame_pending(),
+            wake.frame_pending(),
             session.segment_state(segment).timeline(),
         )
+    }
+
+    /// Derive wake mechanics while a host still owes completion for its current segment.
+    ///
+    /// A zero-length wait is already at its endpoint, so its ordinary timeline state is
+    /// quiescent even though the continuation must drive once to reconcile completion.
+    /// Keep [`Self::from_segment`] stable for completed-handle observations and add the
+    /// immediate deadline only at the live host's explicit pending-segment boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn from_pending_segment(
+        session: &ExecutionSession,
+        segment: ExecutionSegment,
+    ) -> Self {
+        let state = session.segment_state(segment);
+        let timeline = if matches!(state.timeline(), TimelineWakeState::Quiescent) {
+            TimelineWakeState::Deadline(session.frame().time)
+        } else {
+            state.timeline()
+        };
+        Self::from_parts(session.wake_state().frame_pending(), timeline)
     }
 
     /// Project one target-neutral runtime wake observation into browser primitives.
@@ -149,6 +170,23 @@ pub struct BrowserExecutionWakeClock {
 }
 
 impl BrowserExecutionWakeClock {
+    /// Start the next wall-time interval at an already-published authored time.
+    ///
+    /// Required host callback execution may take arbitrary wall time while the
+    /// runtime is pinned at its barrier. Reanchoring after that phase commits
+    /// prevents host latency from advancing authored time. Both values use the
+    /// same units as directive: milliseconds and seconds respectively.
+    pub fn reanchor(&mut self, wall_time_ms: f64, scene_time: f64) -> Option<()> {
+        if !wall_time_ms.is_finite() || !scene_time.is_finite() {
+            return None;
+        }
+        self.anchor = Some(BrowserRealtimeAnchor {
+            wall_origin_ms: wall_time_ms,
+            scene_origin: scene_time,
+        });
+        Some(())
+    }
+
     /// Realize one target-neutral wake plan against a browser monotonic timestamp.
     ///
     /// `wall_time_ms` is expected to share the `performance.now()` / RAF timestamp
@@ -304,6 +342,24 @@ mod tests {
     }
 
     #[test]
+    fn pending_zero_wait_requests_one_immediate_host_drive() {
+        let mut store = SemanticStore::new();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.take_frame_changes();
+        let segment = session.wait_segment(0.0).unwrap();
+
+        assert!(BrowserExecutionWakePlan::from_segment(&session, segment).is_idle());
+        assert_eq!(
+            BrowserExecutionWakePlan::from_pending_segment(&session, segment).cadence(),
+            BrowserExecutionCadence::TimerAtSceneTime(0.0)
+        );
+
+        session.advance_segment_to(segment, 0.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert!(BrowserExecutionWakePlan::from_segment(&session, segment).is_idle());
+    }
+
+    #[test]
     fn browser_realtime_clock_does_not_charge_quiescent_wall_time_to_later_work() {
         let mut clock = BrowserExecutionWakeClock::default();
         let idle = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Quiescent);
@@ -331,6 +387,18 @@ mod tests {
             BrowserHostWake::TimerAfterMilliseconds(2_000.0)
         );
         assert_eq!(clock.scene_time_at(62_000.0), Some(1.0));
+    }
+
+    #[test]
+    fn browser_realtime_clock_reanchors_after_opaque_host_work() {
+        let mut clock = BrowserExecutionWakeClock::default();
+        let active = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Continuous);
+        clock.directive(active, 1_000.0, 0.0).unwrap();
+        assert_eq!(clock.scene_time_at(1_500.0), Some(0.5));
+
+        clock.reanchor(9_000.0, 0.5).unwrap();
+        assert_eq!(clock.scene_time_at(9_000.0), Some(0.5));
+        assert_eq!(clock.scene_time_at(9_016.0), Some(0.516));
     }
 
     #[test]

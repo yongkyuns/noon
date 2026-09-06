@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use noon_compile::{CompileError, CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
-    ComputeProgram, ComputeState, ObjectId, Property, PublicationContext, ReactiveBinding,
-    ReactiveError, ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene,
-    SignalId,
+    ComputeProgram, ComputeState, ObjectId, PreparedComputeInputBatch, Property,
+    PublicationContext, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveProgram,
+    ReactiveValue, SemanticScene, SignalId,
 };
 
-use crate::{FrameState, SceneInstance};
+use crate::{frame_row_mut, FrameRowMut, FrameState, SceneInstance};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneBuildError {
@@ -66,6 +66,22 @@ pub(crate) struct ReactiveRuntime {
     targets_by_object: Vec<Vec<usize>>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedReactiveRuntimeUpdate {
+    compute: PreparedComputeInputBatch,
+    property_changes: Vec<(usize, Property, ReactiveValue)>,
+    stats: ReactiveRuntimeStats,
+}
+
+impl PreparedReactiveRuntimeUpdate {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.compute.is_empty()
+    }
+    pub(crate) fn property_changes(&self) -> &[(usize, Property, ReactiveValue)] {
+        &self.property_changes
+    }
+}
+
 impl ReactiveRuntime {
     fn new(
         compiled: &CompiledScene,
@@ -107,13 +123,48 @@ impl ReactiveRuntime {
         self.targets[index]
     }
 
+    pub(crate) fn prepare_input_batch(
+        &mut self,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<PreparedReactiveRuntimeUpdate, ReactiveError> {
+        let compute = self.state.prepare_input_batch(inputs)?;
+        let mut property_changes = Vec::new();
+        let mut stats = ReactiveRuntimeStats::default();
+        let update = compute.update();
+        let evaluation = update.stats();
+        stats.derived_signals_evaluated = evaluation.derived_signals_evaluated;
+        stats.bindings_invalidated = evaluation.bindings_invalidated;
+        for change in update.property_changes() {
+            let target = self.target(change.object, change.property);
+            property_changes.push((target.object_index, target.property, change.value.clone()));
+        }
+        stats.dense_targets_applied = property_changes.len();
+        Ok(PreparedReactiveRuntimeUpdate {
+            compute,
+            property_changes,
+            stats,
+        })
+    }
+
+    pub(crate) fn commit_prepared_input_batch(
+        &mut self,
+        prepared: PreparedReactiveRuntimeUpdate,
+    ) -> ReactiveRuntimeStats {
+        self.state
+            .commit_prepared_input_batch(prepared.compute)
+            .expect("runtime commits a prepared batch only after its owning frame preflight");
+        prepared.stats
+    }
+
     fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
-        const PROPERTIES: [Property; 9] = [
+        const PROPERTIES: [Property; 11] = [
             Property::Presence,
             Property::Transform,
             Property::Position,
             Property::Rotation,
             Property::Scale,
+            Property::Fill,
+            Property::Stroke,
             Property::Opacity,
             Property::Appearance,
             Property::Reveal,
@@ -235,6 +286,38 @@ impl SceneInstance {
         self.reactive.as_ref()?.state.value(signal)
     }
 
+    /// Deterministically seek, evaluating a canonical signal-timeline input batch
+    /// before reactive bindings are reapplied to the rebuilt frame.
+    pub fn seek_with_reactive_inputs(
+        &mut self,
+        time: f64,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<&FrameState, crate::EvaluationError> {
+        if !time.is_finite() {
+            return Err(crate::EvaluationError::InvalidTime(time));
+        }
+        let previous_time = self.frame.time;
+        let prepared = self
+            .reactive
+            .as_mut()
+            .ok_or_else(|| {
+                crate::EvaluationError::Reactive(ReactiveError::UnknownSignal(inputs[0].0))
+            })?
+            .prepare_input_batch(inputs)
+            .map_err(crate::EvaluationError::Reactive)?;
+        let stats = self
+            .reactive
+            .as_mut()
+            .expect("prepared reactive inputs retain their runtime")
+            .commit_prepared_input_batch(prepared);
+        self.seek_unchecked(time);
+        self.last_reactive_stats = stats;
+        if self.frame.time != previous_time || stats.bindings_invalidated != 0 {
+            self.publish_effective_change();
+        }
+        Ok(&self.frame)
+    }
+
     /// Change one native input and apply only its invalidated bindings to the
     /// already-compiled dense frame state.
     pub fn set_reactive_input(
@@ -335,6 +418,26 @@ impl SceneInstance {
             apply_reactive_value(frame, target.object_index, target.property, value);
         }
     }
+
+    pub(crate) fn reapply_reactive_to_row(&self, object_index: usize, mut row: FrameRowMut<'_>) {
+        if !self.object_slot_is_live(object_index) {
+            return;
+        }
+        let Some(reactive) = self.reactive.as_ref() else {
+            return;
+        };
+        let Some(target_indices) = reactive.targets_by_object.get(object_index) else {
+            return;
+        };
+        for target_index in target_indices {
+            let target = reactive.targets[*target_index];
+            let value = reactive
+                .state
+                .value(target.signal)
+                .expect("lowered reactive target references a valid signal");
+            apply_reactive_value_to_row(&mut row, target.property, value);
+        }
+    }
 }
 
 fn runtime_stats(
@@ -361,10 +464,12 @@ const fn property_slot(property: Property) -> u8 {
         Property::Position => 2,
         Property::Rotation => 3,
         Property::Scale => 4,
-        Property::Opacity => 5,
-        Property::Appearance => 6,
-        Property::Reveal => 7,
-        Property::Morph => 8,
+        Property::Fill => 5,
+        Property::Stroke => 6,
+        Property::Opacity => 7,
+        Property::Appearance => 8,
+        Property::Reveal => 9,
+        Property::Morph => 10,
     }
 }
 
@@ -374,60 +479,75 @@ fn apply_reactive_value(
     property: Property,
     value: &ReactiveValue,
 ) -> bool {
+    apply_reactive_value_to_row(&mut frame_row_mut(frame, object_index), property, value)
+}
+
+pub(crate) fn apply_reactive_value_to_row(
+    row: &mut FrameRowMut<'_>,
+    property: Property,
+    value: &ReactiveValue,
+) -> bool {
     match (property, value) {
         (Property::Presence, ReactiveValue::Bool(value)) => {
-            let changed = frame.presences[object_index] != *value;
-            frame.presences[object_index] = *value;
+            let changed = *row.presence != *value;
+            *row.presence = *value;
             changed
         }
         (Property::Position, ReactiveValue::Vec2(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.translation != *value;
-            object.transform.translation = *value;
+            let render_changed = crate::release_render_transform(
+                row.render_geometry,
+                row.render_transform,
+                *row.transform,
+            );
+            let changed = row.transform.translation != *value;
+            row.transform.translation = *value;
             changed || render_changed
         }
         (Property::Rotation, ReactiveValue::Scalar(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.rotation != *value;
-            object.transform.rotation = *value;
+            let render_changed = crate::release_render_transform(
+                row.render_geometry,
+                row.render_transform,
+                *row.transform,
+            );
+            let changed = row.transform.rotation != *value;
+            row.transform.rotation = *value;
             changed || render_changed
         }
         (Property::Scale, ReactiveValue::Vec2(value)) => {
-            let render_changed = frame.release_render_transform(object_index);
-            let object = &mut frame.objects[object_index];
-            let changed = object.transform.scale != *value;
-            object.transform.scale = *value;
+            let render_changed = crate::release_render_transform(
+                row.render_geometry,
+                row.render_transform,
+                *row.transform,
+            );
+            let changed = row.transform.scale != *value;
+            row.transform.scale = *value;
             changed || render_changed
         }
         (Property::Opacity, ReactiveValue::Scalar(value)) => {
-            let object = &mut frame.objects[object_index];
-            let changed = object.style.opacity != *value;
-            object.style.opacity = *value;
+            let changed = row.style.opacity != *value;
+            row.style.opacity = *value;
             changed
         }
         (Property::Appearance, ReactiveValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let object = &mut frame.objects[object_index];
-            let changed = object.appearance != value;
-            object.appearance = value;
+            let changed = *row.appearance != value;
+            *row.appearance = value;
             changed
         }
         (Property::Reveal, ReactiveValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let changed = frame.reveals[object_index] != value;
-            frame.reveals[object_index] = value;
+            let changed = *row.reveal != value;
+            *row.reveal = value;
             changed
         }
         (Property::Morph, ReactiveValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let changed = frame.morphs[object_index] != value;
-            frame.morphs[object_index] = value;
+            let changed = *row.morph != value;
+            *row.morph = value;
             changed
         }
-        (Property::Transform, _) => {
-            unreachable!("reactive values cannot drive object-snapshot Transform properties")
+        (Property::Transform | Property::Fill | Property::Stroke, _) => {
+            unreachable!("reactive values cannot drive object-snapshot or paint-color properties")
         }
         _ => unreachable!("validated reactive binding value type must match its property"),
     }

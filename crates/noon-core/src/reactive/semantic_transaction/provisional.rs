@@ -67,12 +67,19 @@ pub enum SemanticPendingNodeKind {
     Object,
     Family,
     AuthoringNode,
+    Animation,
+}
+
+#[derive(Clone, Copy)]
+enum PendingSemanticNode<'a> {
+    Creation(&'a SemanticNodeCreation),
+    Animation(&'a SemanticTransactionAnimation),
 }
 
 pub(super) struct TransactionNodeCatalog<'a> {
     transaction_id: u32,
     store: &'a SemanticStore,
-    pending: HashMap<SemanticLocalNodeToken, &'a SemanticNodeCreation>,
+    pending: HashMap<SemanticLocalNodeToken, PendingSemanticNode<'a>>,
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
@@ -84,7 +91,12 @@ impl<'a> TransactionNodeCatalog<'a> {
             .mutations
             .iter()
             .filter_map(|mutation| match mutation {
-                SemanticMutation::AddNode { token, creation } => Some((*token, creation)),
+                SemanticMutation::AddNode { token, creation } => {
+                    Some((*token, PendingSemanticNode::Creation(creation)))
+                }
+                SemanticMutation::AddAnimation { token, animation } => {
+                    Some((*token, PendingSemanticNode::Animation(animation)))
+                }
                 _ => None,
             })
             .collect();
@@ -120,7 +132,22 @@ impl<'a> TransactionNodeCatalog<'a> {
     pub(super) fn cloned_creations(&self) -> HashMap<SemanticLocalNodeToken, SemanticNodeCreation> {
         self.pending
             .iter()
-            .map(|(token, creation)| (*token, (*creation).clone()))
+            .filter_map(|(token, pending)| match pending {
+                PendingSemanticNode::Creation(creation) => Some((*token, (*creation).clone())),
+                PendingSemanticNode::Animation(_) => None,
+            })
+            .collect()
+    }
+
+    pub(super) fn cloned_animations(
+        &self,
+    ) -> HashMap<SemanticLocalNodeToken, SemanticTransactionAnimation> {
+        self.pending
+            .iter()
+            .filter_map(|(token, pending)| match pending {
+                PendingSemanticNode::Animation(animation) => Some((*token, (*animation).clone())),
+                PendingSemanticNode::Creation(_) => None,
+            })
             .collect()
     }
 
@@ -146,7 +173,10 @@ impl<'a> TransactionNodeCatalog<'a> {
             }
             SemanticTransactionNodeRef::Pending(token) => {
                 self.validate_pending(node, index)?;
-                if !matches!(self.pending[&token], SemanticNodeCreation::Family { .. }) {
+                if !matches!(
+                    self.pending[&token],
+                    PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. })
+                ) {
                     return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
                         index,
                         token,
@@ -181,9 +211,89 @@ impl<'a> TransactionNodeCatalog<'a> {
                     });
                 }
             }
-            SemanticTransactionNodeRef::Pending(_) => self.validate_pending(node, index)?,
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_pending(node, index)?;
+                if !matches!(
+                    self.pending[&token],
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Object { .. } | SemanticNodeCreation::Family { .. }
+                    )
+                ) {
+                    return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
+                        index,
+                        token,
+                        expected: SemanticPendingNodeKind::AuthoringNode,
+                    });
+                }
+            }
         }
         Ok(())
+    }
+
+    pub(super) fn ensure_animation(
+        &self,
+        node: SemanticTransactionNodeRef,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => {
+                let Some(existing) = self.store.node(node) else {
+                    return Err(SemanticMutationTransactionError::UnknownAnimation {
+                        index,
+                        animation: node,
+                    });
+                };
+                if !matches!(existing.kind(), SemanticNodeKind::Animation(_)) {
+                    return Err(SemanticMutationTransactionError::NotAnimation {
+                        index,
+                        animation: node,
+                    });
+                }
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_pending(node, index)?;
+                if !matches!(self.pending[&token], PendingSemanticNode::Animation(_)) {
+                    return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
+                        index,
+                        token,
+                        expected: SemanticPendingNodeKind::Animation,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn ensure_animation_target(
+        &self,
+        node: SemanticTransactionNodeRef,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .semantic_object_state_checked(node)
+                .map(|_| ())
+                .map_err(|error| SemanticMutationTransactionError::AnimationTarget {
+                    index,
+                    error,
+                }),
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_pending(node, index)?;
+                if matches!(
+                    self.pending[&token],
+                    PendingSemanticNode::Creation(SemanticNodeCreation::Object { .. })
+                ) {
+                    Ok(())
+                } else {
+                    Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
+                        index,
+                        token,
+                        expected: SemanticPendingNodeKind::Object,
+                    })
+                }
+            }
+        }
     }
 
     pub(super) fn members(
@@ -217,6 +327,20 @@ impl<'a> TransactionNodeCatalog<'a> {
         }
     }
 
+    pub(super) fn updater_registrations(
+        &self,
+        target: SemanticTransactionNodeRef,
+    ) -> Vec<SemanticUpdaterRegistration> {
+        match target {
+            SemanticTransactionNodeRef::Existing(target) => self
+                .store
+                .node(target)
+                .map(|node| node.host_updaters().to_vec())
+                .unwrap_or_default(),
+            SemanticTransactionNodeRef::Pending(_) => Vec::new(),
+        }
+    }
+
     pub(super) fn staged_object_state<'b>(
         &self,
         staged: &'b mut HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
@@ -232,8 +356,11 @@ impl<'a> TransactionNodeCatalog<'a> {
                     .map_err(|error| SemanticMutationTransactionError::Object { index, error })?
                     .clone(),
                 SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
-                    SemanticNodeCreation::Object { state, .. } => (**state).clone(),
-                    SemanticNodeCreation::Family { .. } => {
+                    PendingSemanticNode::Creation(SemanticNodeCreation::Object {
+                        state, ..
+                    }) => (**state).clone(),
+                    PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. })
+                    | PendingSemanticNode::Animation(_) => {
                         return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
                             index,
                             token,

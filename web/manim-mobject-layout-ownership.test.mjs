@@ -26,7 +26,7 @@ test("detached Mobject layout queries stay owned by the shared semantic handle",
   assert.match(layoutCenter, /handle\.centerY/);
 
   const getCenter = functionBody(semanticHandlesSource, "_get_center", "_width");
-  assert.match(getCenter, /_handle_for\(self\) is not None/);
+  assert.match(getCenter, /_handle_for\(self\)/);
   assert.match(getCenter, /return _layout_center\(self\)/);
 
   const width = functionBody(semanticHandlesSource, "_width", "_height");

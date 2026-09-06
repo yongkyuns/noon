@@ -127,6 +127,7 @@ fn position_track(id: u64, object: u32, start_time: f64, duration: f64) -> Compi
         },
         time_map: CompositionTimeMap::default(),
         transform_geometry_plan: None,
+        reconciled: false,
     }
 }
 

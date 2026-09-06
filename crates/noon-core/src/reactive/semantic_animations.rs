@@ -12,6 +12,13 @@ pub enum SemanticAnimationCompositionKind {
     Sequence,
 }
 
+/// Direction of one canonical single-leaf fade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticFadeDirection {
+    In,
+    Out,
+}
+
 /// One authored animation operation before execution scheduling/lowering.
 ///
 /// Targets and composition children are semantic identities. Execution tracks,
@@ -25,6 +32,12 @@ pub enum SemanticAnimationIntent {
     TransformTo {
         target: SemanticNodeId,
         target_state: SemanticNodeId,
+    },
+    /// Fade one semantic leaf through the shared runtime appearance channel.
+    /// Membership entry/exit is applied atomically by live activation/completion.
+    Fade {
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
     },
     /// Compose existing semantic animation declarations in stable authored order.
     ///
@@ -40,7 +53,7 @@ pub enum SemanticAnimationIntent {
 impl SemanticAnimationIntent {
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
-            Self::TransformTo { target, .. } => Some(*target),
+            Self::TransformTo { target, .. } | Self::Fade { target, .. } => Some(*target),
             Self::Composition { .. } => None,
         }
     }
@@ -48,20 +61,20 @@ impl SemanticAnimationIntent {
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target_state, .. } => Some(*target_state),
-            Self::Composition { .. } => None,
+            Self::Fade { .. } | Self::Composition { .. } => None,
         }
     }
 
     pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
         match self {
-            Self::TransformTo { .. } => None,
+            Self::TransformTo { .. } | Self::Fade { .. } => None,
             Self::Composition { kind, .. } => Some(*kind),
         }
     }
 
     pub fn children(&self) -> &[SemanticNodeId] {
         match self {
-            Self::TransformTo { .. } => &[],
+            Self::TransformTo { .. } | Self::Fade { .. } => &[],
             Self::Composition { children, .. } => children,
         }
     }
@@ -194,6 +207,24 @@ impl SemanticStore {
                     target,
                     target_state,
                 },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one single-leaf fade declaration into the scene-global semantic arena.
+    pub fn insert_semantic_fade_animation(
+        &mut self,
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Fade { target, direction },
                 options,
             )),
         )

@@ -28,10 +28,7 @@ pub mod prelude {
         Transform,
     };
     pub use crate::legacy::*;
-    pub use crate::{
-        ExecutionSession, ReactiveScene, ReactiveTimelineScene, RetainedScene, ValueTracker,
-        VectorSignal,
-    };
+    pub use crate::{ExecutionSession, RetainedScene};
     pub use noon_core::{
         Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, RateFunction, Style, Vec2,
         VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E,

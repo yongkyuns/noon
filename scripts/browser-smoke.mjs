@@ -267,6 +267,299 @@ async function directExecutionProof(page, expectedBackend) {
     true,
     "direct Rust/WASM renderer prepared a static frame without a publication",
   );
+  assert.equal(
+    direct.metrics.affineCallbacks?.backend,
+    expectedBackend,
+    "direct Rust/WASM callbacks did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.affineCallbacks?.authoredTime,
+    2,
+    "direct Rust/WASM callbacks did not reach the exact authored endpoint",
+  );
+  assert.equal(
+    direct.metrics.affineCallbacks?.objectCount,
+    3,
+    "direct Rust/WASM callback scene did not retain its Text and two geometry objects",
+  );
+  assert.ok(
+    direct.metrics.affineCallbacks?.sourceLuma >= 180,
+    "direct Rust/WASM ordered callbacks did not render the transformed translucent source",
+  );
+  assert.ok(
+    direct.metrics.affineCallbacks?.driftLuma >= 600,
+    "direct Rust/WASM dt callback did not render the accumulated drift object",
+  );
+  assert.ok(
+    direct.metrics.affineCallbacks?.driftLuma >=
+      direct.metrics.affineCallbacks?.sourceLuma + 120,
+    "direct Rust/WASM ordered opacity callback did not affect the source",
+  );
+  assert.ok(
+    direct.metrics.affineCallbacks?.bootstrapVacatedLuma <= 60,
+    "direct Rust/WASM time-zero callback did not publish before the first renderer frame",
+  );
+  assert.equal(
+    direct.metrics.affineCompletion?.backend,
+    expectedBackend,
+    "direct Rust/WASM completion did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.affineCompletion?.authoredTime,
+    4.25,
+    "direct Rust/WASM completion did not preserve the typed authored sequence",
+  );
+  assert.equal(
+    direct.metrics.affineCompletion?.objectCount,
+    1,
+    "direct Rust/WASM completion scene did not retain its Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.affineCompletion?.endpointLuma >= 150,
+    "direct Rust/WASM completion did not render the x=5 endpoint",
+  );
+  assert.ok(
+    direct.metrics.affineCompletion?.priorSetterLuma <= 60,
+    "direct Rust/WASM completion remained at the intervening x=3 setter",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffinePlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary affine play did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffinePlay?.authoredTime,
+    4,
+    "direct Rust/WASM ordinary affine play did not preserve the shared session time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffinePlay?.objectCount,
+    1,
+    "direct Rust/WASM ordinary affine scene did not retain its Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffinePlay?.endpointLuma >= 250,
+    "direct Rust/WASM ordinary affine play did not render the x=5 endpoint",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffinePlay?.firstEndpointLuma <= 60 &&
+      direct.metrics.ordinaryAffinePlay?.shiftedLuma <= 60,
+    "direct Rust/WASM ordinary affine play retained an earlier barrier position",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffineContinuation?.backend,
+    expectedBackend,
+    "direct Rust/WASM continuation did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffineContinuation?.authoredTime,
+    4,
+    "direct Rust/WASM continuation did not retain its shared authored time",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffineContinuation?.firstMidpointLuma >= 180 &&
+      direct.metrics.ordinaryAffineContinuation?.secondMidpointLuma >= 180 &&
+      direct.metrics.ordinaryAffineContinuation?.finalLuma >= 180,
+    "direct Rust/WASM continuation did not visibly render both midpoints and final endpoint",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffineContinuation?.noSyntheticWaitDraw &&
+      direct.metrics.ordinaryAffineContinuation?.waitDelayMs >= 999 &&
+      direct.metrics.ordinaryAffineContinuation?.waitDelayMs <= 1001 &&
+      direct.metrics.ordinaryAffineContinuation?.finalCadence === "idle",
+    "direct Rust/WASM continuation did not preserve its wait deadline and final resume lifecycle",
+  );
+  assert.equal(
+    direct.metrics.ordinaryFadePlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary fade did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryFadePlay?.authoredTime,
+    2.25,
+    "direct Rust/WASM ordinary fade did not preserve its shared authored time",
+  );
+  assert.ok(
+    direct.metrics.ordinaryFadePlay?.detachedLuma <= 30 &&
+      direct.metrics.ordinaryFadePlay?.fadeInMidpointLuma >= 100 &&
+      direct.metrics.ordinaryFadePlay?.fadeInEndpointLuma >= 300 &&
+      direct.metrics.ordinaryFadePlay?.fadeOutMidpointLuma >= 100 &&
+      direct.metrics.ordinaryFadePlay?.absentLuma <= 30,
+    "direct Rust/WASM ordinary fade did not render both fade midpoints and its absent endpoint",
+  );
+  assert.ok(
+    direct.metrics.ordinaryFadePlay?.absentObjectCount === 0 &&
+      direct.metrics.ordinaryFadePlay?.readdedObjectCount === 1 &&
+      direct.metrics.ordinaryFadePlay?.readdedColor.blue >= 200 &&
+      direct.metrics.ordinaryFadePlay?.noSyntheticDetachedDraw &&
+      direct.metrics.ordinaryFadePlay?.waitDelayMs >= 249 &&
+      direct.metrics.ordinaryFadePlay?.waitDelayMs <= 251 &&
+      direct.metrics.ordinaryFadePlay?.finalCadence === "idle",
+    "direct Rust/WASM ordinary fade did not preserve detached wait and same-handle re-entry",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffineCallbackContinuation?.backend,
+    expectedBackend,
+    "direct Rust/WASM callback continuation did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffineCallbackContinuation?.authoredTime,
+    1,
+    "direct Rust/WASM callback continuation did not reach its exact endpoint",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffineCallbackContinuation?.midpointColor.blue >= 70 &&
+      direct.metrics.ordinaryAffineCallbackContinuation?.endpointColor.blue >= 70 &&
+      direct.metrics.ordinaryAffineCallbackContinuation?.midpointVacatedLuma <= 60 &&
+      direct.metrics.ordinaryAffineCallbackContinuation?.endpointVacatedLuma <= 60,
+    "direct Rust/WASM callback continuation did not render its ordered midpoint and endpoint",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCompositionPlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary composition did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCompositionPlay?.authoredTime,
+    4,
+    "direct Rust/WASM ordinary composition did not preserve its shared root time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCompositionPlay?.objectCount,
+    2,
+    "direct Rust/WASM ordinary composition did not retain both Rust-authored objects",
+  );
+  assert.ok(
+    direct.metrics.ordinaryCompositionPlay?.leftColor.green >= 180 &&
+      direct.metrics.ordinaryCompositionPlay?.rightColor.blue >= 180 &&
+      direct.metrics.ordinaryCompositionPlay?.oldLeftLuma <= 60 &&
+      direct.metrics.ordinaryCompositionPlay?.oldRightLuma <= 60,
+    "direct Rust/WASM ordinary composition did not render its released Parallel/Sequence endpoint",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCompositionContinuation?.backend,
+    expectedBackend,
+    "direct Rust/WASM composition continuation did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCompositionContinuation?.authoredTime,
+    4,
+    "direct Rust/WASM composition continuation did not retain its shared authored time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCompositionContinuation?.objectCount,
+    2,
+    "direct Rust/WASM composition continuation did not retain both Rust-authored objects",
+  );
+  assert.ok(
+    direct.metrics.ordinaryCompositionContinuation?.leftSequence.red >= 120 &&
+      direct.metrics.ordinaryCompositionContinuation?.rightSequence.red >= 120 &&
+      direct.metrics.ordinaryCompositionContinuation?.leftFinal.green >=
+        direct.metrics.ordinaryCompositionContinuation?.leftFinal.red + 40 &&
+      direct.metrics.ordinaryCompositionContinuation?.rightFinal.blue >=
+        direct.metrics.ordinaryCompositionContinuation?.rightFinal.red + 40 &&
+      direct.metrics.ordinaryCompositionContinuation?.finalCadence === "idle",
+    "direct Rust/WASM composition continuation did not render its sequence and post-completion edit",
+  );
+  assert.equal(
+    direct.metrics.ordinaryStylePlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary style play did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryStylePlay?.authoredTime,
+    2,
+    "direct Rust/WASM ordinary style play did not preserve the shared session time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryStylePlay?.objectCount,
+    1,
+    "direct Rust/WASM ordinary style scene did not retain its Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.ordinaryStylePlay?.endpointColor.green >= 180 &&
+      direct.metrics.ordinaryStylePlay?.endpointColor.green >=
+        direct.metrics.ordinaryStylePlay?.endpointColor.red + 100 &&
+      direct.metrics.ordinaryStylePlay?.endpointColor.green >=
+        direct.metrics.ordinaryStylePlay?.endpointColor.blue + 100,
+    "direct Rust/WASM ordinary style play did not render its post-completion green edit",
+  );
+  assert.equal(
+    direct.metrics.ordinaryPaintPlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary paint play did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryPaintPlay?.authoredTime,
+    2.4,
+    "direct Rust/WASM ordinary paint play did not preserve the shared session time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryPaintPlay?.objectCount,
+    1,
+    "direct Rust/WASM ordinary paint scene did not retain its Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.ordinaryPaintPlay?.endpointColor.red >= 180 &&
+      direct.metrics.ordinaryPaintPlay?.endpointColor.green >= 180 &&
+      direct.metrics.ordinaryPaintPlay?.endpointColor.blue <= 100,
+    "direct Rust/WASM ordinary paint play did not render its post-completion yellow edit",
+  );
+  assert.equal(
+    direct.metrics.ordinaryValueTrackerContinuation?.backend,
+    expectedBackend,
+    "direct Rust/WASM scalar continuation did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryValueTrackerContinuation?.authoredTime,
+    4,
+    "direct Rust/WASM scalar continuation did not preserve its shared session time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryValueTrackerContinuation?.objectCount,
+    1,
+    "direct Rust/WASM scalar continuation did not retain its bound object",
+  );
+  for (const [label, color] of Object.entries({
+    firstMidpoint: direct.metrics.ordinaryValueTrackerContinuation?.firstMidpoint,
+    persistentHold: direct.metrics.ordinaryValueTrackerContinuation?.persistentHold,
+    secondMidpoint: direct.metrics.ordinaryValueTrackerContinuation?.secondMidpoint,
+    endpoint: direct.metrics.ordinaryValueTrackerContinuation?.endpoint,
+  })) {
+    assert.ok(
+      color?.red >= 180 && color?.green >= 180 && color?.blue >= 180,
+      `direct Rust/WASM scalar continuation did not render its ${label} state`,
+    );
+  }
+  assert.equal(
+    direct.metrics.nativeSignals?.backend,
+    expectedBackend,
+    "direct Rust/WASM native signals did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.nativeSignals?.objectCount,
+    1,
+    "direct Rust/WASM native signals did not reveal the Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.nativeSignals?.hiddenLuma <= 60 &&
+      direct.metrics.nativeSignals?.visibleLuma >= 200,
+    "direct Rust/WASM key state did not drive presence",
+  );
+  assert.ok(
+    direct.metrics.nativeSignals?.vacatedLuma <= 60 &&
+      direct.metrics.nativeSignals?.movedLuma >= 200,
+    "direct Rust/WASM pointer state did not drive translation",
+  );
+  assert.ok(
+    direct.metrics.nativeSignals?.dimmedLuma < direct.metrics.nativeSignals?.movedLuma * 0.7,
+    "direct Rust/WASM scalar control did not drive opacity",
+  );
+  assert.ok(
+    direct.metrics.nativeSignals?.firstClickLuma >= 60 &&
+      direct.metrics.nativeSignals?.secondClickLuma <= 60,
+    "direct Rust/WASM ordered pointer events did not drive rotation",
+  );
   return direct.metrics;
 }
 

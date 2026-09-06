@@ -1,5 +1,6 @@
 use noon_core::{
-    MutationImpact, ObjectContentRef, ObjectId, Rect, Style, TrackDefinition, TrackId, Transform2D,
+    MutationImpact, ObjectContentRef, ObjectId, Property, Rect, Style, TrackDefinition, TrackId,
+    Transform2D,
 };
 
 use crate::CompiledObject;
@@ -28,6 +29,13 @@ pub enum ExecutionPatch {
     AddTrack(TrackDefinition),
     ReplaceTrack(TrackDefinition),
     RemoveTrack(TrackId),
+    /// Release one completed timeline driver while retaining its deterministic history.
+    ReconcileTrack {
+        track: TrackId,
+        object: ObjectId,
+        property: Property,
+        end_time: f64,
+    },
 }
 
 impl ExecutionPatch {
@@ -36,9 +44,10 @@ impl ExecutionPatch {
             Self::SetContent { .. } | Self::SetTransform { .. } | Self::SetStyle { .. } => {
                 MutationImpact::Property
             }
-            Self::AddTrack(_) | Self::ReplaceTrack(_) | Self::RemoveTrack(_) => {
-                MutationImpact::Timeline
-            }
+            Self::AddTrack(_)
+            | Self::ReplaceTrack(_)
+            | Self::RemoveTrack(_)
+            | Self::ReconcileTrack { .. } => MutationImpact::Timeline,
             Self::CreateObject(_) | Self::RemoveObject(_) => MutationImpact::Structure,
         }
     }

@@ -34,12 +34,18 @@ let requestQueue = Promise.resolve();
 let engineHostPort = null;
 const semanticContexts = new Map();
 let nextSemanticContext = 0;
+let nextContinuationGeneration = 1;
+let activeAuthoringRun = null;
 
 pyodidePromise
   .then(() => post("ready"))
   .catch((error) => postError(null, error));
 
 self.addEventListener("message", (event) => {
+  if (isContinuationControl(event.data)) {
+    void handleContinuationControl(event.data);
+    return;
+  }
   requestQueue = requestQueue.then(() => handleRequest(event.data));
 });
 
@@ -64,6 +70,8 @@ async function initializePyodide() {
   self.noonCreateCanonicalAuthoringSceneContext = () =>
     authoringStore.createSceneContext();
   self.noonRegisterSemanticExecution = (context) => {
+    const continuation = activeAuthoringRun?.continuation;
+    if (continuation?.context === context) return continuation.contextId;
     // Registration is the authoring-run publication boundary. It retains a
     // returned runtime for renderer recovery, but invalidates one only when
     // direct authored work changed since that runtime was published.
@@ -71,6 +79,41 @@ async function initializePyodide() {
     const token = `semantic-${nextSemanticContext++}`;
     semanticContexts.set(token, { context, endpoints: new Set(), released: false });
     return token;
+  };
+  self.noonAwaitSemanticContinuation = (context) => awaitSemanticContinuation(context);
+  self.noonSetSemanticContinuationCallbackSession = (context, sessionId) => {
+    if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
+      throw new TypeError("semantic continuation callback session must be a non-negative safe integer");
+    }
+    if (activeAuthoringRun === null) {
+      throw new Error("semantic continuation callback session requires an active Python authoring run");
+    }
+    const existing = activeAuthoringRun.continuationCallbackSession;
+    if (existing !== null && (existing.context !== context || existing.sessionId !== sessionId)) {
+      throw new Error("semantic continuation callback session changed during authoring");
+    }
+    if (activeAuthoringRun.continuation !== null && activeAuthoringRun.continuation.context !== context) {
+      throw new Error("semantic continuation callback session belongs to another context");
+    }
+    activeAuthoringRun.continuationCallbackSession = { context, sessionId };
+  };
+  self.noonCompleteSemanticContinuationCallback = (context, tokenJson, patchBatchJson) =>
+    completeContinuationCallback(context, tokenJson, patchBatchJson);
+  self.noonFailSemanticContinuationCallback = (context, tokenJson, message) =>
+    failContinuationCallback(context, tokenJson, message);
+  self.noonSemanticContinuationGeneration = (context) => {
+    const continuation = activeAuthoringRun?.continuation;
+    return continuation?.context === context ? continuation.generation : undefined;
+  };
+  self.noonRequireSemanticContinuationActive = (context) => {
+    if (activeAuthoringRun === null) {
+      throw new Error("semantic continuation is not active for this Python source run");
+    }
+    const continuation = activeAuthoringRun.continuation;
+    if (continuation !== null &&
+        (continuation.context !== context || continuation.terminal)) {
+      throw new Error("semantic continuation is not active for this Python source run");
+    }
   };
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
@@ -316,6 +359,221 @@ function validatePresenceTransitionPlain(...args) {
   return lifecycleResultPlain(validatePresenceTransition(...args));
 }
 
+function registerContinuationContext(context) {
+  if (activeAuthoringRun === null) {
+    throw new Error("semantic continuation requires an active Python authoring run");
+  }
+  if (activeAuthoringRun.continuation !== null) {
+    if (activeAuthoringRun.continuation.context !== context) {
+      throw new Error("one Python authoring run cannot suspend multiple semantic contexts");
+    }
+    return activeAuthoringRun.continuation;
+  }
+  context.prepareExecutionRun();
+  const callbackSession = activeAuthoringRun.continuationCallbackSession;
+  if (callbackSession !== null && callbackSession.context !== context) {
+    throw new Error("semantic continuation callback session belongs to another context");
+  }
+  const contextId = `semantic-${nextSemanticContext++}`;
+  const generation = nextContinuationGeneration++;
+  const entry = {
+    context,
+    endpoints: new Set(),
+    released: false,
+    ...(callbackSession === null ? {} : { callbackSessionId: callbackSession.sessionId }),
+  };
+  const continuation = {
+    context,
+    contextId,
+    generation,
+    runRequestId: activeAuthoringRun.requestId,
+    endpoint: null,
+    pending: null,
+    callbackRequest: null,
+    terminal: false,
+  };
+  semanticContexts.set(contextId, entry);
+  activeAuthoringRun.continuation = continuation;
+  post("semantic_continuation_registered", {
+    requestId: activeAuthoringRun.requestId,
+    generation,
+    semanticExecution: {
+      context_id: contextId,
+      continuation_generation: generation,
+      ...(callbackSession === null ? {} : { callback_session_id: callbackSession.sessionId }),
+    },
+    duration: Number(context.liveHandoffDuration()),
+  });
+  return continuation;
+}
+
+function awaitSemanticContinuation(context) {
+  let continuation;
+  try {
+    continuation = registerContinuationContext(context);
+    if (continuation.terminal) {
+      throw new Error("semantic continuation is terminal");
+    }
+    if (continuation.pending !== null) {
+      throw new Error("semantic continuation already has a pending await");
+    }
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  const result = new Promise((resolve, reject) => {
+    continuation.pending = { resolve, reject };
+  });
+  if (continuation.endpoint !== null) {
+    try {
+      continuation.endpoint.startContinuation(continuation.generation);
+    } catch (error) {
+      failContinuation(continuation, error);
+    }
+  }
+  return result;
+}
+
+function continuationEvent(kind, value = {}) {
+  return JSON.stringify({ kind, ...value });
+}
+
+function requestContinuationCallback(continuation, phase) {
+  if (continuation.terminal || continuation.pending === null) {
+    return Promise.reject(new Error("required callback reached a continuation without a suspended source"));
+  }
+  if (continuation.callbackRequest !== null) {
+    return Promise.reject(new Error("semantic continuation already has a required callback request"));
+  }
+  let phaseTokenJson;
+  try {
+    phaseTokenJson = JSON.stringify(phase?.token);
+  } catch (error) {
+    return Promise.reject(new Error(`canonical callback phase token is not serializable: ${error}`));
+  }
+  if (phaseTokenJson === undefined) {
+    return Promise.reject(new Error("canonical callback phase is missing its token"));
+  }
+  return new Promise((resolve, reject) => {
+    continuation.callbackRequest = { phaseTokenJson, resolve, reject };
+    const pending = continuation.pending;
+    continuation.pending = null;
+    pending.resolve(continuationEvent("callback", { phase }));
+  });
+}
+
+function continuationCallbackRequest(context, tokenJson) {
+  const continuation = activeAuthoringRun?.continuation;
+  if (!continuation || continuation.context !== context || continuation.terminal ||
+      continuation.callbackRequest === null) {
+    throw new Error("semantic continuation has no pending required callback");
+  }
+  if (typeof tokenJson !== "string" || tokenJson !== continuation.callbackRequest.phaseTokenJson) {
+    throw new Error("semantic continuation callback token is stale");
+  }
+  return continuation;
+}
+
+function awaitContinuationEvent(continuation) {
+  if (continuation.terminal) {
+    return Promise.reject(new Error("semantic continuation is terminal"));
+  }
+  if (continuation.pending !== null) {
+    return Promise.reject(new Error("semantic continuation already has a pending await"));
+  }
+  return new Promise((resolve, reject) => {
+    continuation.pending = { resolve, reject };
+  });
+}
+
+function completeContinuationCallback(context, tokenJson, patchBatchJson) {
+  if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
+    throw new TypeError("semantic continuation callback result must be non-empty JSON");
+  }
+  const continuation = continuationCallbackRequest(context, tokenJson);
+  const callback = continuation.callbackRequest;
+  const next = awaitContinuationEvent(continuation);
+  continuation.callbackRequest = null;
+  callback.resolve(patchBatchJson);
+  return next;
+}
+
+function failContinuationCallback(context, tokenJson, message) {
+  if (typeof message !== "string" || message.trim() === "") {
+    throw new TypeError("semantic continuation callback failure requires a message");
+  }
+  const continuation = continuationCallbackRequest(context, tokenJson);
+  const callback = continuation.callbackRequest;
+  const next = awaitContinuationEvent(continuation);
+  continuation.callbackRequest = null;
+  callback.reject(new Error(message));
+  return next;
+}
+
+function completeContinuation(continuation, generation) {
+  if (continuation.terminal || generation !== continuation.generation ||
+      continuation.pending === null || continuation.callbackRequest !== null) {
+    throw new Error("stale semantic continuation completion");
+  }
+  const { resolve } = continuation.pending;
+  continuation.pending = null;
+  resolve(continuationEvent("complete"));
+}
+
+function failContinuation(continuation, error) {
+  if (continuation.terminal) return;
+  continuation.terminal = true;
+  if (continuation.callbackRequest !== null) {
+    const { reject } = continuation.callbackRequest;
+    continuation.callbackRequest = null;
+    reject(error instanceof Error ? error : new Error(String(error)));
+  }
+  if (continuation.pending !== null) {
+    const { reject } = continuation.pending;
+    continuation.pending = null;
+    reject(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+function isContinuationControl(request) {
+  return isRecord(request) && request.channel === AUTHORING_CHANNEL &&
+    (request.type === "cancel_semantic_continuation" ||
+      (request.type === "attach_semantic_execution" &&
+       request.continuationGeneration !== undefined));
+}
+
+async function handleContinuationControl(request) {
+  let requestId = null;
+  try {
+    validateRequest(request);
+    requestId = request.requestId;
+    const pyodide = await pyodidePromise;
+    if (request.type === "attach_semantic_execution") {
+      await attachSemanticExecutionRequest(request, true, pyodide);
+      post("semantic_execution_attached", { requestId });
+      return;
+    }
+    const entry = semanticContexts.get(request.contextId);
+    const continuation = activeAuthoringRun?.continuation;
+    if (!entry || continuation === null || continuation === undefined ||
+        continuation.contextId !== request.contextId ||
+        continuation.generation !== request.continuationGeneration ||
+        continuation.runRequestId !== request.continuationRunRequestId ||
+        activeAuthoringRun.requestId !== request.continuationRunRequestId) {
+      throw new Error("stale semantic continuation cancellation");
+    }
+    failContinuation(continuation, new Error(request.reason));
+    entry.released = true;
+    continuation.endpoint?.stop();
+    post("semantic_continuation_cancelled", { requestId });
+  } catch (error) {
+    if (request?.type === "attach_semantic_execution") {
+      request.controlPort?.close?.();
+      request.renderPort?.close?.();
+    }
+    postError(requestId, error);
+  }
+}
+
 async function handleRequest(request) {
   let requestId = null;
   try {
@@ -323,24 +581,34 @@ async function handleRequest(request) {
     requestId = request.requestId;
     const pyodide = await pyodidePromise;
     if (request.type === "run") {
-      const resultJson = await runAuthoringSource(
-        pyodide,
-        request.source,
-        request.context,
-        request.exportDocument ?? false,
-      );
-      post("result", { requestId, resultJson });
+      const run = { requestId, continuation: null, continuationCallbackSession: null };
+      activeAuthoringRun = run;
+      let completed = false;
+      try {
+        const resultJson = await runAuthoringSource(
+          pyodide,
+          request.source,
+          request.context,
+          request.exportDocument ?? false,
+        );
+        if (run.continuation !== null) {
+          await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
+        }
+        post("result", { requestId, resultJson });
+        completed = true;
+      } finally {
+        if (!completed && run.continuation !== null) {
+          const entry = semanticContexts.get(run.continuation.contextId);
+          if (entry) entry.released = true;
+          failContinuation(run.continuation, new Error("Python authoring continuation failed"));
+          run.continuation.endpoint?.stop();
+        }
+        if (activeAuthoringRun === run) activeAuthoringRun = null;
+      }
       return;
     }
     if (request.type === "attach_semantic_execution") {
-      const entry = semanticContexts.get(request.contextId);
-      if (!entry || entry.released) throw new Error("unknown or retired semantic execution context");
-      let endpoint;
-      endpoint = attachSemanticEngine(entry.context, request, () => {
-        entry.endpoints.delete(endpoint);
-        retireSemanticContext(request.contextId, entry);
-      });
-      entry.endpoints.add(endpoint);
+      await attachSemanticExecutionRequest(request, false, pyodide);
       post("semantic_execution_attached", { requestId });
       return;
     }
@@ -383,9 +651,68 @@ async function handleRequest(request) {
   }
 }
 
+async function attachSemanticExecutionRequest(request, continuationOnly, pyodide) {
+  const entry = semanticContexts.get(request.contextId);
+  if (!entry || entry.released) throw new Error("unknown or retired semantic execution context");
+  const continuation = activeAuthoringRun?.continuation;
+  if (continuationOnly) {
+    if (!continuation || continuation.contextId !== request.contextId ||
+        continuation.generation !== request.continuationGeneration ||
+        continuation.runRequestId !== request.continuationRunRequestId ||
+        activeAuthoringRun?.requestId !== request.continuationRunRequestId ||
+        continuation.terminal) {
+      throw new Error("stale semantic continuation attachment");
+    }
+    if (continuation.endpoint !== null) {
+      throw new Error("semantic continuation endpoint is already attached");
+    }
+  }
+  if (request.callbackSessionId !== null && request.callbackSessionId !== undefined) {
+    if (entry.callbackSessionId !== undefined && entry.callbackSessionId !== request.callbackSessionId) {
+      throw new Error("semantic callback session does not belong to this execution context");
+    }
+    entry.callbackSessionId = request.callbackSessionId;
+    entry.releaseCallbackSession = () =>
+      releaseCanonicalCallbackSession(pyodide, request.callbackSessionId);
+  }
+  const runRequiredCallbackPhase = entry.callbackSessionId === undefined
+    ? null
+    : continuationOnly
+    ? (frame) => requestContinuationCallback(continuation, frame)
+    : (frame) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame);
+  let endpoint;
+  endpoint = await attachSemanticEngine(
+    entry.context,
+    request,
+    () => {
+      entry.endpoints.delete(endpoint);
+      if (continuationOnly && continuation !== undefined) {
+        failContinuation(continuation, new Error("semantic continuation endpoint stopped"));
+      }
+      retireSemanticContext(request.contextId, entry);
+    },
+    runRequiredCallbackPhase,
+    continuationOnly ? {
+      generation: continuation.generation,
+      onComplete: (generation) => completeContinuation(continuation, generation),
+      onError: (_generation, error) => {
+        entry.released = true;
+        failContinuation(continuation, error);
+      },
+    } : null,
+  );
+  entry.endpoints.add(endpoint);
+  if (continuationOnly) continuation.endpoint = endpoint;
+}
+
 function retireSemanticContext(token, entry) {
   if (entry.released && entry.endpoints.size === 0) {
     semanticContexts.delete(token);
+    // Cancellation may retire the endpoint while its Python stack is still
+    // unwinding. Release through the existing interpreter queue after that run.
+    requestQueue = requestQueue
+      .then(() => entry.releaseCallbackSession?.())
+      .catch((error) => postError(null, error));
     // Python may still retain this same wrapper on a reusable Scene. Dropping
     // our registry reference lets wasm-bindgen finalize it after all owners leave.
   }
@@ -419,6 +746,11 @@ async function runAuthoringSource(pyodide, source, context, exportDocument = fal
       `
 import json
 import _manim_updaters
+from _manim_canonical_scene import (
+    execute_construct,
+    execution_context,
+    materialize_legacy_geometry,
+)
 from noon import PatchBatch, Scene
 
 __noon_namespace = {
@@ -449,29 +781,36 @@ else:
             f"select one explicitly via result = SceneClass(): {__noon_names}"
         )
     __noon_result = __noon_scene_classes[0]()
-    __noon_result.setup()
-    try:
-        __noon_result.construct()
-    finally:
-        __noon_result.tear_down()
+    await execute_construct(
+        __noon_result, export_document=bool(__noon_export_document)
+    )
 
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
-    import _manim_canonical_scene
-    from js import noonRegisterSemanticExecution
-    __noon_callbacks = _manim_updaters.register_scene(__noon_result)
+    from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
     __noon_context = (None if __noon_export_document else
-        _manim_canonical_scene.execution_context(__noon_result, __noon_callbacks))
+        execution_context(__noon_result))
     __noon_semantic = None
     __noon_live_duration = None
+    __noon_authored_duration = None
     if __noon_context is not None:
         __noon_live_duration = __noon_context.liveHandoffDuration()
-        __noon_semantic = {"context_id": str(noonRegisterSemanticExecution(__noon_context))}
+        __noon_authored_duration = __noon_context.authoredDuration()
+        __noon_callback_session = _manim_updaters.canonical_callback_session_id(__noon_result)
+        __noon_semantic = {
+            "context_id": str(noonRegisterSemanticExecution(__noon_context)),
+            "callback_session_id": __noon_callback_session,
+        }
+        __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
+        if __noon_continuation_generation is not None:
+            __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
+        __noon_callbacks = None
         __noon_scene_spec = None
         __noon_document = None
         __noon_retained = None
         __noon_identities = None
     else:
+        __noon_callbacks = _manim_updaters.register_scene(__noon_result)
         if __noon_callbacks and getattr(__noon_result, "_semantic_text_handles", {}):
             raise RuntimeError(
                 "native Text with Python callbacks is not supported by the retained "
@@ -481,7 +820,7 @@ if isinstance(__noon_result, Scene):
         # temporary #959 codec is derived from the Rust store at finalization.
         # Geometry-only fallback retains the existing legacy materialization.
         if not getattr(__noon_result, "_semantic_text_handles", {}):
-            _manim_canonical_scene.materialize_legacy_geometry(__noon_result)
+            materialize_legacy_geometry(__noon_result)
         __noon_scene_spec = __noon_result.to_scene_spec()
         __noon_document = __noon_result.to_document()
         # The canonical document already includes every text object. The old
@@ -492,6 +831,8 @@ if isinstance(__noon_result, Scene):
     __noon_duration = (
         float(__noon_live_duration)
         if __noon_live_duration is not None
+        else float(__noon_authored_duration)
+        if __noon_authored_duration is not None
         else float(__noon_result.time)
     )
 elif isinstance(__noon_result, PatchBatch):
@@ -553,6 +894,47 @@ _manim_updaters.run_callback_phase(
   }
 }
 
+async function runCanonicalCallbackPhase(pyodide, sessionId, frame) {
+  const dictConstructor = pyodide.globals.get("dict");
+  const globals = dictConstructor();
+  dictConstructor.destroy();
+  globals.set("__noon_callback_session", sessionId);
+  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
+  try {
+    return await pyodide.runPythonAsync(
+      `
+import json
+import _manim_updaters
+_manim_updaters.run_canonical_callback_phase(
+    int(__noon_callback_session),
+    json.loads(__noon_callback_frame_json),
+)
+`,
+      { globals },
+    );
+  } finally {
+    globals.destroy();
+  }
+}
+
+async function releaseCanonicalCallbackSession(pyodide, sessionId) {
+  const dictConstructor = pyodide.globals.get("dict");
+  const globals = dictConstructor();
+  dictConstructor.destroy();
+  globals.set("__noon_callback_session", sessionId);
+  try {
+    await pyodide.runPythonAsync(
+      `
+import _manim_updaters
+_manim_updaters.release_session(int(__noon_callback_session))
+`,
+      { globals },
+    );
+  } finally {
+    globals.destroy();
+  }
+}
+
 function validateRequest(request) {
   if (!isRecord(request) || request.channel !== AUTHORING_CHANNEL) {
     throw new Error("Received a message from an unknown authoring channel");
@@ -598,6 +980,37 @@ function validateRequest(request) {
     if (typeof request.contextId !== "string" || !request.contextId ||
         !(request.controlPort instanceof MessagePort) || !(request.renderPort instanceof MessagePort)) {
       throw new Error("semantic attachment requires a context and two ports");
+    }
+    if (request.callbackSessionId !== null && request.callbackSessionId !== undefined &&
+        (!Number.isSafeInteger(request.callbackSessionId) || request.callbackSessionId < 0)) {
+      throw new Error("semantic attachment has an invalid callback session ID");
+    }
+    if (request.continuationGeneration !== undefined &&
+        (!Number.isSafeInteger(request.continuationGeneration) ||
+         request.continuationGeneration <= 0)) {
+      throw new Error("semantic attachment has an invalid continuation generation");
+    }
+    if (typeof request.initiallyPaused !== "boolean") {
+      throw new Error("semantic attachment has an invalid initially-paused state");
+    }
+    if (request.initiallyPaused && request.continuationGeneration !== undefined) {
+      throw new Error("source-owned semantic continuations cannot start paused");
+    }
+    if (request.continuationGeneration !== undefined &&
+        (!Number.isSafeInteger(request.continuationRunRequestId) ||
+         request.continuationRunRequestId < 0)) {
+      throw new Error("semantic attachment has an invalid continuation run request ID");
+    }
+    return;
+  }
+  if (request.type === "cancel_semantic_continuation") {
+    if (typeof request.contextId !== "string" || !request.contextId ||
+        !Number.isSafeInteger(request.continuationGeneration) ||
+        request.continuationGeneration <= 0 ||
+        !Number.isSafeInteger(request.continuationRunRequestId) ||
+        request.continuationRunRequestId < 0 || typeof request.reason !== "string" ||
+        request.reason.trim() === "") {
+      throw new Error("invalid semantic continuation cancellation");
     }
     return;
   }

@@ -365,19 +365,32 @@ enum Coverage {
 
 pub fn frame_object_conservative_bounds(frame: &FrameState, object_index: usize) -> Option<Rect> {
     let object = frame.objects.get(object_index)?;
-    let render_transform = frame.render_transform(object_index);
-    let mut world = match frame.render_geometry(object_index) {
+    effective_object_conservative_bounds(
+        frame.render_geometry(object_index),
+        object.text_bounds,
+        frame.render_transform(object_index),
+        object.style,
+    )
+}
+
+pub(crate) fn effective_object_conservative_bounds(
+    geometry: Option<&GeometryRef>,
+    text_bounds: Option<Rect>,
+    render_transform: noon_core::Transform2D,
+    style: noon_core::Style,
+) -> Option<Rect> {
+    let mut world = match geometry {
         Some(GeometryRef::Circle { radius }) => circle_world_bounds(*radius, render_transform),
         Some(geometry) => transform_rect(geometry_local_bounds(geometry)?, render_transform),
-        None => transform_rect(object.text_bounds?, render_transform),
+        None => transform_rect(text_bounds?, render_transform),
     };
-    if object.style.stroke.is_some() && object.style.stroke_width.is_finite() {
+    if style.stroke.is_some() && style.stroke_width.is_finite() {
         let scale = render_transform
             .scale
             .x
             .abs()
             .max(render_transform.scale.y.abs());
-        let expansion = object.style.stroke_width.abs() * scale * 0.5;
+        let expansion = style.stroke_width.abs() * scale * 0.5;
         world.min.x -= expansion;
         world.min.y -= expansion;
         world.max.x += expansion;

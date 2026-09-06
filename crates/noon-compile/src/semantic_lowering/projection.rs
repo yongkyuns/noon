@@ -86,10 +86,12 @@ impl SemanticExecutionIndex {
                     self.object_ids.remove(&node);
                 }
                 SemanticMutationImpact::SignalValue { .. }
+                | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
                 | SemanticMutationImpact::Subscription { .. }
+                | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::FamilyMemberAdded { .. }
                 | SemanticMutationImpact::FamilyMemberRemoved { .. }
                 | SemanticMutationImpact::FamilyMemberReordered { .. }
@@ -389,7 +391,7 @@ impl std::fmt::Display for SemanticExecutionValueError {
 impl std::error::Error for SemanticExecutionValueError {}
 
 impl SemanticExecutionValueError {
-    fn with_node(self, node: SemanticNodeId) -> SemanticLoweringError {
+    pub(super) fn with_node(self, node: SemanticNodeId) -> SemanticLoweringError {
         match self {
             Self::NonFiniteValue { field } => SemanticLoweringError::NonFiniteValue { node, field },
             Self::ValueOutOfRange { field } => {

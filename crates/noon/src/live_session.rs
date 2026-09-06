@@ -3,16 +3,24 @@
 //! This facade owns neither semantic nor runtime state.  It only coordinates a
 //! transaction with the session that already lowered the same semantic store.
 //! Membership and property publication use the same prepared semantic transaction.
-//! Existing affine declarations use session-local segments; persistent completion
-//! reconciliation remains a separate contract.
+//! Existing affine declarations use session-local segments, whose endpoint
+//! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 use crate::{
-    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentError,
-    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
-    ExecutionSessionPublicationError, Mobject,
+    semantic_mobject::authoring_render_f64,
+    semantic_mobject::{
+        edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
+        edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
+        edit_stroke_opacity,
+    },
+    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
+    ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
+    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
+    ValueTracker,
 };
 use noon_core::{
-    PublicationContext, SemanticMutationTransaction, SemanticMutationTransactionResult,
+    AnimationOptions, Bounds2D64, PublicationContext, SemanticAnimationCompositionKind,
+    SemanticFadeDirection, SemanticMutationTransaction, SemanticMutationTransactionResult,
     SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSignalValue,
     SemanticStore, SemanticStyle, Style, Transform2D,
 };
@@ -30,6 +38,43 @@ pub struct EffectiveMobjectState {
     pub publication: PublicationContext,
 }
 
+/// One object's exact layout observation at a coherent runtime publication.
+///
+/// These bounds retain authored layout semantics and therefore exclude the
+/// renderer's conservative stroke expansion used for visibility indexing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectiveMobjectLayout {
+    pub center: (f64, f64),
+    pub width: f64,
+    pub height: f64,
+    pub publication: PublicationContext,
+}
+
+/// One borrowed TransformTo leaf in an atomic live composition request.
+///
+/// This value contains no schedule or runtime state. The shared Rust compiler resolves all child
+/// intervals and captures effective properties when the request is consumed.
+#[derive(Clone, Copy)]
+pub struct TransformToRequest<'a> {
+    source: &'a Mobject,
+    target_state: &'a Mobject,
+    options: AnimationOptions,
+}
+
+impl<'a> TransformToRequest<'a> {
+    pub const fn new(
+        source: &'a Mobject,
+        target_state: &'a Mobject,
+        options: AnimationOptions,
+    ) -> Self {
+        Self {
+            source,
+            target_state,
+            options,
+        }
+    }
+}
+
 /// Errors while a semantic handle is used through a live execution session.
 #[derive(Debug)]
 pub enum LiveSessionError {
@@ -38,6 +83,8 @@ pub enum LiveSessionError {
     Animation(String),
     Activation(ExecutionSessionAnimationError),
     Segment(ExecutionSegmentError),
+    Advance(ExecutionSegmentAdvanceError),
+    Completion(ExecutionSegmentCompletionError),
     Publication(ExecutionSessionPublicationError),
 }
 
@@ -51,6 +98,8 @@ impl std::fmt::Display for LiveSessionError {
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
+            Self::Advance(error) => error.fmt(formatter),
+            Self::Completion(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
         }
     }
@@ -73,6 +122,18 @@ impl From<ExecutionSessionAnimationError> for LiveSessionError {
 impl From<ExecutionSegmentError> for LiveSessionError {
     fn from(value: ExecutionSegmentError) -> Self {
         Self::Segment(value)
+    }
+}
+
+impl From<ExecutionSegmentAdvanceError> for LiveSessionError {
+    fn from(value: ExecutionSegmentAdvanceError) -> Self {
+        Self::Advance(value)
+    }
+}
+
+impl From<ExecutionSegmentCompletionError> for LiveSessionError {
+    fn from(value: ExecutionSegmentCompletionError) -> Self {
+        Self::Completion(value)
     }
 }
 
@@ -138,6 +199,15 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Check whether a handle is currently a direct member of this live scene root.
+    pub fn contains(&self, mobject: &Mobject) -> Result<bool, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        self.store
+            .borrow()
+            .is_direct_member(self.root, mobject.node_id())
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))
+    }
+
     /// Replace one live object's content with content already authored in this store.
     /// Transform, style, semantic identity, and family membership stay unchanged.
     pub fn replace_content(
@@ -159,6 +229,23 @@ impl<'a> LiveSession<'a> {
         mobject.state().map_err(LiveSessionError::Mobject)
     }
 
+    /// Create a detached, session-coherent target copy for subsequent live authoring.
+    ///
+    /// Detached target edits advance the same semantic/runtime publication context but produce
+    /// no execution object or frame work. This keeps later atomic animation declaration valid
+    /// without resetting or relowering the active runtime.
+    pub fn target_editor(&mut self, source: &Mobject) -> Result<Mobject, LiveSessionError> {
+        self.require_mobject(source)?;
+        let state = source.state().map_err(LiveSessionError::Mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        let result = self.apply(transaction)?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one prepared target copy has one exact semantic impact")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+    }
+
     /// Read the current effective runtime value at the session's publication.
     pub fn effective(&self, mobject: &Mobject) -> Result<EffectiveMobjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
@@ -166,6 +253,7 @@ impl<'a> LiveSession<'a> {
         let EffectiveSemanticObject {
             object,
             publication,
+            ..
         } = self
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
@@ -177,14 +265,66 @@ impl<'a> LiveSession<'a> {
         })
     }
 
+    /// Read exact layout values from authored content at the current effective
+    /// transform. Work and resource lookup are bounded to this object.
+    pub fn effective_layout(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let store = self.store.borrow();
+        let observed = self
+            .session
+            .effective_semantic_object(&store, mobject.node_id())?;
+        if !observed.authored_content_layout_applicable() {
+            return Err(LiveSessionError::Mobject(
+                "effective layout queries currently support affine and style drivers only".into(),
+            ));
+        }
+        let transform = observed.object.transform;
+        let publication = observed.publication;
+        drop(store);
+        let bounds = mobject
+            .layout_bounds_at(transform)
+            .map_err(LiveSessionError::Mobject)?;
+        let (center, width, height) = if let Some(Bounds2D64 {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }) = bounds
+        {
+            (
+                ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5),
+                max_x - min_x,
+                max_y - min_y,
+            )
+        } else {
+            (
+                (
+                    f64::from(transform.translation.x),
+                    f64::from(transform.translation.y),
+                ),
+                0.0,
+                0.0,
+            )
+        };
+        Ok(EffectiveMobjectLayout {
+            center,
+            width,
+            height,
+            publication,
+        })
+    }
+
     /// Activate one predeclared animation in this session.
     ///
     /// This performs no semantic declaration or target creation: the supplied
     /// handle is replayable authored state, while activation atomically adds
     /// execution-local tracks and captures the current effective affine source.
     /// The returned segment can be driven with [`Self::advance_segment_to`] and
-    /// observed with [`Self::segment_state`]. Completion exposes its effective
-    /// endpoint but does not yet reconcile it into persistent authored state.
+    /// observed with [`Self::segment_state`]. Call [`Self::complete_segment`]
+    /// at its coherent endpoint before sequential authoring resumes.
     pub fn play_animation(
         &mut self,
         animation: &DeclaredAnimation,
@@ -199,6 +339,124 @@ impl<'a> LiveSession<'a> {
             .options();
         self.session
             .activate_animation_segment(&store, animation.node_id(), options)
+            .map_err(Into::into)
+    }
+
+    /// Atomically author and activate one supported transform/style transition after bootstrap.
+    ///
+    /// The declaration and execution tracks publish together through the canonical semantic
+    /// transaction and runtime. The returned segment uses the existing advance/completion
+    /// lifecycle and this facade retains no animation target or scheduler state.
+    pub fn declare_and_activate_transform_to(
+        &mut self,
+        source: &Mobject,
+        target: &Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(source)?;
+        self.require_mobject(target)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_transform_to(
+                &mut store,
+                source.node_id(),
+                target.node_id(),
+                options,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Atomically append and activate one scalar tracker interval at the current
+    /// session time. The returned segment uses the same completion barrier as
+    /// object-property animation tracks.
+    pub fn declare_and_activate_value_tracker(
+        &mut self,
+        tracker: &ValueTracker,
+        target: f64,
+        duration: f64,
+        rate_func: noon_core::RateFunction,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        tracker
+            .require_store(self.store)
+            .map_err(LiveSessionError::Animation)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_value_tracker(
+                &mut store,
+                tracker.node_id(),
+                target,
+                duration,
+                rate_func,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Persist one tracker value at the current live authored time after its
+    /// active segment has completed and released timeline ownership.
+    pub fn set_value(
+        &mut self,
+        tracker: &ValueTracker,
+        value: f64,
+    ) -> Result<(), LiveSessionError> {
+        tracker
+            .require_store(self.store)
+            .map_err(LiveSessionError::Animation)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .set_scalar_signal_value(&mut store, tracker.node_id(), value)
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    /// Atomically author and activate one canonical single-leaf FadeIn or FadeOut.
+    pub fn declare_and_activate_fade(
+        &mut self,
+        target: &Mobject,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(target)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_fade(&mut store, self.root, target.node_id(), direction, options)
+            .map_err(Into::into)
+    }
+
+    /// Atomically author and activate one flat Parallel or Sequence of TransformTo leaves.
+    ///
+    /// All handles are checked before the semantic transaction is built. Rust snapshots the target
+    /// states into that transaction, then completes schedule lowering, effective capture, and
+    /// runtime preflight before any target, leaf, or root receives permanent identity.
+    pub fn declare_and_activate_transform_composition(
+        &mut self,
+        kind: SemanticAnimationCompositionKind,
+        children: &[TransformToRequest<'_>],
+        composition_options: AnimationOptions,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        for child in children {
+            self.require_mobject(child.source)?;
+            self.require_mobject(child.target_state)?;
+        }
+        let children = children
+            .iter()
+            .map(|child| {
+                (
+                    child.source.node_id(),
+                    child.target_state.node_id(),
+                    child.options,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_transform_composition(
+                &mut store,
+                kind,
+                &children,
+                composition_options,
+                play_options,
+            )
             .map_err(Into::into)
     }
 
@@ -221,7 +479,21 @@ impl<'a> LiveSession<'a> {
         self.session
             .advance_segment_to(segment, requested_time)
             .map(|_| ())
-            .map_err(|error| LiveSessionError::Animation(error.to_string()))
+            .map_err(Into::into)
+    }
+
+    /// Reconcile one endpoint through the existing session publication path.
+    ///
+    /// The session validates that the segment reached its boundary and that any
+    /// required callback phase is coherent, releases its runtime driver, and
+    /// publishes the resulting authored/effective endpoint atomically. This
+    /// facade retains no endpoint copy or completion state.
+    pub fn complete_segment(&mut self, segment: ExecutionSegment) -> Result<(), LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        self.session
+            .complete_segment(&mut store, segment)
+            .map(|_| ())
+            .map_err(Into::into)
     }
 
     /// Set any already-supported semantic property through one atomic publish.
@@ -261,6 +533,41 @@ impl<'a> LiveSession<'a> {
         self.set_property(mobject, SemanticObjectProperty::Translation, translation)
     }
 
+    /// Multiply an object's authored affine scale through the shared live
+    /// transaction. The current scale is read from the semantic store, never a
+    /// wrapper projection, so detached session targets follow the same path.
+    pub fn scale(
+        &mut self,
+        mobject: &Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let x = authoring_render_f64("scale.x", x).map_err(LiveSessionError::Mobject)?;
+        let y = authoring_render_f64("scale.y", y).map_err(LiveSessionError::Mobject)?;
+        let mut scale = self.authored(mobject)?.transform.scale;
+        scale.x *= x;
+        scale.y *= y;
+        scale
+            .lower_xy_f32()
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        self.set_property(mobject, SemanticObjectProperty::Scale, scale)
+    }
+
+    /// Add a center-relative affine rotation through the shared live
+    /// transaction. Pivot/layout rotation remains outside the bounded ordinary
+    /// affine facade.
+    pub fn rotate(
+        &mut self,
+        mobject: &Mobject,
+        angle: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let angle = authoring_render_f64("rotation", angle).map_err(LiveSessionError::Mobject)?;
+        let rotation = self.authored(mobject)?.transform.rotation_z + angle;
+        let rotation =
+            authoring_render_f64("rotation result", rotation).map_err(LiveSessionError::Mobject)?;
+        self.set_property(mobject, SemanticObjectProperty::RotationZ, rotation)
+    }
+
     pub fn set_scale(
         &mut self,
         mobject: &Mobject,
@@ -292,6 +599,135 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Set fill color and fill opacity through one authoritative style publication.
+    pub fn set_fill(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_fill(style, red, green, blue, opacity))
+    }
+
+    pub fn set_fill_color(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_fill_color(style, red, green, blue, alpha)
+        })
+    }
+
+    pub fn disable_fill(
+        &mut self,
+        mobject: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_disable_fill(style);
+            Ok(())
+        })
+    }
+
+    pub fn set_fill_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_fill_opacity(style, opacity))
+    }
+
+    /// Recolor the currently enabled fill and stroke without changing their opacity.
+    pub fn set_color(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_color(style, red, green, blue, alpha))
+    }
+
+    /// Set stroke color and opacity through one authoritative style publication.
+    pub fn set_stroke(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_stroke(style, red, green, blue, opacity)
+        })
+    }
+
+    pub fn set_stroke_color(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_stroke_color(style, red, green, blue, alpha)
+        })
+    }
+
+    pub fn disable_stroke(
+        &mut self,
+        mobject: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_disable_stroke(style);
+            Ok(())
+        })
+    }
+
+    pub fn set_stroke_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_stroke_opacity(style, opacity))
+    }
+
+    /// Apply Manim's paint-opacity operation to the currently enabled paint channels.
+    pub fn set_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_manim_opacity(style, opacity))
+    }
+
+    /// Set the independent object-composite opacity domain.
+    pub fn set_object_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_object_opacity(style, opacity))
+    }
+
+    fn edit_style(
+        &mut self,
+        mobject: &Mobject,
+        edit: impl FnOnce(&mut SemanticStyle) -> Result<(), String>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let mut style = mobject.state().map_err(LiveSessionError::Mobject)?.style;
+        edit(&mut style).map_err(LiveSessionError::Mobject)?;
+        self.replace_style(mobject, style)
+    }
+
     fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
         if !Rc::ptr_eq(self.store, mobject.store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
@@ -304,7 +740,7 @@ impl<'a> LiveSession<'a> {
 mod tests {
     use super::*;
     use crate::Scene;
-    use noon_core::{AnimationOptions, RateFunction, SemanticVec3};
+    use noon_core::{AnimationOptions, Color, RateFunction, SemanticPaint, SemanticVec3};
 
     #[test]
     fn live_property_edits_publish_once_and_queries_are_effective_not_authored_aliases() {
@@ -335,6 +771,81 @@ mod tests {
     }
 
     #[test]
+    fn live_style_edits_share_mobject_semantics_and_publish_complete_styles() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let target = live.target_editor(&circle).unwrap();
+        let before = live.session.publication_context().scene_revision();
+
+        live.set_fill(&target, 1.0, 0.0, 0.0, 0.4).unwrap();
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.checked_next().unwrap()
+        );
+        live.set_object_opacity(&target, 0.5).unwrap();
+        let style = live.authored(&target).unwrap().style;
+        assert_eq!(
+            style.fill,
+            Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)))
+        );
+        assert_eq!(style.fill_opacity, 0.4);
+        assert_eq!(style.object_opacity, 0.5);
+
+        live.disable_fill(&target).unwrap();
+        live.set_fill_opacity(&target, 0.25).unwrap();
+        let style = live.authored(&target).unwrap().style;
+        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::WHITE)));
+        assert_eq!(style.fill_opacity, 0.25);
+
+        live.set_stroke(&target, 0.0, 0.0, 1.0, 0.7).unwrap();
+        live.set_color(&target, 0.0, 1.0, 0.0, 1.0).unwrap();
+        let style = live.authored(&target).unwrap().style;
+        assert_eq!(
+            style.fill,
+            Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
+        );
+        assert_eq!(
+            style.stroke,
+            Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
+        );
+        assert_eq!(style.fill_opacity, 0.25);
+        assert_eq!(style.stroke_opacity, 0.7);
+
+        live.set_opacity(&target, 0.5).unwrap();
+        let style = live.authored(&target).unwrap().style;
+        assert_eq!(style.fill_opacity, 0.5);
+        assert_eq!(style.stroke_opacity, 0.5);
+        assert_eq!(style.object_opacity, 0.5);
+    }
+
+    #[test]
+    fn relative_affine_edits_use_shared_authored_state_for_live_and_detached_targets() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+
+        live.scale(&circle, 2.0, 0.5).unwrap();
+        live.rotate(&circle, 0.25).unwrap();
+        let effective = live.effective(&circle).unwrap();
+        assert_eq!(effective.transform.scale, noon_core::Vec2::new(2.0, 0.5));
+        assert_eq!(effective.transform.rotation, 0.25);
+
+        live.session.take_frame_changes();
+        let target = live.target_editor(&circle).unwrap();
+        live.scale(&target, 0.5, 4.0).unwrap();
+        live.rotate(&target, 0.75).unwrap();
+        let authored = live.authored(&target).unwrap();
+        assert_eq!(authored.transform.scale, SemanticVec3::new(1.0, 2.0, 1.0));
+        assert_eq!(authored.transform.rotation_z, 1.0);
+        assert!(live.session.take_frame_changes().is_empty());
+    }
+
+    #[test]
     fn live_facade_rejects_foreign_handles_without_fallback() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
@@ -349,7 +860,39 @@ mod tests {
     }
 
     #[test]
-    fn live_query_observes_the_active_driver_while_authored_edits_remain_explicit() {
+    fn live_segment_drive_preserves_foreign_runtime_errors() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+        let mut foreign_runtime = session.clone();
+        let before = foreign_runtime.frame().clone();
+
+        assert!(matches!(
+            scene
+                .live(&mut foreign_runtime)
+                .advance_segment_to(segment, segment.end_time()),
+            Err(LiveSessionError::Advance(
+                ExecutionSegmentAdvanceError::ForeignSegment { .. }
+            ))
+        ));
+        assert_eq!(foreign_runtime.frame(), &before);
+    }
+
+    #[test]
+    fn live_query_observes_the_active_driver_while_conflicting_edits_wait_for_completion() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let mut target = circle.target_editor().unwrap();
@@ -369,14 +912,419 @@ mod tests {
         let mut live = scene.live(&mut session);
         let segment = live.play_animation(&animation).unwrap();
         live.advance_segment_to(segment, 1.0).unwrap();
-        live.set_translation(&circle, 100.0, 0.0).unwrap();
+        assert!(matches!(
+            live.set_translation(&circle, 100.0, 0.0),
+            Err(LiveSessionError::Publication(
+                ExecutionSessionPublicationError::SegmentCompletionPending
+            ))
+        ));
         assert_eq!(
             live.authored(&circle).unwrap().transform.translation,
-            SemanticVec3::new(100.0, 0.0, 0.0)
+            SemanticVec3::new(0.0, 0.0, 0.0)
         );
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation.x,
             2.0
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        live.set_translation(&circle, 100.0, 0.0).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            100.0
+        );
+    }
+
+    #[test]
+    fn effective_layout_uses_shared_layout_bounds_without_stroke_expansion() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, -2.0).unwrap();
+        scene.add(&circle).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.0).unwrap();
+
+        let layout = live.effective_layout(&circle).unwrap();
+        assert_eq!(layout.center, (2.0, -1.0));
+        assert_eq!((layout.width, layout.height), (2.0, 2.0));
+    }
+
+    #[test]
+    fn completion_reconciles_the_endpoint_before_the_next_live_segment() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut first_target = circle.target_editor().unwrap();
+        first_target.set_translation(2.0, -2.0).unwrap();
+        let mut second_target = circle.target_editor().unwrap();
+        second_target.set_translation(5.0, -2.0).unwrap();
+        scene.add(&circle).unwrap();
+        let first = scene
+            .declare_transform_to(
+                &circle,
+                &first_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let second = scene
+            .declare_transform_to(
+                &circle,
+                &second_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+
+        let first_segment = live.play_animation(&first).unwrap();
+        live.advance_segment_to(first_segment, first_segment.end_time())
+            .unwrap();
+        assert!(!live.segment_state(first_segment).is_complete());
+        live.complete_segment(first_segment).unwrap();
+        assert!(live.segment_state(first_segment).is_complete());
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            2.0
+        );
+
+        live.set_translation(&circle, 3.0, -2.0).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            3.0
+        );
+        let second_segment = live.play_animation(&second).unwrap();
+        live.advance_segment_to(second_segment, second_segment.end_time())
+            .unwrap();
+        live.complete_segment(second_segment).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            5.0
+        );
+    }
+
+    #[test]
+    fn post_bootstrap_transform_declaration_and_activation_publish_atomically() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(8.0, -2.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(segment.start_time(), 0.0);
+        assert_eq!(segment.end_time(), 2.0);
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+
+        live.advance_segment_to(segment, 1.0).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            4.0
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.authored(&circle).unwrap().transform.translation,
+            SemanticVec3::new(8.0, -2.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn prepared_parallel_composition_publishes_one_revision_and_completes_both_leaves() {
+        let mut scene = Scene::new();
+        let mut left = scene.circle(1.0).unwrap();
+        left.set_translation(-2.0, 0.0).unwrap();
+        let mut right = scene.circle(1.0).unwrap();
+        right.set_translation(2.0, 0.0).unwrap();
+        let mut left_target = left.target_editor().unwrap();
+        left_target.set_translation(-2.0, 1.0).unwrap();
+        let mut right_target = right.target_editor().unwrap();
+        right_target.set_translation(2.0, -1.0).unwrap();
+        scene.add(&left).unwrap();
+        scene.add(&right).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = left.store().borrow().len();
+
+        let children = [
+            TransformToRequest::new(
+                &left,
+                &left_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            ),
+            TransformToRequest::new(
+                &right,
+                &right_target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            ),
+        ];
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        // Two immutable target snapshots, two leaves, and one root share that commit.
+        assert_eq!(left.store().borrow().len(), before_nodes + 5);
+        let publication = live.session.last_structural_publication_stats();
+        assert_eq!(publication.preparation.object_states_lowered, 0);
+        assert_eq!(publication.entered_objects, 0);
+        assert_eq!(publication.exited_objects, 0);
+        live.advance_segment_to(segment, 1.0).unwrap();
+        assert_eq!(
+            live.effective(&left).unwrap().transform.translation,
+            noon_core::Vec2::new(-2.0, 0.5)
+        );
+        assert_eq!(
+            live.effective(&right).unwrap().transform.translation,
+            noon_core::Vec2::new(2.0, -0.5)
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.authored(&left).unwrap().transform.translation,
+            SemanticVec3::new(-2.0, 1.0, 0.0)
+        );
+        assert_eq!(
+            live.authored(&right).unwrap().transform.translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn prepared_sequence_uses_mapped_boundaries_and_releases_disjoint_style_channels() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut fill_target = circle.target_editor().unwrap();
+        fill_target.set_fill(1.0, 0.0, 0.0, 0.4).unwrap();
+        let mut opacity_target = circle.target_editor().unwrap();
+        opacity_target.set_object_opacity(0.5).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let children = [
+            TransformToRequest::new(
+                &circle,
+                &fill_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            ),
+            TransformToRequest::new(
+                &circle,
+                &opacity_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            ),
+        ];
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, 1.0).unwrap();
+        let boundary = live.effective(&circle).unwrap().style;
+        assert_eq!(boundary.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.4)));
+        assert_eq!(boundary.opacity, 1.0);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        let endpoint = live.effective(&circle).unwrap().style;
+        assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.4)));
+        assert_eq!(endpoint.opacity, 0.5);
+        live.complete_segment(segment).unwrap();
+        let authored = live.authored(&circle).unwrap().style;
+        assert_eq!(
+            authored.fill,
+            Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)))
+        );
+        assert_eq!(authored.fill_opacity, 0.4);
+        assert_eq!(authored.object_opacity, 0.5);
+    }
+
+    #[test]
+    fn duplicate_composition_driver_rolls_back_target_leaf_and_root_declarations() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut first_target = circle.target_editor().unwrap();
+        first_target.set_translation(1.0, 0.0).unwrap();
+        let mut second_target = circle.target_editor().unwrap();
+        second_target.set_translation(2.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_frame = session.frame().clone();
+        let before_nodes = circle.store().borrow().len();
+        let children = [
+            TransformToRequest::new(&circle, &first_target, AnimationOptions::new()),
+            TransformToRequest::new(&circle, &second_target, AnimationOptions::new()),
+        ];
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new(),
+                AnimationOptions::new().run_time(2.0),
+            );
+
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::PreparedAnimation(
+                    noon_compile::PreparedSemanticAnimationLoweringError::MultipleDrivers { .. }
+                )
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &before_frame);
+        assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn invalid_or_conflicting_post_bootstrap_activation_does_not_publish() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(3.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+
+        let before = session.publication_context();
+        let before_frame = session.frame().clone();
+        let invalid = scene.live(&mut session).declare_and_activate_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new().run_time(f64::NAN),
+        );
+        assert!(matches!(
+            invalid,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Semantic(
+                        noon_core::SemanticMutationTransactionError::InvalidAnimationRunTime { .. }
+                    )
+                )
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &before_frame);
+        assert!(session.take_frame_changes().is_empty());
+
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let published = session.publication_context();
+        let frame = session.frame().clone();
+        let rejected = scene.live(&mut session).declare_and_activate_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new().run_time(1.0),
+        );
+        assert!(matches!(
+            rejected,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::SegmentCompletionPending
+            ))
+        ));
+        assert_eq!(session.publication_context(), published);
+        assert_eq!(session.frame(), &frame);
+        assert!(!session.segment_state(segment).is_complete());
+    }
+
+    #[test]
+    fn live_target_created_after_wait_stays_in_the_same_publication_chain() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+
+        let wait = live.wait_segment(3.0).unwrap();
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        assert_eq!(live.session.frame().time, 3.0);
+        let target = live.target_editor(&circle).unwrap();
+        live.set_translation(&target, 6.0, 1.0).unwrap();
+        assert!(live.session.take_frame_changes().is_empty());
+        let segment = live
+            .declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        assert_eq!(segment.start_time(), 3.0);
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            6.0
         );
     }
 
@@ -413,5 +1361,112 @@ mod tests {
 
         assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
         assert_eq!(session.frame().objects.len(), 4);
+    }
+
+    #[test]
+    fn single_leaf_fade_enters_exits_and_readds_the_same_handle_locally() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let fading = scene.circle(1.0).unwrap();
+        scene.add(&anchor).unwrap();
+        let fading_node = fading.node_id();
+        let authored_before = fading.state().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let anchor_slot = session.execution_slot_for_frame_index(0).unwrap();
+        session.take_frame_changes();
+
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let fade_in = {
+            let mut live = scene.live(&mut session);
+            assert!(!live.contains(&fading).unwrap());
+            let segment = live
+                .declare_and_activate_fade(&fading, SemanticFadeDirection::In, options)
+                .unwrap();
+            assert!(live.contains(&fading).unwrap());
+            assert_eq!(live.effective(&fading).unwrap().appearance, 0.0);
+            let publication = live.session.last_structural_publication_stats();
+            assert_eq!(publication.entered_objects, 1);
+            assert_eq!(publication.exited_objects, 0);
+            assert_eq!(publication.preparation.object_states_lowered, 1);
+            assert_eq!(live.session.take_frame_changes().object_indices().len(), 1);
+            segment
+        };
+        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
+
+        {
+            let mut live = scene.live(&mut session);
+            live.advance_segment_to(fade_in, 0.5).unwrap();
+            assert_eq!(live.effective(&fading).unwrap().appearance, 0.5);
+            live.advance_segment_to(fade_in, fade_in.end_time())
+                .unwrap();
+            live.complete_segment(fade_in).unwrap();
+            assert_eq!(live.effective(&fading).unwrap().appearance, 1.0);
+            assert_eq!(live.authored(&fading).unwrap(), authored_before);
+        }
+
+        let fade_out = {
+            let mut live = scene.live(&mut session);
+            live.declare_and_activate_fade(&fading, SemanticFadeDirection::Out, options)
+                .unwrap()
+        };
+        {
+            let mut live = scene.live(&mut session);
+            live.advance_segment_to(fade_out, 1.5).unwrap();
+            assert_eq!(live.effective(&fading).unwrap().appearance, 0.5);
+            live.advance_segment_to(fade_out, fade_out.end_time())
+                .unwrap();
+            assert!(live.contains(&fading).unwrap());
+            live.complete_segment(fade_out).unwrap();
+            assert!(!live.contains(&fading).unwrap());
+            assert!(live.effective(&fading).is_err());
+            let publication = live.session.last_structural_publication_stats();
+            assert_eq!(publication.entered_objects, 0);
+            assert_eq!(publication.exited_objects, 1);
+
+            live.add(&fading).unwrap();
+            assert!(live.contains(&fading).unwrap());
+            assert_eq!(live.effective(&fading).unwrap().appearance, 1.0);
+            assert_eq!(fading.node_id(), fading_node);
+            assert_eq!(live.authored(&fading).unwrap(), authored_before);
+        }
+        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
+    }
+
+    #[test]
+    fn fade_target_and_option_failures_leave_membership_and_publication_unchanged() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let fading = scene.circle(1.0).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let mut live = scene.live(&mut session);
+        assert!(live
+            .declare_and_activate_fade(
+                &fading,
+                SemanticFadeDirection::Out,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .is_err());
+        assert!(live
+            .declare_and_activate_fade(
+                &fading,
+                SemanticFadeDirection::In,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear)
+                    .lag_ratio(0.5),
+            )
+            .is_err());
+        assert!(!live.contains(&fading).unwrap());
+        assert_eq!(live.session.publication_context(), before);
+        assert!(live.session.take_frame_changes().is_empty());
+        assert!(live.session.execution_object_id(fading.node_id()).is_none());
     }
 }

@@ -37,6 +37,32 @@ impl RuntimeWakeState {
     pub const fn is_quiescent(self) -> bool {
         !self.frame_pending && matches!(self.timeline, TimelineWakeState::Quiescent)
     }
+
+    /// Combine another execution-owned cadence observation without transferring
+    /// scheduling authority to the platform host.
+    pub fn with_additional_timeline(mut self, additional: TimelineWakeState) -> Self {
+        self.timeline = match (self.timeline, additional) {
+            (TimelineWakeState::Continuous, _) | (_, TimelineWakeState::Continuous) => {
+                TimelineWakeState::Continuous
+            }
+            (TimelineWakeState::Deadline(left), TimelineWakeState::Deadline(right)) => {
+                TimelineWakeState::Deadline(left.min(right))
+            }
+            (TimelineWakeState::Deadline(deadline), TimelineWakeState::Quiescent)
+            | (TimelineWakeState::Quiescent, TimelineWakeState::Deadline(deadline)) => {
+                TimelineWakeState::Deadline(deadline)
+            }
+            (TimelineWakeState::Quiescent, TimelineWakeState::Quiescent) => {
+                TimelineWakeState::Quiescent
+            }
+        };
+        self
+    }
+
+    pub fn without_timeline_wake(mut self) -> Self {
+        self.timeline = TimelineWakeState::Quiescent;
+        self
+    }
 }
 
 impl TimelineEventScheduler {
@@ -86,6 +112,7 @@ mod tests {
             },
             time_map: CompositionTimeMap::default(),
             transform_geometry_plan: None,
+            reconciled: false,
         }
     }
 

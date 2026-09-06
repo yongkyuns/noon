@@ -72,6 +72,8 @@ pub struct DynamicProperties {
     pub position: bool,
     pub rotation: bool,
     pub scale: bool,
+    pub fill: bool,
+    pub stroke: bool,
     pub opacity: bool,
     pub appearance: bool,
     pub reveal: bool,
@@ -86,6 +88,8 @@ impl DynamicProperties {
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
             Property::Scale => self.scale = true,
+            Property::Fill => self.fill = true,
+            Property::Stroke => self.stroke = true,
             Property::Opacity => self.opacity = true,
             Property::Appearance => self.appearance = true,
             Property::Reveal => self.reveal = true,
@@ -99,6 +103,8 @@ impl DynamicProperties {
             || self.position
             || self.rotation
             || self.scale
+            || self.fill
+            || self.stroke
             || self.opacity
             || self.appearance
             || self.reveal
@@ -295,6 +301,9 @@ pub struct CompiledTrack {
     pub timing: TrackTiming,
     pub time_map: CompositionTimeMap,
     pub transform_geometry_plan: Option<TransformGeometryPlan>,
+    /// Completion reconciled this driver's endpoint into authored base state.
+    /// Its payload remains available for deterministic evaluation before the end.
+    pub reconciled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -365,6 +374,7 @@ pub struct CompiledPatchStats {
     pub object_indices_rewritten: usize,
     pub track_object_indices_rewritten: usize,
     pub track_locators_removed: usize,
+    pub tracks_reconciled: usize,
 }
 
 /// Lightweight validation accounting for an atomic compiled-scene transaction.
@@ -504,6 +514,13 @@ pub enum CompilePatchError {
     UnknownObject(ObjectId),
     DuplicateTrack(TrackId),
     UnknownTrack(TrackId),
+    TrackAlreadyReconciled(TrackId),
+    TrackReconciliationMismatch(TrackId),
+    UnsupportedTrackReconciliation(TrackId),
+    OverlappingTrackReconciliation {
+        track: TrackId,
+        other: TrackId,
+    },
     InvalidObjectState {
         object: ObjectId,
         field: ObjectStateField,
@@ -543,6 +560,25 @@ impl std::fmt::Display for CompilePatchError {
             Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
             Self::DuplicateTrack(id) => write!(formatter, "duplicate track id {}", id.get()),
             Self::UnknownTrack(id) => write!(formatter, "unknown track id {}", id.get()),
+            Self::TrackAlreadyReconciled(id) => {
+                write!(formatter, "track {} was already reconciled", id.get())
+            }
+            Self::TrackReconciliationMismatch(id) => write!(
+                formatter,
+                "track {} does not match its completion reconciliation metadata",
+                id.get()
+            ),
+            Self::UnsupportedTrackReconciliation(id) => write!(
+                formatter,
+                "track {} cannot use affine completion reconciliation",
+                id.get()
+            ),
+            Self::OverlappingTrackReconciliation { track, other } => write!(
+                formatter,
+                "track {} overlaps track {} on its completion channel",
+                track.get(),
+                other.get()
+            ),
             Self::InvalidObjectState { object, field } => write!(
                 formatter,
                 "object {} contains non-finite {field} state",
@@ -605,6 +641,68 @@ impl std::fmt::Display for CompilePatchError {
 impl std::error::Error for CompilePatchError {}
 
 impl CompiledScene {
+    /// Validate the bounded affine completion policy for newly activated tracks.
+    /// Existing and candidate tracks are inspected only in affected channels.
+    /// Mapped composition leaves retain the root interval as their track timing;
+    /// completion reconciles only at that exact root endpoint, where runtime finish
+    /// semantics settle every leaf to its authored target independently of the
+    /// map's ordinary alpha-at-one sample.
+    pub fn preflight_reconcilable_track_additions(
+        &self,
+        tracks: &[TrackDefinition],
+    ) -> Result<(), CompilePatchError> {
+        let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
+        for track in tracks {
+            validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
+            if track.timing.duration <= 0.0
+                || !matches!(
+                    track.property,
+                    Property::Position
+                        | Property::Rotation
+                        | Property::Scale
+                        | Property::Fill
+                        | Property::Stroke
+                        | Property::Opacity
+                        | Property::Appearance
+                )
+            {
+                return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
+            }
+            let object_index = self
+                .object_index(track.object)
+                .ok_or(CompilePatchError::UnknownObject(track.object))?;
+            candidates
+                .entry(CompiledChannelKey::new(object_index, track.property))
+                .or_default()
+                .push(track);
+        }
+        for (channel, candidate_tracks) in candidates {
+            for (candidate_index, candidate) in candidate_tracks.iter().enumerate() {
+                let start = candidate.timing.start_time;
+                let end = start + candidate.timing.duration;
+                for existing in self.channel_tracks(channel) {
+                    let existing_end = existing.timing.start_time + existing.timing.duration;
+                    if start < existing_end && existing.timing.start_time < end {
+                        return Err(CompilePatchError::OverlappingTrackReconciliation {
+                            track: candidate.id,
+                            other: existing.id,
+                        });
+                    }
+                }
+                for other in &candidate_tracks[..candidate_index] {
+                    let other_end = other.timing.start_time + other.timing.duration;
+                    if start < other_end && other.timing.start_time < end {
+                        return Err(CompilePatchError::OverlappingTrackReconciliation {
+                            track: candidate.id,
+                            other: other.id,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn compile(scene: &SceneDefinition) -> Result<Self, CompileError> {
         let objects = scene
             .objects()
@@ -878,6 +976,9 @@ impl CompiledScene {
                     || existing.timing != track.timing
                     || existing.time_map != track.time_map
             }),
+            ExecutionPatch::ReconcileTrack { track, .. } => self
+                .track(*track)
+                .is_none_or(|existing| !existing.reconciled),
             ExecutionPatch::CreateObject(_)
             | ExecutionPatch::RemoveObject(_)
             | ExecutionPatch::AddTrack(_)
@@ -1079,6 +1180,68 @@ impl CompiledScene {
                 self.track_locators.remove(id);
                 self.recompute_dynamic_for_objects(&[old_locator.object_index], &mut stats);
             }
+            ExecutionPatch::ReconcileTrack {
+                track,
+                object,
+                property,
+                end_time,
+            } => {
+                let locator = self
+                    .track_locators
+                    .get(track)
+                    .copied()
+                    .ok_or(CompilePatchError::UnknownTrack(*track))?;
+                let position = self.track_position(locator);
+                let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+                let compiled = &self.tracks[&channel][position];
+                if compiled.reconciled {
+                    return Err(CompilePatchError::TrackAlreadyReconciled(*track));
+                }
+                let actual_object = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let actual_end = compiled.timing.start_time + compiled.timing.duration;
+                if actual_object != locator.object_index
+                    || *property != locator.property
+                    || actual_end.total_cmp(end_time) != std::cmp::Ordering::Equal
+                {
+                    return Err(CompilePatchError::TrackReconciliationMismatch(*track));
+                }
+                if compiled.timing.duration <= 0.0
+                    || !matches!(
+                        compiled.property,
+                        Property::Position
+                            | Property::Rotation
+                            | Property::Scale
+                            | Property::Fill
+                            | Property::Stroke
+                            | Property::Opacity
+                            | Property::Appearance
+                    )
+                {
+                    return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
+                }
+                for other in &self.tracks[&channel] {
+                    if other.id == *track {
+                        continue;
+                    }
+                    let other_end = other.timing.start_time + other.timing.duration;
+                    if compiled.timing.start_time < other_end
+                        && other.timing.start_time < actual_end
+                    {
+                        return Err(CompilePatchError::OverlappingTrackReconciliation {
+                            track: *track,
+                            other: other.id,
+                        });
+                    }
+                }
+                let compiled = &mut self
+                    .tracks
+                    .get_mut(&channel)
+                    .expect("track locator channel must exist")[position];
+                compiled.reconciled = true;
+                stats.tracks_reconciled = 1;
+            }
         }
         Ok(stats)
     }
@@ -1216,6 +1379,7 @@ fn compile_track(
         timing: track.timing,
         time_map: track.time_map.clone(),
         transform_geometry_plan: compile_transform_geometry_plan(track)?,
+        reconciled: false,
     })
 }
 
@@ -1365,10 +1529,12 @@ const fn property_rank(property: Property) -> u8 {
         Property::Position => 2,
         Property::Rotation => 3,
         Property::Scale => 4,
-        Property::Opacity => 5,
-        Property::Appearance => 6,
-        Property::Reveal => 7,
-        Property::Morph => 8,
+        Property::Fill => 5,
+        Property::Stroke => 6,
+        Property::Opacity => 7,
+        Property::Appearance => 8,
+        Property::Reveal => 9,
+        Property::Morph => 10,
     }
 }
 
@@ -1560,6 +1726,8 @@ mod tests {
                 position: false,
                 rotation: false,
                 scale: false,
+                fill: false,
+                stroke: false,
                 opacity: true,
                 appearance: false,
                 reveal: false,
@@ -1728,6 +1896,8 @@ mod tests {
                 position: false,
                 rotation: false,
                 scale: false,
+                fill: false,
+                stroke: false,
                 opacity: false,
                 appearance: false,
                 reveal: true,

@@ -8,13 +8,18 @@ use noon_core::{
     SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
     SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
     SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
-    Vec2, VectorPath,
+    Transform2D, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
 mod layout;
 mod style;
 use bounds::layout_for_content;
+pub(crate) use style::{
+    edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
+    edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
+    edit_stroke_opacity,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManimNextToArgs {
@@ -232,6 +237,27 @@ impl Mobject {
             .map_err(|e| e.to_string())?;
         layout_for_content(&store, state.content, state.transform)
     }
+
+    /// Resolve authored content through an effective renderer-independent
+    /// transform. Live layout queries use this one-object semantic calculation
+    /// rather than renderer visibility bounds, which include stroke expansion.
+    pub(crate) fn layout_bounds_at(
+        &self,
+        transform: Transform2D,
+    ) -> Result<Option<Bounds2D64>, String> {
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(|error| error.to_string())?;
+        let mut semantic_transform = state.transform;
+        semantic_transform.translation.x = f64::from(transform.translation.x);
+        semantic_transform.translation.y = f64::from(transform.translation.y);
+        semantic_transform.scale.x = f64::from(transform.scale.x);
+        semantic_transform.scale.y = f64::from(transform.scale.y);
+        semantic_transform.rotation_z = f64::from(transform.rotation);
+        layout_for_content(&store, state.content, semantic_transform)
+    }
+
     pub fn center(&self) -> Result<(f64, f64), String> {
         if let Some(b) = self.layout_bounds()? {
             Ok(((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
@@ -408,28 +434,48 @@ impl Mobject {
     ) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let angle = authoring_render_f64("rotation", angle)?;
-        let pivot = authoring_xy_f64(point_x, point_y)?;
-        let rotation = state.transform.rotation_z + angle;
-        finite_f32("rotation result", rotation)?;
-
-        let translation = state.transform.translation;
-        let relative_x = translation.x - pivot.x;
-        let relative_y = translation.y - pivot.y;
-        let cosine = angle.cos();
-        let sine = angle.sin();
-        let next_translation = SemanticVec3::new(
-            pivot.x + relative_x * cosine - relative_y * sine,
-            pivot.y + relative_x * sine + relative_y * cosine,
-            translation.z,
-        );
-        next_translation
-            .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
-        state.transform.translation = next_translation;
+        let ((translation_x, translation_y), rotation) = rotate_affine_about_point(
+            (state.transform.translation.x, state.transform.translation.y),
+            state.transform.rotation_z,
+            angle,
+            (point_x, point_y),
+        )?;
+        state.transform.translation.x = translation_x;
+        state.transform.translation.y = translation_y;
         state.transform.rotation_z = rotation;
         self.commit_state(state)
     }
+}
+
+pub(crate) fn rotate_affine_about_point(
+    translation: (f64, f64),
+    rotation: f64,
+    angle: f64,
+    pivot: (f64, f64),
+) -> Result<((f64, f64), f64), String> {
+    let angle = authoring_render_f64("rotation", angle)?;
+    let pivot_x = authoring_render_f64("rotation pivot.x", pivot.0)?;
+    let pivot_y = authoring_render_f64("rotation pivot.y", pivot.1)?;
+    let translation_x = authoring_render_f64("translation.x", translation.0)?;
+    let translation_y = authoring_render_f64("translation.y", translation.1)?;
+    let rotation = authoring_render_f64("rotation", rotation)?;
+    let relative_x = translation_x - pivot_x;
+    let relative_y = translation_y - pivot_y;
+    let cosine = angle.cos();
+    let sine = angle.sin();
+    Ok((
+        (
+            authoring_render_f64(
+                "rotation result translation.x",
+                pivot_x + relative_x * cosine - relative_y * sine,
+            )?,
+            authoring_render_f64(
+                "rotation result translation.y",
+                pivot_y + relative_x * sine + relative_y * cosine,
+            )?,
+        ),
+        authoring_render_f64("rotation result", rotation + angle)?,
+    ))
 }
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {

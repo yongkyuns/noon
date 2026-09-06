@@ -3,19 +3,21 @@ use noon_compile::{
     ExecutionPatch, SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
 };
 use noon_core::{
-    PublicationContext, SceneRevision, SemanticMutationTransaction,
-    SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticStore,
+    PreparedSemanticMutationTransaction, PublicationContext, SceneRevision,
+    SemanticMutationTransaction, SemanticMutationTransactionError,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore,
 };
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
-    AuthoredPublicationError, ExecutionSlotError, FrameObjectState,
+    AuthoredPublicationError, ExecutionSlotError, FrameObjectState, PreparedEffectivePropertyBatch,
 };
 
 use super::ExecutionSession;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionPublicationError {
+    RequiredCallbackPending,
+    SegmentCompletionPending,
     ForeignSemanticStore,
     StaleSceneRevision {
         expected: SceneRevision,
@@ -31,6 +33,12 @@ pub enum ExecutionSessionPublicationError {
 impl std::fmt::Display for ExecutionSessionPublicationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RequiredCallbackPending => {
+                f.write_str("a required callback publication is pending")
+            }
+            Self::SegmentCompletionPending => f.write_str(
+                "an active animation segment must be completed before authored publication",
+            ),
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
             }
@@ -68,6 +76,17 @@ pub struct StructuralPublicationStats {
 pub struct EffectiveSemanticObject<'a> {
     pub object: &'a FrameObjectState,
     pub publication: PublicationContext,
+    authored_content_layout_applicable: bool,
+}
+
+impl EffectiveSemanticObject<'_> {
+    /// Whether authored content plus the effective affine transform exactly
+    /// describes this frame's layout. Morph/reveal render overrides require a
+    /// dedicated effective-content layout path and are rejected by the first
+    /// ordinary live-query subset.
+    pub const fn authored_content_layout_applicable(&self) -> bool {
+        self.authored_content_layout_applicable
+    }
 }
 
 impl ExecutionSession {
@@ -106,12 +125,53 @@ impl ExecutionSession {
         store: &mut SemanticStore,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_semantic_transaction_with_execution(store, transaction, Vec::new(), None)
+    }
+
+    pub(crate) fn apply_semantic_transaction_with_execution(
+        &mut self,
+        store: &mut SemanticStore,
+        transaction: SemanticMutationTransaction,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
+        }
+        if self.pending_segment_completion.is_some() && execution_prefix.is_empty() {
+            return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+        }
         self.require_published_store(store)?;
         validate_semantic_publication(&transaction)
             .map_err(ExecutionSessionPublicationError::Lowering)?;
         let prepared = transaction
             .prepare(store)
             .map_err(ExecutionSessionPublicationError::Semantic)?;
+        self.apply_prepared_semantic_transaction_with_execution(
+            prepared,
+            execution_prefix,
+            effective,
+        )
+    }
+
+    /// Publish an already-prepared semantic transaction with its preflighted execution prefix.
+    ///
+    /// This is the shared infallible suffix for callers that must inspect transaction-local
+    /// semantic references while preparing compiler/runtime work. All fallible work remains
+    /// before `commit_with_store`, and the returned result is the sole local-name mapping.
+    pub(crate) fn apply_prepared_semantic_transaction_with_execution(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
+        }
+        if self.pending_segment_completion.is_some() && execution_prefix.is_empty() {
+            return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+        }
+        self.require_published_store(prepared.store())?;
         let publication = prepare_semantic_publication(
             &prepared,
             &self.execution_index,
@@ -120,7 +180,11 @@ impl ExecutionSession {
         )
         .map_err(ExecutionSessionPublicationError::Lowering)?;
         let preparation_stats = publication.stats();
-        let mut conservative_patches = publication.value_transaction().mutations().to_vec();
+        let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) = execution_prefix
+            .into_iter()
+            .partition(|patch| matches!(patch, ExecutionPatch::AddTrack(_)));
+        let mut conservative_patches = execution_prefix.clone();
+        conservative_patches.extend_from_slice(publication.value_transaction().mutations());
         conservative_patches.extend(
             publication
                 .possible_exits()
@@ -128,6 +192,10 @@ impl ExecutionSession {
                 .copied()
                 .map(ExecutionPatch::RemoveObject),
         );
+        if !execution_suffix.is_empty() {
+            conservative_patches.extend(publication.conservative_existing_entry_patches());
+        }
+        conservative_patches.extend(execution_suffix.iter().cloned());
         let conservative = ExecutionMutationTransaction::from_mutations(conservative_patches);
         let structural_change_possible =
             publication.possible_entry_count() != 0 || !publication.possible_exits().is_empty();
@@ -141,6 +209,11 @@ impl ExecutionSession {
                 structural_change_possible,
             )
             .map_err(ExecutionSessionPublicationError::Runtime)?;
+        if let Some(effective) = effective.as_ref() {
+            self.runtime
+                .preflight_effective_carry_forward(effective, self.publication_context())
+                .map_err(ExecutionSessionPublicationError::Runtime)?;
+        }
         preflight_execution_slot_membership_shape(
             &self.slots,
             publication.possible_exits(),
@@ -148,7 +221,7 @@ impl ExecutionSession {
         )
         .map_err(ExecutionSessionPublicationError::ExecutionSlot)?;
 
-        let result = prepared.commit();
+        let (result, store) = prepared.commit_with_store();
         let membership = self
             .reachability
             .apply_transaction_result(store, &result)
@@ -157,10 +230,17 @@ impl ExecutionSession {
         let exited = membership.exited_execution_objects().collect::<Vec<_>>();
         let execution = publication.bind(&result, &membership);
         let (execution, resource_additions) = execution.into_parts();
+        let execution = ExecutionMutationTransaction::from_mutations(
+            execution_prefix
+                .into_iter()
+                .chain(execution.mutations().iter().cloned())
+                .chain(execution_suffix),
+        );
         self.runtime
-            .apply_authored_execution_transaction(
+            .apply_authored_execution_transaction_with_effective(
                 &execution,
                 resource_additions,
+                effective,
                 self.publication_context(),
                 store.scene_revision(),
             )
@@ -203,14 +283,27 @@ impl ExecutionSession {
         store
             .semantic_object_state_checked(node)
             .map_err(|_| ExecutionSessionPublicationError::UnknownObject(node))?;
-        let object = self
+        let execution_object = self
             .execution_index
             .execution_object_id(node)
-            .and_then(|id| self.runtime.effective_object(id))
             .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let object_index = self
+            .runtime
+            .frame_index_for_object(execution_object)
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let frame = self.runtime.frame();
+        let object = frame
+            .objects
+            .get(object_index)
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let authored_content_layout_applicable = frame.render_geometries[object_index].is_none()
+            && frame.render_transforms[object_index].is_none()
+            && frame.reveals[object_index] == 1.0
+            && frame.morphs[object_index] == 0.0;
         Ok(EffectiveSemanticObject {
             object,
             publication: self.publication_context(),
+            authored_content_layout_applicable,
         })
     }
 }

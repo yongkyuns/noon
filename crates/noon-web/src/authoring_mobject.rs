@@ -1622,6 +1622,10 @@ mod wasm {
     }
 
     impl WasmAuthoringMobjectHandle {
+        pub(crate) fn from_semantic_mobject(handle: Mobject) -> Self {
+            Self { handle }
+        }
+
         pub(crate) fn semantic_mobject(&self) -> &Mobject {
             &self.handle
         }

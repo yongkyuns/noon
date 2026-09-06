@@ -9,6 +9,7 @@ export class PythonAuthoringClient {
   #worker;
   #nextRequestId = 0;
   #pending = new Map();
+  #continuations = new Map();
   #readyPromise;
   #resolveReady;
   #rejectReady;
@@ -50,7 +51,11 @@ export class PythonAuthoringClient {
     return this.#readyPromise;
   }
 
-  async run(source, context = {}, { exportDocument = false } = {}) {
+  async run(
+    source,
+    context = {},
+    { exportDocument = false, onSemanticContinuation = null } = {},
+  ) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
     }
@@ -60,9 +65,12 @@ export class PythonAuthoringClient {
     if (typeof exportDocument !== "boolean") {
       throw new TypeError("Python authoring exportDocument must be a boolean");
     }
+    if (onSemanticContinuation !== null && typeof onSemanticContinuation !== "function") {
+      throw new TypeError("onSemanticContinuation must be a function");
+    }
     await this.ready();
     const requestId = this.#beginRequest();
-    const result = this.#resultFor(requestId);
+    const result = this.#resultFor(requestId, { onSemanticContinuation });
     this.#worker.postMessage(
       envelope("run", {
         requestId,
@@ -118,6 +126,9 @@ export class PythonAuthoringClient {
       sharedSlotCapacity,
       loopDurationSeconds,
       session,
+      callbackSessionId = null,
+      continuationGeneration = null,
+      initiallyPaused = false,
     },
   ) {
     validateSemanticExecutionContextId(contextId);
@@ -136,20 +147,44 @@ export class PythonAuthoringClient {
     if (!Number.isSafeInteger(session) || session < 0) {
       throw new TypeError("semantic execution session must be a non-negative safe integer");
     }
+    if (callbackSessionId !== null &&
+        (!Number.isSafeInteger(callbackSessionId) || callbackSessionId < 0)) {
+      throw new TypeError("semantic callback session must be a non-negative safe integer");
+    }
+    if (continuationGeneration !== null &&
+        (!Number.isSafeInteger(continuationGeneration) || continuationGeneration <= 0)) {
+      throw new TypeError("semantic continuation generation must be a positive safe integer");
+    }
+    if (typeof initiallyPaused !== "boolean") {
+      throw new TypeError("initiallyPaused must be a boolean");
+    }
+    if (initiallyPaused && continuationGeneration !== null) {
+      throw new Error("source-owned semantic continuations cannot start paused");
+    }
+    const continuation = continuationGeneration === null
+      ? null
+      : this.#matchingContinuation(contextId, continuationGeneration);
     await this.ready();
     const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
+    const payload = {
+      requestId,
+      contextId,
+      controlPort,
+      renderPort,
+      transportMode,
+      sharedSlotCapacity,
+      loopDurationSeconds,
+      session,
+      initiallyPaused,
+    };
+    if (callbackSessionId !== null) payload.callbackSessionId = callbackSessionId;
+    if (continuationGeneration !== null) {
+      payload.continuationGeneration = continuationGeneration;
+      payload.continuationRunRequestId = continuation.runRequestId;
+    }
     this.#worker.postMessage(
-      envelope("attach_semantic_execution", {
-        requestId,
-        contextId,
-        controlPort,
-        renderPort,
-        transportMode,
-        sharedSlotCapacity,
-        loopDurationSeconds,
-        session,
-      }),
+      envelope("attach_semantic_execution", payload),
       [controlPort, renderPort],
     );
     return result;
@@ -168,7 +203,33 @@ export class PythonAuthoringClient {
     this.#worker.postMessage(
       envelope("release_semantic_execution", { requestId, contextId }),
     );
-    return result;
+    const response = await result;
+    this.#continuations.delete(contextId);
+    return response;
+  }
+
+  async cancelSemanticContinuation(contextId, continuationGeneration, reason) {
+    validateSemanticExecutionContextId(contextId);
+    if (!Number.isSafeInteger(continuationGeneration) || continuationGeneration <= 0) {
+      throw new TypeError("semantic continuation generation must be a positive safe integer");
+    }
+    if (typeof reason !== "string" || reason.trim() === "") {
+      throw new TypeError("semantic continuation cancellation requires a reason");
+    }
+    const continuation = this.#matchingContinuation(contextId, continuationGeneration);
+    await this.ready();
+    const requestId = this.#beginRequest();
+    const result = this.#resultFor(requestId);
+    this.#worker.postMessage(envelope("cancel_semantic_continuation", {
+      requestId,
+      contextId,
+      continuationGeneration,
+      continuationRunRequestId: continuation.runRequestId,
+      reason,
+    }));
+    const response = await result;
+    this.#continuations.delete(contextId);
+    return response;
   }
 
   terminate() {
@@ -189,9 +250,9 @@ export class PythonAuthoringClient {
     return requestId;
   }
 
-  #resultFor(requestId) {
+  #resultFor(requestId, metadata = {}) {
     return new Promise((resolve, reject) => {
-      this.#pending.set(requestId, { resolve, reject });
+      this.#pending.set(requestId, { resolve, reject, ...metadata });
     });
   }
 
@@ -221,9 +282,27 @@ export class PythonAuthoringClient {
       }
 
       if (message.type === "result") {
-        this.#settle(message.requestId, ({ resolve }) => {
-          resolve(parseAuthoringResult(message.resultJson));
-        });
+        const pending = this.#pendingFor(message.requestId);
+        if (pending === null) return;
+        const result = parseAuthoringResult(message.resultJson);
+        const registrationCompletion = pending.continuationRegistrationCompletion;
+        if (registrationCompletion === undefined) {
+          this.#settle(message.requestId, ({ resolve }) => resolve(result));
+        } else {
+          void registrationCompletion.then(
+            () => {
+              if (this.#pending.get(message.requestId) === pending) {
+                this.#settle(message.requestId, ({ resolve }) => resolve(result));
+              }
+            },
+            () => {},
+          );
+        }
+        return;
+      }
+
+      if (message.type === "semantic_continuation_registered") {
+        this.#handleSemanticContinuation(message);
         return;
       }
 
@@ -248,6 +327,10 @@ export class PythonAuthoringClient {
         this.#settle(message.requestId, ({ resolve }) => resolve(message));
         return;
       }
+      if (message.type === "semantic_continuation_cancelled") {
+        this.#settle(message.requestId, ({ resolve }) => resolve(message));
+        return;
+      }
 
       throw new Error(`Unknown Python authoring message type: ${message.type}`);
     } catch (error) {
@@ -255,7 +338,71 @@ export class PythonAuthoringClient {
     }
   }
 
+  #handleSemanticContinuation(message) {
+    if (!Number.isSafeInteger(message.requestId) || message.requestId < 0 ||
+        !Number.isSafeInteger(message.generation) || message.generation <= 0) {
+      throw new Error("Python semantic continuation registration is invalid");
+    }
+    const pending = this.#pending.get(message.requestId);
+    if (!pending || typeof pending.onSemanticContinuation !== "function") {
+      throw new Error("Python source suspended without a semantic continuation consumer");
+    }
+    if (pending.continuationRegistered) {
+      throw new Error("Python source registered more than one semantic continuation");
+    }
+    const semanticExecution = validateSemanticExecutionDescriptor(message.semanticExecution);
+    if (semanticExecution?.continuationGeneration !== message.generation) {
+      throw new Error("Python semantic continuation registration generation does not match");
+    }
+    const registration = Object.freeze({
+      semanticExecution,
+      generation: message.generation,
+      duration: validateSceneDuration(message.duration),
+    });
+    if (this.#continuations.has(semanticExecution.contextId)) {
+      throw new Error("Python semantic continuation context is already registered");
+    }
+    pending.continuationRegistered = true;
+    this.#continuations.set(semanticExecution.contextId, {
+      generation: message.generation,
+      runRequestId: message.requestId,
+    });
+    const registrationCompletion = Promise.resolve()
+      .then(() => pending.onSemanticContinuation(registration));
+    pending.continuationRegistrationCompletion = registrationCompletion;
+    void registrationCompletion.catch((error) => {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (this.#pending.get(message.requestId) === pending) {
+        this.#settle(message.requestId, ({ reject }) => reject(failure));
+      }
+      void this.cancelSemanticContinuation(
+        semanticExecution.contextId,
+        message.generation,
+        failure.message,
+      )
+        .catch((cancelError) => {
+          this.#fail(cancelError instanceof Error ? cancelError : new Error(String(cancelError)));
+        });
+    });
+  }
+
+  #matchingContinuation(contextId, generation) {
+    const continuation = this.#continuations.get(contextId);
+    if (continuation?.generation !== generation) {
+      throw new Error("stale semantic continuation context or generation");
+    }
+    return continuation;
+  }
+
   #settle(requestId, settle) {
+    const pending = this.#pendingFor(requestId);
+    if (pending === null) return false;
+    settle(pending);
+    this.#pending.delete(requestId);
+    return true;
+  }
+
+  #pendingFor(requestId) {
     if (!Number.isSafeInteger(requestId) || requestId < 0) {
       throw new Error("Python authoring response has an invalid request ID");
     }
@@ -263,13 +410,11 @@ export class PythonAuthoringClient {
     if (!pending) {
       if (requestId < this.#nextRequestId) {
         this.#staleResponses += 1;
-        return false;
+        return null;
       }
       throw new Error(`Python authoring response has unissued request ID ${requestId}`);
     }
-    settle(pending);
-    this.#pending.delete(requestId);
-    return true;
+    return pending;
   }
 
   #fail(error) {
@@ -284,6 +429,7 @@ export class PythonAuthoringClient {
       reject(error);
     }
     this.#pending.clear();
+    this.#continuations.clear();
   }
 }
 
@@ -348,7 +494,24 @@ export function validateSemanticExecutionDescriptor(descriptor) {
     throw new Error("Python semantic execution descriptor must be an object");
   }
   validateSemanticExecutionContextId(descriptor.context_id);
-  return Object.freeze({ contextId: descriptor.context_id });
+  const callbackSessionId = descriptor.callback_session_id;
+  const continuationGeneration = descriptor.continuation_generation;
+  if (
+    callbackSessionId !== null &&
+    callbackSessionId !== undefined &&
+    (!Number.isSafeInteger(callbackSessionId) || callbackSessionId < 0)
+  ) {
+    throw new TypeError("semantic callback session ID must be a non-negative safe integer");
+  }
+  if (continuationGeneration !== null && continuationGeneration !== undefined &&
+      (!Number.isSafeInteger(continuationGeneration) || continuationGeneration <= 0)) {
+    throw new TypeError("semantic continuation generation must be a positive safe integer");
+  }
+  return Object.freeze({
+    contextId: descriptor.context_id,
+    ...(callbackSessionId == null ? {} : { callbackSessionId }),
+    ...(continuationGeneration == null ? {} : { continuationGeneration }),
+  });
 }
 
 function validateSemanticExecutionContextId(contextId) {

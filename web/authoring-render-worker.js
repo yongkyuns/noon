@@ -38,10 +38,21 @@ let transitionMode = null;
 let transitionResourceBytes = null;
 let transitionFrameLoopWasRunning = false;
 let needsPresent = false;
+// Renderer-derived metadata for the publication that the next successful
+// present exposes. It is an acknowledgement only, never scene or time state.
+let pendingPresentationPublication = null;
+let lastPresentedPublication = null;
+let pendingRendererObservationRequest = null;
+let pendingRendererObservationPublication = null;
 let running = false;
 let stopped = false;
 let frameLoopGeneration = 0;
 let lastFrameTimestamp = null;
+// Optional cross-worker projection of Rust's wake decision. This owns browser
+// timer handles only; scene time and segment completion remain in the engine.
+let engineWake = null;
+let scheduledFrame = null;
+let scheduleTicket = 0;
 let presentedFrames = 0;
 let modeSwitches = 0;
 let rendererRebuilds = 0;
@@ -163,6 +174,7 @@ function attachEngine(message) {
     reconnectResourceBundlePending = true;
   }
   attachRenderPort(message.port);
+  scheduleFrame();
   respond(message.requestId, {
     type: "engine_port_attached",
     mode,
@@ -238,6 +250,7 @@ function resize(message) {
   if (mode === MODE_RETAINED && dimensionsChanged) {
     needsPresent = true;
     tryPresent();
+    if (engineWake !== null) scheduleFrame();
   }
 }
 
@@ -265,13 +278,15 @@ function attachRenderPort(port) {
   if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
     transferableReceiver = new TransferableExecutionDeltaReceiver(
       port,
-      (json) => (renderPort === port ? consumeDelta(json) : true),
+      (json, metadata) => (renderPort === port ? consumeDelta(json, metadata) : true),
     );
   }
   port.start();
 }
 
 function detachRenderPort() {
+  cancelScheduledFrame();
+  engineWake = null;
   renderPort?.close?.();
   renderPort = null;
 }
@@ -281,10 +296,32 @@ function resetTransportState() {
   transferableReceiver = null;
   bootstrapQueue = [];
   bootstrapPromise = null;
+  pendingPresentationPublication = null;
+  lastPresentedPublication = null;
+  pendingRendererObservationRequest = null;
+  pendingRendererObservationPublication = null;
 }
 
 function handleEngineMessage(message) {
   if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.type === "execution_wake") {
+    try {
+      const { cadence, timerAfterMilliseconds } = message;
+      if (!["animation_frame", "timer", "idle"].includes(cadence) ||
+          (cadence === "timer" &&
+           (!Number.isFinite(timerAfterMilliseconds) || timerAfterMilliseconds < 0))) {
+        throw new Error("invalid semantic execution wake directive");
+      }
+      engineWake = {
+        cadence,
+        deadline: cadence === "timer" ? performance.now() + timerAfterMilliseconds : null,
+      };
+      scheduleFrame();
+    } catch (error) {
+      fail(error, null);
+    }
     return;
   }
   if (message.type === "retained_resources") {
@@ -306,6 +343,22 @@ function handleEngineMessage(message) {
   }
   if (message.type === "shared_delta") {
     drainTransport();
+    return;
+  }
+  if (message.type === "renderer_observation_request") {
+    try {
+      receiveRendererObservationRequest(message);
+    } catch (error) {
+      fail(error, null);
+    }
+    return;
+  }
+  if (message.type === "renderer_observation_cancel") {
+    try {
+      cancelRendererObservationRequest(message);
+    } catch (error) {
+      fail(error, null);
+    }
   }
 }
 
@@ -348,7 +401,7 @@ function handleRetainedResources(message) {
 function drainTransport() {
   try {
     if (sharedReader !== null) {
-      const drained = sharedReader.drain((json) => consumeDelta(json));
+      const drained = sharedReader.drain((json, metadata) => consumeDelta(json, metadata));
       if (drained > 0) {
         renderPort?.postMessage({ type: "transport_writable" });
       }
@@ -359,22 +412,22 @@ function drainTransport() {
   }
 }
 
-function consumeDelta(json) {
+function consumeDelta(json, publication = null) {
   if (transitionMode !== null) {
-    return commitRendererTransition(json);
+    return commitRendererTransition(json, publication);
   }
   if (renderer === null) {
     if (mode === MODE_RETAINED && resourceBytes === null) {
       throw new Error("retained authoring snapshot arrived before its resource bundle");
     }
     if (bootstrapPromise === null) {
-      bootstrapPromise = bootstrapRenderer(json);
+      bootstrapPromise = bootstrapRenderer(json, true, publication);
       return true;
     }
     if (bootstrapQueue.length >= BOOTSTRAP_QUEUE_LIMIT) {
       return false;
     }
-    bootstrapQueue.push(json);
+    bootstrapQueue.push({ json, publication });
     return true;
   }
 
@@ -386,14 +439,18 @@ function consumeDelta(json) {
   }
   const applied = renderer.applyDeltaJson(json);
   if (!applied) {
+    acknowledgeAlreadyPresented(publication);
     return true;
   }
+  armRendererObservation(publication);
+  pendingPresentationPublication = publication;
   needsPresent = true;
   tryPresent();
+  if (engineWake !== null) scheduleFrame();
   return true;
 }
 
-function commitRendererTransition(initial) {
+function commitRendererTransition(initial, publication = null) {
   const nextMode = transitionMode;
   if (nextMode === null) {
     throw new Error("authoring render transition has no pending mode");
@@ -415,12 +472,15 @@ function commitRendererTransition(initial) {
   resourceBytes = nextResourceBytes;
   reconnectResourceBundlePending = false;
   needsPresent = false;
+  pendingPresentationPublication = null;
+  lastPresentedPublication = null;
+  pendingRendererObservationPublication = null;
   mode = nextMode;
-  bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop);
+  bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);
   return true;
 }
 
-async function bootstrapRenderer(initial, resumeFrameLoop = true) {
+async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null) {
   const bootstrapGeneration = frameLoopGeneration;
   try {
     let createdRenderer;
@@ -436,6 +496,7 @@ async function bootstrapRenderer(initial, resumeFrameLoop = true) {
       if (!applied) {
         throw new Error("retained authoring renderer must begin from an applied snapshot");
       }
+      armRendererObservation(publication);
     } else {
       createdRenderer = await ExecutionCanvasRenderer.create(canvas, initial);
       if (stopped) {
@@ -446,6 +507,7 @@ async function bootstrapRenderer(initial, resumeFrameLoop = true) {
     }
     renderer.resize(width, height);
     if (!drainGpuDiagnostics()) return;
+    pendingPresentationPublication = publication;
     needsPresent = true;
     while (!tryPresent()) {
       if (
@@ -513,7 +575,66 @@ function tryPresent() {
   }
   needsPresent = false;
   presentedFrames += 1;
+  const publication = pendingPresentationPublication;
+  const observationPublication = pendingRendererObservationPublication;
+  pendingPresentationPublication = null;
+  pendingRendererObservationPublication = null;
+  if (publication !== null) {
+    lastPresentedPublication = publication;
+  }
+  try {
+    acknowledgeRendererObservation(observationPublication, publication);
+  } catch (error) {
+    fail(error, null);
+    return false;
+  }
+  acknowledgePresented(publication);
   return drainGpuDiagnostics();
+}
+
+function samePublication(left, right) {
+  return left !== null && right !== null &&
+    left.session === right.session && left.sequence === right.sequence;
+}
+
+function acknowledgePresented(publication) {
+  if (publication === null || renderPort === null) {
+    return;
+  }
+  renderPort.postMessage({
+    type: "execution_presented",
+    session: publication.session,
+    sequence: publication.sequence,
+  });
+}
+
+function acknowledgeRendererObservation(observationPublication, presentedPublication) {
+  if (observationPublication === null) {
+    return;
+  }
+  if (!samePublication(observationPublication, presentedPublication) || renderPort === null) {
+    throw new Error("renderer observation presentation does not match its publication");
+  }
+  const json = renderer.takeRendererObservationJson();
+  if (typeof json !== "string") {
+    throw new Error("retained renderer did not publish its requested observation");
+  }
+  renderPort.postMessage({
+    type: "renderer_observation",
+    session: observationPublication.session,
+    sequence: observationPublication.sequence,
+    json,
+  });
+}
+
+function acknowledgeAlreadyPresented(publication) {
+  // `applyDeltaJson` returns false only for a typed stale transport envelope.
+  // It cannot prove a new publication reached the surface. A duplicate of the
+  // exact already-presented envelope is safe to acknowledge without redrawing;
+  // any older or foreign envelope remains unacknowledged.
+  if (!needsPresent && samePublication(publication, lastPresentedPublication)) {
+    acknowledgePresented(publication);
+  }
 }
 
 function flushBootstrapQueue() {
@@ -521,16 +642,70 @@ function flushBootstrapQueue() {
     return;
   }
   while (!needsPresent && bootstrapQueue.length > 0) {
-    const json = bootstrapQueue.shift();
+    const { json, publication } = bootstrapQueue.shift();
     const applied = renderer.applyDeltaJson(json);
     if (!applied) {
+      acknowledgeAlreadyPresented(publication);
       continue;
     }
+    armRendererObservation(publication);
+    pendingPresentationPublication = publication;
     needsPresent = true;
     if (!tryPresent()) {
       break;
     }
   }
+}
+
+function receiveRendererObservationRequest(message) {
+  const publication = rendererObservationMessagePublication(message);
+  if (mode !== MODE_RETAINED) {
+    throw new Error("renderer observations require retained execution");
+  }
+  if (pendingRendererObservationRequest !== null ||
+      pendingRendererObservationPublication !== null) {
+    throw new Error("render worker already has a pending renderer observation");
+  }
+  if (typeof message.json !== "string") {
+    throw new Error("renderer observation request must be JSON");
+  }
+  pendingRendererObservationRequest = { publication, json: message.json };
+}
+
+function cancelRendererObservationRequest(message) {
+  const publication = rendererObservationMessagePublication(message);
+  if (pendingRendererObservationRequest !== null &&
+      samePublication(pendingRendererObservationRequest.publication, publication)) {
+    pendingRendererObservationRequest = null;
+  }
+}
+
+function rendererObservationMessagePublication(message) {
+  if (!Number.isSafeInteger(message?.session) || message.session < 0 ||
+      !Number.isSafeInteger(message?.sequence) || message.sequence < 0) {
+    throw new Error("renderer observation publication is invalid");
+  }
+  return { session: message.session, sequence: message.sequence };
+}
+
+function armRendererObservation(publication) {
+  if (pendingRendererObservationRequest === null) {
+    return;
+  }
+  const requested = pendingRendererObservationRequest.publication;
+  if (!samePublication(requested, publication)) {
+    if (publication !== null &&
+        (publication.session !== requested.session || publication.sequence > requested.sequence)) {
+      throw new Error("renderer observation publication was skipped or replaced");
+    }
+    return;
+  }
+  if (renderer === null || typeof renderer.setRendererObservationRequestJson !== "function") {
+    throw new Error("retained renderer observation support is unavailable");
+  }
+  renderer.setRendererObservationRequestJson(pendingRendererObservationRequest.json);
+  pendingRendererObservationPublication = publication;
+  pendingRendererObservationRequest = null;
 }
 
 function nextRenderOpportunity() {
@@ -543,21 +718,43 @@ function nextRenderOpportunity() {
   });
 }
 
-function scheduleFrame(generation = frameLoopGeneration) {
-  if (!running) {
-    return;
-  }
-  if (typeof self.requestAnimationFrame === "function") {
-    self.requestAnimationFrame((timestamp) => frame(timestamp, generation));
-  } else {
-    setTimeout(() => frame(performance.now(), generation), 16);
+function cancelScheduledFrame() {
+  scheduleTicket += 1;
+  if (scheduledFrame !== null) {
+    if (scheduledFrame.kind === "animation") {
+      self.cancelAnimationFrame?.(scheduledFrame.handle);
+    } else {
+      clearTimeout(scheduledFrame.handle);
+    }
+    scheduledFrame = null;
   }
 }
 
-function frame(timestamp, generation) {
-  if (generation !== frameLoopGeneration || !running || !drainGpuDiagnostics()) {
-    return;
+function scheduleFrame(generation = frameLoopGeneration) {
+  cancelScheduledFrame();
+  if (!running) return;
+  const needsAnimationFrame = needsPresent || engineWake === null ||
+    engineWake.cadence === "animation_frame";
+  if (!needsAnimationFrame && engineWake.cadence === "idle") return;
+  const ticket = scheduleTicket;
+  if (needsAnimationFrame && typeof self.requestAnimationFrame === "function") {
+    scheduledFrame = {
+      kind: "animation",
+      handle: self.requestAnimationFrame((timestamp) => frame(timestamp, generation, ticket)),
+    };
+  } else {
+    const delay = needsAnimationFrame ? 16 : Math.max(0, engineWake.deadline - performance.now());
+    scheduledFrame = {
+      kind: "timer",
+      handle: setTimeout(() => frame(performance.now(), generation, ticket), delay),
+    };
   }
+}
+
+function frame(timestamp, generation, ticket) {
+  if (ticket !== scheduleTicket || generation !== frameLoopGeneration ||
+      !running || !drainGpuDiagnostics()) return;
+  scheduledFrame = null;
   lastFrameTimestamp = timestamp;
   if (needsPresent && tryPresent()) {
     flushBootstrapQueue();
@@ -567,10 +764,15 @@ function frame(timestamp, generation) {
     flushBootstrapQueue();
     drainTransport();
   }
-  if (!running || !drainGpuDiagnostics()) {
-    return;
+  if (!running || !drainGpuDiagnostics()) return;
+  const tickDue = engineWake === null || engineWake.cadence === "animation_frame" ||
+    (engineWake.cadence === "timer" && performance.now() >= engineWake.deadline);
+  if (tickDue) {
+    // One directive admits one engine drive. The response supplies the next
+    // Rust-derived directive, so an idle/waiting continuation never RAF-polls.
+    if (engineWake !== null) engineWake = { cadence: "idle", deadline: null };
+    renderPort?.postMessage({ type: "tick", timestamp });
   }
-  renderPort?.postMessage({ type: "tick", timestamp });
   scheduleFrame(generation);
 }
 

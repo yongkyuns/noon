@@ -75,6 +75,29 @@ function retainedDocument(backend = { kind: "typst", math: false }) {
   };
 }
 
+function sceneResult(overrides = {}) {
+  return {
+    kind: "scene_document",
+    document: { version: 1, objects: [], tracks: [] },
+    retained_document: null,
+    scene_spec: { version: 1, objects: [], tracks: [], camera_object: null },
+    duration: 0,
+    identities: { objects: [], tracks: [] },
+    callbacks: null,
+    ...overrides,
+  };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 test("correlates a Python request with a validated PatchBatch response", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
@@ -117,15 +140,7 @@ test("requests legacy Scene export only through an explicit boolean option", asy
     "message",
     workerMessage("result", {
       requestId: 0,
-      resultJson: JSON.stringify({
-        kind: "scene_document",
-        document: { version: 1, objects: [], tracks: [] },
-        retained_document: null,
-        scene_spec: { version: 1, objects: [], tracks: [], camera_object: null },
-        duration: 0,
-        identities: { objects: [], tracks: [] },
-        callbacks: null,
-      }),
+      resultJson: JSON.stringify(sceneResult()),
     }),
   );
   await resultPromise;
@@ -218,10 +233,210 @@ test("semantic execution descriptor bypasses legacy document and SceneSpec valid
   assert.deepEqual(validateSemanticExecutionDescriptor({ context_id: "semantic-8" }), {
     contextId: "semantic-8",
   });
+  assert.deepEqual(validateSemanticExecutionDescriptor({
+    context_id: "semantic-9",
+    continuation_generation: 4,
+  }), {
+    contextId: "semantic-9",
+    continuationGeneration: 4,
+  });
   assert.throws(
     () => validateSemanticExecutionDescriptor({ context_id: "" }),
     /non-empty string/,
   );
+});
+
+test("routes an early semantic continuation registration without settling the run", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  const registrations = [];
+  let settled = false;
+  const result = client.run("async scene", {}, {
+    onSemanticContinuation: (registration) => { registrations.push(registration); },
+  });
+  result.then(() => { settled = true; });
+  await Promise.resolve();
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0,
+    generation: 7,
+    duration: 2,
+    semanticExecution: {
+      context_id: "semantic-async",
+      continuation_generation: 7,
+    },
+  }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.deepEqual(registrations, [{
+    generation: 7,
+    duration: 2,
+    semanticExecution: {
+      contextId: "semantic-async",
+      continuationGeneration: 7,
+    },
+  }]);
+
+  const control = new MessageChannel();
+  const render = new MessageChannel();
+  const attached = client.attachSemanticExecution(
+    registrations[0].semanticExecution.contextId,
+    control.port1,
+    render.port1,
+    {
+      transportMode: "transferable",
+      sharedSlotCapacity: 1024,
+      loopDurationSeconds: 2,
+      session: 1,
+      continuationGeneration: registrations[0].generation,
+    },
+  );
+  await Promise.resolve();
+  const attachment = worker.messages.find(
+    (message) => message.type === "attach_semantic_execution",
+  );
+  assert.equal(attachment.continuationGeneration, 7);
+  assert.equal(attachment.continuationRunRequestId, 0);
+  worker.emit("message", workerMessage("semantic_execution_attached", {
+    requestId: attachment.requestId,
+  }));
+  await attached;
+
+  worker.emit("message", workerMessage("result", {
+    requestId: 0,
+    resultJson: JSON.stringify(sceneResult({
+      semantic_execution: {
+        context_id: "semantic-async",
+        continuation_generation: 7,
+      },
+      duration: 4,
+    })),
+  }));
+  assert.equal((await result).semanticExecution.continuationGeneration, 7);
+  control.port2.close();
+  render.port2.close();
+});
+
+test("waits for continuation startup before settling an already returned result", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  const startup = deferred();
+  let settled = false;
+  const result = client.run("async scene", {}, {
+    onSemanticContinuation: () => startup.promise,
+  });
+  void result.then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  await Promise.resolve();
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0,
+    generation: 17,
+    duration: 1,
+    semanticExecution: {
+      context_id: "semantic-delayed",
+      continuation_generation: 17,
+    },
+  }));
+  worker.emit("message", workerMessage("result", {
+    requestId: 0,
+    resultJson: JSON.stringify(sceneResult({
+      semantic_execution: {
+        context_id: "semantic-delayed",
+        continuation_generation: 17,
+      },
+      duration: 1,
+    })),
+  }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(settled, false);
+
+  startup.resolve();
+  assert.equal((await result).semanticExecution.contextId, "semantic-delayed");
+});
+
+test("continuation startup failure rejects a buffered result and cancels its run", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  const startup = deferred();
+  const result = client.run("async scene", {}, {
+    onSemanticContinuation: () => startup.promise,
+  });
+  await Promise.resolve();
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0,
+    generation: 19,
+    duration: 1,
+    semanticExecution: {
+      context_id: "semantic-failed-startup",
+      continuation_generation: 19,
+    },
+  }));
+  worker.emit("message", workerMessage("result", {
+    requestId: 0,
+    resultJson: JSON.stringify(sceneResult({
+      semantic_execution: {
+        context_id: "semantic-failed-startup",
+        continuation_generation: 19,
+      },
+      duration: 1,
+    })),
+  }));
+
+  startup.reject(new Error("startup rejected"));
+  await assert.rejects(result, /startup rejected/);
+  await new Promise((resolve) => setImmediate(resolve));
+  const cancellation = worker.messages.find(
+    (message) => message.type === "cancel_semantic_continuation",
+  );
+  assert.equal(cancellation.contextId, "semantic-failed-startup");
+  assert.equal(cancellation.continuationGeneration, 19);
+  worker.emit("message", workerMessage("semantic_continuation_cancelled", {
+    requestId: cancellation.requestId,
+  }));
+});
+
+test("cancels the matching suspended continuation when early startup rejects", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  const result = client.run("async scene", {}, {
+    onSemanticContinuation: () => { throw new Error("renderer startup failed"); },
+  });
+  const rejected = assert.rejects(result, /renderer startup failed/);
+  await Promise.resolve();
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0,
+    generation: 11,
+    duration: 1,
+    semanticExecution: {
+      context_id: "semantic-cancel",
+      continuation_generation: 11,
+    },
+  }));
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  const cancellation = worker.messages.find(
+    (message) => message.type === "cancel_semantic_continuation",
+  );
+  assert.equal(cancellation.contextId, "semantic-cancel");
+  assert.equal(cancellation.continuationGeneration, 11);
+  assert.equal(cancellation.continuationRunRequestId, 0);
+  assert.equal(cancellation.reason, "renderer startup failed");
+  worker.emit("message", workerMessage("semantic_continuation_cancelled", {
+    requestId: cancellation.requestId,
+  }));
+  worker.emit("message", workerMessage("error", {
+    requestId: 0,
+    message: "renderer startup failed",
+  }));
+  await rejected;
 });
 
 test("semantic execution attachment transfers distinct control and render ports", async () => {
@@ -239,6 +454,7 @@ test("semantic execution attachment transfers distinct control and render ports"
       sharedSlotCapacity: 1024,
       loopDurationSeconds: 3,
       session: 4,
+      initiallyPaused: true,
     },
   );
   await Promise.resolve();
@@ -248,6 +464,7 @@ test("semantic execution attachment transfers distinct control and render ports"
   assert.equal(request.controlPort, control.port1);
   assert.equal(request.renderPort, render.port1);
   assert.equal(request.session, 4);
+  assert.equal(request.initiallyPaused, true);
   worker.emit(
     "message",
     workerMessage("semantic_execution_attached", { requestId: request.requestId }),

@@ -335,6 +335,24 @@ fn property_type_and_target_kind_are_validated_before_mutation() {
 }
 
 #[test]
+fn presence_property_requires_a_typed_signal_binding() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_property(target, SemanticObjectProperty::Presence, false);
+
+    assert_eq!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::UnsupportedPropertyWrite {
+            index: 0,
+            object: target.into(),
+            property: SemanticObjectProperty::Presence,
+        })
+    );
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+}
+
+#[test]
 fn unchanged_signal_is_a_noop_with_no_impact() {
     let mut store = SemanticStore::new();
     let signal = store.insert_semantic_input_signal(true).unwrap();

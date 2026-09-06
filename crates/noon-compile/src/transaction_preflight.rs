@@ -18,6 +18,8 @@ struct TrackShadow {
     object_index: u32,
     property: Property,
     start_time: f64,
+    duration: f64,
+    reconciled: bool,
     presence: Option<(bool, bool)>,
 }
 
@@ -28,6 +30,8 @@ impl TrackShadow {
             object_index: track.object_index,
             property: track.property,
             start_time: track.timing.start_time,
+            duration: track.timing.duration,
+            reconciled: track.reconciled,
             presence: presence_endpoints(track.property, &track.values),
         }
     }
@@ -38,6 +42,8 @@ impl TrackShadow {
             object_index,
             property: track.property,
             start_time: track.timing.start_time,
+            duration: track.timing.duration,
+            reconciled: false,
             presence: presence_endpoints(track.property, &track.values),
         }
     }
@@ -333,6 +339,57 @@ pub(super) fn preflight_transaction_with_resources(
                 if removed.property == Property::Presence {
                     validate_presence_channel(scene, &mut overlay, removed.object_index)?;
                 }
+            }
+            ExecutionPatch::ReconcileTrack {
+                track,
+                object,
+                property,
+                end_time,
+            } => {
+                let mut reconciled = overlay
+                    .track(scene, *track)
+                    .ok_or(CompilePatchError::UnknownTrack(*track))?;
+                if reconciled.reconciled {
+                    return Err(CompilePatchError::TrackAlreadyReconciled(*track));
+                }
+                let object_index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let actual_end = reconciled.start_time + reconciled.duration;
+                if reconciled.object_index != object_index
+                    || reconciled.property != *property
+                    || actual_end.total_cmp(end_time) != std::cmp::Ordering::Equal
+                {
+                    return Err(CompilePatchError::TrackReconciliationMismatch(*track));
+                }
+                if reconciled.duration <= 0.0
+                    || !matches!(
+                        reconciled.property,
+                        Property::Position
+                            | Property::Rotation
+                            | Property::Scale
+                            | Property::Fill
+                            | Property::Stroke
+                            | Property::Opacity
+                            | Property::Appearance
+                    )
+                {
+                    return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
+                }
+                for other in overlay.channel(scene, object_index, *property) {
+                    if other.id == *track {
+                        continue;
+                    }
+                    let other_end = other.start_time + other.duration;
+                    if reconciled.start_time < other_end && other.start_time < actual_end {
+                        return Err(CompilePatchError::OverlappingTrackReconciliation {
+                            track: *track,
+                            other: other.id,
+                        });
+                    }
+                }
+                reconciled.reconciled = true;
+                overlay.set_track(*track, Some(reconciled));
             }
         }
     }

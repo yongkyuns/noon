@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ops::Bound::{Excluded, Included, Unbounded},
 };
 
@@ -21,6 +21,22 @@ pub struct TimelineRelowerStats {
     pub groups_relowered: usize,
     pub events_removed: usize,
     pub events_inserted: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TimelineAdvancePreview {
+    requested: Vec<CompiledChannelKey>,
+    stats: TimelineSchedulerStats,
+}
+
+impl TimelineAdvancePreview {
+    pub(crate) fn requested(&self) -> &[CompiledChannelKey] {
+        &self.requested
+    }
+
+    pub(crate) const fn stats(&self) -> TimelineSchedulerStats {
+        self.stats
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -291,6 +307,83 @@ impl TimelineEventScheduler {
         self.requested.len()
     }
 
+    /// Derive the exact forward request order without changing scheduler state.
+    ///
+    /// Scratch storage is proportional to the active groups plus groups whose
+    /// events are crossed. This is used by a required host-callback barrier to
+    /// evaluate a sparse tentative frame while the last coherent scheduler/time
+    /// remains live.
+    pub(crate) fn preview_advance(&self, time: f64) -> TimelineAdvancePreview {
+        debug_assert!(time >= self.time);
+
+        let mut active_groups = self.active_groups.clone();
+        let mut active_positions = active_groups
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(position, group)| (group, position))
+            .collect::<BTreeMap<_, _>>();
+        let mut changed_counts = BTreeMap::<usize, u32>::new();
+        let mut requested_groups = Vec::new();
+        let mut requested = BTreeSet::new();
+        let mut events_crossed = 0;
+
+        let mut request = |group: usize| {
+            if self.groups[group].is_some() && requested.insert(group) {
+                requested_groups.push(group);
+            }
+        };
+
+        let lower = time_upper_bound(self.time);
+        let upper = time_upper_bound(time);
+        for (key, kind) in self.events.range((Excluded(lower), Included(upper))) {
+            events_crossed += 1;
+            request(key.group);
+            let count = changed_counts
+                .entry(key.group)
+                .or_insert(self.active_counts[key.group]);
+            match kind {
+                EventKind::Instant => {}
+                EventKind::Start => {
+                    *count += 1;
+                    if *count == 1 && !active_positions.contains_key(&key.group) {
+                        active_positions.insert(key.group, active_groups.len());
+                        active_groups.push(key.group);
+                    }
+                }
+                EventKind::End => {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        let Some(position) = active_positions.remove(&key.group) else {
+                            continue;
+                        };
+                        let last = active_groups.len() - 1;
+                        active_groups.swap(position, last);
+                        active_groups.pop();
+                        if position < active_groups.len() {
+                            active_positions.insert(active_groups[position], position);
+                        }
+                    }
+                }
+            }
+        }
+        for group in &active_groups {
+            request(*group);
+        }
+
+        TimelineAdvancePreview {
+            requested: requested_groups
+                .into_iter()
+                .filter_map(|group| self.groups[group].map(|scheduled| scheduled.channel))
+                .collect(),
+            stats: TimelineSchedulerStats {
+                events_crossed,
+                active_groups: active_groups.len(),
+                groups_requested: requested.len(),
+            },
+        }
+    }
+
     fn allocate_group(&mut self, channel: CompiledChannelKey) -> usize {
         if let Some(group) = self.free_groups.pop() {
             self.groups[group] = Some(ScheduledTrackGroup { channel });
@@ -469,6 +562,7 @@ mod tests {
             },
             time_map: CompositionTimeMap::default(),
             transform_geometry_plan: None,
+            reconciled: false,
         }
     }
 
@@ -587,5 +681,24 @@ mod tests {
         assert_eq!(scheduler.live_group_count(), 100_000);
         assert_eq!(scheduler.advance(2.5), 1);
         assert_eq!(scheduler.requested(), &[channel]);
+    }
+
+    #[test]
+    fn forward_preview_matches_mutating_request_order_and_stats() {
+        let tracks = vec![
+            position_track(1, 0, 0.0, 2.0),
+            position_track(2, 1, 1.0, 3.0),
+            position_track(3, 2, 3.0, 1.0),
+        ];
+        let mut scheduler = TimelineEventScheduler::new(&tracks);
+        scheduler.seek(0.5);
+
+        let preview = scheduler.preview_advance(3.5);
+        let requested = preview.requested().to_vec();
+        let stats = preview.stats();
+        scheduler.advance(3.5);
+
+        assert_eq!(scheduler.requested(), requested);
+        assert_eq!(scheduler.last_stats(), stats);
     }
 }

@@ -256,6 +256,8 @@ fn completed_effective_query_can_author_and_activate_the_next_segment() {
         session
             .advance_segment_to(segment, segment.end_time() + 10.0)
             .unwrap();
+        assert!(!session.segment_state(segment).is_complete());
+        session.complete_segment(&mut store, segment).unwrap();
         assert!(session.segment_state(segment).is_complete());
         assert_eq!(
             session
@@ -451,7 +453,7 @@ fn painter_interleaving_fails_before_semantic_or_runtime_publication() {
 }
 
 #[test]
-fn authored_value_change_during_animation_preserves_effective_driver() {
+fn authored_value_change_during_animation_is_rejected_before_publication() {
     let (mut store, mut session, nodes) = fixture(1);
     let target = add_target(&mut store, &mut session, nodes[0], 4.0);
     let options = AnimationOptions::new()
@@ -469,41 +471,43 @@ fn authored_value_change_during_animation_preserves_effective_driver() {
     let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
         panic!()
     };
-    session
+    let segment = session
         .activate_animation_segment(&store, *animation, options)
         .unwrap();
     session.seek(1.0).unwrap();
+    let store_revision = store.scene_revision();
+    let publication = session.publication_context();
+    let frame = session.frame().clone();
+    assert_eq!(
+        session.apply_semantic_transaction(&mut store, translation(nodes[0], 100.0)),
+        Err(ExecutionSessionPublicationError::SegmentCompletionPending)
+    );
+    assert_eq!(store.scene_revision(), store_revision);
+    assert_eq!(session.publication_context(), publication);
+    assert_eq!(session.frame(), &frame);
     session
-        .apply_semantic_transaction(&mut store, translation(nodes[0], 100.0))
+        .advance_segment_to(segment, segment.end_time())
         .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+}
+
+#[test]
+fn authored_publication_is_rejected_while_required_callback_is_pending() {
+    let (mut store, mut session, nodes) = fixture(1);
+    let context = session.publication_context();
+    let frame = session.frame().clone();
+    let store_revision = store.scene_revision();
+    let token = session
+        .begin_required_callback_phase(1.0, [nodes[0]])
+        .unwrap()
+        .token();
+
     assert_eq!(
-        store
-            .semantic_object_state_checked(nodes[0])
-            .unwrap()
-            .transform
-            .translation
-            .x,
-        100.0
+        session.apply_semantic_transaction(&mut store, translation(nodes[0], 3.0)),
+        Err(ExecutionSessionPublicationError::RequiredCallbackPending)
     );
-    assert_eq!(
-        session
-            .effective_semantic_object(&store, nodes[0])
-            .unwrap()
-            .object
-            .transform
-            .translation
-            .x,
-        2.0
-    );
-    session.seek(2.0).unwrap();
-    assert_eq!(
-        session
-            .effective_semantic_object(&store, nodes[0])
-            .unwrap()
-            .object
-            .transform
-            .translation
-            .x,
-        4.0
-    );
+    assert_eq!(store.scene_revision(), store_revision);
+    assert_eq!(session.publication_context(), context);
+    assert_eq!(session.frame(), &frame);
+    session.fail_required_callback_phase(token).unwrap();
 }

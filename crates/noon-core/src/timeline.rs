@@ -89,6 +89,8 @@ pub enum Property {
     Position,
     Rotation,
     Scale,
+    Fill,
+    Stroke,
     Opacity,
     Appearance,
     Reveal,
@@ -100,6 +102,7 @@ pub enum ValueKind {
     Bool,
     Scalar,
     Vec2,
+    Color,
     Object,
 }
 
@@ -108,6 +111,7 @@ impl Property {
         match self {
             Self::Presence => ValueKind::Bool,
             Self::Transform => ValueKind::Object,
+            Self::Fill | Self::Stroke => ValueKind::Color,
             Self::Position | Self::Scale => ValueKind::Vec2,
             Self::Rotation | Self::Opacity | Self::Appearance | Self::Reveal | Self::Morph => {
                 ValueKind::Scalar
@@ -150,6 +154,10 @@ pub enum TrackValues {
         from: Vec2,
         to: Vec2,
     },
+    Color {
+        from: Option<crate::Color>,
+        to: Option<crate::Color>,
+    },
     Object {
         from: ObjectSnapshot,
         to: ObjectSnapshot,
@@ -162,6 +170,7 @@ impl TrackValues {
             Self::Bool { .. } => ValueKind::Bool,
             Self::Scalar { .. } => ValueKind::Scalar,
             Self::Vec2 { .. } => ValueKind::Vec2,
+            Self::Color { .. } => ValueKind::Color,
             Self::Object { .. } => ValueKind::Object,
         }
     }
@@ -190,6 +199,22 @@ impl TrackValues {
                     from: *from,
                     to: *to,
                 })
+            }
+            Self::Color { from, to } => {
+                for (endpoint, color) in [
+                    (TrackValueEndpoint::From, from),
+                    (TrackValueEndpoint::To, to),
+                ] {
+                    if color.as_ref().is_some_and(|color| {
+                        !color.red.is_finite()
+                            || !color.green.is_finite()
+                            || !color.blue.is_finite()
+                            || !color.alpha.is_finite()
+                    }) {
+                        return Err(TimelineError::InvalidColorValue { property, endpoint });
+                    }
+                }
+                Ok(())
             }
             Self::Object { from, to } => {
                 validate_object_track_value(object, property, TrackValueEndpoint::From, from)?;
@@ -289,6 +314,10 @@ pub enum TimelineError {
         from: Vec2,
         to: Vec2,
     },
+    InvalidColorValue {
+        property: Property,
+        endpoint: TrackValueEndpoint,
+    },
     InvalidObjectValue {
         property: Property,
         endpoint: TrackValueEndpoint,
@@ -326,6 +355,10 @@ impl std::fmt::Display for TimelineError {
                 "non-finite vector values for {property:?}: from=({}, {}), to=({}, {})",
                 from.x, from.y, to.x, to.y
             ),
+            Self::InvalidColorValue { property, endpoint } => write!(
+                formatter,
+                "non-finite color in {endpoint} value for {property:?}"
+            ),
             Self::InvalidObjectValue {
                 property,
                 endpoint,
@@ -350,12 +383,7 @@ pub(crate) fn validate_track_timing(
     property: Property,
     timing: TrackTiming,
 ) -> Result<(), TimelineError> {
-    if !timing.start_time.is_finite() {
-        return Err(TimelineError::InvalidStartTime(timing.start_time));
-    }
-    if !timing.duration.is_finite() {
-        return Err(TimelineError::InvalidDuration(timing.duration));
-    }
+    validate_track_time_fields(timing)?;
     if property.is_instant() {
         if timing.duration != 0.0 {
             return Err(TimelineError::InvalidInstantDuration {
@@ -364,6 +392,24 @@ pub(crate) fn validate_track_timing(
             });
         }
     } else if timing.duration < 0.0 {
+        return Err(TimelineError::InvalidDuration(timing.duration));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_continuous_track_timing(timing: TrackTiming) -> Result<(), TimelineError> {
+    validate_track_time_fields(timing)?;
+    if timing.duration < 0.0 {
+        return Err(TimelineError::InvalidDuration(timing.duration));
+    }
+    Ok(())
+}
+
+fn validate_track_time_fields(timing: TrackTiming) -> Result<(), TimelineError> {
+    if !timing.start_time.is_finite() {
+        return Err(TimelineError::InvalidStartTime(timing.start_time));
+    }
+    if !timing.duration.is_finite() {
         return Err(TimelineError::InvalidDuration(timing.duration));
     }
     Ok(())
@@ -832,6 +878,41 @@ mod tests {
                 .unwrap(),
             TrackId::new(0)
         );
+    }
+
+    #[test]
+    fn non_finite_fill_color_is_rejected_by_track_validation() {
+        let invalid = crate::Color {
+            red: f32::NAN,
+            ..crate::Color::RED
+        };
+        let invalid_track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(1),
+            property: Property::Fill,
+            values: TrackValues::Color {
+                from: Some(crate::Color::BLUE),
+                to: Some(invalid),
+            },
+            timing: timing(),
+            time_map: CompositionTimeMap::identity(),
+        };
+        assert_eq!(
+            validate_track_definition(&invalid_track),
+            Err(TimelineError::InvalidColorValue {
+                property: Property::Fill,
+                endpoint: TrackValueEndpoint::To,
+            })
+        );
+
+        let valid_track = TrackDefinition {
+            values: TrackValues::Color {
+                from: None,
+                to: Some(crate::Color::RED),
+            },
+            ..invalid_track
+        };
+        assert!(validate_track_definition(&valid_track).is_ok());
     }
 
     #[test]

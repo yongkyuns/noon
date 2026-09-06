@@ -199,6 +199,10 @@ mod tests {
             .bind_semantic_signal(scalar, target, SemanticObjectProperty::ObjectOpacity)
             .unwrap());
         assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert!(store
+            .bind_semantic_signal(boolean, target, SemanticObjectProperty::Presence)
+            .unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
 
         assert!(matches!(
             store.bind_semantic_signal(scalar, target, SemanticObjectProperty::Scale),

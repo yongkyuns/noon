@@ -53,7 +53,10 @@ async function load(source, loopDurationSeconds) {
     throw new Error("host raster page supports one authored scene per page");
   }
 
-  const result = await client.run(source);
+  // This #959-owned codec/renderer diagnostic explicitly consumes a scene
+  // document. Canonical callback execution is qualified by the shared-authoring
+  // and direct Rust/WASM proofs without this legacy document adapter.
+  const result = await client.run(source, {}, { exportDocument: true });
   if (result.kind !== "scene_document") {
     throw new Error("host raster harness requires a scene document");
   }
@@ -93,13 +96,8 @@ async function load(source, loopDurationSeconds) {
 async function advanceOneFrame(frameIndex, time) {
   const deterministicDelta = engine.tickDeltaJson(time * 1000);
   await presentDelta(deterministicDelta);
-  let diagnostic = null;
 
   if (host !== null) {
-    // A deterministic render may have produced a diagnostic for the same
-    // renderer. Clear it before the host phase so a no-op host patch cannot
-    // accidentally consume that older record as its own observation.
-    renderer.takeHostUpdaterDiagnosticJson();
     host.advanceTo(time);
     const frame = JSON.parse(host.callbackFrameJson());
     if (Math.abs(Number(frame.time) - Number(time)) > 1e-9) {
@@ -113,28 +111,10 @@ async function advanceOneFrame(frameIndex, time) {
     host.commitPatchBatch(batchJson);
 
     const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
-    const hostPresented = await presentDelta(hostDelta);
-    if (hostPresented) {
-      const diagnosticJson = renderer.takeHostUpdaterDiagnosticJson();
-      diagnostic = diagnosticJson === undefined || diagnosticJson === null
-        ? null
-        : JSON.parse(diagnosticJson);
-    }
+    await presentDelta(hostDelta);
   }
   currentFrameIndex = frameIndex;
   currentLogicalTime = time;
-  return diagnostic;
-}
-
-function setHostUpdaterDiagnosticObject(objectId) {
-  if (renderer === null) {
-    throw new Error("host raster scene has not been loaded");
-  }
-  const normalized = Number(objectId);
-  if (!Number.isSafeInteger(normalized) || normalized < 0) {
-    throw new RangeError("host updater diagnostic object must be a non-negative integer");
-  }
-  renderer.setHostUpdaterDiagnosticObject(BigInt(normalized));
 }
 
 function normalizeFrameTimes(frameTimes, targetFrame) {
@@ -179,9 +159,8 @@ async function renderThrough(frameIndex, frameTimes) {
     throw new RangeError("host raster playback cannot move backwards");
   }
 
-  let diagnostic = null;
   for (let frame = currentFrameIndex + 1; frame <= targetFrame; frame += 1) {
-    diagnostic = await advanceOneFrame(frame, activeFrameTimes[frame]);
+    await advanceOneFrame(frame, activeFrameTimes[frame]);
   }
   await waitForPaint();
 
@@ -202,13 +181,11 @@ async function renderThrough(frameIndex, frameTimes) {
     geometryCacheMisses: renderer.lastGeometryCacheMisses(),
     authoredDuration,
     frameIndex: currentFrameIndex,
-    diagnostic,
   };
 }
 
 window.noonHostRaster = {
   ready: () => readyPromise,
   load,
-  setHostUpdaterDiagnosticObject,
   renderThrough,
 };
