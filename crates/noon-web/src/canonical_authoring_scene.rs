@@ -5739,8 +5739,8 @@ mod tests {
         player.live_advance_segment_to(0.5).unwrap();
         assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
         assert!(
-            (player.live_effective(&square).unwrap().transform.rotation_z
-                - std::f64::consts::FRAC_PI_2)
+            (player.live_effective(&square).unwrap().transform.rotation
+                - std::f32::consts::FRAC_PI_2)
                 .abs()
                 < 1e-12
         );
