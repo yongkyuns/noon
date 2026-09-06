@@ -31,6 +31,7 @@ function fixture(
   let created = 0, resumed = 0, completedSegments = 0;
   let initialSnapshots = 0, resourceBundles = 0;
   const nativeInputs = [];
+  const continuationDriveTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
@@ -50,8 +51,16 @@ function fixture(
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setNativeStateInputJson: (value) => { nativeInputs.push({ type: "state", value: JSON.parse(value) }); },
     emitNativeEventJson: (value) => { nativeInputs.push({ type: "event", value: JSON.parse(value) }); },
-    liveSegmentWake: () => ({ presentNow: true, cadence: "animation_frame", timerAfterMilliseconds: undefined }),
-    driveLiveSegmentFromWallTime: () => { time = 1; return true; },
+    liveSegmentWake: () => ({
+      presentNow: true,
+      cadence: "animation_frame",
+      timerAfterMilliseconds: undefined,
+    }),
+    driveLiveSegmentFromWallTime: (wallTime) => {
+      continuationDriveTimes.push(wallTime);
+      time = 1;
+      return true;
+    },
     completeLiveSegment: () => { completedSegments += 1; },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
     time: () => time, isPlaying: () => playing,
@@ -64,7 +73,7 @@ function fixture(
   };
   return { control, render, player, stats: () => ({
     returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
-    initialSnapshots, resourceBundles,
+    initialSnapshots, resourceBundles, continuationDriveTimes,
   }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
@@ -126,7 +135,16 @@ test("semantic continuation returns one completed player before resuming and ret
       session: initialDelta.session,
       sequence: initialDelta.sequence,
     });
-    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    const paused = await request(f.control.port2, "pause", 80);
+    assert.equal(paused.type, "error");
+    assert.match(paused.message, /Python source continuation owns execution/);
+    const sought = await request(f.control.port2, "seek", 81, { time: 0.75 });
+    assert.equal(sought.type, "error");
+    assert.match(sought.message, /Python source continuation owns execution/);
+    assert.equal(f.player.isPlaying(), true, "rejected pause must not change presentation state");
+    assert.equal(f.player.time(), 0, "rejected seek must not bypass the live segment barrier");
+    const foreignWorkerTimestamp = 9_000_000_000;
+    f.render.port2.postMessage({ type: "tick", timestamp: foreignWorkerTimestamp });
     await turn();
     await turn();
     assert.deepEqual(completions, [9]);
@@ -134,10 +152,18 @@ test("semantic continuation returns one completed player before resuming and ret
     assert.equal(f.stats().completedSegments, 1);
     assert.equal(f.stats().returned, 1);
     assert.equal(f.stats().returnedPlayer, f.player);
+    assert.notEqual(
+      f.stats().continuationDriveTimes[0],
+      foreignWorkerTimestamp,
+      "render ticks must not supply the authoring worker's continuation clock",
+    );
     assert.deepEqual(wakes, ["animation_frame", "idle"]);
     const idleState = await request(f.control.port2, "state", 90);
     assert.equal(idleState.time, 1);
     assert.equal(idleState.playing, false);
+    const idleResume = await request(f.control.port2, "resume", 91);
+    assert.equal(idleResume.type, "error");
+    assert.match(idleResume.message, /Python source continuation owns execution/);
 
     endpoint.startContinuation(9);
     assert.equal(f.stats().created, 1, "only the first attachment may bootstrap transport");
@@ -192,10 +218,19 @@ test("semantic continuation drives a pure wait only when its Rust deadline is du
       sequence: initialDelta.sequence,
     });
 
+    const rearmedWake = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_wake" && message.cadence === "timer",
+    );
     f.render.port2.postMessage({ type: "tick", timestamp: 16 });
     await turn();
     assert.deepEqual(completions, []);
     assert.equal(f.stats().completedSegments, 0);
+    assert.deepEqual(await rearmedWake, {
+      type: "execution_wake",
+      cadence: "timer",
+      timerAfterMilliseconds: 1_000,
+    });
 
     f.render.port2.postMessage({ type: "tick", timestamp: 1_016 });
     await turn();

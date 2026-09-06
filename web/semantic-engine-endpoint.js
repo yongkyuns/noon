@@ -8,6 +8,14 @@ import {
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
 export const MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE = 128;
+const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
+  "pause",
+  "resume",
+  "seek",
+  "restart_playback",
+  "set_loop_duration",
+  "advance_to",
+]);
 
 export async function attachSemanticEngine(
   context,
@@ -117,8 +125,6 @@ export async function attachSemanticEngine(
   const emitContinuationWake = (cadence, timerAfterMilliseconds, force = false) => {
     if (continuation === null) return;
     if (!force && cadence === "idle" && continuationWakeCadence === "idle") return;
-    if (!force && cadence === "timer" && continuationWakeCadence === "timer" &&
-        timerAfterMilliseconds > 0) return;
     continuationWakeCadence = cadence;
     renderPort.postMessage({
       type: "execution_wake",
@@ -310,7 +316,10 @@ export async function attachSemanticEngine(
         if (callbackFault === null) {
           try {
             if (continuationActive) {
-              await driveContinuation(timestamp);
+              // A render-worker timestamp may use a different time origin.
+              // Its tick is only a wake opportunity; Rust progression stays
+              // anchored to this authoring worker's monotonic clock.
+              await driveContinuation(performance.now());
             } else if (player !== null) {
               await publishCallbackPhase(player.tickCallbackPhaseJson(timestamp));
             }
@@ -388,6 +397,15 @@ export async function attachSemanticEngine(
           "native_state_input", "native_event",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
+        }
+        if (continuation !== null && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {
+          throw new Error(
+            "playback controls are unavailable while a Python source continuation owns execution",
+          );
+        }
+        if (player === null &&
+            (message.type === "native_state_input" || message.type === "native_event")) {
+          throw new Error("native input requires an active Python source continuation segment");
         }
         if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
           throw new Error("semantic control queue is full; wait for pending commands before retrying");
