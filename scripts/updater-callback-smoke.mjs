@@ -82,16 +82,44 @@ try {
     assert.deepEqual(phase.mirrored.transform, phase.committed.transform);
     assert.deepEqual(phase.mirrored.style, phase.committed.style);
     assert.equal(phase.prepared.kind, "geometry");
-    assert.ok(phase.upload.target_geometry_writes.length > 0);
-    assert.equal(phase.presentation.presented, true);
+    assert.equal(phase.prepared.primitive, "rectangle");
+    assert.equal(phase.prepared.instance_dirty, true);
+    assert.equal(phase.prepared.full_rebuilds, 0);
+    assert.equal(phase.prepared.instances_repacked, 1);
+    assert.ok(phase.prepared.instance_end > phase.prepared.instance_start);
+
+    const targetWrite = phase.upload.target_write;
+    assert.ok(targetWrite, "callback target upload was not captured");
+    assert.equal(targetWrite.buffer, "rectangle");
+    assert.ok(targetWrite.instance_start < phase.prepared.instance_end);
+    assert.ok(targetWrite.instance_end > phase.prepared.instance_start);
+    assert.ok(targetWrite.byte_length > 0);
+    assert.ok(targetWrite.payload_hash > 0);
+    assert.deepEqual(phase.upload.target_text_writes, []);
+    assert.ok(phase.upload.geometry_bytes_uploaded >= targetWrite.byte_length);
+    assert.equal(phase.upload.buffer_reallocations, 0);
+
+    assert.equal(phase.draw.submission_membership, true);
+    assert.ok(phase.draw.geometry_draw_calls > 0);
+    assert.ok(phase.draw.geometry_instances_drawn >= 2);
+    assert.equal(phase.draw.text_draw_calls, 0);
+    assert.equal(phase.draw.text_instances_drawn, 0);
+    assert.ok(["success", "suboptimal"].includes(phase.presentation.surface_status));
+    assert.ok(phase.presentation.presentation_sequence > 0);
+    assert.equal(phase.presentation.submit_called, true);
+    assert.equal(phase.presentation.present_called, true);
   }
 
   assert.equal(first.committed.time, 0.25);
   assert.deepEqual(first.committed.transform.translation, { x: 2, y: 0.25 });
-  assert.equal(first.committed.style.opacity, 0.75);
+  assert.equal(first.committed.style.opacity, 1);
+  assert.equal(first.committed.style.fill.alpha, 0.75);
+  assert.equal(first.committed.style.stroke.alpha, 0.75);
   assert.equal(second.committed.time, 0.75);
   assert.deepEqual(second.committed.transform.translation, { x: 2, y: 0.5 });
   assert.equal(second.committed.style.opacity, 1);
+  assert.equal(second.committed.style.fill.alpha, 1);
+  assert.equal(second.committed.style.stroke.alpha, 1);
   assert.equal(second.committed.object, first.committed.object);
   assert.equal(second.committed.frame_index, first.committed.frame_index);
   assert.ok(second.publication.sequence > first.publication.sequence);

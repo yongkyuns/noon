@@ -910,8 +910,17 @@ def _canonical_set_opacity(self: _base.Mobject, opacity: float) -> _base.Mobject
     if value is None:
         return _ORIGINAL_SET_OPACITY(self, opacity)
     context, key, row = value
+    from _manim_phase_b import _opacity
+
+    paint_opacity = _opacity("opacity", opacity)
     before = row.style
-    row.style = replace(row.style, opacity=float(opacity))
+    fill = row.style.fill
+    if fill is not None:
+        fill = (fill[0], fill[1], fill[2], paint_opacity)
+    stroke = row.style.stroke
+    if stroke is not None:
+        stroke = (stroke[0], stroke[1], stroke[2], paint_opacity)
+    row.style = replace(row.style, fill=fill, stroke=stroke)
     context.style_changed(key, before, row)
     return self
 
