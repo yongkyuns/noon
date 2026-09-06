@@ -191,34 +191,59 @@ pub(crate) fn edit_stroke(
     Ok(())
 }
 
+pub(super) fn edit_stroke_width(style: &mut SemanticStyle, width: f64) -> Result<(), String> {
+    let width = authoring_render_f64("stroke width", width)?;
+    if width < 0.0 {
+        return Err("stroke width must be non-negative".to_owned());
+    }
+    style.stroke_width = width;
+    if style.stroke.is_none() {
+        style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        style.stroke_opacity = 1.0;
+    }
+    Ok(())
+}
+
+pub(super) fn parse_stroke_width_mode(mode: &str) -> Result<StrokeWidthMode, String> {
+    match mode {
+        "scale_with_object" => Ok(StrokeWidthMode::ScaleWithObject),
+        "screen_space" => Ok(StrokeWidthMode::ScreenSpace),
+        _ => Err("stroke_width_mode must be scale_with_object or screen_space".into()),
+    }
+}
+
+pub(super) fn parse_stroke_join(join: &str) -> Result<StrokeJoin, String> {
+    match join {
+        "round" => Ok(StrokeJoin::Round),
+        "miter" => Ok(StrokeJoin::Miter),
+        "bevel" => Ok(StrokeJoin::Bevel),
+        _ => Err("stroke_join must be round, miter, or bevel".into()),
+    }
+}
+
+pub(super) fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, String> {
+    match cap {
+        "round" => Ok(StrokeCap::Round),
+        "butt" => Ok(StrokeCap::Butt),
+        "square" => Ok(StrokeCap::Square),
+        _ => Err("stroke_cap must be round, butt, or square".into()),
+    }
+}
+
 impl Mobject {
     pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
         let mut state = self.state()?;
-        state.style.stroke_width_mode = match mode {
-            "scale_with_object" => StrokeWidthMode::ScaleWithObject,
-            "screen_space" => StrokeWidthMode::ScreenSpace,
-            _ => return Err("stroke_width_mode must be scale_with_object or screen_space".into()),
-        };
+        state.style.stroke_width_mode = parse_stroke_width_mode(mode)?;
         self.commit_state(state)
     }
     pub fn set_stroke_join(&mut self, join: &str) -> Result<(), String> {
         let mut state = self.state()?;
-        state.style.stroke_join = match join {
-            "round" => StrokeJoin::Round,
-            "miter" => StrokeJoin::Miter,
-            "bevel" => StrokeJoin::Bevel,
-            _ => return Err("stroke_join must be round, miter, or bevel".into()),
-        };
+        state.style.stroke_join = parse_stroke_join(join)?;
         self.commit_state(state)
     }
     pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), String> {
         let mut state = self.state()?;
-        state.style.stroke_cap = match cap {
-            "round" => StrokeCap::Round,
-            "butt" => StrokeCap::Butt,
-            "square" => StrokeCap::Square,
-            _ => return Err("stroke_cap must be round, butt, or square".into()),
-        };
+        state.style.stroke_cap = parse_stroke_cap(cap)?;
         self.commit_state(state)
     }
     pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), String> {
@@ -297,15 +322,7 @@ impl Mobject {
     pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let width = authoring_render_f64("stroke width", width)?;
-        if width < 0.0 {
-            return Err("stroke width must be non-negative".to_owned());
-        }
-        state.style.stroke_width = width;
-        if state.style.stroke.is_none() {
-            state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
-            state.style.stroke_opacity = 1.0;
-        }
+        edit_stroke_width(&mut state.style, width)?;
         self.commit_state(state)
     }
     pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {

@@ -20,6 +20,7 @@ pub(crate) use style::{
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
     edit_stroke_opacity,
 };
+use style::{edit_stroke_width, parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManimNextToArgs {
@@ -137,16 +138,7 @@ impl ManimPrimitiveOptions {
     }
 
     pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
-        let width = authoring_render_f64("stroke width", width)?;
-        if width < 0.0 {
-            return Err("stroke width must be non-negative".to_owned());
-        }
-        self.state.style.stroke_width = width;
-        if self.state.style.stroke.is_none() {
-            self.state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
-            self.state.style.stroke_opacity = 1.0;
-        }
-        Ok(())
+        edit_stroke_width(&mut self.state.style, width)
     }
 
     pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
@@ -798,32 +790,6 @@ fn positive_f32(name: &str, value: f64) -> Result<f32, String> {
     }
     Ok(value)
 }
-fn parse_stroke_width_mode(mode: &str) -> Result<StrokeWidthMode, String> {
-    match mode {
-        "scale_with_object" => Ok(StrokeWidthMode::ScaleWithObject),
-        "screen_space" => Ok(StrokeWidthMode::ScreenSpace),
-        _ => Err("stroke_width_mode must be scale_with_object or screen_space".into()),
-    }
-}
-
-fn parse_stroke_join(join: &str) -> Result<StrokeJoin, String> {
-    match join {
-        "round" => Ok(StrokeJoin::Round),
-        "miter" => Ok(StrokeJoin::Miter),
-        "bevel" => Ok(StrokeJoin::Bevel),
-        _ => Err("stroke_join must be round, miter, or bevel".into()),
-    }
-}
-
-fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, String> {
-    match cap {
-        "round" => Ok(StrokeCap::Round),
-        "butt" => Ok(StrokeCap::Butt),
-        "square" => Ok(StrokeCap::Square),
-        _ => Err("stroke_cap must be round, butt, or square".into()),
-    }
-}
-
 fn manim_style(color: Color) -> SemanticStyle {
     SemanticStyle {
         fill: Some(SemanticPaint::Solid(color)),
