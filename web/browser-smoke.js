@@ -24,6 +24,8 @@ let renderer = null;
 let incrementalTime = null;
 let backingWidth = canvas.width;
 let backingHeight = canvas.height;
+let rendererCanvas = null;
+let webglContextRecovery = null;
 
 window.noonSmoke = {
   state,
@@ -40,6 +42,9 @@ window.noonSmoke = {
     throw new Error("Noon browser smoke harness is not ready");
   },
   resizeBacking() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  webglContextControl() {
     throw new Error("Noon browser smoke harness is not ready");
   },
   metrics() {
@@ -216,6 +221,7 @@ async function start() {
     1,
   );
   const offscreen = canvas.transferControlToOffscreen();
+  rendererCanvas = offscreen;
   renderer = await ExecutionCanvasRenderer.create(offscreen, engine.initialDeltaJson());
   renderer.resize(backingWidth, backingHeight);
   renderer.setCamera(0.0, 0.0, MANIM_DEFAULT_CAMERA_HEIGHT);
@@ -241,6 +247,26 @@ async function start() {
   window.noonSmoke.beginIncremental = beginIncremental;
   window.noonSmoke.renderIncrementalAt = presentIncrementalAt;
   window.noonSmoke.resizeBacking = resizeBacking;
+  window.noonSmoke.webglContextControl = () => {
+    if (webglContextRecovery !== null) return webglContextRecovery;
+    const gl = rendererCanvas?.getContext("webgl2");
+    const extension = gl?.getExtension("WEBGL_lose_context");
+    if (!gl || !extension) return null;
+    const state = { lost: 0, restored: 0 };
+    rendererCanvas.addEventListener("webglcontextlost", (event) => {
+      event.preventDefault();
+      state.lost += 1;
+    });
+    rendererCanvas.addEventListener("webglcontextrestored", () => {
+      state.restored += 1;
+    });
+    webglContextRecovery = {
+      state,
+      lose: () => extension.loseContext(),
+      restore: () => extension.restoreContext(),
+    };
+    return webglContextRecovery;
+  };
   window.noonSmoke.metrics = metrics;
   state.ready = true;
 }
