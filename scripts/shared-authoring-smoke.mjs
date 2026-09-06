@@ -738,7 +738,7 @@ try {
     if (midpoint === null || settled) {
       throw new Error("callback continuation source did not remain suspended at a live midpoint");
     }
-    return { canvasId: canvas.id, midpoint };
+    return { canvasId: canvas.id, midpoint, registration };
   }, callbackContinuationSource);
   const callbackContinuationMidpointPixels = visiblePixelStats(
     await page.locator(`#${callbackContinuation.canvasId}`).screenshot(),
@@ -760,11 +760,21 @@ try {
     return { authored, metrics };
   });
   assert.equal(callbackContinuationResult.authored.duration, 1);
+  assert.equal(callbackContinuationResult.authored.kind, "scene_document");
+  assert.equal(
+    callbackContinuationResult.authored.semanticExecution.contextId,
+    callbackContinuation.registration.semanticExecution.contextId,
+    "callback continuation must retain the early canonical context",
+  );
+  assert.equal(
+    callbackContinuationResult.authored.semanticExecution.continuationGeneration,
+    callbackContinuation.registration.generation,
+    "callback continuation must retain its one source-run lease generation",
+  );
   assert.ok(
     Number.isSafeInteger(callbackContinuationResult.authored.semanticExecution.callbackSessionId),
     "callback continuation must retain the existing host callable session",
   );
-  assert.equal(callbackContinuationResult.authored.document, undefined);
   assert.equal(callbackContinuationResult.metrics.objectCount, 1);
   const callbackContinuationFinalPixels = visiblePixelStats(
     await page.locator(`#${callbackContinuation.canvasId}`).screenshot(),
