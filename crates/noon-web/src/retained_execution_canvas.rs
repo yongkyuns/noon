@@ -68,7 +68,7 @@ mod wasm {
         gpu_diagnostics: GpuDiagnosticMailbox,
         pending_renderer_observation: Option<RendererObservationRequest>,
         last_renderer_observation: Option<RendererObservationOutcome>,
-        gpu_instance_generation: u64,
+        presentation_sequence: u64,
     }
 
     #[wasm_bindgen(js_class = RetainedExecutionCanvasRenderer)]
@@ -187,7 +187,7 @@ mod wasm {
                 gpu_diagnostics,
                 pending_renderer_observation: None,
                 last_renderer_observation: None,
-                gpu_instance_generation: 0,
+                presentation_sequence: 0,
             };
             result.update_camera()?;
             Ok(result)
@@ -275,8 +275,7 @@ mod wasm {
                 .map(|request| resolve_renderer_observation_target(request, &self.mirror));
             let resolved_observation_target = observation_target
                 .as_ref()
-                .and_then(|target| target.as_ref().ok())
-                .cloned();
+                .and_then(|target| target.as_ref().ok());
             let resources = self.mirror.resources();
             let camera = self.renderer.camera();
             let metrics = TextDeviceMetrics::new(Vec2::new(
@@ -330,14 +329,18 @@ mod wasm {
             let prepared_observation = resolved_observation_target.as_ref().map(|target| {
                 prepared.observe_object(target.mirrored.frame_index, target.mirrored.object)
             });
-            let mut geometry_writes = Vec::<UploadWrite>::new();
+            let mut geometry_writes = resolved_observation_target
+                .is_some()
+                .then(Vec::<UploadWrite>::new);
             let upload = if resolved_observation_target.is_some() {
                 self.renderer.upload_retained_with_trace(
                     &self.device,
                     &self.queue,
                     &prepared,
                     &mut self.text_gpu,
-                    &mut geometry_writes,
+                    geometry_writes
+                        .as_mut()
+                        .expect("resolved observation owns its upload trace"),
                 )
             } else {
                 self.renderer.upload_retained(
@@ -366,7 +369,7 @@ mod wasm {
                 .map_err(js_error)?;
             self.queue.submit(Some(encoder.finish()));
             self.queue.present(surface_texture);
-            self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
+            self.presentation_sequence = self.presentation_sequence.saturating_add(1);
             self.last_draw_calls = draw
                 .geometry
                 .draw_calls
@@ -381,10 +384,10 @@ mod wasm {
                     Ok(target) => finish_renderer_observation(
                         target,
                         prepared_observation.expect("resolved target was prepared"),
-                        &geometry_writes,
+                        geometry_writes.as_deref().unwrap_or_default(),
                         upload,
                         draw,
-                        self.gpu_instance_generation,
+                        self.presentation_sequence,
                         renderer_backend,
                         surface_status,
                     ),

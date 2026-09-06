@@ -213,7 +213,6 @@ impl From<PackedStyle> for RendererPackedStyleObservation {
 pub struct RendererPreparedObjectObservation {
     pub kind: RendererPreparedKind,
     pub primitive: Option<RendererPreparedPrimitive>,
-    pub instance_index: Option<usize>,
     pub instance_start: Option<usize>,
     pub instance_end: Option<usize>,
     pub transform: Option<RendererPackedTransformObservation>,
@@ -223,7 +222,6 @@ pub struct RendererPreparedObjectObservation {
     pub render_item_end: Option<usize>,
     pub render_item_count: usize,
     pub glyph_item_count: usize,
-    pub submission_membership: bool,
     pub full_rebuilds: usize,
     pub instances_repacked: usize,
 }
@@ -234,7 +232,6 @@ impl From<RetainedPreparedObjectObservation> for RendererPreparedObjectObservati
         Self {
             kind: value.kind.into(),
             primitive: geometry.map(|geometry| geometry.primitive.into()),
-            instance_index: geometry.map(|geometry| geometry.instance_index),
             instance_start: geometry.map(|geometry| geometry.instance_start),
             instance_end: geometry.map(|geometry| geometry.instance_end),
             transform: geometry.map(|geometry| geometry.transform.into()),
@@ -244,7 +241,6 @@ impl From<RetainedPreparedObjectObservation> for RendererPreparedObjectObservati
             render_item_end: value.render_item_end,
             render_item_count: value.render_item_count,
             glyph_item_count: value.glyph_item_count,
-            submission_membership: value.submission_membership,
             full_rebuilds: value.full_rebuilds,
             instances_repacked: value.instances_repacked,
         }
@@ -280,7 +276,6 @@ pub struct RendererUploadObservation {
     pub geometry_bytes_uploaded: usize,
     pub text_bytes_uploaded: usize,
     pub buffer_reallocations: usize,
-    pub instance_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -295,6 +290,7 @@ pub struct RendererDrawObservation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct RendererPresentationObservation {
     pub surface_status: &'static str,
+    pub presentation_sequence: u64,
     pub submit_called: bool,
     pub present_called: bool,
 }
@@ -403,7 +399,7 @@ pub(crate) fn finish_renderer_observation(
     geometry_writes: &[UploadWrite],
     upload: RetainedUploadStats,
     draw: RetainedDrawStats,
-    instance_generation: u64,
+    presentation_sequence: u64,
     backend: &'static str,
     surface_status: &'static str,
 ) -> RendererObservationOutcome {
@@ -496,7 +492,6 @@ pub(crate) fn finish_renderer_observation(
             geometry_bytes_uploaded: upload.geometry.bytes_uploaded,
             text_bytes_uploaded: upload.text.bytes_uploaded,
             buffer_reallocations: upload.geometry.buffer_reallocations,
-            instance_generation,
         },
         draw: RendererDrawObservation {
             submission_membership,
@@ -507,6 +502,7 @@ pub(crate) fn finish_renderer_observation(
         },
         presentation: RendererPresentationObservation {
             surface_status,
+            presentation_sequence,
             submit_called: true,
             present_called: true,
         },
@@ -727,6 +723,7 @@ mod tests {
         );
         assert_eq!(target_write.byte_offset, 240);
         assert!(draw.submission_membership);
+        assert_eq!(presentation.presentation_sequence, 4);
         assert!(presentation.submit_called);
         assert!(presentation.present_called);
     }

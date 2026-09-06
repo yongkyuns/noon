@@ -36,6 +36,7 @@ export async function attachSemanticEngine(
   let lastSentPublication = null;
   let lastPresentedPublication = null;
   let pendingPresentation = null;
+  let pendingRendererObservation = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
@@ -48,6 +49,57 @@ export async function attachSemanticEngine(
     if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
     return publication;
   };
+  const sendRendererObservationPublication = (json) => {
+    if (typeof json !== "string") {
+      throw new Error("renderer observation publication must be JSON");
+    }
+    let envelope;
+    try {
+      envelope = JSON.parse(json);
+    } catch (error) {
+      throw new Error(`renderer observation publication is invalid JSON: ${error.message}`);
+    }
+    const deltaJson = JSON.stringify(envelope?.delta);
+    const publication = executionDeltaMetadata(deltaJson);
+    const requested = envelope?.observation?.publication;
+    if (!samePublication(requested, publication)) {
+      throw new Error("renderer observation does not match its retained publication");
+    }
+    if (pendingRendererObservation !== null) {
+      throw new Error("semantic endpoint already awaits a renderer observation");
+    }
+    let resolveObservation;
+    let rejectObservation;
+    const observation = new Promise((resolve, reject) => {
+      resolveObservation = resolve;
+      rejectObservation = reject;
+    });
+    renderPort.postMessage({
+      type: "renderer_observation_request",
+      session: publication.session,
+      sequence: publication.sequence,
+      json: JSON.stringify(envelope.observation),
+    });
+    try {
+      const sent = send(deltaJson);
+      if (!samePublication(sent, publication)) {
+        throw new Error("renderer observation publication changed during transport send");
+      }
+    } catch (error) {
+      renderPort.postMessage({
+        type: "renderer_observation_cancel",
+        session: publication.session,
+        sequence: publication.sequence,
+      });
+      throw error;
+    }
+    pendingRendererObservation = {
+      publication,
+      resolve: resolveObservation,
+      reject: rejectObservation,
+    };
+    return { publication, observation };
+  };
   const samePublication = (left, right) =>
     left !== null && right !== null &&
     left.session === right.session && left.sequence === right.sequence;
@@ -57,6 +109,12 @@ export async function attachSemanticEngine(
     if (pendingPresentation === null) return;
     const { reject } = pendingPresentation;
     pendingPresentation = null;
+    reject(error);
+  };
+  const rejectPendingRendererObservation = (error) => {
+    if (pendingRendererObservation === null) return;
+    const { reject } = pendingRendererObservation;
+    pendingRendererObservation = null;
     reject(error);
   };
   const awaitPresentation = (publication) => {
@@ -97,18 +155,55 @@ export async function attachSemanticEngine(
       resolve();
     }
   };
+  const noteRendererObservation = (message) => {
+    const publication = message && {
+      session: message.session,
+      sequence: message.sequence,
+    };
+    if (pendingRendererObservation === null ||
+        !samePublication(publication, pendingRendererObservation.publication)) {
+      fail(new Error("renderer reported an invalid publication observation"));
+      return;
+    }
+    if (typeof message.json !== "string") {
+      const error = new Error("renderer observation result must be JSON");
+      rejectPendingRendererObservation(error);
+      fail(error);
+      return;
+    }
+    let observation;
+    try {
+      observation = JSON.parse(message.json);
+    } catch (error) {
+      const invalid = new Error(`renderer observation is invalid JSON: ${error.message}`);
+      rejectPendingRendererObservation(invalid);
+      fail(invalid);
+      return;
+    }
+    const observedPublication = observation?.publication ?? observation?.requested;
+    if (!samePublication(observedPublication, publication)) {
+      const error = new Error("renderer observation result does not match its publication");
+      rejectPendingRendererObservation(error);
+      fail(error);
+      return;
+    }
+    const { resolve } = pendingRendererObservation;
+    pendingRendererObservation = null;
+    resolve(observation);
+  };
   const state = (type) => ({ type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" });
   async function publishCallbackPhase(
     phaseJson,
-    { initial = false, emitDelta = true, onPhaseToken = null } = {},
+    { initial = false, emitDelta = true, onPhaseToken = null, observeAtTime = null } = {},
   ) {
     let phaseToken = null;
+    let rendererObservation = null;
+    let phase = null;
     if (phaseJson !== null && phaseJson !== undefined) {
       if (runRequiredCallbackPhase === null) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve original phase error */ }
         throw new Error("canonical execution requires a Python callback phase handler");
       }
-      let phase;
       try {
         phase = JSON.parse(phaseJson);
         phaseToken = JSON.stringify(phase?.token);
@@ -137,22 +232,34 @@ export async function attachSemanticEngine(
         }
         throw error;
       }
+      if (observeAtTime !== null && Math.abs(phase.time - observeAtTime) <= 1e-9) {
+        const target = callbackObservationTarget(phase);
+        rendererObservation = sendRendererObservationPublication(
+          player.drainRendererObservationPublicationJson(
+            phaseJson,
+            target.slot,
+            target.generation,
+          ),
+        );
+      }
     }
     if (stopped || player === null) {
       return { phaseToken, publication: null, interrupted: true };
     }
     return {
       phaseToken,
-      publication: emitDelta
+      publication: rendererObservation?.publication ?? (emitDelta
         ? send(initial ? player.initialDeltaJson() : player.drainDeltaJson())
-        : null,
+        : null),
+      rendererObservation,
       interrupted: false,
     };
   }
 
-  async function advanceToAuthoredTime(time) {
+  async function advanceToAuthoredTime(time, observeRenderer) {
     const phaseTokens = new Set();
     let phaseCount = 0;
+    let rendererObservation = null;
     while (!stopped && player !== null) {
       if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE && player.time() < time) {
         throw new Error(
@@ -163,6 +270,7 @@ export async function attachSemanticEngine(
         player.advanceForwardToCallbackPhaseJson(time),
         {
           emitDelta: false,
+          observeAtTime: observeRenderer && rendererObservation === null ? time : null,
           onPhaseToken(token) {
             if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE) {
               throw new Error(
@@ -178,13 +286,18 @@ export async function attachSemanticEngine(
         },
       );
       if (result.interrupted) return null;
+      rendererObservation ??= result.rendererObservation;
       if (result.phaseToken !== null) continue;
       if (Math.abs(player.time() - time) > 1e-9) {
         throw new Error(
           `forward authored-time advance stopped at ${player.time()} before requested time ${time}`,
         );
       }
-      return send(player.drainDeltaJson());
+      const publication = send(player.drainDeltaJson());
+      return {
+        publication: publication ?? rendererObservation?.publication ?? null,
+        rendererObservation,
+      };
     }
     return null;
   }
@@ -195,6 +308,7 @@ export async function attachSemanticEngine(
     try {
       while (controls.length && writable()) {
       const message = controls.shift();
+      let rendererObservation = null;
       try {
         switch (message.type) {
           case "pause": player.pause(); break;
@@ -210,8 +324,16 @@ export async function attachSemanticEngine(
               );
             }
             latestTick = null;
-            const publication = await advanceToAuthoredTime(message.time);
-            await awaitPresentation(publication);
+            const advanced = await advanceToAuthoredTime(
+              message.time,
+              message.observeRenderer === true,
+            );
+            const observation = advanced?.rendererObservation?.observation ??
+              Promise.resolve(null);
+            [, rendererObservation] = await Promise.all([
+              awaitPresentation(advanced?.publication ?? null),
+              observation,
+            ]);
             break;
           }
           case "native_state_input":
@@ -228,7 +350,11 @@ export async function attachSemanticEngine(
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped || player === null) break;
-        post({ requestId: message.requestId, ...state(message.type) });
+        post({
+          requestId: message.requestId,
+          ...state(message.type),
+          ...(rendererObservation === null ? {} : { rendererObservation }),
+        });
       } catch (error) { fail(error, message.requestId); }
       }
       if (!controls.length && latestTick !== null && writable()) {
@@ -260,6 +386,9 @@ export async function attachSemanticEngine(
     stopped = true;
     callbackGeneration += 1;
     rejectPendingPresentation(new Error("semantic execution stopped before renderer publication"));
+    rejectPendingRendererObservation(
+      new Error("semantic execution stopped before renderer observation"),
+    );
     controls.length = 0;
     latestTick = null;
     if (player !== null) {
@@ -313,6 +442,10 @@ export async function attachSemanticEngine(
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
+        if (message.type === "advance_to" && message.observeRenderer !== undefined &&
+            typeof message.observeRenderer !== "boolean") {
+          throw new Error("renderer observation flag must be boolean");
+        }
         if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
           throw new Error("semantic control queue is full; wait for pending commands before retrying");
         }
@@ -328,9 +461,11 @@ export async function attachSemanticEngine(
         void drain();
       } else if (message?.type === "transport_writable") void drain();
       else if (message?.type === "execution_presented") notePresentedPublication(message);
+      else if (message?.type === "renderer_observation") noteRendererObservation(message);
       else if (message?.type === "render_error") {
         const error = new Error(message.message);
         rejectPendingPresentation(error);
+        rejectPendingRendererObservation(error);
         fail(error);
       }
     });
@@ -352,4 +487,21 @@ export async function attachSemanticEngine(
     post({ type: "ready", transportMode });
   } catch (error) { stop(); throw error; }
   return { stop };
+}
+
+function callbackObservationTarget(phase) {
+  if (!Array.isArray(phase?.invocations) || phase.invocations.length === 0) {
+    throw new Error("renderer observation requires a callback target");
+  }
+  const target = phase.invocations[0]?.target;
+  if (!Number.isSafeInteger(target?.slot) || target.slot < 0 ||
+      !Number.isSafeInteger(target?.generation) || target.generation < 0) {
+    throw new Error("renderer observation callback target is invalid");
+  }
+  if (phase.invocations.some((invocation) =>
+    invocation?.target?.slot !== target.slot ||
+    invocation?.target?.generation !== target.generation)) {
+    throw new Error("renderer observation supports one callback target per publication");
+  }
+  return target;
 }
