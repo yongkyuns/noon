@@ -44,6 +44,7 @@ for (const required of [
   "example_scenes::live_affine_completion",
   "example_scenes::ordinary_affine_play",
   "example_scenes::ordinary_fade_continuation_program",
+  "example_scenes::ordinary_create_continuation_program",
   "example_scenes::ordinary_composition_play",
   "example_scenes::ordinary_composition_continuation_program",
   "example_scenes::ordinary_value_tracker_continuation_program",

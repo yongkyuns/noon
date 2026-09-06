@@ -119,6 +119,12 @@ pub enum PreparedSemanticAnimationLoweringError {
     UnsupportedFadeOptions {
         animation: SemanticTransactionNodeRef,
     },
+    UnsupportedCreateComposition {
+        animation: SemanticTransactionNodeRef,
+    },
+    UnsupportedCreateOptions {
+        animation: SemanticTransactionNodeRef,
+    },
     UnsupportedContentChange {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
@@ -293,6 +299,40 @@ where
                     conflict_property: SemanticObjectProperty::Presence,
                     completion: SemanticAnimationCompletion::Fade { direction },
                     values: TrackValues::Scalar { from, to },
+                }
+            }
+            PreparedSemanticScheduledAnimationPayload::Create => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.reverse_rate_function
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedCreateOptions {
+                            animation: leaf.animation,
+                        },
+                    );
+                }
+                if !leaf.time_map.is_identity() {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedCreateComposition {
+                            animation: leaf.animation,
+                        },
+                    );
+                }
+                if !source.signal_bindings().is_empty() {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
+                            animation: leaf.animation,
+                            target: leaf.target,
+                            property: SemanticObjectProperty::Presence,
+                        },
+                    );
+                }
+                super::affine::LoweredAffineChannel {
+                    property: Property::Reveal,
+                    conflict_property: SemanticObjectProperty::Presence,
+                    completion: SemanticAnimationCompletion::Create,
+                    values: TrackValues::Scalar { from: 0.0, to: 1.0 },
                 }
             }
         };

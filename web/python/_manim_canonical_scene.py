@@ -844,6 +844,101 @@ def _canonical_fade_animation(
     return target, direction
 
 
+def _canonical_create_animation(
+    scene: _base.Scene, animation: object
+) -> _base.Mobject | None:
+    """Classify one exact detached single-leaf Create."""
+    if type(animation) is not _base.Create:
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary Create target must be a Mobject")
+    if getattr(target, "_semantic_handle", None) is None:
+        return None
+    if target._scene is not None:
+        if target._scene is scene:
+            raise NotImplementedError("canonical Create requires a detached Mobject")
+        raise ValueError("Create target already belongs to another Scene")
+    return target
+
+
+def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    args = dict(getattr(animation, "anim_args", {}))
+    if "introducer" in args and args.pop("introducer") is not True:
+        return None
+    if "remover" in args and args.pop("remover") is not False:
+        return None
+    return _canonical_affine_options(animation, kwargs, builder_args=args)
+
+
+def _play_canonical_create(
+    self: _base.Scene,
+    target: _base.Mobject,
+    animation: object,
+    **kwargs: object,
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    duration = kwargs.pop("duration", None)
+    run_time = kwargs.pop("run_time", None)
+    start_time = kwargs.pop("start_time", None)
+    easing = kwargs.pop("easing", None)
+    rate_func = kwargs.pop("rate_func", None)
+    lag_ratio = kwargs.pop("lag_ratio", None)
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if start_time is not None:
+        raise NotImplementedError("canonical ordinary Scene.play uses the shared session cursor")
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
+    if _legacy_authored_time(self) != 0.0:
+        raise NotImplementedError("canonical ordinary Create cannot follow legacy Scene timing")
+    resolved = _canonical_create_options(
+        animation,
+        {
+            "duration": duration,
+            "run_time": run_time,
+            "start_time": start_time,
+            "easing": easing,
+            "rate_func": rate_func,
+            "lag_ratio": lag_ratio,
+        },
+    )
+    if resolved is None:
+        raise NotImplementedError(
+            "canonical ordinary Create currently supports one basic detached leaf"
+        )
+    _start_default_synchronous_continuation(self)
+    handle = getattr(target, "_semantic_handle")
+    reservation = _reserve_typed_binding(target, self, handle, None)
+    context = _context(self)
+    try:
+        _require_semantic_continuation_active(self)
+        method = (
+            context.beginOrdinaryCreate
+            if _semantic_continuation_active(self)
+            else context.ordinaryPlayCreate
+        )
+        method(
+            str(reservation.object.id),
+            handle,
+            float(resolved.run_time),
+            str(resolved.rate_func),
+        )
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    _commit_typed_binding(target, self, reservation, handle)
+    register = getattr(self, "_register_top_level", None)
+    if register is not None:
+        register(target)
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self)
+    if _synchronous_continuation_active(self):
+        return _synchronous_continuation_wait(self)
+    return self
+
+
 def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> object | None:
     """Keep endpoint motion/layout requests out of the basic lifecycle subset."""
     shift = getattr(animation, "_fade_shift_vector", None)
@@ -1138,6 +1233,28 @@ def _play(self, *args, **kwargs):
                 "realtime construct supports only canonical affine Scene.play and Scene.wait"
             )
         return _play_legacy_compatibility(self, *args, **kwargs)
+
+    canonical_creates = [
+        target
+        for argument in args
+        if (target := _canonical_create_animation(self, argument)) is not None
+    ]
+    if canonical_creates:
+        if len(canonical_creates) != 1 or len(args) != 1:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError("realtime construct supports one canonical Create per play")
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        if _canonical_create_options(args[0], kwargs) is None:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError("realtime construct Create is outside the canonical leaf subset")
+            context = getattr(self, "_canonical_authoring_context", None)
+            ownership = getattr(context, "liveExecutionOwnership", None)
+            if callable(ownership) and str(ownership()) in {"active", "transferred", "returned"}:
+                raise NotImplementedError(
+                    "active canonical execution cannot fall back to the legacy Create scheduler"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        return _play_canonical_create(self, canonical_creates[0], args[0], **kwargs)
 
     canonical_fades = [
         classified

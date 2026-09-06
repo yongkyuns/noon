@@ -540,6 +540,19 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Atomically introduce one detached leaf and activate shared Create reveal semantics.
+    pub fn declare_and_activate_create(
+        &mut self,
+        target: &Mobject,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(target)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_create(&mut store, self.root, target.node_id(), options)
+            .map_err(Into::into)
+    }
+
     /// Atomically author and activate one flat Parallel or Sequence of TransformTo leaves.
     ///
     /// All handles are checked before the semantic transaction is built. Rust snapshots the target

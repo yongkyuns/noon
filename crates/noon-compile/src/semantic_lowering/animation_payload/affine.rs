@@ -44,6 +44,8 @@ pub enum SemanticAnimationCompletion {
     },
     /// Execution-only lifecycle completion. Appearance is not authored object state.
     Fade { direction: SemanticFadeDirection },
+    /// Execution-only Create completion. Reveal is not authored object state.
+    Create,
 }
 
 /// One existing execution-timeline channel lowered from an activated semantic animation.
@@ -424,7 +426,8 @@ where
         validate_leaf_matches_declaration(store, leaf)?;
         let target_state = match leaf.payload {
             SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
-            SemanticScheduledAnimationPayload::Fade { .. } => {
+            SemanticScheduledAnimationPayload::Fade { .. }
+            | SemanticScheduledAnimationPayload::Create => {
                 return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation: leaf.animation,
                     remover: leaf.options.remover,
@@ -509,6 +512,12 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
+        SemanticAnimationIntent::Create { target }
+            if *target == leaf.target
+                && leaf.payload == SemanticScheduledAnimationPayload::Create =>
+        {
+            Ok(())
+        }
         _ => Err(SemanticAffineAnimationTrackError::ScheduleMismatch {
             animation: leaf.animation,
         }),
@@ -518,7 +527,8 @@ fn validate_leaf_matches_declaration(
 fn scheduled_target_state(leaf: &SemanticScheduledAnimationLeaf) -> SemanticNodeId {
     match leaf.payload {
         SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
-        SemanticScheduledAnimationPayload::Fade { .. } => {
+        SemanticScheduledAnimationPayload::Fade { .. }
+        | SemanticScheduledAnimationPayload::Create => {
             unreachable!("affine payload errors are only produced for TransformTo leaves")
         }
     }

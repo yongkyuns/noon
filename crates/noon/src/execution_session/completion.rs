@@ -350,7 +350,8 @@ impl ExecutionSession {
                 }
                 SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
-                | SemanticAnimationCompletion::Fade { .. } => {}
+                | SemanticAnimationCompletion::Fade { .. }
+                | SemanticAnimationCompletion::Create => {}
             }
             release.push(ExecutionPatch::ReconcileTrack {
                 track: entry.track,

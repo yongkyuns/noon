@@ -55,6 +55,7 @@ impl SemanticAnimationScheduleProjection {
 pub enum SemanticScheduledAnimationPayload {
     TransformTo { target_state: SemanticNodeId },
     Fade { direction: SemanticFadeDirection },
+    Create,
 }
 
 /// One scheduled semantic animation leaf ready for payload-specific track lowering.
@@ -121,6 +122,7 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     Fade {
         direction: SemanticFadeDirection,
     },
+    Create,
 }
 
 /// One scheduled leaf whose authored identities are still transaction-local.
@@ -297,6 +299,7 @@ pub fn lower_semantic_animation_schedule(
                     ScheduledAnimationPayload::Fade { direction } => {
                         SemanticScheduledAnimationPayload::Fade { direction }
                     }
+                    ScheduledAnimationPayload::Create => SemanticScheduledAnimationPayload::Create,
                 },
                 timing: leaf.timing,
                 time_map: leaf.time_map,
@@ -339,6 +342,9 @@ pub fn lower_prepared_semantic_animation_schedule(
                     ScheduledAnimationPayload::Fade { direction } => {
                         PreparedSemanticScheduledAnimationPayload::Fade { direction }
                     }
+                    ScheduledAnimationPayload::Create => {
+                        PreparedSemanticScheduledAnimationPayload::Create
+                    }
                 },
                 timing: leaf.timing,
                 time_map: leaf.time_map,
@@ -363,6 +369,9 @@ enum AnimationDeclarationIntent<R> {
     Fade {
         target: R,
         direction: SemanticFadeDirection,
+    },
+    Create {
+        target: R,
     },
     Composition {
         kind: SemanticAnimationCompositionKind,
@@ -424,6 +433,12 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     target: *target,
                     direction: *direction,
                 }
+            }
+            SemanticAnimationIntent::Create { target } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::Create { target: *target }
             }
             SemanticAnimationIntent::Composition { kind, children } => {
                 AnimationDeclarationIntent::Composition {
@@ -489,6 +504,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             direction: *direction,
                         }
                     }
+                    SemanticAnimationIntent::Create { target } => {
+                        AnimationDeclarationIntent::Create {
+                            target: (*target).into(),
+                        }
+                    }
                     SemanticAnimationIntent::Composition { kind, children } => {
                         AnimationDeclarationIntent::Composition {
                             kind: *kind,
@@ -517,6 +537,9 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             direction: *direction,
                         }
                     }
+                    SemanticTransactionAnimationIntent::Create { target } => {
+                        AnimationDeclarationIntent::Create { target: *target }
+                    }
                     SemanticTransactionAnimationIntent::Composition { kind, children } => {
                         AnimationDeclarationIntent::Composition {
                             kind: *kind,
@@ -540,6 +563,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
             AnimationDeclarationIntent::Fade { target, .. } => {
+                self.prepared
+                    .object_state(*target)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
+            AnimationDeclarationIntent::Create { target } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
@@ -582,6 +610,7 @@ struct ScheduledAnimationLeaf<R> {
 enum ScheduledAnimationPayload<R> {
     TransformTo { target_state: R },
     Fade { direction: SemanticFadeDirection },
+    Create,
 }
 
 #[derive(Clone, Debug)]
@@ -747,6 +776,41 @@ where
                     target,
                     execution_object_id,
                     payload: ScheduledAnimationPayload::Fade { direction },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::Create { target } => {
+            let options = resolve_animation_options(
+                AnimationDefaults {
+                    introducer: true,
+                    remover: false,
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            if !options.introducer || options.remover {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::Create,
                     options,
                 },
             })

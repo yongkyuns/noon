@@ -1087,6 +1087,79 @@ pub fn ordinary_fade_continuation_program() -> Result<LiveProgram<OrdinaryFadeCo
         .map_err(|error| error.to_string())
 }
 
+/// Ordinary single-leaf Create continuation shared by native and direct Rust/WASM hosts.
+pub struct OrdinaryCreateContinuation {
+    circle: Mobject,
+    semantic_id: SemanticNodeId,
+    authored_style: SemanticStyle,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryCreateContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                if live
+                    .contains(&self.circle)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err("Create example target must begin detached".into());
+                }
+                self.stage = 1;
+                live.declare_and_activate_create(
+                    &self.circle,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                let authored = live
+                    .authored(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                if self.circle.node_id() != self.semantic_id
+                    || !live
+                        .contains(&self.circle)
+                        .map_err(|error| error.to_string())?
+                    || authored.style != self.authored_style
+                {
+                    return Err("Create did not publish its exact shared endpoint".into());
+                }
+                self.stage = 2;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary Create continuation resumed after it finished".into()),
+        }
+    }
+}
+
+/// Build the paired ordinary Create program without selecting a platform host.
+pub fn ordinary_create_continuation_program(
+) -> Result<LiveProgram<OrdinaryCreateContinuation>, String> {
+    let scene = Scene::new();
+    let mut circle = scene.circle(0.8).map_err(|error| error.to_string())?;
+    circle
+        .set_fill(1.0, 0.1, 0.5, 0.5)
+        .map_err(|error| error.to_string())?;
+    let semantic_id = circle.node_id();
+    let authored_style = circle.state().map_err(|error| error.to_string())?.style;
+    scene
+        .into_live_program(OrdinaryCreateContinuation {
+            circle,
+            semantic_id,
+            authored_style,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// Execute paired flat Parallel and Sequence compositions on one live runtime.
 ///
 /// Child intervals, root timing, transaction-local declaration identity, and
@@ -1617,6 +1690,34 @@ mod continuation_tests {
         program.admit_publication(hold_publication).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
         assert_eq!(program.session().frame().time, 1.5);
+    }
+
+    #[test]
+    fn ordinary_create_continuation_reveals_and_preserves_authored_style() {
+        let mut program = ordinary_create_continuation_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(program.session().frame().reveals, vec![0.0]);
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(program.session().frame().reveals, vec![0.5]);
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        assert_eq!(program.session().frame().reveals, vec![1.0]);
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     }
 
     #[test]

@@ -341,7 +341,8 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
                 references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
             }
-            SemanticAnimationIntent::Fade { target, .. } => {
+            SemanticAnimationIntent::Fade { target, .. }
+            | SemanticAnimationIntent::Create { target } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
             }
             SemanticAnimationIntent::Composition { children, .. } => {

@@ -26,6 +26,9 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         direction: SemanticFadeDirection,
     },
+    Create {
+        target: SemanticTransactionNodeRef,
+    },
     Composition {
         kind: SemanticAnimationCompositionKind,
         children: Vec<SemanticTransactionNodeRef>,
@@ -39,12 +42,12 @@ impl SemanticTransactionAnimationIntent {
                 target,
                 target_state,
             } => Some([Some(*target), Some(*target_state)]),
-            Self::Fade { target, .. } => Some([Some(*target), None]),
+            Self::Fade { target, .. } | Self::Create { target } => Some([Some(*target), None]),
             Self::Composition { .. } => None,
         };
         let children = match self {
             Self::Composition { children, .. } => children.as_slice(),
-            Self::TransformTo { .. } | Self::Fade { .. } => &[],
+            Self::TransformTo { .. } | Self::Fade { .. } | Self::Create { .. } => &[],
         };
         leaf.into_iter()
             .flatten()
@@ -92,6 +95,11 @@ impl SemanticTransactionAnimation {
                     direction: *direction,
                 }
             }
+            SemanticAnimationIntent::Create { target } => {
+                SemanticTransactionAnimationIntent::Create {
+                    target: (*target).into(),
+                }
+            }
             SemanticAnimationIntent::Composition { kind, children } => {
                 SemanticTransactionAnimationIntent::Composition {
                     kind: *kind,
@@ -118,6 +126,11 @@ impl SemanticTransactionAnimation {
                 SemanticAnimationIntent::Fade {
                     target: resolve_node_ref(*target, committed),
                     direction: *direction,
+                }
+            }
+            SemanticTransactionAnimationIntent::Create { target } => {
+                SemanticAnimationIntent::Create {
+                    target: resolve_node_ref(*target, committed),
                 }
             }
             SemanticTransactionAnimationIntent::Composition { kind, children } => {
@@ -189,6 +202,10 @@ pub(super) fn preflight_transaction_animation(
             catalog.ensure_animation_target(*target, index)?;
             catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
         }
+        SemanticTransactionAnimationIntent::Create { target } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+        }
         SemanticTransactionAnimationIntent::Composition { children, .. } => {
             if children.is_empty() {
                 return Err(SemanticMutationTransactionError::EmptyAnimationComposition { index });
@@ -253,6 +270,9 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::Fade { target, direction } => store
             .insert_semantic_fade_animation(*target, *direction, options)
             .expect("preflighted semantic fade insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::Create { target } => store
+            .insert_semantic_create_animation(*target, options)
+            .expect("preflighted semantic Create insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Composition { kind, children } => match kind {
             SemanticAnimationCompositionKind::Parallel => store
                 .insert_semantic_parallel_animation(children, options)
