@@ -791,7 +791,7 @@ where
                 play_options,
             )
             .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
-            if !options.introducer || options.remover {
+            if !options.introducer {
                 return Err(
                     AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
                         animation,

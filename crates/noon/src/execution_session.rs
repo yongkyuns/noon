@@ -1419,7 +1419,7 @@ impl ExecutionSession {
         let mut declaration = SemanticMutationTransaction::new();
         declaration.add_member(root, target);
         let animation = declaration
-            .create_create_animation(target, options.remover(true).reverse_rate_function(false));
+            .create_create_animation(target, options.remover(true).reverse_rate_function(true));
         self.declare_and_activate_prepared_animation(
             store,
             declaration,
