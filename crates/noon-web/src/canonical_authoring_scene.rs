@@ -1426,9 +1426,9 @@ impl CanonicalAuthoringScene {
             }
             player.live_declare_and_activate_composition(&composition, play_options)?
         };
-        fn bindings(
-            child: &OrdinaryCompositionChild,
-            output: &mut Vec<(ObjectId, &noon::Mobject)>,
+        fn bindings<'a>(
+            child: &'a OrdinaryCompositionChild,
+            output: &mut Vec<(ObjectId, &'a noon::Mobject)>,
         ) {
             match child {
                 OrdinaryCompositionChild::TransformTo {
