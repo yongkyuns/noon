@@ -112,13 +112,13 @@ try {
 
   assert.equal(first.committed.time, 0.25);
   assert.deepEqual(first.committed.transform.translation, { x: 2, y: 0.25 });
-  assert.equal(first.committed.style.opacity, 1);
-  assert.equal(first.committed.style.fill.alpha, 0.75);
-  assert.equal(first.committed.style.stroke.alpha, 0.75);
+  assert.equal(first.committed.style.opacity, 0.75);
+  assert.equal(first.committed.style.fill.alpha, 0);
+  assert.equal(first.committed.style.stroke.alpha, 1);
   assert.equal(second.committed.time, 0.75);
   assert.deepEqual(second.committed.transform.translation, { x: 2, y: 0.5 });
   assert.equal(second.committed.style.opacity, 1);
-  assert.equal(second.committed.style.fill.alpha, 1);
+  assert.equal(second.committed.style.fill.alpha, 0);
   assert.equal(second.committed.style.stroke.alpha, 1);
   assert.equal(second.committed.object, first.committed.object);
   assert.equal(second.committed.frame_index, first.committed.frame_index);

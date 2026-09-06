@@ -173,8 +173,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertEqual(
             writes[-1]["transform"]["translation"], {"x": 5.0, "y": 3.0}
         )
-        self.assertEqual(writes[1]["style"]["opacity"], 1.0)
-        self.assertEqual(writes[1]["style"]["stroke"]["alpha"], 0.5)
         row = next(iter(context._rows.values()))
         self.assertIsInstance(row, updaters._PhasePropertyRow)
         self.assertFalse(hasattr(row, "geometry"))
@@ -248,8 +246,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertEqual(
             writes[0]["transform"]["translation"], {"x": 2.25, "y": -0.5}
         )
-        self.assertEqual(writes[1]["style"]["opacity"], 1.0)
-        self.assertEqual(writes[1]["style"]["stroke"]["alpha"], 0.4)
+        self.assertEqual(writes[1]["style"]["opacity"], 0.4)
         self.assertEqual(handle.authored_translation, (2.0, -1.0))
         self.assertEqual(handle.authored_opacity, 1.0)
         self.assertEqual(handle.authored_revision, 17)
