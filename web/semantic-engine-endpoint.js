@@ -101,7 +101,7 @@ export async function attachSemanticEngine(
     return { publication, observation };
   };
   const samePublication = (left, right) =>
-    left !== null && right !== null &&
+    left != null && right != null &&
     left.session === right.session && left.sequence === right.sequence;
   const publicationAlreadyPresented = (publication) =>
     samePublication(lastPresentedPublication, publication);
@@ -498,10 +498,9 @@ function callbackObservationTarget(phase) {
       !Number.isSafeInteger(target?.generation) || target.generation < 0) {
     throw new Error("renderer observation callback target is invalid");
   }
-  if (phase.invocations.some((invocation) =>
-    invocation?.target?.slot !== target.slot ||
-    invocation?.target?.generation !== target.generation)) {
-    throw new Error("renderer observation supports one callback target per publication");
-  }
+  // Observation remains bounded to one target even when the committed phase
+  // contains other callback targets. Authoring order makes the first target a
+  // deterministic diagnostic selection without copying or exposing the full
+  // callback object set to the renderer.
   return target;
 }

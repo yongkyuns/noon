@@ -773,8 +773,8 @@ result = scene
   );
 
   // Opaque callbacks must progress forward through the required Rust barrier.
-  // The two circles independently prove ordered timeline/host writes and dt
-  // accumulation on an object without a timeline driver.
+  // The exact callback publication for the first ordered target is observed
+  // through its normal retained renderer submission and presentation.
   const callbackSource = await readFile(
     path.join(repoRoot, "web/python/examples/live_affine_callbacks.py"), "utf8",
   );
@@ -793,34 +793,99 @@ result = scene
       loopDurationSeconds: 8,
       transportMode: "transferable",
     });
-    let latest;
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      latest = await execution.state();
-      if (latest.time >= 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    if (!(latest.time >= 2)) {
-      throw new Error(`required callbacks did not progress: ${JSON.stringify(latest)}`);
-    }
     const paused = await execution.pause();
-    const requestedTime = paused.time + 0.5;
-    const advanced = await execution.advanceTo(requestedTime);
+    const requestedTime = 1.0;
+    if (paused.time > requestedTime) {
+      throw new Error(
+        `callback proof advanced past its deterministic sample before pause: ${paused.time}`,
+      );
+    }
+    const advanced = await execution.advanceToWithRendererObservation(requestedTime);
     if (advanced.time !== requestedTime || advanced.playing !== false) {
       throw new Error(
         `exact callback advance did not remain paused at ${requestedTime}: ${JSON.stringify(advanced)}`,
       );
     }
+    if (advanced.rendererObservation?.outcome !== "presented") {
+      throw new Error(
+        `callback publication did not produce retained renderer evidence: ${JSON.stringify(advanced)}`,
+      );
+    }
     const metrics = (await execution.metrics()).metrics;
-    return { canvasId: canvas.id, paused, requestedTime, advanced, metrics };
+    return {
+      canvasId: canvas.id,
+      paused,
+      requestedTime,
+      advanced: {
+        time: advanced.time,
+        playing: advanced.playing,
+      },
+      rendererObservation: advanced.rendererObservation,
+      metrics,
+    };
   }, callbackSource);
   assert.equal(callbackResult.paused.playing, false);
   assert.equal(callbackResult.advanced.playing, false);
   assert.equal(callbackResult.advanced.time, callbackResult.requestedTime);
   assert.equal(callbackResult.metrics.objectCount, 2);
   assert.ok(callbackResult.metrics.drawCalls > 0);
-  // `advanceTo` resolves only after the matching publication reached the
-  // renderer surface. Capture that exact coherent frame: no seek, replay, or
-  // browser-frame polling may advance opaque callbacks past it.
+  const rendererObservation = callbackResult.rendererObservation;
+  const {
+    publication, committed, mirrored, prepared, upload, draw, presentation,
+  } = rendererObservation;
+  assert.equal(rendererObservation.schema_version, 1);
+  assert.equal(rendererObservation.backend, "WebGPU");
+  assert.ok(Number.isSafeInteger(publication.session));
+  assert.ok(Number.isSafeInteger(publication.sequence));
+  assert.equal(committed.time, callbackResult.requestedTime);
+  assert.equal(committed.dirty, "updated");
+  assert.equal(committed.presence, true);
+  assert.deepEqual(committed.transform.translation, { x: 1, y: 1 });
+  assert.deepEqual(committed.transform.scale, { x: 1, y: 1 });
+  assert.equal(committed.transform.rotation, 0);
+  assert.equal(committed.style.fill.alpha, 1);
+  assert.equal(committed.style.opacity, 0.5);
+  assert.equal(mirrored.object, committed.object);
+  assert.equal(mirrored.frame_index, committed.frame_index);
+  assert.equal(mirrored.time, committed.time);
+  assert.deepEqual(mirrored.transform, committed.transform);
+  assert.deepEqual(mirrored.style, committed.style);
+  assert.equal(mirrored.presence, committed.presence);
+
+  assert.equal(prepared.kind, "geometry");
+  assert.equal(prepared.primitive, "circle");
+  assert.deepEqual(prepared.transform.translation, [1, 1]);
+  assert.deepEqual(prepared.transform.scale, [1, 1]);
+  assert.equal(prepared.transform.rotation, 0);
+  assert.equal(prepared.style.fill[3], 1);
+  assert.equal(prepared.style.opacity, 0.5);
+  assert.equal(prepared.instance_end, prepared.instance_start + 1);
+  assert.equal(prepared.render_item_end, prepared.render_item_start + 1);
+  assert.equal(prepared.render_item_count, 1);
+  assert.equal(prepared.glyph_item_count, 0);
+  assert.equal(prepared.full_rebuilds, 0);
+  assert.ok(prepared.instances_repacked > 0);
+
+  assert.equal(upload.target_write.buffer, "circle");
+  assert.ok(upload.target_write.instance_start <= prepared.instance_start);
+  assert.ok(upload.target_write.instance_end >= prepared.instance_end);
+  assert.ok(upload.target_write.byte_length > 0);
+  assert.ok(upload.geometry_bytes_uploaded >= upload.target_write.byte_length);
+  assert.equal(upload.text_bytes_uploaded, 0);
+  assert.equal(upload.buffer_reallocations, 0);
+  assert.equal(draw.submission_membership, true);
+  assert.ok(draw.geometry_draw_calls > 0);
+  assert.ok(draw.geometry_instances_drawn >= 2);
+  assert.equal(draw.text_draw_calls, 0);
+  assert.equal(draw.text_instances_drawn, 0);
+  assert.ok(["success", "suboptimal"].includes(presentation.surface_status));
+  assert.ok(presentation.presentation_sequence > 0);
+  assert.equal(presentation.submit_called, true);
+  assert.equal(presentation.present_called, true);
+
+  // The public observation call resolves only after the matching publication
+  // reached the renderer surface. Capture those same pixels without seeking,
+  // replaying, or polling another browser frame.
   const callbackScreenshot = await page.locator(`#${callbackResult.canvasId}`).screenshot();
   const callbackPixels = {
     animated: visiblePixelStats(callbackScreenshot,
@@ -830,7 +895,7 @@ result = scene
   };
   assert.ok(callbackPixels.animated.count > 500, "ordered callback circle was blank");
   assert.ok(callbackPixels.drift.count > 100, "accumulating callback circle was blank");
-  assert.ok(Math.abs(callbackPixels.animated.centerX - 410) < 4, "timeline endpoint x");
+  assert.ok(Math.abs(callbackPixels.animated.centerX - 365) < 4, "timeline midpoint x");
   assert.ok(Math.abs(callbackPixels.animated.centerY - 135) < 4, "ordered callback lift y");
   assert.ok(Math.abs(callbackPixels.drift.centerX - 185) < 4, "unowned callback x");
   assert.ok(Math.abs(callbackPixels.drift.centerY - (180 - 45 * callbackResult.advanced.time)) < 4,

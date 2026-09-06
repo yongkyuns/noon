@@ -63,6 +63,75 @@ function fixture(transportMode = "transferable", runRequiredCallbackPhase = null
   };
 }
 
+async function prepareRendererObservationFixture(f, invocations) {
+  const ready = next(f.control.port2);
+  const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+  const endpoint = await f.attach();
+  await ready;
+  const initialDelta = await initial;
+  f.render.port2.postMessage({
+    type: "execution_ack",
+    session: initialDelta.session,
+    sequence: initialDelta.sequence,
+  });
+  f.render.port2.postMessage({
+    type: "execution_presented",
+    session: initialDelta.session,
+    sequence: initialDelta.sequence,
+  });
+  f.player.pause();
+  const advanceForward = f.player.advanceForwardToCallbackPhaseJson;
+  let phasePending = true;
+  const phase = { token: { sequence: "1" }, time: 1, invocations };
+  f.player.advanceForwardToCallbackPhaseJson = (time) => {
+    advanceForward(time);
+    if (!phasePending) return null;
+    phasePending = false;
+    return JSON.stringify(phase);
+  };
+  f.player.drainRendererObservationPublicationJson = (phaseJson, slot, generation) => {
+    assert.deepEqual(JSON.parse(phaseJson), phase);
+    assert.deepEqual({ slot, generation }, invocations[0].target);
+    const delta = JSON.parse(f.player.initialDeltaJson());
+    return JSON.stringify({
+      delta,
+      observation: {
+        schema_version: 1,
+        publication: { session: delta.session, sequence: delta.sequence },
+        slot: { slot, generation },
+        committed: {},
+      },
+    });
+  };
+  return {
+    endpoint,
+    begin(requestId) {
+      const observationRequest = nextMatching(
+        f.render.port2,
+        (message) => message.type === "renderer_observation_request",
+      );
+      const publicationMessage = nextMatching(
+        f.render.port2,
+        (message) => message.type === "execution_delta" &&
+          message.sequence !== initialDelta.sequence,
+      );
+      const advanced = nextMatching(
+        f.control.port2,
+        (message) => message.requestId === requestId,
+      );
+      f.control.port2.postMessage({
+        channel: "noon.engine",
+        protocolVersion: 1,
+        type: "advance_to",
+        requestId,
+        time: 1,
+        observeRenderer: true,
+      });
+      return { observationRequest, publicationMessage, advanced };
+    },
+  };
+}
+
 test("semantic producer installs mixed resources before its retained snapshot and supports controls", async () => {
   const f = fixture();
   try {
@@ -192,70 +261,13 @@ test("callback renderer observation waits for the exact presented publication an
     JSON.stringify({ token: phase.token, writes: [] }));
   let endpoint;
   try {
-    const ready = next(f.control.port2);
-    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
-    endpoint = await f.attach();
-    await ready;
-    const initialDelta = await initial;
-    f.render.port2.postMessage({
-      type: "execution_ack",
-      session: initialDelta.session,
-      sequence: initialDelta.sequence,
-    });
-    f.render.port2.postMessage({
-      type: "execution_presented",
-      session: initialDelta.session,
-      sequence: initialDelta.sequence,
-    });
-    f.player.pause();
-    const advanceForward = f.player.advanceForwardToCallbackPhaseJson;
-    let phasePending = true;
-    const phase = {
-      token: { sequence: "1" },
-      time: 1,
-      invocations: [{ target: { slot: 4, generation: 2 } }],
-    };
-    f.player.advanceForwardToCallbackPhaseJson = (time) => {
-      advanceForward(time);
-      if (!phasePending) return null;
-      phasePending = false;
-      return JSON.stringify(phase);
-    };
-    f.player.drainRendererObservationPublicationJson = (phaseJson, slot, generation) => {
-      assert.deepEqual(JSON.parse(phaseJson), phase);
-      assert.deepEqual({ slot, generation }, { slot: 4, generation: 2 });
-      const delta = JSON.parse(f.player.initialDeltaJson());
-      return JSON.stringify({
-        delta,
-        observation: {
-          schema_version: 1,
-          publication: { session: delta.session, sequence: delta.sequence },
-          slot: { slot, generation },
-          committed: {},
-        },
-      });
-    };
-    const requestMessage = nextMatching(
-      f.render.port2,
-      (message) => message.type === "renderer_observation_request",
-    );
-    const publicationMessage = nextMatching(
-      f.render.port2,
-      (message) => message.type === "execution_delta" &&
-        message.sequence !== initialDelta.sequence,
-    );
-    const advanced = nextMatching(
-      f.control.port2,
-      (message) => message.requestId === 37,
-    );
-    f.control.port2.postMessage({
-      channel: "noon.engine",
-      protocolVersion: 1,
-      type: "advance_to",
-      requestId: 37,
-      time: 1,
-      observeRenderer: true,
-    });
+    const prepared = await prepareRendererObservationFixture(f, [
+        { target: { slot: 4, generation: 2 } },
+        { target: { slot: 9, generation: 1 } },
+    ]);
+    endpoint = prepared.endpoint;
+    const { observationRequest: requestMessage, publicationMessage, advanced } =
+      prepared.begin(37);
     const observationRequest = await requestMessage;
     const publication = await publicationMessage;
     assert.equal(observationRequest.session, publication.session);
@@ -301,6 +313,59 @@ test("callback renderer observation waits for the exact presented publication an
     });
     const result = await advanced;
     assert.deepEqual(result.rendererObservation, rendererObservation);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("malformed renderer observation rejects its control and clears the pending request", async () => {
+  const f = fixture("transferable", async (phase) =>
+    JSON.stringify({ token: phase.token, writes: [] }));
+  let endpoint;
+  try {
+    const prepared = await prepareRendererObservationFixture(f, [
+      { target: { slot: 4, generation: 2 } },
+    ]);
+    endpoint = prepared.endpoint;
+    const { observationRequest, publicationMessage, advanced } = prepared.begin(39);
+    const requestMessage = await observationRequest;
+    const publication = await publicationMessage;
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: publication.session,
+      sequence: publication.sequence,
+    });
+
+    const malformedDiagnostic = nextMatching(
+      f.control.port2,
+      (message) => message.type === "error" && message.requestId === null,
+    );
+    f.render.port2.postMessage({
+      type: "renderer_observation",
+      session: publication.session,
+      sequence: publication.sequence,
+      json: JSON.stringify({ outcome: "presented" }),
+    });
+    assert.match((await malformedDiagnostic).message, /does not match its publication/);
+    const rejected = await advanced;
+    assert.equal(rejected.type, "error");
+    assert.match(rejected.message, /does not match its publication/);
+
+    const noLongerPending = nextMatching(
+      f.control.port2,
+      (message) => message.type === "error" && message.requestId === null,
+    );
+    f.render.port2.postMessage({
+      type: "renderer_observation",
+      session: publication.session,
+      sequence: publication.sequence,
+      json: JSON.stringify({
+        outcome: "presented",
+        publication: {
+          session: requestMessage.session,
+          sequence: requestMessage.sequence,
+        },
+      }),
+    });
+    assert.match((await noLongerPending).message, /invalid publication observation/);
   } finally { endpoint?.stop(); f.close(); }
 });
 
