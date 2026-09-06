@@ -732,7 +732,7 @@ try {
         if (continuation.settled) break;
         try {
           latest = await continuation.execution.state();
-          if (latest.time > startTime && latest.time < endTime) return latest;
+          if (latest.time >= startTime && latest.time < endTime) return latest;
           if (latest.time >= endTime) break;
         } catch {
           // A transferred player is observable again only after the source has
