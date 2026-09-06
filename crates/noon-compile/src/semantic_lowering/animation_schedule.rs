@@ -534,15 +534,20 @@ enum AnimationSchedulePlanError<R, E> {
     },
 }
 
+type SchedulePlanResult<L, T> = Result<
+    T,
+    AnimationSchedulePlanError<
+        <L as AnimationScheduleLookup>::Reference,
+        <L as AnimationScheduleLookup>::Error,
+    >,
+>;
+
 fn lower_animation_schedule<L>(
     lookup: &L,
     root: L::Reference,
     start_time: f64,
     play_options: AnimationOptions,
-) -> Result<
-    AnimationScheduleProjection<L::Reference>,
-    AnimationSchedulePlanError<L::Reference, L::Error>,
->
+) -> SchedulePlanResult<L, AnimationScheduleProjection<L::Reference>>
 where
     L: AnimationScheduleLookup,
 {
@@ -596,7 +601,7 @@ fn plan_animation<L>(
     lookup: &L,
     animation: L::Reference,
     play_options: AnimationOptions,
-) -> Result<PlannedAnimation<L::Reference>, AnimationSchedulePlanError<L::Reference, L::Error>>
+) -> SchedulePlanResult<L, PlannedAnimation<L::Reference>>
 where
     L: AnimationScheduleLookup,
 {
