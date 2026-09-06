@@ -34,7 +34,6 @@ mod manim_sector_bridge;
 mod manim_shape_matcher_bridge;
 #[cfg(any(target_arch = "wasm32", test))]
 mod manim_shape_matcher_handle_bridge;
-mod reactive_player;
 mod retained_authoring;
 mod retained_authoring_player;
 #[cfg(test)]
@@ -88,7 +87,6 @@ pub use manim_geometry_bridge::*;
 pub use manim_path_query_bridge::*;
 pub use manim_sector_bridge::*;
 pub use manim_shape_matcher_bridge::*;
-pub use reactive_player::*;
 pub use retained_authoring::*;
 pub use retained_authoring_player::*;
 pub use retained_authoring_scene_spec::*;

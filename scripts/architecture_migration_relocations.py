@@ -130,7 +130,10 @@ def main() -> int:
     sources = {path: (ROOT / path).read_text() for path in paths if (ROOT / path).is_file()}
     previous_config_source = at_base(base, CONFIG_REPO_PATH)
     previous_config = json.loads(previous_config_source) if previous_config_source else {}
+    retired_players = re.compile(r'\b(?:TimedScenePlayer|ReactiveScenePlayer|ReactiveCanvasPlayer|WasmReactiveScenePlayer|WasmReactiveCanvasPlayer)\b')
     for path, source in sources.items():
+        if path not in {'scripts/architecture_migration_relocations.py', 'scripts/check-web-package.mjs'} and retired_players.search(source):
+            errors.append(f'{path}: deleted reactive player returned; use the canonical execution session')
         if not path.endswith('.rs'):
             continue
         if re.search(r'\bFrontendMobjectHandle\b', source):

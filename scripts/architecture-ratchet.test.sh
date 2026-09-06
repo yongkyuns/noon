@@ -549,6 +549,16 @@ if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
 fi
 rm src/restored_handle.rs
 
+# Retired reactive players are forbidden even through a new alias/consumer.
+for retired in TimedScenePlayer ReactiveScenePlayer ReactiveCanvasPlayer WasmReactiveScenePlayer WasmReactiveCanvasPlayer; do
+  printf 'type Restored = %s;\n' "$retired" > src/restored_player.rs
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted retired player $retired" >&2
+    exit 1
+  fi
+  rm src/restored_player.rs
+done
+
 # Tool vocabulary is exempt at exactly its enforcement path, never when copied
 # into product code. Missing comparison commits also fail closed.
 reset_to_base
