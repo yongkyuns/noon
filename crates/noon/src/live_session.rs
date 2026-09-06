@@ -892,7 +892,7 @@ impl<'a> LiveSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CallbackAdvance, Scene};
+    use crate::{CallbackAdvance, ExecutionSessionCreateError, Scene};
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
     };
@@ -1300,7 +1300,7 @@ mod tests {
 
     #[test]
     fn parallel_create_admits_all_detached_leaves_in_one_reveal_segment() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         let square = scene.square(0.8).unwrap();
         let mut session = scene.execution_session().unwrap();

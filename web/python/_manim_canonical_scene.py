@@ -944,32 +944,23 @@ def _canonical_create_parallel_candidate(
     classified = [_canonical_create_animation(scene, animation) for animation in args]
     if any(target is None for target in classified):
         return None
-    try:
-        play = _canonical_affine_options(args[0], kwargs, builder_args={})
-    except (TypeError, ValueError):
-        raise
+    play = _canonical_affine_options(args[0], kwargs, builder_args={})
     if play is None:
         return None
 
     children: list[tuple[_base.Mobject, object]] = []
     for animation, target in zip(args, classified, strict=True):
-        child = _canonical_create_options(animation, {})
+        child = _canonical_create_options(animation, kwargs)
         if child is None:
             return None
         children.append((target, child))
 
-    # A top-level parallel has no implicit rate warp. Its children retain their
-    # individually resolved Manim timing (Smooth by default), so a default root
-    # must be Linear rather than applying Smooth twice.
-    root_rate = (
-        str(play.rate_func)
-        if kwargs.get("easing") is not None or kwargs.get("rate_func") is not None
-        else "linear"
-    )
+    # Scene.play options apply to each child through shared option resolution.
+    # The implicit parallel root is linear, so the curve is applied only once.
     context = _context(scene)
     play_run_time = kwargs.get("run_time", kwargs.get("duration"))
     candidate = context.beginOrdinaryCreateParallel(
-        None if play_run_time is None else float(play_run_time), root_rate
+        None if play_run_time is None else float(play_run_time), "linear"
     )
     next_object_id = scene._next_object_id
     reservations = []
