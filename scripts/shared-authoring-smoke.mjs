@@ -775,6 +775,132 @@ try {
     window.sharedAuthoringSmoke.liveSynchronousContinuationExecution = null;
   });
 
+  // Fade lifecycle uses the same synchronous JSPI continuation lease. Capture
+  // real presented midpoints while Python is suspended, then keep the FadeOut
+  // endpoint detached for a separate canonical wait before re-adding its exact
+  // semantic handle.
+  const fadeContinuationSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_fade_synchronous_continuation.py"),
+    "utf8",
+  );
+  const fadeContinuation = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-ordinary-fade-synchronous-continuation";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let execution = null;
+    let registration = null;
+    const authoredPromise = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(next) {
+        if (registration !== null) {
+          throw new Error("fade source registered more than one semantic context");
+        }
+        registration = next;
+        execution = new harness.AuthoringExecutionClient(canvas);
+        await execution.startSemanticExecution(next.semanticExecution, {
+          authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, next.duration),
+          transportMode: "transferable",
+        });
+      },
+    });
+    for (let attempt = 0; attempt < 150 && execution === null; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (execution === null || registration === null) {
+      throw new Error("fade source did not register its semantic continuation");
+    }
+    harness.ordinaryFadeContinuation = { authoredPromise, execution, registration };
+    return { canvasId: canvas.id };
+  }, fadeContinuationSource);
+
+  async function pauseFadeDuring(start, end, label) {
+    return page.evaluate(async ({ startTime, endTime, phaseLabel }) => {
+      const { execution } = window.sharedAuthoringSmoke.ordinaryFadeContinuation;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        try {
+          const state = await execution.state();
+          if (state.time >= startTime && state.time <= endTime) {
+            const paused = await execution.pause();
+            if (paused.time >= startTime && paused.time <= endTime) return paused;
+          }
+        } catch {
+          // The exact player is briefly returned between continuation segments.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`fade ${phaseLabel} did not reach its observable interval`);
+    }, { startTime: start, endTime: end, phaseLabel: label });
+  }
+
+  const fadeInMidpoint = await pauseFadeDuring(0.3, 0.7, "FadeIn midpoint");
+  const fadeInPixel = renderedWorldPixel(
+    await page.locator(`#${fadeContinuation.canvasId}`).screenshot(), 0, 0,
+  );
+  assert.ok(
+    fadeInPixel.blue > 50 && fadeInPixel.blue < 210 &&
+      fadeInPixel.green > 15 && fadeInPixel.green < 100,
+    `FadeIn midpoint did not present partial appearance: ${JSON.stringify({ fadeInMidpoint, fadeInPixel })}`,
+  );
+  await page.evaluate(() => window.sharedAuthoringSmoke.ordinaryFadeContinuation.execution.resume());
+
+  const fadeOutMidpoint = await pauseFadeDuring(1.3, 1.7, "FadeOut midpoint");
+  const fadeOutPixel = renderedWorldPixel(
+    await page.locator(`#${fadeContinuation.canvasId}`).screenshot(), 0, 0,
+  );
+  assert.ok(
+    fadeOutPixel.blue > 50 && fadeOutPixel.blue < 210 &&
+      fadeOutPixel.green > 15 && fadeOutPixel.green < 100,
+    `FadeOut midpoint did not present partial appearance: ${JSON.stringify({ fadeOutMidpoint, fadeOutPixel })}`,
+  );
+  await page.evaluate(() => window.sharedAuthoringSmoke.ordinaryFadeContinuation.execution.resume());
+
+  const fadeAbsent = await pauseFadeDuring(2.05, 2.2, "detached wait");
+  const absentPixels = visiblePixelStats(
+    await page.locator(`#${fadeContinuation.canvasId}`).screenshot(),
+    (red, green, blue) => blue > 35 && blue > red + 20 && blue > green + 10,
+  );
+  assert.equal(
+    absentPixels.count,
+    0,
+    `FadeOut endpoint remained visible before re-add: ${JSON.stringify({ fadeAbsent, absentPixels })}`,
+  );
+  await page.evaluate(() => window.sharedAuthoringSmoke.ordinaryFadeContinuation.execution.resume());
+
+  const fadeFinal = await page.evaluate(async () => {
+    const continuation = window.sharedAuthoringSmoke.ordinaryFadeContinuation;
+    const authored = await continuation.authoredPromise;
+    if (
+      authored.semanticExecution.contextId !== continuation.registration.semanticExecution.contextId ||
+      authored.semanticExecution.continuationGeneration !== continuation.registration.generation
+    ) {
+      throw new Error("fade result did not retain its continuation context");
+    }
+    let metrics;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      metrics = (await continuation.execution.metrics()).metrics;
+      if (metrics.objectCount === 1 && metrics.drawCalls > 0 && metrics.presentedFrames > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return { duration: authored.duration, metrics };
+  });
+  assert.equal(fadeFinal.duration, 2.25);
+  assert.equal(fadeFinal.metrics.objectCount, 1);
+  assert.ok(fadeFinal.metrics.drawCalls > 0);
+  const fadeFinalPixel = renderedWorldPixel(
+    await page.locator(`#${fadeContinuation.canvasId}`).screenshot(), 0, 0,
+  );
+  assert.ok(
+    fadeFinalPixel.blue > 230 && fadeFinalPixel.green > 85,
+    `same-handle re-add did not restore full authored appearance: ${JSON.stringify(fadeFinalPixel)}`,
+  );
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.ordinaryFadeContinuation.execution.terminate();
+    window.sharedAuthoringSmoke.ordinaryFadeContinuation = null;
+  });
+
   // Native hosts send normalized input occurrences across the genuine worker
   // control port. The Python scene owns no input values or event cursor; the
   // canonical Rust session evaluates the bindings and publishes each frame.
