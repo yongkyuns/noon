@@ -6,6 +6,7 @@ import {
   createDirectOrdinaryAffineContinuationSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
+  createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
   createDirectValueTrackerSmokeRenderer,
@@ -365,6 +366,106 @@ async function directOrdinaryAffineContinuationProof(expectedBackend) {
   return metrics;
 }
 
+async function directOrdinaryFadePlayProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryFadePlaySmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow || initial.cadence !== "animation-frame") {
+    throw new Error(`direct ordinary fade did not start FadeIn: ${JSON.stringify(initial)}`);
+  }
+  await presentDirectFrame(renderer);
+  const detachedLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
+
+  if (!renderer.advanceDirectRealtime(500)) {
+    throw new Error("direct ordinary fade did not publish the FadeIn midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const fadeInMidpointLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
+
+  if (!renderer.advanceDirectRealtime(1000)) {
+    throw new Error("direct ordinary fade did not publish the FadeIn endpoint");
+  }
+  await presentDirectFrame(renderer);
+  const fadeInEndpointLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
+  const fadeOutStart = JSON.parse(renderer.directWakeDirectiveJson(1000));
+  if (fadeOutStart.cadence !== "animation-frame") {
+    throw new Error(`direct ordinary fade did not begin FadeOut: ${JSON.stringify(fadeOutStart)}`);
+  }
+
+  if (!renderer.advanceDirectRealtime(1500)) {
+    throw new Error("direct ordinary fade did not publish the FadeOut midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const fadeOutMidpointLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
+
+  if (!renderer.advanceDirectRealtime(2000)) {
+    throw new Error("direct ordinary fade did not publish its absent endpoint");
+  }
+  await presentDirectFrame(renderer);
+  const absentLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
+  const absentObjectCount = renderer.objectCount();
+  const waitDirective = JSON.parse(renderer.directWakeDirectiveJson(2000));
+  const noSyntheticDetachedDraw = renderer.render() === false;
+  if (waitDirective.cadence !== "timer" || waitDirective.delayMs < 249 || waitDirective.delayMs > 251) {
+    throw new Error(`direct ordinary fade did not retain its detached wait: ${JSON.stringify(waitDirective)}`);
+  }
+
+  if (!renderer.advanceDirectRealtime(2250)) {
+    throw new Error("direct ordinary fade did not publish same-handle re-entry");
+  }
+  await presentDirectFrame(renderer);
+  const readdedColor = await sampleRenderedColor(canvas, 0, 0);
+  const readdedObjectCount = renderer.objectCount();
+  const finalBarrier = JSON.parse(renderer.directWakeDirectiveJson(2250));
+  if (finalBarrier.cadence !== "timer" || finalBarrier.delayMs !== 0) {
+    throw new Error(`direct ordinary fade did not expose its final admission barrier: ${JSON.stringify(finalBarrier)}`);
+  }
+  if (renderer.advanceDirectRealtime(2250)) {
+    throw new Error("direct ordinary fade created a synthetic frame after final admission");
+  }
+  const finalDirective = JSON.parse(renderer.directWakeDirectiveJson(2250));
+
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    detachedLuma,
+    fadeInMidpointLuma,
+    fadeInEndpointLuma,
+    fadeOutMidpointLuma,
+    absentLuma,
+    absentObjectCount,
+    readdedColor,
+    readdedObjectCount,
+    noSyntheticDetachedDraw,
+    waitDelayMs: waitDirective.delayMs,
+    finalCadence: finalDirective.cadence,
+  };
+  if (metrics.backend !== expectedBackend || metrics.authoredTime !== 2.25) {
+    throw new Error(`direct ordinary fade selected an invalid runtime ${JSON.stringify(metrics)}`);
+  }
+  if (
+    detachedLuma > 30 ||
+    fadeInMidpointLuma < 100 ||
+    fadeInMidpointLuma >= fadeInEndpointLuma ||
+    fadeInEndpointLuma < 300 ||
+    fadeOutMidpointLuma < 100 ||
+    fadeOutMidpointLuma >= fadeInEndpointLuma ||
+    absentLuma > 30 ||
+    absentObjectCount !== 0 ||
+    readdedObjectCount !== 1 ||
+    readdedColor.red > 40 ||
+    readdedColor.green < 80 ||
+    readdedColor.blue < 200 ||
+    !noSyntheticDetachedDraw ||
+    finalDirective.cadence !== "idle"
+  ) {
+    throw new Error(`direct ordinary fade pixels or lifecycle are invalid ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
 async function directOrdinaryCompositionPlayProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinaryCompositionPlaySmokeRenderer(canvas);
@@ -688,6 +789,7 @@ async function start() {
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
+  metrics.ordinaryFadePlay = await directOrdinaryFadePlayProof(expectedBackend);
   metrics.ordinaryCompositionPlay = await directOrdinaryCompositionPlayProof(expectedBackend);
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);

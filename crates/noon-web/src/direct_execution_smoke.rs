@@ -127,6 +127,16 @@ pub async fn create_direct_ordinary_affine_continuation_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Browser proof that FadeIn/FadeOut, detached wait, and same-handle re-entry
+/// execute through the same target-neutral Rust continuation as the native example.
+#[wasm_bindgen(js_name = createDirectOrdinaryFadePlaySmokeRenderer)]
+pub async fn create_direct_ordinary_fade_play_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_fade_continuation_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that flat Parallel/Sequence composition uses the same typed
 /// target-neutral session as the native Rust example.
 #[wasm_bindgen(js_name = createDirectOrdinaryCompositionPlaySmokeRenderer)]

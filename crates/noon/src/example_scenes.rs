@@ -5,8 +5,8 @@ use std::error::Error;
 use crate::{
     AnimationOptions, Color, ExecutionSession, ExecutionSessionInputError, HostCallbackId,
     LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, ReactiveValue,
-    RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticPaint, SemanticVec3,
-    TransformToRequest, Vec2,
+    RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, TransformToRequest, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -300,6 +300,147 @@ pub fn ordinary_affine_continuation_program(
         .into_live_program(OrdinaryAffineContinuation {
             circle,
             first_target,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Ordinary FadeIn/FadeOut continuation used unchanged by native and direct Rust/WASM hosts.
+///
+/// The circle begins detached, enters and exits through the shared appearance/membership
+/// publication, remains absent for one ordinary wait, then re-enters with the same semantic
+/// identity. This continuation owns no membership mirror or appearance scheduler.
+pub struct OrdinaryFadeContinuation {
+    circle: Mobject,
+    semantic_id: SemanticNodeId,
+    authored_style: SemanticStyle,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryFadeContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        let linear = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        match self.stage {
+            0 => {
+                if live
+                    .contains(&self.circle)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err("FadeIn example target must begin detached".into());
+                }
+                self.stage = 1;
+                live.declare_and_activate_fade(&self.circle, SemanticFadeDirection::In, linear)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            1 => {
+                let effective = live
+                    .effective(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                let authored = live
+                    .authored(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                if !live
+                    .contains(&self.circle)
+                    .map_err(|error| error.to_string())?
+                    || effective.appearance != 1.0
+                    || authored.style != self.authored_style
+                {
+                    return Err("FadeIn did not publish its exact shared endpoint".into());
+                }
+                self.stage = 2;
+                live.declare_and_activate_fade(&self.circle, SemanticFadeDirection::Out, linear)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            2 => {
+                if live
+                    .contains(&self.circle)
+                    .map_err(|error| error.to_string())?
+                    || live.effective(&self.circle).is_ok()
+                    || self.circle.node_id() != self.semantic_id
+                {
+                    return Err("FadeOut did not detach the original semantic handle".into());
+                }
+                self.stage = 3;
+                live.wait_segment(0.25)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            3 => {
+                if live
+                    .contains(&self.circle)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err("fade target re-entered before the detached wait completed".into());
+                }
+                live.add(&self.circle).map_err(|error| error.to_string())?;
+                let effective = live
+                    .effective(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                let authored = live
+                    .authored(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                if self.circle.node_id() != self.semantic_id
+                    || !live
+                        .contains(&self.circle)
+                        .map_err(|error| error.to_string())?
+                    || effective.appearance != 1.0
+                    || authored.style != self.authored_style
+                {
+                    return Err("ordinary re-add did not preserve fade identity and style".into());
+                }
+                self.stage = 4;
+                live.wait_segment(0.0)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            4 => {
+                if self.circle.node_id() != self.semantic_id
+                    || !live
+                        .contains(&self.circle)
+                        .map_err(|error| error.to_string())?
+                    || live
+                        .authored(&self.circle)
+                        .map_err(|error| error.to_string())?
+                        .style
+                        != self.authored_style
+                {
+                    return Err("re-added fade handle changed before final admission".into());
+                }
+                self.stage = 5;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary fade continuation resumed after it finished".into()),
+        }
+    }
+}
+
+/// Build the paired ordinary fade program without selecting a platform host.
+///
+/// The authored circle stays blue and fully opaque throughout. Only runtime appearance and exact
+/// root membership change, and the final ordinary add reuses the original semantic handle.
+pub fn ordinary_fade_continuation_program() -> Result<LiveProgram<OrdinaryFadeContinuation>, String>
+{
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.4).map_err(|error| error.to_string())?;
+    circle
+        .set_fill(0.0, 0.4, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    let semantic_id = circle.node_id();
+    let authored_style = circle.state().map_err(|error| error.to_string())?.style;
+    scene
+        .into_live_program(OrdinaryFadeContinuation {
+            circle,
+            semantic_id,
+            authored_style,
             stage: 0,
         })
         .map_err(|error| error.to_string())
@@ -655,7 +796,7 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
 #[cfg(test)]
 mod continuation_tests {
     use super::*;
-    use crate::LiveProgramStatus;
+    use crate::{LiveProgramStatus, TimelineWakeState};
 
     #[test]
     fn ordinary_affine_continuation_uses_shared_segments_and_publication_admission() {
@@ -719,5 +860,88 @@ mod continuation_tests {
             program.session().frame().objects[0].transform.translation,
             Vec2::new(5.0, -1.0)
         );
+    }
+
+    #[test]
+    fn ordinary_fade_continuation_exposes_absent_boundary_then_readds() {
+        let mut program = ordinary_fade_continuation_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(program.session().frame().objects[0].appearance, 0.0);
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(program.session().frame().objects[0].appearance, 0.5);
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let fade_in_publication = program.take_renderer_publication().context();
+        program.admit_publication(fade_in_publication).unwrap();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        let fading_index = program
+            .query_viewport(crate::Rect::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0)))
+            .object_indices()[0];
+        assert_eq!(
+            program.session().frame().objects[fading_index].appearance,
+            0.5
+        );
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 2.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        assert!(program
+            .query_viewport(crate::Rect::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0),))
+            .object_indices()
+            .is_empty());
+        let absent_publication = program.take_renderer_publication().context();
+        program.admit_publication(absent_publication).unwrap();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.wake_state().timeline(),
+            TimelineWakeState::Deadline(2.25)
+        );
+
+        assert_eq!(
+            program.drive_to(&mut callbacks, 2.25).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        );
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        let readded =
+            program.query_viewport(crate::Rect::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0)));
+        assert_eq!(readded.object_indices().len(), 1);
+        let index = readded.object_indices()[0];
+        assert_eq!(program.session().frame().objects[index].appearance, 1.0);
+        program.take_renderer_publication();
+        assert_eq!(
+            program.drive_to(&mut callbacks, 2.25).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        );
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     }
 }

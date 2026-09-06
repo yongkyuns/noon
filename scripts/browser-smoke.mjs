@@ -370,6 +370,34 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM continuation did not preserve its wait deadline and final resume lifecycle",
   );
   assert.equal(
+    direct.metrics.ordinaryFadePlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary fade did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryFadePlay?.authoredTime,
+    2.25,
+    "direct Rust/WASM ordinary fade did not preserve its shared authored time",
+  );
+  assert.ok(
+    direct.metrics.ordinaryFadePlay?.detachedLuma <= 30 &&
+      direct.metrics.ordinaryFadePlay?.fadeInMidpointLuma >= 100 &&
+      direct.metrics.ordinaryFadePlay?.fadeInEndpointLuma >= 300 &&
+      direct.metrics.ordinaryFadePlay?.fadeOutMidpointLuma >= 100 &&
+      direct.metrics.ordinaryFadePlay?.absentLuma <= 30,
+    "direct Rust/WASM ordinary fade did not render both fade midpoints and its absent endpoint",
+  );
+  assert.ok(
+    direct.metrics.ordinaryFadePlay?.absentObjectCount === 0 &&
+      direct.metrics.ordinaryFadePlay?.readdedObjectCount === 1 &&
+      direct.metrics.ordinaryFadePlay?.readdedColor.blue >= 200 &&
+      direct.metrics.ordinaryFadePlay?.noSyntheticDetachedDraw &&
+      direct.metrics.ordinaryFadePlay?.waitDelayMs >= 249 &&
+      direct.metrics.ordinaryFadePlay?.waitDelayMs <= 251 &&
+      direct.metrics.ordinaryFadePlay?.finalCadence === "idle",
+    "direct Rust/WASM ordinary fade did not preserve detached wait and same-handle re-entry",
+  );
+  assert.equal(
     direct.metrics.ordinaryCompositionPlay?.backend,
     expectedBackend,
     "direct Rust/WASM ordinary composition did not use the selected renderer backend",
