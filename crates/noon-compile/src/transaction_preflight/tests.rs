@@ -9,7 +9,10 @@ use noon_core::{
     TrackTiming, TrackValues,
 };
 
-use crate::{lower_semantic_execution, CompilePatchError, CompiledScene, SemanticExecutionIndex};
+use crate::{
+    lower_semantic_execution, CompilePatchError, CompiledScene, ExecutionMutationTransaction,
+    ExecutionPatch, SemanticExecutionIndex,
+};
 
 fn compiled_circles(radii: impl IntoIterator<Item = f32>) -> (CompiledScene, Vec<ObjectId>) {
     let mut store = SemanticStore::new();
@@ -145,8 +148,18 @@ fn late_presence_replacement_rejects_without_touching_unrelated_tracks() {
 fn mapped_presence_preflight_orders_by_compiled_event_boundary() {
     let (mut compiled, objects) = compiled_circles([1.0]);
     let target = objects[0];
-    add_presence(&mut compiled, target, 0, false, true, 1.0);
-    add_presence(&mut compiled, target, 1, true, false, 2.0);
+    for (id, from, to, time) in [(0, false, true, 1.0), (1, true, false, 2.0)] {
+        compiled
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(id),
+                object: target,
+                property: noon_core::Property::Presence,
+                values: TrackValues::Bool { from, to },
+                timing: TrackTiming::instant(time),
+                time_map: noon_core::CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+    }
     let mapped = TrackDefinition {
         id: TrackId::new(2),
         object: target,
@@ -160,16 +173,49 @@ fn mapped_presence_preflight_orders_by_compiled_event_boundary() {
             noon_core::CompositionTimeMapStep::new(0.5, 0.5, Easing::Linear),
         ]),
     };
-    let transaction = MutationTransaction::from_mutations([ScenePatch::AddTrack(mapped)]);
+    let transaction =
+        ExecutionMutationTransaction::from_mutations([ExecutionPatch::AddTrack(mapped)]);
 
-    compiled.preflight_transaction(&transaction).unwrap();
+    compiled
+        .preflight_execution_transaction(&transaction)
+        .unwrap();
     for patch in transaction.mutations() {
-        compiled.apply_patch(patch).unwrap();
+        compiled.apply_execution_patch(patch).unwrap();
     }
     assert_eq!(
         compiled.track(TrackId::new(2)).unwrap().timing,
         TrackTiming::instant(3.0)
     );
+}
+
+#[test]
+fn unsupported_mapped_presence_transaction_is_atomic() {
+    let (compiled, objects) = compiled_circles([1.0]);
+    let before = compiled.clone();
+    let transaction =
+        ExecutionMutationTransaction::from_mutations([ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(0),
+            object: objects[0],
+            property: noon_core::Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            time_map: noon_core::CompositionTimeMap::from_steps(vec![
+                noon_core::CompositionTimeMapStep::new(
+                    0.0,
+                    1.0,
+                    noon_core::RateFunction::ThereAndBack,
+                ),
+            ]),
+        })]);
+
+    assert!(matches!(
+        compiled.preflight_execution_transaction(&transaction),
+        Err(CompilePatchError::InvalidTrack(_))
+    ));
+    assert_eq!(compiled, before);
 }
 
 #[test]

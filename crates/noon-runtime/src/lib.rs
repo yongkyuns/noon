@@ -2527,24 +2527,32 @@ mod tests {
 
     #[test]
     fn nested_mapped_presence_has_one_forward_and_seek_boundary() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        scene
-            .add_track_with_time_map(
+        let mut store = noon_core::SemanticStore::new();
+        let node = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+            noon_core::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        store.attach_semantic_object(node).unwrap();
+        let mut index = noon_compile::SemanticExecutionIndex::new();
+        let (mut compiled, _) = noon_compile::lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        let object = index.execution_object_id(node).unwrap();
+        compiled
+            .apply_execution_patch(&noon_compile::ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(0),
                 object,
-                Property::Presence,
-                TrackValues::Bool {
+                property: Property::Presence,
+                values: TrackValues::Bool {
                     from: false,
                     to: true,
                 },
-                TrackTiming::new(2.0, 4.0, RateFunction::Linear),
-                CompositionTimeMap::from_steps(vec![
+                timing: TrackTiming::new(2.0, 4.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::from_steps(vec![
                     CompositionTimeMapStep::new(0.2, 0.6, RateFunction::Smooth),
                     CompositionTimeMapStep::new(0.5, 0.5, RateFunction::Linear),
                 ]),
-            )
+            }))
             .unwrap();
-        let compiled = CompiledScene::compile(&scene).unwrap();
         let boundary = compiled.tracks()[0].timing.start_time;
         assert!(boundary > 2.0 && boundary < 6.0);
 

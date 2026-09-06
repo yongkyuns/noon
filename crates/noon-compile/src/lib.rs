@@ -10,11 +10,12 @@ mod transform;
 use std::cmp::Ordering;
 use std::{collections::BTreeMap, sync::Arc};
 
+use noon_core::resolve_track_timing;
 use noon_core::{
-    resolve_track_timing, validate_geometry, validate_style, validate_track_definition,
-    validate_transform, CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId,
-    ObjectStateField, Property, SceneDefinition, ScenePatch, Style, TimelineError, TrackDefinition,
-    TrackId, TrackTiming, TrackValues, Transform2D,
+    validate_geometry, validate_style, validate_track_definition, validate_transform,
+    CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId, ObjectStateField, Property,
+    SceneDefinition, ScenePatch, Style, TimelineError, TrackDefinition, TrackId, TrackTiming,
+    TrackValues, Transform2D,
 };
 use noon_core::{
     FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
@@ -1717,26 +1718,33 @@ mod tests {
 
     #[test]
     fn mapped_presence_compiles_to_one_scheduler_event() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        scene
-            .add_track_with_time_map(
+        let mut store = SemanticStore::new();
+        let node = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+            noon_core::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        store.attach_semantic_object(node).unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        let object = index.execution_object_id(node).unwrap();
+        compiled
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(0),
                 object,
-                Property::Presence,
-                TrackValues::Bool {
+                property: Property::Presence,
+                values: TrackValues::Bool {
                     from: false,
                     to: true,
                 },
-                TrackTiming::new(3.0, 4.0, RateFunction::Linear),
-                CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                timing: TrackTiming::new(3.0, 4.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
                     0.25,
                     0.5,
                     RateFunction::Linear,
                 )]),
-            )
+            }))
             .unwrap();
-
-        let compiled = CompiledScene::compile(&scene).unwrap();
         let track = &compiled.tracks()[0];
         assert_eq!(track.timing, TrackTiming::instant(4.0));
         assert!(track.time_map.is_identity());

@@ -849,24 +849,23 @@ mod tests {
     }
 
     #[test]
-    fn mapped_presence_rejects_reversing_rate_before_scene_mutation() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let error = scene
-            .add_track_with_time_map(
-                object,
-                Property::Presence,
-                TrackValues::Bool {
-                    from: false,
-                    to: true,
-                },
-                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
-                CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
-                    0.0,
-                    1.0,
-                    RateFunction::ThereAndBack,
-                )]),
-            )
+    fn mapped_presence_rejects_reversing_rate_during_validation() {
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(1),
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                0.0,
+                1.0,
+                RateFunction::ThereAndBack,
+            )]),
+        };
+        let error = validate_track_definition(&track)
             .expect_err("a reversing parent has no single presence boundary");
         assert!(matches!(
             error,
@@ -874,7 +873,6 @@ mod tests {
                 CompositionTimeMapError::UnsupportedDiscreteRate { .. }
             )
         ));
-        assert!(scene.tracks().is_empty());
     }
 
     #[test]
