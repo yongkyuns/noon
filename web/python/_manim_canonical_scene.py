@@ -1320,10 +1320,11 @@ def _play_canonical_fade(
 
 
 def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
-    """Return one flat Rust composition request shape without scheduling it."""
-    if len(args) == 1 and isinstance(args[0], _composition.Succession):
+    """Return one recursive Rust composition request shape without scheduling it."""
+    if len(args) == 1 and isinstance(args[0], _composition.AnimationGroup):
         group = args[0]
-        return "sequence", tuple(group.animations), group
+        kind = "sequence" if isinstance(group, _composition.Succession) else "parallel"
+        return kind, tuple(group.animations), group
     if len(args) > 1:
         return "parallel", args, None
     if len(args) == 1:
@@ -1398,133 +1399,142 @@ def _build_canonical_composition_candidate(
     group: object | None,
     kwargs: dict[str, object],
 ):
+    """Build one inert recursive composition tree owned by the WASM context."""
     import _manim_rotate as _rotate
 
-    classified = []
-    for animation in animations:
+    play_run_time = _canonical_linear_play_options(dict(kwargs))
+    composition_run_time = None if group is None else group.run_time
+    composition_lag_ratio = 0.0 if group is None else float(group.lag_ratio)
+    if group is not None and _compat._easing_from_rate_func(group.rate_func) != "linear":
+        raise NotImplementedError("canonical composition currently requires a linear group rate_func")
+    context = _context(self)
+    candidate = context.beginOrdinaryTransformComposition(
+        kind, composition_run_time, composition_lag_ratio, play_run_time,
+    )
+    reservations: list[tuple[_base.Mobject, object]] = []
+    next_object_id = self._next_object_id
+
+    def reserve(target: _base.Mobject):
+        nonlocal next_object_id
+        reservation = _reserve_typed_binding(
+            target, self, getattr(target, "_semantic_handle"), None, object_id=next_object_id,
+        )
+        reservations.append((target, reservation))
+        next_object_id += 1
+        return reservation
+
+    def append_leaf(builder: object, animation: object, child_kwargs: dict[str, object]) -> None:
+        nonlocal next_object_id
+        if isinstance(animation, _composition.AnimationGroup):
+            nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
+            nested, nested_reservations = build(nested_kind, tuple(animation.animations), animation, {})
+            reservations.extend(nested_reservations)
+            builder.appendComposition(nested)
+            return
+        if isinstance(animation, _composition.Wait):
+            if child_kwargs:
+                raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
+            builder.appendWait(float(animation.run_time))
+            return
+        if isinstance(animation, _composition.Add):
+            if child_kwargs:
+                raise NotImplementedError("Add inside a composition does not accept play timing overrides")
+            for member in _compat._leaf_mobjects(animation.mobject):
+                if getattr(member, "_semantic_handle", None) is None or member._scene is not None:
+                    raise NotImplementedError("canonical Add requires detached typed leaves")
+                reservation = reserve(member)
+                builder.appendAdd(str(reservation.object.id), getattr(member, "_semantic_handle"), float(animation.run_time), "linear")
+            return
+        lifecycle = _canonical_affine_lifecycle_animation(self, animation)
+        if lifecycle is not None:
+            target, lifecycle_animation = lifecycle
+            child = _canonical_composition_child_options(lifecycle_animation, child_kwargs)
+            if child.lag_ratio != 0.0 or child.path_arc != 0.0 or child.reverse_rate_function:
+                raise NotImplementedError("canonical lifecycle leaves do not support lag or path options")
+            if getattr(lifecycle_animation, "_canonical_affine_lifecycle", None) == "shrink":
+                direction, endpoint, x, y, rotation_offset, color = "remove-to", "effective-center", 0.0, 0.0, 0.0, None
+            else:
+                direction, endpoint = "introduce-from", "point"
+                point = lifecycle_animation.point
+                x, y = float(point.x), float(point.y)
+                rotation_offset = -float(lifecycle_animation.angle) if type(lifecycle_animation).__name__ == "SpinInFromNothing" else 0.0
+                color = getattr(lifecycle_animation, "point_color", None)
+            rgba = (None, None, None, None) if color is None else tuple(float(getattr(color, name)) for name in ("red", "green", "blue", "alpha"))
+            reservation = reserve(target) if target._scene is None else None
+            object_id = str(reservation.object.id) if reservation is not None else ""
+            builder.appendAffineLifecycle(object_id, getattr(target, "_semantic_handle"), direction, endpoint, x, y, rotation_offset, *rgba, float(child.run_time), str(child.rate_func))
+            return
+        fade = _canonical_fade_animation(self, animation)
+        if fade is not None:
+            target, direction = fade
+            child = _canonical_fade_options(animation, child_kwargs)
+            if child is None:
+                raise NotImplementedError("unsupported canonical fade options")
+            object_id, reservation = _fade_object_id(self, target, direction)
+            if reservation is not None:
+                reservations.append((target, reservation))
+            elif direction == "out":
+                object_id = ""
+            builder.appendFade(object_id, getattr(target, "_semantic_handle"), direction, float(child.run_time), str(child.rate_func))
+            return
+        created = _canonical_create_animation(self, animation)
+        if created is not None:
+            child = _canonical_create_options(animation, child_kwargs)
+            if child is None:
+                raise NotImplementedError("unsupported canonical Create options")
+            reservation = reserve(created)
+            builder.appendCreate(str(reservation.object.id), getattr(created, "_semantic_handle"), float(child.run_time), str(child.rate_func))
+            return
         affine = _canonical_affine_animation(self, animation)
         if affine is not None:
-            source, target, animation = affine
+            source, target, leaf = affine
+            child = _canonical_composition_child_options(leaf, child_kwargs)
             source_handle = getattr(source, "_semantic_handle")
             target_handle = getattr(target, "_semantic_handle")
-            builder_rotation = type(animation) in (
-                _base._AnimationBuilder,
-                _compat._CompatAnimationBuilder,
-            ) and not math.isclose(
-                float(source_handle.wireRotation),
-                float(target_handle.wireRotation),
-                abs_tol=1e-12,
-            )
-            classified.append(
-                ("point_transform" if builder_rotation else "transform", source, target, animation)
-            )
-            continue
+            point_correspondence = type(leaf) in (_base._AnimationBuilder, _compat._CompatAnimationBuilder) and not math.isclose(float(source_handle.wireRotation), float(target_handle.wireRotation), abs_tol=1e-12)
+            if source._scene is None:
+                reservation = reserve(source)
+                method = builder.appendEnteringPointTransformTo if point_correspondence else builder.appendEnteringTransformTo
+                method(str(reservation.object.id), source_handle, target_handle, float(child.run_time), str(child.rate_func))
+            else:
+                method = builder.appendPointTransformTo if point_correspondence else builder.appendTransformTo
+                method(source_handle, target_handle, float(child.run_time), str(child.rate_func))
+            return
         if type(animation) is _rotate.Rotate:
             target = animation.mobject
             if not isinstance(target, _base.Mobject) or getattr(target, "_semantic_handle", None) is None:
-                classified.append(None)
-                continue
-            if target._scene not in (None, self):
-                raise NotImplementedError("canonical Rotate target belongs to another Scene")
-            center = target.get_center()
-            pivot = _compat._as_vec2(animation.about_point)
-            if not (math.isclose(center.x, pivot.x, abs_tol=1e-9) and math.isclose(center.y, pivot.y, abs_tol=1e-9)):
-                raise NotImplementedError("canonical Rotate requires the object's center pivot")
+                raise NotImplementedError("canonical Rotate requires a typed Mobject")
+            child = _canonical_composition_child_options(animation, child_kwargs)
             angle = float(animation.angle) * _rotate._axis_sign(animation.axis)
-            classified.append(("rotate", target, angle, animation))
-            continue
-        classified.append(None)
-    present = [leaf for leaf in classified if leaf is not None]
-    if not present:
-        return None
-    if len(present) != len(animations):
-        raise NotImplementedError(
-            "canonical ordinary compositions require only flat affine leaves"
-        )
-
-    play_run_time = _canonical_linear_play_options(dict(kwargs))
-    composition_run_time = None
-    composition_lag_ratio = 0.0 if kind == "parallel" else 1.0
-    if group is not None:
-        if not isinstance(group, _composition.Succession):
-            raise NotImplementedError(
-                "canonical ordinary composition currently supports flat Succession only"
-            )
-        if _compat._easing_from_rate_func(group.rate_func) != "linear":
-            raise NotImplementedError(
-                "canonical ordinary Succession currently requires a linear rate_func"
-            )
-        composition_run_time = group.run_time
-        composition_lag_ratio = float(group.lag_ratio)
-        if composition_lag_ratio != 1.0:
-            raise NotImplementedError(
-                "canonical ordinary Succession currently requires lag_ratio=1"
-            )
-
-    context = _context(self)
-    candidate = context.beginOrdinaryTransformComposition(
-        kind,
-        composition_run_time,
-        composition_lag_ratio,
-        play_run_time,
-    )
-    reservations = []
-    next_object_id = self._next_object_id
-    for leaf_kind, source, target, animation in present:
-        # Implicit parallel play options apply to its top-level animations;
-        # explicit Succession owns its root options and preserves child curves.
-        child = _canonical_composition_child_options(
-            animation, kwargs if group is None else {},
-        )
-        if leaf_kind in ("transform", "point_transform"):
-            point_correspondence = leaf_kind == "point_transform"
-            if source._scene is None:
-                reservation = _reserve_typed_binding(source, self, getattr(source, "_semantic_handle"), None, object_id=next_object_id)
-                reservations.append((source, reservation))
-                next_object_id += 1
-                method = (
-                    candidate.appendEnteringPointTransformTo
-                    if point_correspondence
-                    else candidate.appendEnteringTransformTo
-                )
-                method(
-                    str(reservation.object.id),
-                    getattr(source, "_semantic_handle"),
-                    getattr(target, "_semantic_handle"),
-                    float(child.run_time),
-                    str(child.rate_func),
-                )
+            if target._scene is None:
+                reservation = reserve(target)
+                builder.appendRotate(str(reservation.object.id), target._semantic_handle, angle, float(child.run_time), str(child.rate_func))
             else:
-                method = (
-                    candidate.appendPointTransformTo
-                    if point_correspondence
-                    else candidate.appendTransformTo
-                )
-                method(
-                    getattr(source, "_semantic_handle"),
-                    getattr(target, "_semantic_handle"),
-                    float(child.run_time),
-                    str(child.rate_func),
-                )
-        else:
-            if source._scene is None:
-                reservation = _reserve_typed_binding(source, self, getattr(source, "_semantic_handle"), None, object_id=next_object_id)
-                reservations.append((source, reservation))
-                next_object_id += 1
-                candidate.appendRotate(
-                    str(reservation.object.id),
-                    getattr(source, "_semantic_handle"),
-                    float(target),
-                    float(child.run_time),
-                    str(child.rate_func),
-                )
-            else:
-                candidate.appendBoundRotate(
-                    getattr(source, "_semantic_handle"),
-                    float(target),
-                    float(child.run_time),
-                    str(child.rate_func),
-                )
+                builder.appendBoundRotate(target._semantic_handle, angle, float(child.run_time), str(child.rate_func))
+            return
+        raise NotImplementedError(f"canonical composition does not support {type(animation).__name__}")
+
+    def build(root_kind: str, root_animations: tuple[object, ...], root_group: object | None, root_kwargs: dict[str, object]):
+        # Recursion uses a fresh builder; reservations are accumulated by the caller.
+        nested = context.beginOrdinaryTransformComposition(
+            root_kind,
+            None if root_group is None else root_group.run_time,
+            0.0 if root_group is None else float(root_group.lag_ratio),
+            None if root_group is not None else _canonical_linear_play_options(dict(root_kwargs)),
+        )
+        local_reservations: list[tuple[_base.Mobject, object]] = []
+        # Temporarily redirect the shared reservation accumulator for this subtree.
+        outer = reservations[:]
+        reservations.clear()
+        for child_animation in root_animations:
+            append_leaf(nested, child_animation, {} if root_group is not None else root_kwargs)
+        local_reservations.extend(reservations)
+        reservations.clear()
+        reservations.extend(outer)
+        return nested, local_reservations
+
+    for animation in animations:
+        append_leaf(candidate, animation, {} if group is not None else kwargs)
     try:
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:

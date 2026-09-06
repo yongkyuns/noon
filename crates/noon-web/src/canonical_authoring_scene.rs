@@ -34,6 +34,37 @@ enum OrdinaryCompositionChild {
         angle: f64,
         options: noon_core::AnimationOptions,
     },
+    Wait {
+        duration: f64,
+    },
+    Add {
+        entering_id: ObjectId,
+        target: noon::Mobject,
+        options: noon_core::AnimationOptions,
+    },
+    Fade {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        direction: SemanticFadeDirection,
+        options: noon_core::AnimationOptions,
+    },
+    Create {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        options: noon_core::AnimationOptions,
+    },
+    AffineLifecycle {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        direction: noon::AffineLifecycleDirection,
+        endpoint: noon::AffineLifecycleEndpoint,
+        options: noon_core::AnimationOptions,
+    },
+    Composition {
+        kind: noon_core::SemanticAnimationCompositionKind,
+        children: Vec<OrdinaryCompositionChild>,
+        options: noon_core::AnimationOptions,
+    },
 }
 
 /// One scene family in the worker's shared semantic store.
@@ -1293,9 +1324,8 @@ impl CanonicalAuthoringScene {
                     .or(composition_options.run_time)
                     .unwrap_or(1.0),
             );
-        let requests = children
-            .iter()
-            .map(|child| match child {
+        fn request(child: &OrdinaryCompositionChild) -> noon::AnimationCompositionRequest<'_> {
+            match child {
                 OrdinaryCompositionChild::TransformTo {
                     source,
                     target,
@@ -1323,20 +1353,69 @@ impl CanonicalAuthoringScene {
                     angle: *angle,
                     options: *options,
                 },
-            })
-            .collect::<Vec<_>>();
+                OrdinaryCompositionChild::Wait { duration } => {
+                    noon::AnimationCompositionRequest::Wait {
+                        duration: *duration,
+                    }
+                }
+                OrdinaryCompositionChild::Add {
+                    target, options, ..
+                } => noon::AnimationCompositionRequest::Add {
+                    target,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::Fade {
+                    target,
+                    direction,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::Fade {
+                    target,
+                    direction: *direction,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::Create {
+                    target, options, ..
+                } => noon::AnimationCompositionRequest::Create {
+                    target,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::AffineLifecycle {
+                    target,
+                    direction,
+                    endpoint,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::AffineLifecycle {
+                    target,
+                    direction: *direction,
+                    endpoint: *endpoint,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::Composition {
+                    kind,
+                    children,
+                    options,
+                } => noon::AnimationCompositionRequest::Composition {
+                    kind: *kind,
+                    children: children.iter().map(request).collect(),
+                    options: *options,
+                },
+            }
+        }
+        let requests = children.iter().map(request).collect::<Vec<_>>();
+        let composition = noon::AnimationCompositionRequest::Composition {
+            kind,
+            children: requests,
+            options: composition_options,
+        };
         let end = if self.live_player.is_none() {
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
             if !allow_required_callbacks && player.has_required_callbacks() {
                 return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }
-            let end = player.live_declare_and_activate_animation_composition(
-                kind,
-                &requests,
-                composition_options,
-                play_options,
-            )?;
+            let end = player.live_declare_and_activate_composition(&composition, play_options)?;
             self.live_player = Some(player);
             self.live_player_returned = false;
             end
@@ -1345,28 +1424,64 @@ impl CanonicalAuthoringScene {
             if !allow_required_callbacks && player.has_required_callbacks() {
                 return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }
-            player.live_declare_and_activate_animation_composition(
-                kind,
-                &requests,
-                composition_options,
-                play_options,
-            )?
+            player.live_declare_and_activate_composition(&composition, play_options)?
         };
-        for child in children {
-            let (Some(id), target) = (match child {
+        fn bindings(
+            child: &OrdinaryCompositionChild,
+            output: &mut Vec<(ObjectId, &noon::Mobject)>,
+        ) {
+            match child {
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
                     ..
-                } => (*entering_id, source),
+                } => {
+                    if let Some(id) = entering_id {
+                        output.push((*id, source));
+                    }
+                }
                 OrdinaryCompositionChild::Rotate {
                     entering_id,
                     target,
                     ..
-                } => (*entering_id, target),
-            }) else {
-                continue;
-            };
+                }
+                | OrdinaryCompositionChild::Fade {
+                    entering_id,
+                    target,
+                    ..
+                }
+                | OrdinaryCompositionChild::Create {
+                    entering_id,
+                    target,
+                    ..
+                }
+                | OrdinaryCompositionChild::AffineLifecycle {
+                    entering_id,
+                    target,
+                    ..
+                } => {
+                    if let Some(id) = entering_id {
+                        output.push((*id, target));
+                    }
+                }
+                OrdinaryCompositionChild::Add {
+                    entering_id,
+                    target,
+                    ..
+                } => output.push((*entering_id, target)),
+                OrdinaryCompositionChild::Wait { .. } => {}
+                OrdinaryCompositionChild::Composition { children, .. } => {
+                    for child in children {
+                        bindings(child, output);
+                    }
+                }
+            }
+        }
+        let mut entering = Vec::new();
+        for child in children {
+            bindings(child, &mut entering);
+        }
+        for (id, target) in entering {
             self.bindings.insert(id, target.node_id());
             self.identities.insert(target.node_id(), id);
         }
@@ -1426,6 +1541,27 @@ impl CanonicalAuthoringScene {
         let mut entering_nodes = BTreeSet::new();
         for child in children {
             let (entering_id, target, options) = match child {
+                OrdinaryCompositionChild::Wait { duration } => {
+                    if !duration.is_finite() || *duration < 0.0 {
+                        return Err(
+                            "ordinary composition wait duration must be finite and non-negative"
+                                .into(),
+                        );
+                    }
+                    continue;
+                }
+                OrdinaryCompositionChild::Composition {
+                    kind,
+                    children,
+                    options,
+                } => {
+                    self.validate_ordinary_mixed_composition(
+                        children,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )?;
+                    continue;
+                }
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
@@ -1457,6 +1593,28 @@ impl CanonicalAuthoringScene {
                     }
                     (*entering_id, target, *options)
                 }
+                OrdinaryCompositionChild::Add {
+                    entering_id,
+                    target,
+                    options,
+                } => (Some(*entering_id), target, *options),
+                OrdinaryCompositionChild::Fade {
+                    entering_id,
+                    target,
+                    options,
+                    ..
+                }
+                | OrdinaryCompositionChild::Create {
+                    entering_id,
+                    target,
+                    options,
+                }
+                | OrdinaryCompositionChild::AffineLifecycle {
+                    entering_id,
+                    target,
+                    options,
+                    ..
+                } => (*entering_id, target, *options),
             };
             if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
                 return Err(
@@ -2133,7 +2291,7 @@ mod wasm {
     /// This owns opaque shared handles and unresolved semantic options only. It
     /// contains no semantic IDs, resolved intervals, execution tracks, or clock.
     #[wasm_bindgen]
-    pub struct WasmOrdinaryTransformCompositionBuilder {
+    pub struct WasmAnimationCompositionBuilder {
         kind: noon_core::SemanticAnimationCompositionKind,
         children: Vec<OrdinaryCompositionChild>,
         composition_options: noon_core::AnimationOptions,
@@ -2317,7 +2475,7 @@ mod wasm {
         }
     }
 
-    impl WasmOrdinaryTransformCompositionBuilder {
+    impl WasmAnimationCompositionBuilder {
         fn push_transform(
             &mut self,
             entering_id: Option<ObjectId>,
@@ -2370,6 +2528,87 @@ mod wasm {
                     .run_time(child_run_time)
                     .rate_func(rate_function),
             });
+            Ok(())
+        }
+
+        fn options(
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<noon_core::AnimationOptions, JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            Ok(noon_core::AnimationOptions::new()
+                .run_time(child_run_time)
+                .rate_func(rate_function))
+        }
+
+        fn push_target(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            options: noon_core::AnimationOptions,
+            child: impl FnOnce(
+                ObjectId,
+                noon::Mobject,
+                noon_core::AnimationOptions,
+            ) -> OrdinaryCompositionChild,
+        ) -> Result<(), JsValue> {
+            self.children.push(child(
+                parse_object_id("object ID", object_id)?,
+                target.semantic_mobject().clone(),
+                options,
+            ));
+            Ok(())
+        }
+
+        fn push_entering_lifecycle(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            endpoint: &str,
+            x: f64,
+            y: f64,
+            rotation_offset: f64,
+            point_red: Option<f64>,
+            point_green: Option<f64>,
+            point_blue: Option<f64>,
+            point_alpha: Option<f64>,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let direction = parse_affine_lifecycle_direction(direction)?;
+            let endpoint = parse_affine_lifecycle_endpoint(
+                endpoint,
+                x,
+                y,
+                rotation_offset,
+                callback_color(
+                    "point_color",
+                    point_red,
+                    point_green,
+                    point_blue,
+                    point_alpha,
+                )?,
+            )?;
+            let options = Self::options(child_run_time, rate_function)?;
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("object ID", object_id)?)
+            };
+            self.children
+                .push(OrdinaryCompositionChild::AffineLifecycle {
+                    entering_id,
+                    target: target.semantic_mobject().clone(),
+                    direction,
+                    endpoint,
+                    options,
+                });
             Ok(())
         }
     }
@@ -2503,7 +2742,7 @@ mod wasm {
     }
 
     #[wasm_bindgen]
-    impl WasmOrdinaryTransformCompositionBuilder {
+    impl WasmAnimationCompositionBuilder {
         #[wasm_bindgen(js_name = appendTransformTo)]
         pub fn append_transform_to(
             &mut self,
@@ -2605,6 +2844,128 @@ mod wasm {
             rate_function: &str,
         ) -> Result<(), JsValue> {
             self.push_rotate(None, target, angle, child_run_time, rate_function)
+        }
+
+        #[wasm_bindgen(js_name = appendWait)]
+        pub fn append_wait(&mut self, child_run_time: f64) -> Result<(), JsValue> {
+            if !child_run_time.is_finite() || child_run_time < 0.0 {
+                return Err(js_error("wait duration must be finite and non-negative"));
+            }
+            self.children.push(OrdinaryCompositionChild::Wait {
+                duration: child_run_time,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendAdd)]
+        pub fn append_add(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let options = Self::options(child_run_time, rate_function)?;
+            self.push_target(
+                object_id,
+                target,
+                options,
+                |entering_id, target, options| OrdinaryCompositionChild::Add {
+                    entering_id,
+                    target,
+                    options,
+                },
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendFade)]
+        pub fn append_fade(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let direction = parse_fade_direction(direction)?;
+            let options = Self::options(child_run_time, rate_function)?;
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::Fade {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                direction,
+                options,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendCreate)]
+        pub fn append_create(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let options = Self::options(child_run_time, rate_function)?;
+            self.push_target(
+                object_id,
+                target,
+                options,
+                |entering_id, target, options| OrdinaryCompositionChild::Create {
+                    entering_id: Some(entering_id),
+                    target,
+                    options,
+                },
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendAffineLifecycle)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_affine_lifecycle(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            endpoint: &str,
+            x: f64,
+            y: f64,
+            rotation_offset: f64,
+            point_red: Option<f64>,
+            point_green: Option<f64>,
+            point_blue: Option<f64>,
+            point_alpha: Option<f64>,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            self.push_entering_lifecycle(
+                object_id,
+                target,
+                direction,
+                endpoint,
+                x,
+                y,
+                rotation_offset,
+                point_red,
+                point_green,
+                point_blue,
+                point_alpha,
+                child_run_time,
+                rate_function,
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendComposition)]
+        pub fn append_composition(&mut self, nested: WasmAnimationCompositionBuilder) {
+            self.children.push(OrdinaryCompositionChild::Composition {
+                kind: nested.kind,
+                children: nested.children,
+                options: nested.composition_options,
+            });
         }
     }
 
@@ -3288,7 +3649,7 @@ mod wasm {
             composition_run_time: Option<f64>,
             composition_lag_ratio: f64,
             play_run_time: Option<f64>,
-        ) -> Result<WasmOrdinaryTransformCompositionBuilder, JsValue> {
+        ) -> Result<WasmAnimationCompositionBuilder, JsValue> {
             let kind = match kind {
                 "parallel" => noon_core::SemanticAnimationCompositionKind::Parallel,
                 "sequence" => noon_core::SemanticAnimationCompositionKind::Sequence,
@@ -3305,7 +3666,7 @@ mod wasm {
             if let Some(run_time) = play_run_time {
                 play_options = play_options.run_time(run_time);
             }
-            Ok(WasmOrdinaryTransformCompositionBuilder {
+            Ok(WasmAnimationCompositionBuilder {
                 kind,
                 children: Vec::new(),
                 composition_options,
@@ -3316,7 +3677,7 @@ mod wasm {
         #[wasm_bindgen(js_name = ordinaryCanPlayComposition)]
         pub fn ordinary_can_play_composition(
             &self,
-            candidate: &WasmOrdinaryTransformCompositionBuilder,
+            candidate: &WasmAnimationCompositionBuilder,
         ) -> Result<bool, JsValue> {
             self.inner
                 .validate_ordinary_mixed_composition(
@@ -3331,7 +3692,7 @@ mod wasm {
         #[wasm_bindgen(js_name = ordinaryPlayComposition)]
         pub fn ordinary_play_composition(
             &mut self,
-            candidate: WasmOrdinaryTransformCompositionBuilder,
+            candidate: WasmAnimationCompositionBuilder,
         ) -> Result<f64, JsValue> {
             self.inner
                 .ordinary_play_mixed_composition(
@@ -3349,7 +3710,7 @@ mod wasm {
         #[wasm_bindgen(js_name = beginOrdinaryComposition)]
         pub fn begin_ordinary_composition(
             &mut self,
-            candidate: WasmOrdinaryTransformCompositionBuilder,
+            candidate: WasmAnimationCompositionBuilder,
         ) -> Result<f64, JsValue> {
             self.inner
                 .begin_ordinary_mixed_composition(
