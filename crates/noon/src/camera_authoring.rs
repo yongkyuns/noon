@@ -1,100 +1,144 @@
-use std::ops::{Deref, DerefMut};
+use noon_core::{
+    SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole,
+    SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, DEFAULT_FRAME_HEIGHT,
+    DEFAULT_FRAME_WIDTH,
+};
 
-use noon_core::{SceneDefinition, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH};
+use crate::{Mobject, Scene};
 
-use crate::legacy::{AuthoringError, Mobject, Rectangle, Scene};
-
-/// Rust authoring facade for a scene with a shared semantic 2D camera frame.
-///
-/// The frame is an ordinary Noon mobject. Its motion is authored through the same
-/// `Animate`/Transform timeline as every other object; converting the facade into a
-/// `SceneDefinition` only assigns the shared camera role understood by the Rust
-/// execution/render pipeline.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MovingCameraScene {
-    scene: Scene,
-    frame: Mobject,
-}
-
-impl MovingCameraScene {
-    pub fn new() -> Self {
-        let mut scene = Scene::new();
-        let frame =
-            scene.add(Rectangle::new(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT).set_opacity(0.0));
-        Self { scene, frame }
-    }
-
-    pub const fn camera_frame(&self) -> Mobject {
-        self.frame
-    }
-
-    pub fn into_definition(self) -> SceneDefinition {
-        let frame = self.frame;
-        let mut definition = self.scene.into_definition();
-        let assigned = definition.set_camera_object(frame.id());
-        debug_assert!(assigned, "camera frame must belong to the authored scene");
-        definition
-    }
-
-    pub fn try_into_definition(self) -> Result<SceneDefinition, AuthoringError> {
-        let frame = self.frame;
-        let mut definition = self.scene.into_definition();
-        if !definition.set_camera_object(frame.id()) {
-            return Err(AuthoringError::UnknownObject(frame.id()));
+impl Scene {
+    /// Create and attach the one ordinary semantic object that defines this scene's 2D camera.
+    ///
+    /// Camera creation is scene initialization: the root must still be empty. Allocation and root
+    /// membership then commit in one semantic transaction. The frame remains an ordinary
+    /// transformable Mobject; its role only tells lowering which effective transform supplies the
+    /// renderer viewport.
+    pub fn camera_frame(&mut self) -> Result<Mobject, String> {
+        let store = self.store().borrow();
+        let root_is_empty = store
+            .node(self.root())
+            .ok_or("scene root is unavailable")?
+            .members()
+            .is_empty();
+        drop(store);
+        if !root_is_empty {
+            return Err("2D camera frame must be created before scene content".into());
         }
-        Ok(definition)
-    }
-}
 
-impl Default for MovingCameraScene {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT),
+        });
+        state.style = SemanticStyle {
+            object_opacity: 0.0,
+            ..SemanticStyle::default()
+        };
+        state.set_role(SemanticObjectRole::Camera2D);
 
-impl Deref for MovingCameraScene {
-    type Target = Scene;
-
-    fn deref(&self) -> &Self::Target {
-        &self.scene
-    }
-}
-
-impl DerefMut for MovingCameraScene {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.scene
+        let mut transaction = SemanticMutationTransaction::new();
+        let frame = transaction.create_node(SemanticNodeCreation::object(state));
+        transaction.add_member(self.root(), frame);
+        let result = transaction
+            .apply(&mut self.store().borrow_mut())
+            .map_err(|error| error.to_string())?;
+        let id = result
+            .resolve(frame)
+            .ok_or("camera-frame transaction returned no semantic identity")?;
+        debug_assert!(matches!(
+            result.impacts(),
+            [
+                SemanticMutationImpact::NodeAdded { .. },
+                SemanticMutationImpact::FamilyMemberAdded { .. }
+            ]
+        ));
+        Mobject::from_node(std::rc::Rc::clone(self.store()), id)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{Property, Vec2, RIGHT};
+    use noon_core::{
+        AnimationOptions, Camera2DState, RateFunction, SemanticObjectRole, Vec2,
+        DEFAULT_FRAME_HEIGHT,
+    };
 
     use super::*;
 
     #[test]
-    fn rust_moving_camera_facade_uses_ordinary_transform_tracks() {
-        let mut scene = MovingCameraScene::new();
-        let frame = scene.camera_frame();
-        scene
-            .play(frame.animate().move_to(RIGHT * 3.0))
-            .run_time(1.0)
-            .unwrap();
+    fn camera_creation_is_atomic_unique_and_uses_the_scene_identity_space() {
+        let mut scene = Scene::new();
+        let revision = scene.store().borrow().scene_revision();
+        let frame = scene.camera_frame().unwrap();
+        let state = frame.state().unwrap();
+        assert_eq!(state.role(), SemanticObjectRole::Camera2D);
+        assert_eq!(state.style.object_opacity, 0.0);
+        assert_eq!(
+            scene.store().borrow().node(scene.root()).unwrap().members(),
+            [frame.node_id()]
+        );
+        assert_ne!(scene.store().borrow().scene_revision(), revision);
 
-        let definition = scene.into_definition();
-        assert_eq!(definition.camera_object(), Some(frame.id()));
-        let tracks = definition
-            .tracks()
-            .iter()
-            .filter(|track| track.object == frame.id())
-            .collect::<Vec<_>>();
-        assert_eq!(tracks.len(), 1);
-        assert_eq!(tracks[0].property, Property::Transform);
-        let target = match &tracks[0].values {
-            noon_core::TrackValues::Object { to, .. } => to,
-            other => panic!("camera frame must use shared transform track, got {other:?}"),
-        };
-        assert_eq!(target.transform.translation, Vec2::new(3.0, 0.0));
-        assert_eq!(target.style.opacity, 0.0);
+        let before = scene.store().borrow().scene_revision();
+        assert_eq!(
+            scene.camera_frame().unwrap_err(),
+            "2D camera frame must be created before scene content"
+        );
+        assert_eq!(scene.store().borrow().scene_revision(), before);
+    }
+
+    #[test]
+    fn camera_creation_rejects_existing_scene_content_without_mutation() {
+        let mut scene = Scene::new();
+        let square = scene.square(2.0).unwrap();
+        scene.add(&square).unwrap();
+        let before = scene.store().borrow().scene_revision();
+
+        assert_eq!(
+            scene.camera_frame().unwrap_err(),
+            "2D camera frame must be created before scene content"
+        );
+        assert_eq!(scene.store().borrow().scene_revision(), before);
+        assert_eq!(
+            scene.store().borrow().node(scene.root()).unwrap().members(),
+            [square.node_id()]
+        );
+    }
+
+    #[test]
+    fn ordinary_transform_drives_the_effective_camera_and_publishes_its_endpoint() {
+        let mut scene = Scene::new();
+        let frame = scene.camera_frame().unwrap();
+        let mut target = frame.target_editor().unwrap();
+        target.set_translation(-2.0, 0.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        assert_eq!(
+            session.camera().unwrap(),
+            Camera2DState {
+                center: Vec2::ZERO,
+                height: DEFAULT_FRAME_HEIGHT,
+            }
+        );
+
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_transform_to(
+                &frame,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, 0.5)
+            .unwrap();
+        assert_eq!(session.camera().unwrap().center, Vec2::new(-1.0, 0.0));
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
+        assert_eq!(session.camera().unwrap().center, Vec2::new(-2.0, 0.0));
+        assert_eq!(frame.state().unwrap().transform.translation.x, -2.0);
     }
 }

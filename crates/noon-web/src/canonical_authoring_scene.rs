@@ -73,6 +73,22 @@ impl CanonicalAuthoringScene {
         self.bind_node(id, handle.node_id())
     }
 
+    /// Create and bind this scene's camera frame through the shared semantic transaction.
+    ///
+    /// The returned handle is only an alias of the scene-owned semantic identity. It carries no
+    /// camera state or frontend allocation authority.
+    pub fn create_camera_frame(&mut self, id: ObjectId) -> Result<noon::Mobject, String> {
+        if self.bindings.contains_key(&id) {
+            return Err(format!("canonical object {} is already bound", id.get()));
+        }
+        let frame = self.scene.camera_frame()?;
+        let node = frame.node_id();
+        debug_assert!(!self.identities.contains_key(&node));
+        self.bindings.insert(id, node);
+        self.identities.insert(node, id);
+        Ok(frame)
+    }
+
     fn bind_node(&mut self, id: ObjectId, node: noon_core::SemanticNodeId) -> Result<(), String> {
         if self.bindings.contains_key(&id) || self.identities.contains_key(&node) {
             return Err(format!("canonical object {} is already bound", id.get()));
@@ -2442,6 +2458,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Create the scene-owned invisible 2D camera frame and return its opaque semantic handle.
+        #[wasm_bindgen(js_name = createCameraFrame)]
+        pub fn create_camera_frame(
+            &mut self,
+            object_id: &str,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            let id = parse_object_id("camera frame object ID", object_id)?;
+            self.inner
+                .create_camera_frame(id)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = createValueTracker)]
         pub fn create_value_tracker(
             &mut self,
@@ -3315,6 +3344,21 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveMoveToPoint)]
+        pub fn live_move_to_point(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_to_point(handle.semantic_mobject(), x, y)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFill)]
         pub fn live_set_fill(
             &mut self,
@@ -3762,6 +3806,36 @@ mod tests {
     }
 
     #[test]
+    fn camera_factory_binds_one_scene_local_role_before_execution() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
+        let mut first = CanonicalAuthoringScene::with_store(Rc::clone(&store));
+        let frame = first.create_camera_frame(ObjectId::new(4)).unwrap();
+        assert_eq!(
+            first.lower_execution().unwrap().camera().unwrap(),
+            noon_core::Camera2DState::default()
+        );
+        let checkpoint = first.checkpoint();
+        let revision = store.borrow().scene_revision();
+        assert!(first.create_camera_frame(ObjectId::new(5)).is_err());
+        assert_eq!(first.checkpoint(), checkpoint);
+        assert_eq!(store.borrow().scene_revision(), revision);
+        assert_eq!(
+            first.bindings.get(&ObjectId::new(4)),
+            Some(&frame.node_id())
+        );
+
+        // Store identity is shared, while camera uniqueness is scoped to each scene root.
+        let mut second = CanonicalAuthoringScene::with_store(store);
+        second.create_camera_frame(ObjectId::new(4)).unwrap();
+        assert_eq!(
+            second.lower_execution().unwrap().camera().unwrap(),
+            noon_core::Camera2DState::default()
+        );
+    }
+
+    #[test]
     fn typed_binding_rejects_cross_store_collisions_atomically() {
         let mut first = CanonicalAuthoringScene::default();
         let second = CanonicalAuthoringScene::default();
@@ -3789,6 +3863,19 @@ mod tests {
             .session_mut_for_test()
             .execution_slot_for_frame_index(0)
             .unwrap();
+        assert_eq!(context.ordinary_wait(0.3).unwrap(), 0.3);
+        // New detached state must publish through the active session as well.
+        let collision = context.live_target_editor(&anchor).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .live_add_mobject(ObjectId::new(0), &collision)
+            .is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context
+            .active_live_player()
+            .unwrap()
+            .live_effective(&collision)
+            .is_err());
 
         context.live_remove_mobject(&toggled).unwrap();
         assert!(context
@@ -3829,6 +3916,7 @@ mod tests {
                 .translation,
             Vec2::new(2.0, -1.0)
         );
+        assert_eq!(context.active_live_player().unwrap().time(), 0.3);
         assert_eq!(
             context
                 .active_live_player()

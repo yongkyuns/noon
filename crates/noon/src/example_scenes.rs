@@ -6,8 +6,8 @@ use crate::{
     AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
     LiveSession, MathTypst, Mobject, RateFunction, RustHostCallbackTable, Scene,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, TransformToRequest,
-    Typst, ValueTracker, Vec2,
+    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
+    StrokeJoin, StrokeWidthMode, TransformToRequest, Typst, ValueTracker, Vec2, VectorPath,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -1525,6 +1525,146 @@ pub fn ordinary_create_then_content_morph_program(
         .into_live_program(OrdinaryCreateThenContentMorph {
             square,
             circle_target,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Target-neutral continuation for Manim's unchanged MovingCameraCenter source.
+pub struct OrdinaryMovingCameraCenter {
+    frame: Mobject,
+    left_target: Mobject,
+    right_target: Mobject,
+    square: Mobject,
+    triangle: Mobject,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryMovingCameraCenter {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.wait_segment(0.3)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            1 => {
+                live.add(&self.square).map_err(|error| error.to_string())?;
+                live.add(&self.triangle)
+                    .map_err(|error| error.to_string())?;
+                self.stage = 2;
+                live.declare_and_activate_transform_to(
+                    &self.frame,
+                    &self.left_target,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Smooth),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            2 => {
+                if live
+                    .effective(&self.frame)
+                    .map_err(|error| error.to_string())?
+                    .transform
+                    .translation
+                    != Vec2::new(-2.0, 0.0)
+                {
+                    return Err("first camera move did not publish its exact endpoint".into());
+                }
+                self.stage = 3;
+                live.wait_segment(0.3)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            3 => {
+                self.stage = 4;
+                live.declare_and_activate_transform_to(
+                    &self.frame,
+                    &self.right_target,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Smooth),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            4 => {
+                if live
+                    .effective(&self.frame)
+                    .map_err(|error| error.to_string())?
+                    .transform
+                    .translation
+                    != Vec2::new(2.0, 0.0)
+                {
+                    return Err("second camera move did not publish its exact endpoint".into());
+                }
+                self.stage = 5;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("moving-camera continuation resumed after it finished".into()),
+        }
+    }
+}
+
+/// Build the paired Rust counterpart of the unchanged Python MovingCameraCenter scene.
+pub fn ordinary_moving_camera_center_program(
+) -> Result<LiveProgram<OrdinaryMovingCameraCenter>, String> {
+    let mut scene = Scene::new();
+    let frame = scene.camera_frame()?;
+    let mut left_target = frame.target_editor()?;
+    left_target.set_translation(-2.0, 0.0)?;
+    let mut right_target = frame.target_editor()?;
+    right_target.set_translation(2.0, 0.0)?;
+
+    let mut square = scene.square(2.0)?;
+    let red = Color::RED;
+    square.set_color(
+        f64::from(red.red),
+        f64::from(red.green),
+        f64::from(red.blue),
+        1.0,
+    )?;
+    square.set_fill(
+        f64::from(red.red),
+        f64::from(red.green),
+        f64::from(red.blue),
+        0.5,
+    )?;
+    square.set_translation(-2.0, 0.0)?;
+    let triangle_path = VectorPath::new()
+        .move_to(Vec2::new(0.0, 1.0))
+        .line_to(Vec2::new(-0.866_025_4, -0.5))
+        .line_to(Vec2::new(0.866_025_4, -0.5))
+        .close();
+    let triangle_style = SemanticStyle {
+        fill: Some(SemanticPaint::Solid(Color::GREEN)),
+        fill_opacity: 0.5,
+        stroke: Some(SemanticPaint::Solid(Color::GREEN)),
+        stroke_opacity: 1.0,
+        stroke_width: 0.04,
+        stroke_width_mode: StrokeWidthMode::ScreenSpace,
+        stroke_join: StrokeJoin::Miter,
+        stroke_cap: StrokeCap::Butt,
+        object_opacity: 1.0,
+    };
+    let mut triangle = scene.path(triangle_path, triangle_style)?;
+    triangle.move_to(2.0, 0.0)?;
+
+    scene
+        .into_live_program(OrdinaryMovingCameraCenter {
+            frame,
+            left_target,
+            right_target,
+            square,
+            triangle,
             stage: 0,
         })
         .map_err(|error| error.to_string())

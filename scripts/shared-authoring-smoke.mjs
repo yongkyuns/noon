@@ -486,6 +486,7 @@ try {
     expectedFinalCenter = null,
     expectedFinalColor = null,
     expectedComposition = false,
+    expectedCamera = false,
   } of [
     {
       filename: "live_semantic_scene.py",
@@ -577,6 +578,13 @@ try {
       expectedFinalCenter: [2, 1],
     },
     {
+      filename: "manim_example_moving_camera_center.py",
+      objectCount: 3,
+      expectedDuration: 2.6,
+      endpointTime: null,
+      expectedCamera: true,
+    },
+    {
       filename: "ordinary_composition_play.py",
       objectCount: 2,
       expectedDuration: 4,
@@ -615,6 +623,7 @@ try {
       expectText,
       expectedFinalCenter,
       expectedComposition,
+      expectedCamera,
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -682,13 +691,13 @@ try {
           const rendered = await waitForFrame(initial.presentedFrames);
           endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
         }
-        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition;
+        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera;
         if (retainForInspection) harness.liveExampleExecution = execution;
         return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     if (objectCount === 0) {
       assert.equal(result.metrics.drawCalls, 0, `${filename}: removed object still draws`);
@@ -757,6 +766,22 @@ try {
         `${filename}: sequence right blue endpoint was not rendered: ${JSON.stringify(right)}`,
       );
     }
+    if (expectedCamera) {
+      // Python owns this live source continuation; playback controls are intentionally
+      // unavailable. Verify its completed camera view. The paired direct Rust forward
+      // proof covers the initial wait, admission, and both movement midpoints/endpoints.
+      const cameraView = await page.locator(`#${result.canvasId}`).screenshot();
+      const triangle = renderedWorldPixel(cameraView, 0, 0);
+      const square = renderedWorldPixel(cameraView, -4, 0);
+      assert.ok(
+        triangle.green > triangle.red + 25,
+        `${filename}: camera did not center the triangle: ${JSON.stringify(triangle)}`,
+      );
+      assert.ok(
+        square.red > square.green + 25,
+        `${filename}: camera-relative square position is wrong: ${JSON.stringify(square)}`,
+      );
+    }
     if (expectText) {
       const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
       const pixels = staticTextColor === "yellow"
@@ -769,7 +794,7 @@ try {
         assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
       }
     }
-    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition) {
+    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera) {
       await page.evaluate(() => {
         window.sharedAuthoringSmoke.liveExampleExecution.terminate();
         window.sharedAuthoringSmoke.liveExampleExecution = null;

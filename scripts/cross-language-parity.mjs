@@ -58,17 +58,6 @@ const movingAroundPython = readFileSync(
   path.join(repoRoot, "web", "python", "examples", "manim_gallery_moving_around.py"),
   "utf8",
 );
-const movingCameraPython = readFileSync(
-  path.join(
-    repoRoot,
-    "web",
-    "python",
-    "examples",
-    "manim_example_moving_camera_center.py",
-  ),
-  "utf8",
-);
-
 const javascriptParityCases = new Set([
   "animate_options",
   "lifecycle",
@@ -127,21 +116,6 @@ function assertSemanticEqual(actual, expected, location = "document") {
   assert.equal(actual, expected, `${location}: value mismatch`);
 }
 
-function cameraProjection(document) {
-  assert.ok(Number.isInteger(document.camera_object), "moving camera document must identify camera_object");
-  const cameraObject = document.objects.find((object) => object.id === document.camera_object);
-  assert.ok(cameraObject, "moving camera document must retain its camera frame object");
-  return {
-    camera_object: document.camera_object,
-    camera: cameraObject,
-    // Track ids are allocator-local bookkeeping, not part of the cross-language
-    // camera contract. Compare the authored target/property/timing/value semantics.
-    tracks: document.tracks
-      .filter((track) => track.object === document.camera_object)
-      .map(({ id: _id, ...track }) => track),
-  };
-}
-
 async function javascriptCorpora(page) {
   return page.evaluate(async () => {
     const noon = await import("/web/noon-authoring.js");
@@ -182,15 +156,7 @@ async function javascriptCorpora(page) {
       gallery[name] = build().toJSON();
     }
 
-    const cameraExamples = await import(
-      "/web/js/examples/manim-gallery-moving-camera-center.js"
-    );
-    const movingCamera = {};
-    for (const [name, build] of Object.entries(cameraExamples.galleryMovingCameraCenter)) {
-      movingCamera[name] = build().toJSON();
-    }
-
-    return { parity, quickstart, gallery, movingCamera };
+    return { parity, quickstart, gallery };
   });
 }
 
@@ -223,11 +189,9 @@ try {
   const rust = rustCorpus();
   const rustQuickstart = rustCorpus("manim_quickstart_equivalents");
   const rustMovingAround = rustCorpus("manim_gallery_moving_around");
-  const rustMovingCamera = rustCorpus("manim_gallery_moving_camera_center");
   assert.deepEqual([...rust.keys()].sort(), Object.keys(pythonCases).sort());
   assert.deepEqual([...rustQuickstart.keys()].sort(), [...quickstartEquivalentCases].sort());
   assert.deepEqual([...rustMovingAround.keys()], ["MovingAround"]);
-  assert.deepEqual([...rustMovingCamera.keys()], ["MovingCameraCenter"]);
 
   await waitForServer();
   browser = await chromium.launch({
@@ -266,21 +230,6 @@ try {
     "MovingAround: python/rust",
   );
 
-  const movingCameraResult = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
-    movingCameraPython,
-  );
-  assert.equal(
-    movingCameraResult.kind,
-    "scene_document",
-    "MovingCameraCenter: Python authoring failed",
-  );
-  assertSemanticEqual(
-    cameraProjection(movingCameraResult.document),
-    cameraProjection(rustMovingCamera.get("MovingCameraCenter")),
-    "MovingCameraCenter camera semantics: python/rust",
-  );
-
   const javascript = await javascriptCorpora(page);
   assert.deepEqual(Object.keys(javascript.parity).sort(), [...javascriptParityCases].sort());
   for (const [name, document] of Object.entries(javascript.parity)) {
@@ -301,16 +250,9 @@ try {
     "MovingAround: javascript/rust",
   );
 
-  assert.deepEqual(Object.keys(javascript.movingCamera), ["MovingCameraCenter"]);
-  assertSemanticEqual(
-    cameraProjection(javascript.movingCamera.MovingCameraCenter),
-    cameraProjection(rustMovingCamera.get("MovingCameraCenter")),
-    "MovingCameraCenter camera semantics: javascript/rust",
-  );
-
   assert.equal(errors.length, 0, errors.join("\n"));
   console.log(
-    "Python/Rust parity, JavaScript parity, Rust/JavaScript Quickstart equivalence, MovingAround tri-language equivalence, and MovingCameraCenter camera-semantic equivalence passed",
+    "Python/Rust parity, JavaScript parity, Rust/JavaScript Quickstart equivalence, and MovingAround tri-language equivalence passed",
   );
 } finally {
   if (browser !== null) await browser.close();

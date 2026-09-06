@@ -19,6 +19,7 @@ import _manim_animation_options as _options
 import _manim_compat as _compat
 import _manim_composition as _composition
 import _manim_reactive as _reactive
+import _manim_semantic_handles as _semantic_handles
 import _noon_ir as _ir
 import noon as _base
 
@@ -162,9 +163,34 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     context = _context(scene)
     if reservation.reuse_existing_identity:
         context.liveAdd(str(reservation.object.id), handle)
+    elif str(context.liveExecutionOwnership()) in {"active", "returned", "transferred"}:
+        # A resumed source continuation may introduce an object after a
+        # play/wait barrier. Rust atomically publishes both root membership and execution-slot
+        # enrollment before Python records its derived wrapper identity.
+        context.liveAdd(str(reservation.object.id), handle)
     else:
         context.bindMobject(str(reservation.object.id), handle)
     return _commit_typed_binding(self, scene, reservation, handle)
+
+
+def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object:
+    """Bind one context-created semantic camera without constructing Python geometry state."""
+    if getattr(mobject, "_scene", None) is not None:
+        raise ValueError("camera frame is already bound")
+    if getattr(scene, "_legacy_geometry_materialized", False):
+        raise NotImplementedError(
+            "moving camera construction cannot follow legacy geometry materialization"
+        )
+    object_id = scene._next_object_id
+    authoring_key = _ir._authoring_key("key", None, f"@object:{object_id}")
+    if object_id in scene._object_keys or authoring_key in scene._object_key_ids:
+        raise ValueError("camera frame wrapper identity is already bound")
+    reservation = _TypedBindingReservation(
+        _ir.Object(object_id, scene._owner), authoring_key, None
+    )
+    handle = _context(scene).createCameraFrame(str(object_id))
+    _semantic_handles._attach_shared_handle(mobject, handle)
+    return _commit_typed_binding(mobject, scene, reservation, handle)
 
 
 def _record_mobject_binding(
@@ -2206,6 +2232,7 @@ def install() -> None:
     _typst._RetainedTextMobject._bind_to_scene = _bind_retained_text
     _base.Scene.to_scene_spec = _to_scene_spec
     _base.Mobject._bind_to_scene = _bind_mobject
+    _base.Scene._bind_camera_frame = _bind_camera_frame
     _base.Scene.play = _play
     _base.Scene.wait = _canonical_wait
     _base.Scene.declare_wait = _declare_wait
