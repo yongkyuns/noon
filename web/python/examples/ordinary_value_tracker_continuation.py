@@ -4,7 +4,12 @@ The tracker timeline, persistent post-completion write, wait, and second
 tracker segment all stay in Rust. Python only awaits the returned player lease.
 """
 
-from noon import Circle, RIGHT, Scene, WHITE, linear
+from noon import Circle, RIGHT, Scene, ValueTracker, WHITE, linear
+
+
+# Constructed before the Scene instance and construct lifecycle. The worker's
+# shared Rust store owns this value and identity while it is detached.
+progress = ValueTracker(0.0)
 
 
 class OrdinaryValueTrackerContinuation(Scene):
@@ -12,7 +17,6 @@ class OrdinaryValueTrackerContinuation(Scene):
         circle = Circle(radius=0.4, color=WHITE, fill_opacity=1.0)
         self.add(circle)
 
-        progress = self.value_tracker(0.0)
         self.bind_position(
             circle, progress, direction=RIGHT, offset=(-2.0, 0.0, 0.0)
         )

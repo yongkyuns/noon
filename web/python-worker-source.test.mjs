@@ -20,6 +20,20 @@ test("Python authoring worker keeps shared sector constructors", () => {
   assert.match(source, /noonCreateAuthoringAnnulusHandle/);
 });
 
+test("detached ValueTracker construction stays in the shared authoring store", async () => {
+  assert.match(
+    source,
+    /noonCreateAuthoringValueTrackerHandle\s*=\s*\(initial\)\s*=>\s*\n?\s*authoringStore\.createValueTracker\(initial\)/,
+  );
+  const example = await readFile(
+    new URL("./python/examples/ordinary_value_tracker_continuation.py", import.meta.url),
+    "utf8",
+  );
+  assert.match(example, /^progress = ValueTracker\(0\.0\)$/m);
+  assert.match(example, /self\.bind_position\(\s*circle, progress,/);
+  assert.doesNotMatch(example, /self\.value_tracker\(/);
+});
+
 test("semantic continuation control bypasses the blocked interpreter request queue", () => {
   assert.match(source, /if\s*\(isContinuationControl\(event\.data\)\)/);
   assert.match(source, /void\s+handleContinuationControl\(event\.data\)/);
