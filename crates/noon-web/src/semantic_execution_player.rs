@@ -19,8 +19,8 @@ use crate::{
     BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan, BrowserHostWake,
 };
 use crate::{
-    PlaybackClock, RetainedExecutionDeltaEncoder, RetainedExecutionDeltaEnvelope,
-    RetainedResourceBundle,
+    PlaybackClock, RendererObservationRequest, RetainedExecutionDeltaEncoder,
+    RetainedExecutionDeltaEnvelope, RetainedResourceBundle,
 };
 
 /// A browser-host wake observation for the player-owned current continuation segment.
@@ -1334,6 +1334,12 @@ struct CallbackTerminationWire {
     kind: &'static str,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct RendererObservationPublicationWire {
+    delta: RetainedExecutionDeltaEnvelope,
+    observation: RendererObservationRequest,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CallbackWriteWire {
@@ -1675,6 +1681,48 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaJson))]
     pub fn drain_delta_json(&mut self) -> Result<Option<String>, String> {
         self.encoded_delta(false)
+    }
+
+    /// Drain one callback-published retained delta together with an exact,
+    /// single-target renderer observation request for the same transport sequence.
+    ///
+    /// This opt-in method is the genuine execution-worker to render-worker boundary.
+    /// It consumes the same canonical delta as `drainDeltaJson`; callers forward the
+    /// two fields without deriving slot identity or runtime state in JavaScript.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainRendererObservationPublicationJson))]
+    pub fn drain_renderer_observation_publication_json(
+        &mut self,
+        phase_json: &str,
+        semantic_slot: u32,
+        semantic_generation: u32,
+    ) -> Result<String, String> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        let target = SemanticNodeId::new(semantic_slot, semantic_generation);
+        let committed = match self
+            .session
+            .committed_callback_renderer_observation(token, target)
+        {
+            noon::CallbackRendererObservationOutcome::Committed(observation) => observation,
+            noon::CallbackRendererObservationOutcome::StaleCallback { .. } => {
+                return Err("callback renderer observation token is stale".into());
+            }
+            noon::CallbackRendererObservationOutcome::StalePublication { .. } => {
+                return Err("callback renderer observation publication is stale".into());
+            }
+            noon::CallbackRendererObservationOutcome::Absent { .. } => {
+                return Err("callback renderer observation target is absent".into());
+            }
+        };
+        let delta = self
+            .delta(false)?
+            .ok_or("callback commit produced no retained renderer publication")?;
+        let observation = RendererObservationRequest::from_callback_publication(
+            delta.session,
+            delta.sequence,
+            committed,
+        );
+        serde_json::to_string(&RendererObservationPublicationWire { delta, observation })
+            .map_err(|error| error.to_string())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = initialDeltaJson))]
@@ -2244,7 +2292,29 @@ mod tests {
             1.0
         );
         assert_eq!(player.session.frame().objects[0].style.opacity, 0.5);
-        assert!(player.drain_delta_json().unwrap().is_some());
+        let publication: serde_json::Value = serde_json::from_str(
+            &player
+                .drain_renderer_observation_publication_json(
+                    &phase.to_string(),
+                    source.node_id().slot(),
+                    source.node_id().generation(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(publication["delta"]["session"], 12);
+        assert_eq!(publication["delta"]["sequence"], 0);
+        assert_eq!(publication["observation"]["publication"]["session"], 12);
+        assert_eq!(publication["observation"]["publication"]["sequence"], 0);
+        assert_eq!(
+            publication["observation"]["slot"],
+            publication["delta"]["objects"][0]["slot"]
+        );
+        assert_eq!(
+            publication["observation"]["committed"]["transform"]["translation"]["y"],
+            1.0
+        );
+        assert_eq!(publication["observation"]["committed"]["dirty"], "all");
     }
 
     #[test]

@@ -203,6 +203,12 @@ test("semantic startup uses context-owned ports without constructing an engine w
   assert.equal((await paused).playing, false);
   const sought = client.seek(1);
   assert.equal((await sought).time, 1);
+  await client.advanceToWithRendererObservation(1.25);
+  const observedAdvance = authoring.attachments[0].controlPort.peer.messages.findLast(
+    (message) => message.type === "advance_to",
+  );
+  assert.equal(observedAdvance.time, 1.25);
+  assert.equal(observedAdvance.observeRenderer, true);
   assert.equal((await client.resume()).playing, true);
   client.terminate();
 });

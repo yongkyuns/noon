@@ -3,6 +3,7 @@ mod wasm {
     use noon_core::Vec2;
     use noon_render_wgpu::{
         Camera2D, GpuRenderer, PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState,
+        UploadWrite,
     };
     use noon_runtime::FrameChanges;
     use noon_text_render_wgpu::TextDeviceMetrics;
@@ -10,8 +11,10 @@ mod wasm {
     use web_sys::OffscreenCanvas;
 
     use crate::{
+        finish_renderer_observation,
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
-        InstalledRetainedExecutionMirror, RetainedTransportApplyOutcome,
+        resolve_renderer_observation_target, InstalledRetainedExecutionMirror,
+        RendererObservationOutcome, RendererObservationRequest, RetainedTransportApplyOutcome,
     };
 
     const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -63,6 +66,9 @@ mod wasm {
         preload_bytes_uploaded: usize,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
+        pending_renderer_observation: Option<RendererObservationRequest>,
+        last_renderer_observation: Option<RendererObservationOutcome>,
+        presentation_sequence: u64,
     }
 
     #[wasm_bindgen(js_class = RetainedExecutionCanvasRenderer)]
@@ -179,6 +185,9 @@ mod wasm {
                 preload_bytes_uploaded,
                 gpu_generation,
                 gpu_diagnostics,
+                pending_renderer_observation: None,
+                last_renderer_observation: None,
+                presentation_sequence: 0,
             };
             result.update_camera()?;
             Ok(result)
@@ -208,15 +217,42 @@ mod wasm {
             }
         }
 
+        /// Arm one bounded callback-publication observation. The request is
+        /// resolved only against the exact retained delta session/sequence.
+        #[wasm_bindgen(js_name = setRendererObservationRequestJson)]
+        pub fn set_renderer_observation_request_json(&mut self, json: &str) -> Result<(), JsValue> {
+            if self.pending_renderer_observation.is_some()
+                || self.last_renderer_observation.is_some()
+            {
+                return Err(js_message(
+                    "take the current renderer observation before requesting another",
+                ));
+            }
+            let request = serde_json::from_str(json).map_err(js_error)?;
+            self.pending_renderer_observation = Some(request);
+            self.last_renderer_observation = None;
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = takeRendererObservationJson)]
+        pub fn take_renderer_observation_json(&mut self) -> Result<Option<String>, JsValue> {
+            self.last_renderer_observation
+                .take()
+                .map(|observation| serde_json::to_string(&observation).map_err(js_error))
+                .transpose()
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             if !self.drawable || !self.pending_frame {
                 return Ok(false);
             }
 
-            let (surface_texture, reconfigure_after_present) =
+            let (surface_texture, reconfigure_after_present, surface_status) =
                 match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
-                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
+                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false, "success"),
+                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                        (texture, true, "suboptimal")
+                    }
                     wgpu::CurrentSurfaceTexture::Timeout
                     | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
                     wgpu::CurrentSurfaceTexture::Outdated => {
@@ -231,6 +267,17 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
+            let renderer_backend = renderer_backend_label(self.backend);
+            let observation_target =
+                self.pending_renderer_observation
+                    .as_ref()
+                    .cloned()
+                    .map(|request| {
+                        resolve_renderer_observation_target(request, self.mirror.transport_mirror())
+                    });
+            let resolved_observation_target = observation_target
+                .as_ref()
+                .and_then(|target| target.as_ref().ok());
             let resources = self.mirror.resources();
             let camera = self.renderer.camera();
             let metrics = TextDeviceMetrics::new(Vec2::new(
@@ -281,12 +328,32 @@ mod wasm {
             };
             self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
             self.last_outline_cache_misses = prepared.stats.outline_cache_misses;
-            let upload = self.renderer.upload_retained(
-                &self.device,
-                &self.queue,
-                &prepared,
-                &mut self.text_gpu,
-            );
+            let prepared_observation = resolved_observation_target.as_ref().map(|target| {
+                prepared.observe_object(target.mirrored.frame_index, target.mirrored.object)
+            });
+            let observed_prepared = prepared_observation
+                .as_ref()
+                .and_then(|observation| observation.as_ref().ok());
+            let mut upload_writes = observed_prepared.map(|_| Vec::<UploadWrite>::new());
+            let upload = if let Some(observed) = observed_prepared {
+                self.renderer.upload_retained_with_trace(
+                    &self.device,
+                    &self.queue,
+                    &prepared,
+                    &mut self.text_gpu,
+                    observed,
+                    upload_writes
+                        .as_mut()
+                        .expect("prepared observation owns its upload trace"),
+                )
+            } else {
+                self.renderer.upload_retained(
+                    &self.device,
+                    &self.queue,
+                    &prepared,
+                    &mut self.text_gpu,
+                )
+            };
             self.last_bytes_uploaded = upload
                 .geometry
                 .bytes_uploaded
@@ -306,6 +373,7 @@ mod wasm {
                 .map_err(js_error)?;
             self.queue.submit(Some(encoder.finish()));
             self.queue.present(surface_texture);
+            self.presentation_sequence = self.presentation_sequence.saturating_add(1);
             self.last_draw_calls = draw
                 .geometry
                 .draw_calls
@@ -314,6 +382,22 @@ mod wasm {
                 .geometry
                 .instances_drawn
                 .saturating_add(draw.text.instances_drawn);
+            if let Some(observation_target) = observation_target {
+                self.pending_renderer_observation = None;
+                self.last_renderer_observation = Some(match observation_target {
+                    Ok(target) => finish_renderer_observation(
+                        target,
+                        prepared_observation.expect("resolved target was prepared"),
+                        upload_writes.as_deref().unwrap_or_default(),
+                        upload,
+                        draw,
+                        self.presentation_sequence,
+                        renderer_backend,
+                        surface_status,
+                    ),
+                    Err(outcome) => outcome,
+                });
+            }
             self.pending_frame = false;
             self.pending_changes = FrameChanges::default();
             if reconfigure_after_present {
@@ -429,6 +513,14 @@ mod wasm {
             );
             self.renderer.set_camera(&self.queue, camera);
             Ok(())
+        }
+    }
+
+    const fn renderer_backend_label(backend: wgpu::Backend) -> &'static str {
+        match backend {
+            wgpu::Backend::BrowserWebGpu => "WebGPU",
+            wgpu::Backend::Gl => "WebGL2",
+            _ => "Other",
         }
     }
 

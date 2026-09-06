@@ -36,11 +36,19 @@ const renderModeSwitchPaths = new Set([
 
 const hostUpdaterDiagnosticPaths = new Set([
   ".github/workflows/pr-fast.yml",
-  "crates/noon-render-wgpu/src/gpu_geometry.rs",
-  "crates/noon-web/src/execution_canvas.rs",
-  "crates/noon-web/src/execution_transport.rs",
+  "crates/noon-render-wgpu/src/gpu/retained_text.rs",
+  "crates/noon-text-render-wgpu/src/gpu.rs",
+  "crates/noon-text-render-wgpu/src/preparation.rs",
+  "crates/noon-web/src/renderer_observation.rs",
+  "crates/noon-web/src/renderer_observation/retained.rs",
+  "crates/noon-web/src/retained_execution_canvas.rs",
+  "crates/noon-web/src/semantic_execution_player.rs",
   "scripts/manim-host-updater-diagnostics.mjs",
-  "web/manim-raster-host.js",
+  "web/authoring-execution-client.js",
+  "web/authoring-render-worker.js",
+  "web/execution-worker-client.js",
+  "web/python/examples/renderer_observation_callbacks.py",
+  "web/semantic-engine-endpoint.js",
 ]);
 
 const rendererCriticalPrefixes = Object.freeze([

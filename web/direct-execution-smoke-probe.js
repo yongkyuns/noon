@@ -189,6 +189,7 @@ async function directAffineCallbackProof(expectedBackend) {
     authoredTime: renderer.time(),
     objectCount: renderer.objectCount(),
     drawCalls: renderer.lastDrawCalls(),
+    textDrawCalls: renderer.lastTextDrawCalls(),
     sourceLuma,
     driftLuma,
     backgroundLuma,
@@ -204,7 +205,7 @@ async function directAffineCallbackProof(expectedBackend) {
   if (metrics.authoredTime !== 2) {
     throw new Error(`direct affine callback authored time is ${metrics.authoredTime}; expected 2`);
   }
-  if (metrics.objectCount !== 2 || metrics.drawCalls <= 0) {
+  if (metrics.objectCount !== 3 || metrics.drawCalls <= 0 || metrics.textDrawCalls <= 0) {
     throw new Error(`direct affine callback renderer produced invalid metrics ${JSON.stringify(metrics)}`);
   }
   if (

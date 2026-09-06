@@ -770,6 +770,14 @@ impl SceneInstance {
         std::mem::take(&mut self.changes)
     }
 
+    /// Borrow accumulated renderer invalidation without consuming it.
+    ///
+    /// This is intended for bounded publication diagnostics. Normal renderer
+    /// preparation continues to consume changes through `take_renderer_publication`.
+    pub const fn frame_changes(&self) -> &FrameChanges {
+        &self.changes
+    }
+
     /// Consume one renderer publication atomically with its accumulated changes.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         let changes = self.take_frame_changes();

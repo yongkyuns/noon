@@ -34,7 +34,15 @@ function createRenderer(renderResults) {
   return {
     freed: false,
     renderCalls: 0,
+    observationRequests: [],
+    observationResult: null,
     applyDeltaJson: () => true,
+    setRendererObservationRequestJson(json) { this.observationRequests.push(json); },
+    takeRendererObservationJson() {
+      const result = this.observationResult;
+      this.observationResult = null;
+      return result;
+    },
     resize() {},
     render() {
       this.renderCalls += 1;
@@ -300,4 +308,61 @@ test("reconnecting a non-wake engine restores one frame request on its replaceme
   for (const callback of harness.animationFrames.splice(0)) callback(20);
   assert.equal(replacement.messages.filter((m) => m.type === "tick").length, 1);
   assert.equal(harness.animationFrames.length, 0);
+});
+
+test("retained renderer forwards one observation only after its matching presentation", async () => {
+  const harness = createWorkerHarness([true, false, true]);
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  harness.animationFrames.shift()(10);
+
+  const publication = { session: 15, sequence: 6 };
+  const request = {
+    schema_version: 1,
+    publication,
+    slot: { slot: 4, generation: 2 },
+    committed: {},
+  };
+  const result = {
+    outcome: "presented",
+    publication,
+    presentation: {
+      presentation_sequence: 2,
+      submit_called: true,
+      present_called: true,
+    },
+  };
+  harness.createdRenderer.observationResult = JSON.stringify(result);
+  harness.context.observationRequest = {
+    type: "renderer_observation_request",
+    ...publication,
+    json: JSON.stringify(request),
+  };
+  harness.context.observationPublication = publication;
+  vm.runInContext(
+    "handleEngineMessage(observationRequest); consumeDelta('observed', observationPublication);",
+    harness.context,
+  );
+
+  assert.deepEqual(
+    harness.createdRenderer.observationRequests.map(JSON.parse),
+    [request],
+  );
+  assert.equal(
+    harness.nextPort.messages.some((message) => message.type === "renderer_observation"),
+    false,
+    "a failed surface attempt cannot acknowledge prepared/uploaded state as presented",
+  );
+  harness.animationFrames.shift()(20);
+  await flushTasks();
+  const messages = harness.nextPort.messages.filter((message) =>
+    message.type === "renderer_observation" || message.type === "execution_presented");
+  assert.deepEqual(
+    messages.map(({ type, session, sequence }) => ({ type, session, sequence })),
+    [
+      { type: "renderer_observation", ...publication },
+      { type: "execution_presented", ...publication },
+    ],
+  );
+  assert.deepEqual(JSON.parse(messages[0].json), result);
 });

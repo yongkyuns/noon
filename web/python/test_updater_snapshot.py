@@ -1,7 +1,9 @@
+import math
 import unittest
 from types import SimpleNamespace
 
 import _manim_compat as compat
+import _manim_typst as typst
 import _manim_updaters as updaters
 
 
@@ -81,6 +83,24 @@ class CallbackContextTests(unittest.TestCase):
 
 
 class CanonicalCallbackPropertyRowTests(unittest.TestCase):
+    def test_style_wire_uses_rust_default_and_preserves_explicit_mode(self) -> None:
+        omitted_default = _object(0)["style"]
+        self.assertNotIn("stroke_width_mode", omitted_default)
+
+        default_style = updaters._PhaseStyle.from_wire(omitted_default)
+        self.assertEqual(default_style.stroke_width_mode, "scale_with_object")
+        self.assertEqual(
+            default_style.to_wire()["stroke_width_mode"], "scale_with_object"
+        )
+
+        explicit_style = updaters._PhaseStyle.from_wire(
+            {**omitted_default, "stroke_width_mode": "screen_space"}
+        )
+        self.assertEqual(explicit_style.stroke_width_mode, "screen_space")
+        self.assertEqual(
+            explicit_style.to_wire()["stroke_width_mode"], "screen_space"
+        )
+
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
         compat.install()
@@ -130,7 +150,22 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 }
             ],
         }
-        return scene, mobject, updaters._CanonicalCallbackContext(frame)
+        class CallbackOperations:
+            def __init__(self) -> None:
+                self.rotations: list[tuple[float, ...]] = []
+
+            def callbackRotateTransformAboutPoint(self, *values: float):
+                self.rotations.append(values)
+                return SimpleNamespace(
+                    translationX=1.0,
+                    translationY=2.0,
+                    rotation=math.pi / 2.0,
+                    scaleX=1.0,
+                    scaleY=1.0,
+                )
+
+        operations = CallbackOperations()
+        return scene, mobject, updaters._CanonicalCallbackContext(frame, operations)
 
     def test_translation_only_row_preserves_ordered_property_writes(self) -> None:
         scene, mobject, context = self._mobject_and_context()
@@ -179,6 +214,88 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 mobject.copy()
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_explicit_pivot_rotation_dispatches_to_shared_rust_operation(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            updaters._canonical_rotate(
+                mobject,
+                math.pi / 2.0,
+                (0.0, 0.0, 1.0),
+                about_point=(0.0, 0.0, 0.0),
+            )
+            writes = context.effective_batch()["writes"]
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+        self.assertEqual(len(context._operations.rotations), 1)
+        self.assertEqual(
+            context._operations.rotations[0],
+            (2.0, -1.0, 0.0, 1.0, 1.0, math.pi / 2.0, 0.0, 0.0),
+        )
+        self.assertEqual([write["kind"] for write in writes], ["transform"])
+        self.assertEqual(writes[0]["transform"]["translation"], {"x": 1.0, "y": 2.0})
+        self.assertAlmostEqual(writes[0]["transform"]["rotation"], math.pi / 2.0)
+        self.assertFalse(next(iter(context._rows.values())).bounds_translation_only)
+
+    def test_native_text_uses_the_same_effective_overlay_without_authored_writes(self) -> None:
+        scene, _, context = self._mobject_and_context()
+
+        class SemanticTextHandle:
+            semanticSlot = 11
+            semanticGeneration = 3
+
+            def __init__(self) -> None:
+                self.authored_revision = 17
+                self.authored_translation = (2.0, -1.0)
+                self.authored_opacity = 1.0
+                self.calls: list[tuple[object, ...]] = []
+
+            def shift(self, x: float, y: float) -> None:
+                self.calls.append(("shift", x, y))
+                self.authored_translation = (
+                    self.authored_translation[0] + x,
+                    self.authored_translation[1] + y,
+                )
+                self.authored_revision += 1
+
+            def setObjectOpacity(self, opacity: float) -> None:
+                self.calls.append(("setObjectOpacity", opacity))
+                self.authored_opacity = opacity
+                self.authored_revision += 1
+
+        handle = SemanticTextHandle()
+        text = object.__new__(typst.Text)
+        text._scene = scene
+        text._object = SimpleNamespace(id=0)
+        text._semantic_handle = handle
+        text._semantic_handle_fresh = True
+        text._retained_handle = handle
+
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertEqual(text.get_center(), updaters._base.Vec2(2.0, -1.0))
+            text.shift((0.25, 0.5))
+            text.set_opacity(0.4)
+            self.assertEqual(text.get_center(), updaters._base.Vec2(2.25, -0.5))
+            with self.assertRaises(NotImplementedError):
+                text.scale(2.0)
+            with self.assertRaises(NotImplementedError):
+                text.width
+            writes = context.effective_batch()["writes"]
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+        self.assertEqual([write["kind"] for write in writes], ["transform", "style"])
+        self.assertEqual(
+            writes[0]["transform"]["translation"], {"x": 2.25, "y": -0.5}
+        )
+        self.assertEqual(writes[1]["style"]["opacity"], 0.4)
+        self.assertEqual(handle.authored_translation, (2.0, -1.0))
+        self.assertEqual(handle.authored_opacity, 1.0)
+        self.assertEqual(handle.authored_revision, 17)
+        self.assertEqual(handle.calls, [])
 
 
 if __name__ == "__main__":

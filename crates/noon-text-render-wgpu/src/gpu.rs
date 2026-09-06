@@ -111,6 +111,14 @@ pub struct TextGpuUploadStats {
     pub buffer_reallocations: usize,
 }
 
+/// Caller-owned observation of actual glyph instance buffer writes.
+///
+/// The byte slice is borrowed only for the duration of the call so an upper
+/// renderer can reuse its existing upload-write fingerprint without this crate
+/// allocating a parallel trace. Normal uploads do not install a trace.
+pub type TextUploadTrace<'a> =
+    dyn FnMut(GlyphAtlasPlane, Range<usize>, wgpu::BufferAddress, &[u8]) + 'a;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextGpuDrawStats {
     pub draw_calls: usize,
@@ -360,7 +368,20 @@ impl TextGlyphGpuRenderer {
         prepared: &PreparedRetainedTextFrame<'_>,
         atlas: &GpuGlyphAtlas,
     ) -> TextGpuUploadStats {
-        self.upload_impl(device, queue, prepared, atlas, None, None)
+        self.upload_impl(device, queue, prepared, atlas, None, None, None)
+    }
+
+    /// Upload a full text frame while reporting its actual buffer writes to a
+    /// caller-owned opt-in trace.
+    pub fn upload_with_trace(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedRetainedTextFrame<'_>,
+        atlas: &GpuGlyphAtlas,
+        trace: &mut TextUploadTrace<'_>,
+    ) -> TextGpuUploadStats {
+        self.upload_impl(device, queue, prepared, atlas, None, None, Some(trace))
     }
 
     /// Upload only changed instance ranges when the caller knows the GPU buffers
@@ -383,9 +404,36 @@ impl TextGlyphGpuRenderer {
             atlas,
             Some(mask_ranges),
             Some(color_ranges),
+            None,
         )
     }
 
+    /// Upload dirty text ranges while reporting the actual writes to a
+    /// caller-owned opt-in trace. Buffer growth still reports the required full
+    /// plane write.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_ranges_with_trace(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedRetainedTextFrame<'_>,
+        atlas: &GpuGlyphAtlas,
+        mask_ranges: &[Range<u32>],
+        color_ranges: &[Range<u32>],
+        trace: &mut TextUploadTrace<'_>,
+    ) -> TextGpuUploadStats {
+        self.upload_impl(
+            device,
+            queue,
+            prepared,
+            atlas,
+            Some(mask_ranges),
+            Some(color_ranges),
+            Some(trace),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn upload_impl(
         &mut self,
         device: &wgpu::Device,
@@ -394,6 +442,7 @@ impl TextGlyphGpuRenderer {
         atlas: &GpuGlyphAtlas,
         mask_ranges: Option<&[Range<u32>]>,
         color_ranges: Option<&[Range<u32>]>,
+        mut trace: Option<&mut TextUploadTrace<'_>>,
     ) -> TextGpuUploadStats {
         let mask_bytes = std::mem::size_of_val(prepared.mask_quads);
         let color_bytes = std::mem::size_of_val(prepared.color_quads);
@@ -418,12 +467,16 @@ impl TextGlyphGpuRenderer {
             prepared.mask_quads,
             mask_ranges,
             mask_reallocated,
+            GlyphAtlasPlane::Mask,
+            &mut trace,
         ) + upload_plane_instances(
             queue,
             &self.color_buffer,
             prepared.color_quads,
             color_ranges,
             color_reallocated,
+            GlyphAtlasPlane::Color,
+            &mut trace,
         );
         self.mask_instances = u32::try_from(prepared.mask_quads.len())
             .expect("mask glyph instance count exceeds u32 draw limits");
@@ -571,12 +624,17 @@ fn upload_plane_instances(
     instances: &[GlyphQuadInstance],
     ranges: Option<&[Range<u32>]>,
     reallocated: bool,
+    plane: GlyphAtlasPlane,
+    trace: &mut Option<&mut TextUploadTrace<'_>>,
 ) -> usize {
     if instances.is_empty() {
         return 0;
     }
     if reallocated || ranges.is_none() {
         let bytes = bytemuck::cast_slice(instances);
+        if let Some(trace) = trace.as_deref_mut() {
+            trace(plane, 0..instances.len(), 0, bytes);
+        }
         queue.write_buffer(buffer, 0, bytes);
         return bytes.len();
     }
@@ -596,6 +654,9 @@ fn upload_plane_instances(
         let offset = start
             .checked_mul(size_of::<GlyphQuadInstance>())
             .expect("text glyph upload offset overflow") as u64;
+        if let Some(trace) = trace.as_deref_mut() {
+            trace(plane, start..end, offset, bytes);
+        }
         queue.write_buffer(buffer, offset, bytes);
         bytes_uploaded += bytes.len();
     }
@@ -1052,6 +1113,42 @@ mod tests {
     }
 
     #[test]
+    fn dirty_range_trace_reports_the_exact_written_plane_and_bytes() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let atlas = GpuGlyphAtlas::new(16).unwrap();
+        let quads: [GlyphQuadInstance; 4] = std::array::from_fn(|_| test_quad());
+        let prepared = prepared_mask_frame(&quads, &[]);
+        let mut renderer = TextGlyphGpuRenderer::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            TextCamera2D::DEFAULT,
+        );
+        renderer.upload(&device, &queue, &prepared, &atlas);
+
+        let mut writes = Vec::new();
+        let mut trace = |plane, range, offset, bytes: &[u8]| {
+            writes.push((plane, range, offset, bytes.len()));
+        };
+        let stats = renderer.upload_ranges_with_trace(
+            &device,
+            &queue,
+            &prepared,
+            &atlas,
+            &[1..3],
+            &[],
+            &mut trace,
+        );
+
+        let stride = size_of::<GlyphQuadInstance>();
+        assert_eq!(stats.bytes_uploaded, stride * 2);
+        assert_eq!(
+            writes,
+            vec![(GlyphAtlasPlane::Mask, 1..3, stride as u64, stride * 2)]
+        );
+    }
+
+    #[test]
     fn dirty_range_upload_falls_back_to_full_plane_after_reallocation() {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let atlas = GpuGlyphAtlas::new(16).unwrap();
@@ -1064,11 +1161,32 @@ mod tests {
             TextCamera2D::DEFAULT,
         );
 
-        let stats = renderer.upload_ranges(&device, &queue, &prepared, &atlas, &[1..2], &[]);
+        let mut writes = Vec::new();
+        let mut trace = |plane, range, offset, bytes: &[u8]| {
+            writes.push((plane, range, offset, bytes.len()));
+        };
+        let stats = renderer.upload_ranges_with_trace(
+            &device,
+            &queue,
+            &prepared,
+            &atlas,
+            &[1..2],
+            &[],
+            &mut trace,
+        );
         assert_eq!(stats.buffer_reallocations, 1);
         assert_eq!(
             stats.bytes_uploaded,
             quads.len() * size_of::<GlyphQuadInstance>()
+        );
+        assert_eq!(
+            writes,
+            vec![(
+                GlyphAtlasPlane::Mask,
+                0..quads.len(),
+                0,
+                quads.len() * size_of::<GlyphQuadInstance>()
+            )]
         );
     }
 

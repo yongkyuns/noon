@@ -393,6 +393,8 @@ fn projected_frame<'a>(
         mega_path_index_dirty: preparer.mega_path_index_dirty,
         path_geometry_dirty: preparer.path_geometry_dirty,
         stats,
+        slots: &preparer.slots,
+        complete_submission: false,
     }
 }
 

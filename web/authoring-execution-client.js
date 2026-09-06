@@ -370,6 +370,15 @@ export class AuthoringExecutionClient {
     });
   }
 
+  async advanceToWithRendererObservation(timeSeconds) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("callback renderer observation requires semantic execution mode");
+      }
+      return player.advanceToWithRendererObservation(timeSeconds);
+    });
+  }
+
   async setNativeStateInput(source, value) {
     return this.#withStablePlayer((player, mode) => {
       if (mode !== AUTHORING_EXECUTION_SEMANTIC) {

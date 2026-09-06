@@ -976,6 +976,20 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  // Opt into one callback-publication renderer observation at this exact
+  // authored time. The semantic and render workers produce and match the
+  // publication metadata; this client retains no scene or renderer mirror.
+  async advanceToWithRendererObservation(timeSeconds) {
+    this.#requireSemanticMode("callback renderer observation");
+    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    const result = await this.#requestEngine("advance_to", {
+      time,
+      observeRenderer: true,
+    });
+    this.#rememberPlaying(result);
+    return result;
+  }
+
   async restartPlayback() {
     const result = await this.#requestEngine("restart_playback", {});
     this.#rememberPlaying(result);

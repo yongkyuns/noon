@@ -18,14 +18,13 @@ mod wasm {
         RustHostCallbackTable,
     };
     use noon_core::{
-        Camera2DState, GeometryRef, NativeEventOccurrence, NativeEventSource, NativeInputValue,
-        NativeStateSource, ObjectId, ReactiveValue, Rect, SemanticNodeId, Transform2D, Vec2,
+        Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue,
+        NativeStateSource, ReactiveValue, Rect, SemanticNodeId, Vec2,
     };
     use noon_render_wgpu::{
-        Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
-        RenderPrimitive, RetainedFramePreparer, RetainedTextGpuState, UploadStats, UploadWrite,
+        Camera2D, FramePreparer, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,
     };
-    use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+    use noon_runtime::{FrameChanges, FrameState};
     use noon_text_render_wgpu::TextDeviceMetrics;
     use serde::Serialize;
     use wasm_bindgen::prelude::*;
@@ -35,7 +34,7 @@ mod wasm {
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
         gpu_timestamps::GpuTimestampProfiler,
         BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan,
-        BrowserHostWake, ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
+        BrowserHostWake, ExecutionFrameMirror, TransportApplyOutcome,
     };
 
     use super::MANIM_DEFAULT_CLEAR_COLOR;
@@ -47,102 +46,6 @@ mod wasm {
         fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
             Ok(wgpu::rwh::DisplayHandle::web())
         }
-    }
-
-    #[derive(Clone, Copy, Debug, Serialize)]
-    struct DiagnosticRange {
-        start: usize,
-        end: usize,
-    }
-
-    impl From<&std::ops::Range<usize>> for DiagnosticRange {
-        fn from(value: &std::ops::Range<usize>) -> Self {
-            Self {
-                start: value.start,
-                end: value.end,
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticExecution {
-        session: Option<u32>,
-        sequence: u64,
-        layout_generation: u64,
-        time: f64,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticObjectState {
-        object: u64,
-        frame_index: usize,
-        slot: Option<TransportSlotId>,
-        transform: Transform2D,
-        world_endpoints: Option<[Vec2; 2]>,
-        dirty_classification: &'static str,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticPreparedState {
-        state: DiagnosticObjectState,
-        instance_kind: Option<&'static str>,
-        instance_index: Option<usize>,
-        instance_range: Option<DiagnosticRange>,
-        full_rebuilds: usize,
-        instances_repacked: usize,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticUploadWrite {
-        buffer: &'static str,
-        instance_range: DiagnosticRange,
-        byte_offset: u64,
-        byte_length: usize,
-        payload_hash: u64,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticUploadState {
-        target_write: Option<DiagnosticUploadWrite>,
-        writes: Vec<DiagnosticUploadWrite>,
-        instance_generation: u64,
-        bytes_uploaded: usize,
-        total_bytes_uploaded: usize,
-        buffer_reallocations: usize,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticDrawBatch {
-        primitive: &'static str,
-        instance_range: DiagnosticRange,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticDrawPlan {
-        state: DiagnosticObjectState,
-        submission_membership: bool,
-        batches: Vec<DiagnosticDrawBatch>,
-        draw_calls: usize,
-        instances_drawn: usize,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticPresentationCall {
-        surface_status: &'static str,
-        submit_called: bool,
-        present_called: bool,
-    }
-
-    #[derive(Clone, Debug, Serialize)]
-    struct HostUpdaterDiagnostic {
-        schema_version: u32,
-        backend: &'static str,
-        execution: DiagnosticExecution,
-        committed: DiagnosticObjectState,
-        prepared: DiagnosticPreparedState,
-        upload: DiagnosticUploadState,
-        draw_plan: DiagnosticDrawPlan,
-        present_call: DiagnosticPresentationCall,
     }
 
     #[derive(Clone, Copy, Debug, Serialize)]
@@ -457,13 +360,6 @@ mod wasm {
             }
         }
 
-        fn transport(&self) -> Option<&ExecutionFrameMirror> {
-            match self {
-                Self::Transport(mirror) => Some(mirror),
-                Self::Direct(_) => None,
-            }
-        }
-
         fn transport_mut(&mut self) -> Option<&mut ExecutionFrameMirror> {
             match self {
                 Self::Transport(mirror) => Some(mirror),
@@ -522,9 +418,6 @@ mod wasm {
         last_geometry_cache_misses: usize,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
-        host_updater_diagnostic_object: Option<ObjectId>,
-        last_host_updater_diagnostic: Option<HostUpdaterDiagnostic>,
-        gpu_instance_generation: u64,
     }
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
@@ -577,23 +470,6 @@ mod wasm {
             }
         }
 
-        /// Enables the bounded RotationUpdater diagnostic seam used by the
-        /// deterministic host-updater regression harness. It only records the
-        /// selected object while a normal incremental render is already running.
-        #[wasm_bindgen(js_name = setHostUpdaterDiagnosticObject)]
-        pub fn set_host_updater_diagnostic_object(&mut self, object: u64) {
-            self.host_updater_diagnostic_object = Some(ObjectId::new(object));
-            self.last_host_updater_diagnostic = None;
-        }
-
-        #[wasm_bindgen(js_name = takeHostUpdaterDiagnosticJson)]
-        pub fn take_host_updater_diagnostic_json(&mut self) -> Result<Option<String>, JsValue> {
-            self.last_host_updater_diagnostic
-                .take()
-                .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))
-                .transpose()
-        }
-
         pub fn render(&mut self) -> Result<bool, JsValue> {
             let changes_pending = match &self.source {
                 CanvasExecutionSource::Transport(_) => !self.pending_changes.is_empty(),
@@ -605,12 +481,10 @@ mod wasm {
                 return Ok(false);
             }
 
-            let (surface_texture, reconfigure_after_present, surface_status) =
+            let (surface_texture, reconfigure_after_present) =
                 match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false, "success"),
-                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                        (texture, true, "suboptimal")
-                    }
+                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
+                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
                     wgpu::CurrentSurfaceTexture::Timeout
                     | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
                     wgpu::CurrentSurfaceTexture::Outdated => {
@@ -639,21 +513,8 @@ mod wasm {
                 .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
             let prepared = self.preparer.prepare_incremental(frame, &changes);
             self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
-            let mut upload_writes = Vec::new();
-            let diagnostic_enabled =
-                self.host_updater_diagnostic_object.is_some() && self.source.transport().is_some();
-            let upload = if diagnostic_enabled {
-                self.renderer.upload_with_trace(
-                    &self.device,
-                    &self.queue,
-                    &prepared,
-                    &mut upload_writes,
-                )
-            } else {
-                self.renderer.upload(&self.device, &self.queue, &prepared)
-            };
+            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
             self.last_bytes_uploaded = upload.bytes_uploaded;
-            self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
 
             let view = surface_texture
                 .texture
@@ -698,24 +559,6 @@ mod wasm {
             self.queue.present(surface_texture);
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
-            if let (Some(object), Some(mirror)) =
-                (self.host_updater_diagnostic_object, self.source.transport())
-            {
-                self.last_host_updater_diagnostic = build_host_updater_diagnostic(
-                    self.backend,
-                    mirror,
-                    &changes,
-                    &prepared,
-                    upload,
-                    &upload_writes,
-                    draw,
-                    self.gpu_instance_generation,
-                    surface_status,
-                    true,
-                    true,
-                    object,
-                );
-            }
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
@@ -1022,251 +865,6 @@ mod wasm {
         }
     }
 
-    fn build_host_updater_diagnostic(
-        backend: wgpu::Backend,
-        mirror: &ExecutionFrameMirror,
-        changes: &FrameChanges,
-        prepared: &PreparedFrame<'_>,
-        upload: UploadStats,
-        upload_writes: &[UploadWrite],
-        draw: DrawStats,
-        instance_generation: u64,
-        surface_status: &'static str,
-        submitted: bool,
-        presented: bool,
-        target: ObjectId,
-    ) -> Option<HostUpdaterDiagnostic> {
-        let frame = mirror.frame()?;
-        let frame_index = frame
-            .objects
-            .iter()
-            .position(|object| object.id == target)?;
-        let committed_object = &frame.objects[frame_index];
-        let execution = DiagnosticExecution {
-            session: mirror.session(),
-            sequence: mirror.next_sequence().saturating_sub(1),
-            layout_generation: mirror.layout_generation(),
-            time: frame.time,
-        };
-        let committed = diagnostic_object_state(
-            frame,
-            mirror,
-            changes,
-            frame_index,
-            target,
-            committed_object.transform,
-            world_endpoints(committed_object),
-        );
-
-        let (instance_kind, instance_index, instance_range, prepared_transform, prepared_endpoints) =
-            prepared_line_state(prepared, target);
-        let prepared_state = DiagnosticPreparedState {
-            state: diagnostic_object_state(
-                frame,
-                mirror,
-                changes,
-                frame_index,
-                target,
-                prepared_transform.unwrap_or(committed_object.transform),
-                prepared_endpoints,
-            ),
-            instance_kind,
-            instance_index,
-            instance_range,
-            full_rebuilds: prepared.stats.full_rebuilds,
-            instances_repacked: prepared.stats.instances_repacked,
-        };
-
-        let writes = upload_writes
-            .iter()
-            .map(diagnostic_upload_write)
-            .collect::<Vec<_>>();
-        let target_write = instance_index.and_then(|instance_index| {
-            upload_writes
-                .iter()
-                .filter(|write| write.buffer == "line")
-                .find(|write| write.instance_range.contains(&instance_index))
-                .map(diagnostic_upload_write)
-        });
-        let upload = DiagnosticUploadState {
-            target_write,
-            writes,
-            instance_generation,
-            bytes_uploaded: upload_writes.iter().map(|write| write.byte_length).sum(),
-            total_bytes_uploaded: upload.bytes_uploaded,
-            buffer_reallocations: upload.buffer_reallocations,
-        };
-
-        let mut batches = Vec::new();
-        for batch in prepared.render_batches {
-            let RenderPrimitive::Line = batch.primitive else {
-                continue;
-            };
-            let contains_target = instance_index
-                .map(|index| batch.instance_range.contains(&(index as u32)))
-                .unwrap_or(false);
-            if contains_target {
-                batches.push(DiagnosticDrawBatch {
-                    primitive: "line",
-                    instance_range: DiagnosticRange {
-                        start: batch.instance_range.start as usize,
-                        end: batch.instance_range.end as usize,
-                    },
-                });
-            }
-        }
-        let draw_plan = DiagnosticDrawPlan {
-            state: diagnostic_object_state(
-                frame,
-                mirror,
-                changes,
-                frame_index,
-                target,
-                prepared_transform.unwrap_or(committed_object.transform),
-                prepared_endpoints,
-            ),
-            submission_membership: !batches.is_empty(),
-            batches,
-            draw_calls: draw.draw_calls,
-            instances_drawn: draw.instances_drawn,
-        };
-
-        Some(HostUpdaterDiagnostic {
-            schema_version: 1,
-            backend: backend_label(backend),
-            execution,
-            committed,
-            prepared: prepared_state,
-            upload,
-            draw_plan,
-            present_call: DiagnosticPresentationCall {
-                surface_status,
-                submit_called: submitted,
-                present_called: presented,
-            },
-        })
-    }
-
-    fn diagnostic_upload_write(write: &UploadWrite) -> DiagnosticUploadWrite {
-        DiagnosticUploadWrite {
-            buffer: write.buffer,
-            instance_range: DiagnosticRange {
-                start: write.instance_range.start,
-                end: write.instance_range.end,
-            },
-            byte_offset: write.byte_offset,
-            byte_length: write.byte_length,
-            payload_hash: write.payload_hash,
-        }
-    }
-
-    fn diagnostic_object_state(
-        frame: &noon_runtime::FrameState,
-        mirror: &ExecutionFrameMirror,
-        changes: &FrameChanges,
-        frame_index: usize,
-        target: ObjectId,
-        transform: Transform2D,
-        world_endpoints: Option<[Vec2; 2]>,
-    ) -> DiagnosticObjectState {
-        DiagnosticObjectState {
-            object: target.get(),
-            frame_index,
-            slot: mirror.slot_for_frame_index(frame_index),
-            transform,
-            world_endpoints,
-            dirty_classification: dirty_classification(changes, frame_index, frame),
-        }
-    }
-
-    fn dirty_classification(
-        changes: &FrameChanges,
-        frame_index: usize,
-        frame: &noon_runtime::FrameState,
-    ) -> &'static str {
-        if changes.is_all() {
-            return "all";
-        }
-        if changes
-            .removed_indices()
-            .binary_search(&frame_index)
-            .is_ok()
-            || !frame.is_present(frame_index)
-        {
-            return "removed";
-        }
-        if changes.added_indices().binary_search(&frame_index).is_ok() {
-            return "added";
-        }
-        if changes.object_indices().binary_search(&frame_index).is_ok() {
-            return "updated";
-        }
-        "unchanged"
-    }
-
-    fn prepared_line_state(
-        prepared: &PreparedFrame<'_>,
-        target: ObjectId,
-    ) -> (
-        Option<&'static str>,
-        Option<usize>,
-        Option<DiagnosticRange>,
-        Option<Transform2D>,
-        Option<[Vec2; 2]>,
-    ) {
-        let Some(index) = prepared
-            .line_ids
-            .iter()
-            .position(|object| *object == target)
-        else {
-            return (None, None, None, None, None);
-        };
-        let Some(instance) = prepared.lines.get(index).copied() else {
-            return (Some("line"), Some(index), None, None, None);
-        };
-        let transform = transform_from_packed(instance.transform);
-        let endpoints = [
-            transform.transform_point(Vec2::new(instance.start[0], instance.start[1])),
-            transform.transform_point(Vec2::new(instance.end[0], instance.end[1])),
-        ];
-        (
-            Some("line"),
-            Some(index),
-            Some(DiagnosticRange {
-                start: index,
-                end: index.saturating_add(1),
-            }),
-            Some(transform),
-            Some(endpoints),
-        )
-    }
-
-    fn transform_from_packed(value: PackedTransform) -> Transform2D {
-        Transform2D {
-            translation: Vec2::new(value.translation[0], value.translation[1]),
-            rotation: value.rotation,
-            scale: Vec2::new(value.scale[0], value.scale[1]),
-        }
-    }
-
-    fn world_endpoints(object: &FrameObjectState) -> Option<[Vec2; 2]> {
-        let GeometryRef::Line { start, end } = object.geometry()? else {
-            return None;
-        };
-        Some([
-            object.transform.transform_point(*start),
-            object.transform.transform_point(*end),
-        ])
-    }
-
-    const fn backend_label(backend: wgpu::Backend) -> &'static str {
-        match backend {
-            wgpu::Backend::BrowserWebGpu => "WebGPU",
-            wgpu::Backend::Gl => "WebGL2",
-            _ => "Other",
-        }
-    }
-
     impl WasmExecutionCanvasRenderer {
         /// Build the browser canvas host directly from the typed in-process execution session.
         ///
@@ -1564,9 +1162,6 @@ mod wasm {
                 last_geometry_cache_misses: 0,
                 gpu_generation,
                 gpu_diagnostics,
-                host_updater_diagnostic_object: None,
-                last_host_updater_diagnostic: None,
-                gpu_instance_generation: 0,
             };
             result.update_camera()?;
             Ok(result)
@@ -1621,7 +1216,6 @@ mod wasm {
                     .geometry
                     .bytes_uploaded
                     .saturating_add(upload.text.bytes_uploaded);
-                self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
 
                 let view = surface_texture
                     .texture

@@ -7,7 +7,7 @@ use crate::{
     CallbackAdvance, CallbackPhaseOverlay, EffectiveObjectProperties, ExecutionSegment,
     ExecutionSegmentAdvanceError, ExecutionSession, ExecutionSessionCallbackError, FrameState,
     HostCallbackId, SemanticMutationTransaction, SemanticMutationTransactionError,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore, Style, Transform2D,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore, Style, Transform2D, Vec2,
 };
 
 type BoxedCallbackError = Box<dyn Error + 'static>;
@@ -110,6 +110,18 @@ impl RustHostCallbackContext<'_> {
         self.overlay.set_transform(object, transform)
     }
 
+    /// Derive a world-space pivot rotation from the current target transform.
+    ///
+    /// The returned value remains caller-owned until it is written through
+    /// [`Self::set_target_transform`]. This keeps validation failures atomic.
+    pub fn target_transform_rotated_about_point(
+        &self,
+        angle: f64,
+        pivot: Vec2,
+    ) -> Result<Transform2D, String> {
+        rotate_effective_transform_about_point(self.target_state().transform, angle, pivot)
+    }
+
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
         self.overlay.set_style(self.target, style)
     }
@@ -121,6 +133,35 @@ impl RustHostCallbackContext<'_> {
     ) -> Result<(), ExecutionSessionCallbackError> {
         self.overlay.set_style(object, style)
     }
+}
+
+/// Apply one validated world-space pivot rotation to an effective transform.
+///
+/// Direct Rust callbacks and the Python callback boundary both use this pure
+/// property operation. The affine math is shared with semantic Mobject authoring.
+pub fn rotate_effective_transform_about_point(
+    transform: Transform2D,
+    angle: f64,
+    pivot: Vec2,
+) -> Result<Transform2D, String> {
+    if !transform.scale.x.is_finite() || !transform.scale.y.is_finite() {
+        return Err("callback transform scale must be finite".into());
+    }
+    let ((translation_x, translation_y), rotation) =
+        crate::semantic_mobject::rotate_affine_about_point(
+            (
+                f64::from(transform.translation.x),
+                f64::from(transform.translation.y),
+            ),
+            f64::from(transform.rotation),
+            angle,
+            (f64::from(pivot.x), f64::from(pivot.y)),
+        )?;
+    Ok(Transform2D {
+        translation: Vec2::new(translation_x as f32, translation_y as f32),
+        rotation: rotation as f32,
+        scale: transform.scale,
+    })
 }
 
 /// Host-owned callable lookup for direct Rust execution.
@@ -399,6 +440,26 @@ mod tests {
     const SET_Y: HostCallbackId = HostCallbackId::new(1);
     const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
     const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
+
+    #[test]
+    fn effective_pivot_rotation_reuses_the_shared_affine_operation() {
+        let transform = Transform2D {
+            translation: Vec2::new(2.0, -1.0),
+            rotation: 0.25,
+            scale: Vec2::new(2.0, 3.0),
+        };
+        let rotated = rotate_effective_transform_about_point(
+            transform,
+            std::f64::consts::FRAC_PI_2,
+            Vec2::ZERO,
+        )
+        .unwrap();
+        assert!((rotated.translation.x - 1.0).abs() < 1.0e-6);
+        assert!((rotated.translation.y - 2.0).abs() < 1.0e-6);
+        assert!((rotated.rotation - (0.25 + std::f32::consts::FRAC_PI_2)).abs() < 1.0e-6);
+        assert_eq!(rotated.scale, transform.scale);
+        assert!(rotate_effective_transform_about_point(transform, f64::NAN, Vec2::ZERO).is_err());
+    }
 
     #[test]
     fn callbacks_share_ordered_overlay_and_accumulate_from_prior_effective_frame() {

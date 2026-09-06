@@ -42,6 +42,8 @@ let needsPresent = false;
 // present exposes. It is an acknowledgement only, never scene or time state.
 let pendingPresentationPublication = null;
 let lastPresentedPublication = null;
+let pendingRendererObservationRequest = null;
+let pendingRendererObservationPublication = null;
 let running = false;
 let stopped = false;
 let frameLoopGeneration = 0;
@@ -296,6 +298,8 @@ function resetTransportState() {
   bootstrapPromise = null;
   pendingPresentationPublication = null;
   lastPresentedPublication = null;
+  pendingRendererObservationRequest = null;
+  pendingRendererObservationPublication = null;
 }
 
 function handleEngineMessage(message) {
@@ -339,6 +343,22 @@ function handleEngineMessage(message) {
   }
   if (message.type === "shared_delta") {
     drainTransport();
+    return;
+  }
+  if (message.type === "renderer_observation_request") {
+    try {
+      receiveRendererObservationRequest(message);
+    } catch (error) {
+      fail(error, null);
+    }
+    return;
+  }
+  if (message.type === "renderer_observation_cancel") {
+    try {
+      cancelRendererObservationRequest(message);
+    } catch (error) {
+      fail(error, null);
+    }
   }
 }
 
@@ -422,6 +442,7 @@ function consumeDelta(json, publication = null) {
     acknowledgeAlreadyPresented(publication);
     return true;
   }
+  armRendererObservation(publication);
   pendingPresentationPublication = publication;
   needsPresent = true;
   tryPresent();
@@ -453,6 +474,7 @@ function commitRendererTransition(initial, publication = null) {
   needsPresent = false;
   pendingPresentationPublication = null;
   lastPresentedPublication = null;
+  pendingRendererObservationPublication = null;
   mode = nextMode;
   bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);
   return true;
@@ -474,6 +496,7 @@ async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = 
       if (!applied) {
         throw new Error("retained authoring renderer must begin from an applied snapshot");
       }
+      armRendererObservation(publication);
     } else {
       createdRenderer = await ExecutionCanvasRenderer.create(canvas, initial);
       if (stopped) {
@@ -553,9 +576,17 @@ function tryPresent() {
   needsPresent = false;
   presentedFrames += 1;
   const publication = pendingPresentationPublication;
+  const observationPublication = pendingRendererObservationPublication;
   pendingPresentationPublication = null;
+  pendingRendererObservationPublication = null;
   if (publication !== null) {
     lastPresentedPublication = publication;
+  }
+  try {
+    acknowledgeRendererObservation(observationPublication, publication);
+  } catch (error) {
+    fail(error, null);
+    return false;
   }
   acknowledgePresented(publication);
   return drainGpuDiagnostics();
@@ -574,6 +605,25 @@ function acknowledgePresented(publication) {
     type: "execution_presented",
     session: publication.session,
     sequence: publication.sequence,
+  });
+}
+
+function acknowledgeRendererObservation(observationPublication, presentedPublication) {
+  if (observationPublication === null) {
+    return;
+  }
+  if (!samePublication(observationPublication, presentedPublication) || renderPort === null) {
+    throw new Error("renderer observation presentation does not match its publication");
+  }
+  const json = renderer.takeRendererObservationJson();
+  if (typeof json !== "string") {
+    throw new Error("retained renderer did not publish its requested observation");
+  }
+  renderPort.postMessage({
+    type: "renderer_observation",
+    session: observationPublication.session,
+    sequence: observationPublication.sequence,
+    json,
   });
 }
 
@@ -598,12 +648,64 @@ function flushBootstrapQueue() {
       acknowledgeAlreadyPresented(publication);
       continue;
     }
+    armRendererObservation(publication);
     pendingPresentationPublication = publication;
     needsPresent = true;
     if (!tryPresent()) {
       break;
     }
   }
+}
+
+function receiveRendererObservationRequest(message) {
+  const publication = rendererObservationMessagePublication(message);
+  if (mode !== MODE_RETAINED) {
+    throw new Error("renderer observations require retained execution");
+  }
+  if (pendingRendererObservationRequest !== null ||
+      pendingRendererObservationPublication !== null) {
+    throw new Error("render worker already has a pending renderer observation");
+  }
+  if (typeof message.json !== "string") {
+    throw new Error("renderer observation request must be JSON");
+  }
+  pendingRendererObservationRequest = { publication, json: message.json };
+}
+
+function cancelRendererObservationRequest(message) {
+  const publication = rendererObservationMessagePublication(message);
+  if (pendingRendererObservationRequest !== null &&
+      samePublication(pendingRendererObservationRequest.publication, publication)) {
+    pendingRendererObservationRequest = null;
+  }
+}
+
+function rendererObservationMessagePublication(message) {
+  if (!Number.isSafeInteger(message?.session) || message.session < 0 ||
+      !Number.isSafeInteger(message?.sequence) || message.sequence < 0) {
+    throw new Error("renderer observation publication is invalid");
+  }
+  return { session: message.session, sequence: message.sequence };
+}
+
+function armRendererObservation(publication) {
+  if (pendingRendererObservationRequest === null) {
+    return;
+  }
+  const requested = pendingRendererObservationRequest.publication;
+  if (!samePublication(requested, publication)) {
+    if (publication !== null &&
+        (publication.session !== requested.session || publication.sequence > requested.sequence)) {
+      throw new Error("renderer observation publication was skipped or replaced");
+    }
+    return;
+  }
+  if (renderer === null || typeof renderer.setRendererObservationRequestJson !== "function") {
+    throw new Error("retained renderer observation support is unavailable");
+  }
+  renderer.setRendererObservationRequestJson(pendingRendererObservationRequest.json);
+  pendingRendererObservationPublication = publication;
+  pendingRendererObservationRequest = null;
 }
 
 function nextRenderOpportunity() {

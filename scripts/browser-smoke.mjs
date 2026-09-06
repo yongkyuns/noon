@@ -279,8 +279,8 @@ async function directExecutionProof(page, expectedBackend) {
   );
   assert.equal(
     direct.metrics.affineCallbacks?.objectCount,
-    2,
-    "direct Rust/WASM callback scene did not retain both Rust-authored objects",
+    3,
+    "direct Rust/WASM callback scene did not retain its Text and two geometry objects",
   );
   assert.ok(
     direct.metrics.affineCallbacks?.sourceLuma >= 180,

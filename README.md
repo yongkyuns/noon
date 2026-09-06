@@ -108,6 +108,7 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Flat ordinary composition continuation | [ordinary_composition_continuation.rs](crates/noon-native/examples/ordinary_composition_continuation.rs) | [ordinary_composition_continuation.py](web/python/examples/ordinary_composition_continuation.py) |
 | Scalar ValueTracker continuation | [ordinary_value_tracker_continuation.rs](crates/noon-native/examples/ordinary_value_tracker_continuation.rs) | [ordinary_value_tracker_continuation.py](web/python/examples/ordinary_value_tracker_continuation.py) |
 | Ordered property callbacks | [live_affine_callbacks.rs](crates/noon-native/examples/live_affine_callbacks.rs) | [live_affine_callbacks.py](web/python/examples/live_affine_callbacks.py) |
+| Windowed Line rotation callbacks | [live_line_callback_rotation.rs](crates/noon-native/examples/live_line_callback_rotation.rs) | [renderer_observation_line_callbacks.py](web/python/examples/renderer_observation_line_callbacks.py) |
 | Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
 
 Run a Rust example with `cargo run -p noon-native --example live_content_switch`, or paste its paired Python source into the playground. The shared browser smoke executes the published Python files and checks their rendered output.

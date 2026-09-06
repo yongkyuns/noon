@@ -1,56 +1,233 @@
-use noon_core::{GeometryRef, SceneDefinition};
-use noon_ir::encode_scene;
-use noon_web::HostScenePlayer;
-use serde_json::{json, Value};
+use noon::{
+    CallbackAdvance, CallbackTerminationKind, EffectivePropertyBatch,
+    EffectiveSemanticPropertyWrite, ExecutionSession, ExecutionSessionCallbackError,
+    HostCallbackId, SemanticMutationTransaction, SemanticNodeId, SemanticObjectState,
+    SemanticStore, StoredGeometry, Style, Transform2D, Vec2,
+};
 
 const SCENE_OBJECTS: usize = 10_000;
 const HOST_OBJECT_INDEX: usize = SCENE_OBJECTS / 2;
 
-#[test]
-fn callback_snapshot_stays_local_in_a_large_native_scene() {
-    let mut definition = SceneDefinition::new();
+fn large_callback_scene() -> (SemanticStore, SemanticNodeId) {
+    let mut store = SemanticStore::new();
     let mut host_object = None;
-
     for index in 0..SCENE_OBJECTS {
-        let object = definition.add(GeometryRef::circle(0.1));
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.1,
+            }));
+        store.attach_to_scene(object).unwrap();
         if index == HOST_OBJECT_INDEX {
             host_object = Some(object);
         }
     }
-
     let host_object = host_object.expect("host object must be present in the scene");
-    let scene_json = encode_scene(&definition).expect("large scene must encode");
-    let slots = format!(r#"[{{"id":0,"objects":[{}]}}]"#, host_object.get());
-    let mut player = HostScenePlayer::from_json(&scene_json, &slots)
-        .expect("large scene with one callback slot must initialize");
 
-    player
-        .advance_to(0.25)
-        .expect("large scene must advance without host-wide work");
-    let frame: Value = serde_json::from_str(
-        &player
-            .callback_frame_json()
-            .expect("callback frame must serialize"),
-    )
-    .expect("callback frame must be valid JSON");
+    let removed = HostCallbackId::new(90);
+    let first = HostCallbackId::new(7);
+    let second = HostCallbackId::new(3);
+    let mut callbacks = SemanticMutationTransaction::new();
+    callbacks.add_updater(host_object, removed, 0.0, None);
+    callbacks.remove_updater(host_object, removed, 0.0);
+    callbacks.add_updater(host_object, first, 0.0, None);
+    callbacks.add_updater(host_object, second, 0.0, None);
+    callbacks.apply(&mut store).unwrap();
 
-    let objects = frame["objects"]
-        .as_array()
-        .expect("callback frame objects must be an array");
+    (store, host_object)
+}
+
+#[test]
+fn callback_barrier_stays_target_local_in_a_large_canonical_session() {
+    let (store, host_object) = large_callback_scene();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+
+    let initial = match session.advance_to_callback_barrier(0.0).unwrap() {
+        CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } => {
+            assert_eq!(invocations.len(), 2);
+            assert_eq!(overlay.objects().count(), 1);
+            overlay
+        }
+        CallbackAdvance::Ready(_) => panic!("time-zero updaters must run before later phases"),
+    };
+    session
+        .commit_required_callback_phase(initial.finish())
+        .unwrap();
+    session.take_frame_changes();
+
+    let (invocations, mut overlay) = match session.advance_to_callback_barrier(0.25).unwrap() {
+        CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } => (invocations, overlay),
+        CallbackAdvance::Ready(_) => panic!("the active updater phase must require its host"),
+    };
     assert_eq!(
-        objects.len(),
-        1,
-        "only callback-owned objects belong in the host snapshot"
+        invocations
+            .iter()
+            .map(|invocation| (invocation.occurrence_index(), invocation.callback_id()))
+            .collect::<Vec<_>>(),
+        vec![(1, HostCallbackId::new(7)), (2, HostCallbackId::new(3))],
+        "the closed occurrence is skipped while authored order remains stable"
     );
-    assert_eq!(objects[0]["object"], host_object.get());
-
-    let invocations = frame["invocations"]
-        .as_array()
-        .expect("callback invocations must be an array");
-    assert_eq!(invocations.len(), 1);
+    assert!(invocations
+        .iter()
+        .all(|invocation| invocation.target() == host_object));
+    assert_eq!(overlay.time(), 0.25);
+    assert_eq!(overlay.delta_time(), 0.25);
+    assert_eq!(overlay.objects().count(), 1);
     assert_eq!(
-        invocations[0]["object_indices"],
-        json!([0]),
-        "callback routing uses compact indices into the phase-wide callback snapshot table"
+        overlay.staged_row_count(),
+        0,
+        "the initial static advance needs no timeline or prior-driver rows"
+    );
+    assert_eq!(overlay.prior_driver_row_count(), 0);
+
+    let transform = Transform2D {
+        translation: Vec2::new(2.0, overlay.delta_time() as f32),
+        ..Transform2D::IDENTITY
+    };
+    overlay.set_transform(host_object, transform).unwrap();
+    assert_eq!(
+        overlay.object(host_object).unwrap().transform,
+        transform,
+        "later callbacks read earlier writes through the ordered overlay"
+    );
+    overlay
+        .set_style(
+            host_object,
+            Style {
+                opacity: 0.75,
+                ..Style::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        session.frame().time,
+        0.0,
+        "preflight does not publish early"
+    );
+    let batch = overlay.finish();
+    assert_eq!(
+        batch.writes().len(),
+        2,
+        "only target transform and style are written"
+    );
+    session.commit_required_callback_phase(batch).unwrap();
+    assert_eq!(session.frame().time, 0.25);
+    assert_eq!(
+        session.take_frame_changes().object_indices(),
+        &[HOST_OBJECT_INDEX],
+        "callback publication dirties only the one execution target"
+    );
+
+    let mut overlay = match session.advance_to_callback_barrier(0.75).unwrap() {
+        CallbackAdvance::HostRequired { overlay, .. } => overlay,
+        CallbackAdvance::Ready(_) => panic!("the continuing updater phase must require its host"),
+    };
+    assert_eq!(overlay.time(), 0.75);
+    assert_eq!(overlay.delta_time(), 0.5);
+    assert_eq!(overlay.objects().count(), 1);
+    assert_eq!(overlay.staged_row_count(), 1);
+    assert_eq!(overlay.prior_driver_row_count(), 1);
+    assert_eq!(
+        overlay.object(host_object).unwrap().transform.translation,
+        Vec2::new(2.0, 0.25),
+        "the next phase starts from the last coherent effective publication"
+    );
+    let next_transform = Transform2D {
+        translation: Vec2::new(2.0, overlay.delta_time() as f32),
+        ..transform
+    };
+    overlay.set_transform(host_object, next_transform).unwrap();
+    overlay
+        .set_style(
+            host_object,
+            Style {
+                opacity: 1.0,
+                ..Style::default()
+            },
+        )
+        .unwrap();
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+    assert_eq!(session.frame().time, 0.75);
+    assert_eq!(
+        session.take_frame_changes().object_indices(),
+        &[HOST_OBJECT_INDEX]
+    );
+}
+
+#[test]
+fn canonical_callback_failures_preserve_the_last_coherent_publication() {
+    let mut store = SemanticStore::new();
+    let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(object).unwrap();
+    let mut callbacks = SemanticMutationTransaction::new();
+    callbacks.add_updater(object, HostCallbackId::new(1), 0.0, None);
+    callbacks.apply(&mut store).unwrap();
+
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+    let overlay = match session.advance_to_callback_barrier(0.25).unwrap() {
+        CallbackAdvance::HostRequired { overlay, .. } => overlay,
+        CallbackAdvance::Ready(_) => panic!("the updater phase must require its host"),
+    };
+    let token = overlay.token();
+    let before = session.frame().clone();
+    let publication = session.publication_context();
+
+    let mut foreign = ExecutionSession::from_semantic_store(&store).unwrap();
+    let foreign_overlay = match foreign.advance_to_callback_barrier(0.25).unwrap() {
+        CallbackAdvance::HostRequired { overlay, .. } => overlay,
+        CallbackAdvance::Ready(_) => panic!("the foreign updater phase must require its host"),
+    };
+    assert!(matches!(
+        session.commit_required_callback_phase(foreign_overlay.finish()),
+        Err(ExecutionSessionCallbackError::StaleToken { .. })
+    ));
+
+    let invalid = EffectivePropertyBatch::new(
+        token,
+        [EffectiveSemanticPropertyWrite::Style {
+            object,
+            style: Style {
+                opacity: f32::NAN,
+                ..Style::default()
+            },
+        }],
+    );
+    assert!(matches!(
+        session.commit_required_callback_phase(invalid),
+        Err(ExecutionSessionCallbackError::InvalidEffectiveWrite(_))
+    ));
+    assert_eq!(session.frame(), &before);
+    assert_eq!(session.publication_context(), publication);
+    assert_eq!(session.pending_callback_token(), Some(token));
+    assert!(session.take_frame_changes().is_empty());
+
+    let mut interrupted = session.clone();
+    assert_eq!(
+        interrupted.callback_termination().unwrap().kind(),
+        CallbackTerminationKind::Interrupted
+    );
+    assert!(matches!(
+        interrupted.advance_to_callback_barrier(0.25),
+        Err(ExecutionSessionCallbackError::Terminated(_))
+    ));
+    assert_eq!(session.pending_callback_token(), Some(token));
+
+    session.fail_required_callback_phase(token).unwrap();
+    assert_eq!(session.frame(), &before);
+    assert_eq!(session.publication_context(), publication);
+    assert_eq!(
+        session.callback_termination().unwrap().kind(),
+        CallbackTerminationKind::Failed
     );
 }
