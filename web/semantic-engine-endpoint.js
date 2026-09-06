@@ -596,7 +596,7 @@ export async function attachSemanticEngine(
           }
           return;
         }
-        if (!await settleContinuationPublication(next)) return;
+        if (!await settleContinuationPublication(next.publication)) return;
         // The same absolute request continues against the returned player. Rust
         // decides whether this is a same-time barrier, an interior sample, or the
         // next segment endpoint.
@@ -671,7 +671,7 @@ export async function attachSemanticEngine(
             break;
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
-        if (stopped || player === null) break;
+        if (stopped) break;
         post({
           requestId: message.requestId,
           ...state(message.type),
@@ -915,7 +915,7 @@ export async function attachSemanticEngine(
       if (pendingExternalContinuation !== null) {
         const { resolve } = pendingExternalContinuation;
         pendingExternalContinuation = null;
-        resolve(publication);
+        resolve({ publication });
       }
       if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null, true);
       else observeContinuationWake(performance.now(), true);

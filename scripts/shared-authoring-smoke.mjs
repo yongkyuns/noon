@@ -1894,6 +1894,35 @@ result = scene
     window.sharedAuthoringSmoke.liveExampleExecution = null;
   });
 
+  const lineSource = await readFile(
+    path.join(repoRoot, "web/python/examples/live_line_match_callback.py"), "utf8",
+  );
+  const lineResult = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const authored = await harness.authoring.run(source, {});
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-line-match";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    harness.lineExecution = execution;
+    await execution.startSemanticExecution(authored.semanticExecution, {
+      authoringClient: harness.authoring,
+      transportMode: "transferable",
+      initiallyPaused: true,
+    });
+    await execution.advanceTo(0);
+    return { canvasId: canvas.id, metrics: (await execution.metrics()).metrics };
+  }, lineSource);
+  assert.equal(lineResult.metrics.objectCount, 3);
+  const linePixel = renderedWorldPixel(
+    await page.locator(`#${lineResult.canvasId}`).screenshot(), 1.25, 0,
+  );
+  assert.ok(linePixel.red > 100 && linePixel.green < 100 && linePixel.blue < 100,
+    `ordered Line callback lost its placement or red paint: ${JSON.stringify(linePixel)}`);
+  await page.evaluate(() => window.sharedAuthoringSmoke.lineExecution.terminate());
+
   const paintSource = await readFile(
     path.join(repoRoot, "web/python/examples/live_callback_paint.py"), "utf8",
   );
@@ -2023,6 +2052,38 @@ result = scene
     harness.authoring.terminate();
     globalThis.Worker = harness.NativeWorker;
   });
+  // Run the unchanged MovingDots construct through the production raster host.
+  // Selection/import are host bootstrap; the source's trackers and callbacks are intact.
+  const quickstart = await readFile(path.join(repoRoot, "parity/manim-v0.21/quickstart.py"), "utf8");
+  const movingDotsClass = quickstart.match(/class MovingDots\(Scene\):[\s\S]*?(?=\n\nclass )/);
+  assert.ok(movingDotsClass, "pinned MovingDots source is missing");
+  const rasterPage = await browser.newPage({ viewport: { width: 960, height: 540 } });
+  try {
+    await rasterPage.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
+    await rasterPage.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+    const loaded = await rasterPage.evaluate(async (source) => {
+      await window.noonHostRaster.ready();
+      return window.noonHostRaster.load(source, 4);
+    }, `from noon import *\n\n${movingDotsClass[0]}\n`);
+    assert.equal(loaded.kind, "semantic_execution");
+    assert.equal(loaded.objectCount, 3);
+    const frameTimes = Array.from({ length: 91 }, (_, index) => index / 30);
+    const rendered = await rasterPage.evaluate((times) =>
+      window.noonHostRaster.renderThrough(times.length - 1, times), frameTimes);
+    assert.equal(rendered.time, 3);
+    assert.equal(rendered.authoredDuration, 3);
+    assert.equal(rendered.objectCount, 3);
+    assert.equal(rendered.presented, true);
+    const pixels = await rasterPage.locator("#scene").screenshot();
+    const blueDot = renderedWorldPixel(pixels, 5, 0);
+    const redLine = renderedWorldPixel(pixels, (5 + 0.58) / 2, 2);
+    assert.ok(blueDot.blue > 80 && blueDot.blue > blueDot.red,
+      `MovingDots tracker endpoint missing: ${JSON.stringify(blueDot)}`);
+    assert.ok(redLine.red > 100 && redLine.red > redLine.green,
+      `MovingDots Line endpoint match missing: ${JSON.stringify(redLine)}`);
+  } finally {
+    await rasterPage.close();
+  }
   console.log(
     `✓ shared authoring semantic execution rendered transferable/${transferable.backend} ` +
       `and shared/${shared.backend}; paired live membership and persisted Scene reuse rendered`,

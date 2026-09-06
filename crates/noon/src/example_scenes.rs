@@ -235,7 +235,13 @@ pub fn live_line_match_callback(
     let mut right = scene.circle(0.08)?;
     right.set_translation(0.5, 0.0)?;
     let mut line = scene.line((-0.5, 0.0), (0.5, 0.0))?;
-    line.set_color(1.0, 0.0, 0.0, 1.0)?;
+    let red = Color::RED;
+    line.set_color(
+        red.red.into(),
+        red.green.into(),
+        red.blue.into(),
+        red.alpha.into(),
+    )?;
     scene.add(&left)?;
     scene.add(&right)?;
     scene.add(&line)?;
@@ -1750,7 +1756,7 @@ mod line_callback_tests {
         callbacks.advance_to(&mut session, 0.0).unwrap();
         let frame = session.frame();
         assert_eq!(frame.objects[0].transform.translation.x, 2.0);
-        let line = frame.objects[2];
+        let line = &frame.objects[2];
         let start = line.transform.transform_point(Vec2::new(-0.5, 0.0));
         let end = line.transform.transform_point(Vec2::new(0.5, 0.0));
         assert!((start.x - 2.0).abs() < 1.0e-6 && start.y.abs() < 1.0e-6);

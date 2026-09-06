@@ -1,6 +1,7 @@
 const {
   createDirectAffineCallbackSmokeRenderer,
   createDirectCallbackPaintSmokeRenderer,
+  createDirectLineMatchSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
   createDirectNativeSignalsSmokeRenderer,
@@ -542,6 +543,20 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
   return metrics;
 }
 
+async function directLineMatchProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectLineMatchSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+  renderer.directWakeDirectiveJson(0);
+  await advanceDirectCallbackFrame(renderer, 0);
+  const middle = await sampleRenderedColor(canvas, 1.25, 0);
+  if (renderer.rendererBackend() !== expectedBackend || middle.red < 100 ||
+      middle.green > 120 || middle.blue > 120) {
+    throw new Error(`ordered Line callback did not preserve its red paint: ${JSON.stringify(middle)}`);
+  }
+  return { middle };
+}
+
 async function directCallbackPaintProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectCallbackPaintSmokeRenderer(canvas);
@@ -1058,6 +1073,7 @@ async function start() {
 
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.callbackPaint = await directCallbackPaintProof(expectedBackend);
+  metrics.lineMatch = await directLineMatchProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
