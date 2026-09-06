@@ -1,6 +1,7 @@
 use noon_compile::{
-    prepare_semantic_publication, validate_semantic_publication, ExecutionMutationTransaction,
-    ExecutionPatch, SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
+    prepare_semantic_publication, prepare_semantic_publication_with_scalar_timeline,
+    validate_semantic_publication, ExecutionMutationTransaction, ExecutionPatch,
+    SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
 };
 use noon_core::{
     PreparedSemanticMutationTransaction, PublicationContext, SceneRevision,
@@ -10,6 +11,7 @@ use noon_core::{
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
     AuthoredPublicationError, ExecutionSlotError, FrameObjectState, PreparedEffectivePropertyBatch,
+    PreparedReactiveSignalEnrollmentBatch,
 };
 
 use super::ExecutionSession;
@@ -18,6 +20,16 @@ use super::ExecutionSession;
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
     SegmentCompletion,
+}
+
+pub(crate) struct PreparedReactiveEnrollmentBatch {
+    pub projection_enrollments: Vec<noon_compile::PreparedSemanticInputSignalEnrollment>,
+    pub runtime_enrollment: PreparedReactiveSignalEnrollmentBatch,
+}
+
+struct PreparedScalarPublicationContract {
+    handled_signals: std::collections::HashSet<SemanticNodeId>,
+    reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -182,6 +194,64 @@ impl ExecutionSession {
         effective: Option<PreparedEffectivePropertyBatch>,
         purpose: SemanticPublicationPurpose,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_prepared_semantic_transaction_with_execution_contract(
+            prepared,
+            execution_prefix,
+            effective,
+            purpose,
+            None,
+        )
+    }
+
+    pub(crate) fn apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
+        reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
+        handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_prepared_semantic_transaction_with_execution_contract(
+            prepared,
+            execution_prefix,
+            effective,
+            purpose,
+            Some(PreparedScalarPublicationContract {
+                handled_signals: handled_scalar_signals,
+                reactive_enrollment,
+            }),
+        )
+    }
+
+    pub(crate) fn apply_prepared_scalar_timeline_transaction_with_execution(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
+        handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_prepared_semantic_transaction_with_execution_contract(
+            prepared,
+            execution_prefix,
+            effective,
+            purpose,
+            Some(PreparedScalarPublicationContract {
+                handled_signals: handled_scalar_signals,
+                reactive_enrollment: None,
+            }),
+        )
+    }
+
+    fn apply_prepared_semantic_transaction_with_execution_contract(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
+        scalar: Option<PreparedScalarPublicationContract>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
         }
@@ -191,12 +261,21 @@ impl ExecutionSession {
             return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
         }
         self.require_published_store(prepared.store())?;
-        let publication = prepare_semantic_publication(
-            &prepared,
-            &self.execution_index,
-            &self.reachability,
-            self.painter_order.tail(),
-        )
+        let publication = match scalar.as_ref() {
+            Some(scalar) => prepare_semantic_publication_with_scalar_timeline(
+                &prepared,
+                &self.execution_index,
+                &self.reachability,
+                self.painter_order.tail(),
+                &scalar.handled_signals,
+            ),
+            None => prepare_semantic_publication(
+                &prepared,
+                &self.execution_index,
+                &self.reachability,
+                self.painter_order.tail(),
+            ),
+        }
         .map_err(ExecutionSessionPublicationError::Lowering)?;
         let preparation_stats = publication.stats();
         let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) = execution_prefix
@@ -255,6 +334,17 @@ impl ExecutionSession {
                 .chain(execution.mutations().iter().cloned())
                 .chain(execution_suffix),
         );
+        if let Some(reactive_enrollment) = scalar.and_then(|scalar| scalar.reactive_enrollment) {
+            for projection_enrollment in reactive_enrollment.projection_enrollments {
+                let expected = projection_enrollment.execution_signal();
+                let signal = self
+                    .reactive_projection
+                    .commit_input_signal_enrollment(projection_enrollment);
+                debug_assert_eq!(signal, expected);
+            }
+            self.runtime
+                .commit_reactive_signal_enrollment_batch(reactive_enrollment.runtime_enrollment);
+        }
         self.runtime
             .apply_authored_execution_transaction_with_effective(
                 &execution,

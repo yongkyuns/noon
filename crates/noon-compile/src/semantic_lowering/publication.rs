@@ -237,14 +237,15 @@ impl BoundSemanticPublication {
 pub fn validate_semantic_publication(
     transaction: &SemanticMutationTransaction,
 ) -> Result<(), SemanticPublicationLoweringError> {
-    validate_mutations(transaction.mutations())
+    validate_mutations(transaction.mutations(), None)
 }
 
 fn validate_mutations(
     mutations: &[SemanticMutation],
+    handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
 ) -> Result<(), SemanticPublicationLoweringError> {
     for (position, mutation) in mutations.iter().enumerate() {
-        if !matches!(
+        let ordinary = matches!(
             mutation,
             SemanticMutation::SetProperty { .. }
                 | SemanticMutation::ReplaceContent { .. }
@@ -254,7 +255,16 @@ fn validate_mutations(
                 | SemanticMutation::AddNode { .. }
                 | SemanticMutation::AddAnimation { .. }
                 | SemanticMutation::RemoveNode { .. }
-        ) {
+        );
+        let handled_scalar = handled_scalar_signals.is_some_and(|signals| match mutation {
+            SemanticMutation::AddScalarSignalTrack { signal, .. }
+            | SemanticMutation::SetScalarSignalAt { signal, .. } => signals.contains(signal),
+            SemanticMutation::ScopeSignal { signal, .. } => signal
+                .existing()
+                .is_some_and(|signal| signals.contains(&signal)),
+            _ => false,
+        });
+        if !ordinary && !handled_scalar {
             return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
         }
     }
@@ -268,9 +278,43 @@ pub fn prepare_semantic_publication(
     reachability: &SemanticExecutionReachability,
     live_painter_tail: Option<(i32, u64)>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
-    validate_mutations(prepared.mutations())?;
+    prepare_semantic_publication_with_handled_scalar_signals(
+        prepared,
+        index,
+        reachability,
+        live_painter_tail,
+        None,
+    )
+}
+
+/// Prepare ordinary publication while accepting only scalar mutations whose
+/// signals were already lowered and preflighted by the caller's timeline lane.
+pub fn prepare_semantic_publication_with_scalar_timeline(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    index: &SemanticExecutionIndex,
+    reachability: &SemanticExecutionReachability,
+    live_painter_tail: Option<(i32, u64)>,
+    handled_scalar_signals: &HashSet<SemanticNodeId>,
+) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
+    prepare_semantic_publication_with_handled_scalar_signals(
+        prepared,
+        index,
+        reachability,
+        live_painter_tail,
+        Some(handled_scalar_signals),
+    )
+}
+
+fn prepare_semantic_publication_with_handled_scalar_signals(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    index: &SemanticExecutionIndex,
+    reachability: &SemanticExecutionReachability,
+    live_painter_tail: Option<(i32, u64)>,
+    handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
+) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
+    validate_mutations(prepared.mutations(), handled_scalar_signals)?;
     let (values, mut resource_additions) =
-        lower_semantic_publication(prepared, index, reachability)?;
+        lower_semantic_publication(prepared, index, reachability, handled_scalar_signals)?;
     let mut possible_entry_refs = Vec::new();
     let mut seen_entries = HashSet::new();
     let mut possible_exit_nodes = Vec::new();
@@ -498,8 +542,9 @@ fn lower_semantic_publication(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     index: &SemanticExecutionIndex,
     reachability: &SemanticExecutionReachability,
+    handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
 ) -> Result<(ExecutionMutationTransaction, CompiledResources), SemanticPublicationLoweringError> {
-    validate_mutations(prepared.mutations())?;
+    validate_mutations(prepared.mutations(), handled_scalar_signals)?;
     let mut domains: HashMap<SemanticNodeId, (bool, bool, bool)> = HashMap::new();
     for mutation in prepared.candidate_mutations() {
         match mutation {
@@ -531,7 +576,10 @@ fn lower_semantic_publication(
             | SemanticMutation::RemoveMember { .. }
             | SemanticMutation::AddNode { .. }
             | SemanticMutation::AddAnimation { .. }
-            | SemanticMutation::RemoveNode { .. } => {}
+            | SemanticMutation::RemoveNode { .. }
+            | SemanticMutation::AddScalarSignalTrack { .. }
+            | SemanticMutation::SetScalarSignalAt { .. }
+            | SemanticMutation::ScopeSignal { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
     }
@@ -579,4 +627,37 @@ fn lower_semantic_publication(
         ExecutionMutationTransaction::from_mutations(mutations),
         resource_additions,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use noon_core::{RateFunction, SemanticStore, TrackTiming};
+
+    use super::*;
+
+    #[test]
+    fn scalar_publication_contract_accepts_only_explicitly_preflighted_signals() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let other = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_scalar_signal_track(
+            signal,
+            0.0,
+            2.0,
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        );
+
+        assert!(matches!(
+            validate_semantic_publication(&transaction),
+            Err(SemanticPublicationLoweringError::UnsupportedMutation { index: 0 })
+        ));
+        assert!(matches!(
+            validate_mutations(transaction.mutations(), Some(&HashSet::from([other]))),
+            Err(SemanticPublicationLoweringError::UnsupportedMutation { index: 0 })
+        ));
+        assert!(
+            validate_mutations(transaction.mutations(), Some(&HashSet::from([signal]))).is_ok()
+        );
+    }
 }

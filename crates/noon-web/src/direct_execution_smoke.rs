@@ -287,6 +287,15 @@ pub async fn create_direct_ordinary_composition_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for one mixed scalar/object composition over the shared runtime.
+#[wasm_bindgen(js_name = createDirectMixedScalarCompositionSmokeRenderer)]
+pub async fn create_direct_mixed_scalar_composition_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::mixed_scalar_composition::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that the paired ordinary continuation and its ordered Rust
 /// callback table execute through the normal direct single-context WASM host.
 #[wasm_bindgen(js_name = createDirectOrdinaryAffineCallbackContinuationSmokeRenderer)]

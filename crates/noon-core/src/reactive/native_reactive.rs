@@ -198,6 +198,23 @@ impl ReactiveGraphDefinition {
         Ok(())
     }
 
+    /// Append an input whose derived identity and value were already validated by
+    /// the owning semantic-to-execution projection.
+    ///
+    /// This narrow commit suffix avoids rescanning the complete graph after the
+    /// projection has proved that its one-to-one semantic identity is fresh.
+    pub fn commit_prepared_input_with_id(&mut self, id: SignalId, value: ReactiveValue) {
+        self.next_signal_id = self.next_signal_id.max(
+            id.get()
+                .checked_add(1)
+                .expect("prepared signal ID is valid"),
+        );
+        self.signals.push(SignalDefinition {
+            id,
+            source: SignalSource::Input(value),
+        });
+    }
+
     pub fn add_derived(&mut self, expression: ReactiveExpr) -> SignalId {
         let id = SignalId::new(self.next_signal_id);
         self.next_signal_id = self

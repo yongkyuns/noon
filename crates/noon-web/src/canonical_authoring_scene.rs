@@ -34,6 +34,11 @@ enum OrdinaryCompositionChild {
         angle: f64,
         options: noon_core::AnimationOptions,
     },
+    ValueTracker {
+        tracker: noon::ValueTracker,
+        target: f64,
+        options: noon_core::AnimationOptions,
+    },
     Wait {
         duration: f64,
     },
@@ -1357,6 +1362,15 @@ impl CanonicalAuthoringScene {
                     angle: *angle,
                     options: *options,
                 },
+                OrdinaryCompositionChild::ValueTracker {
+                    tracker,
+                    target,
+                    options,
+                } => noon::AnimationCompositionRequest::ValueTracker {
+                    tracker,
+                    target: *target,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Wait { duration } => {
                     noon::AnimationCompositionRequest::Wait {
                         duration: *duration,
@@ -1474,6 +1488,7 @@ impl CanonicalAuthoringScene {
                     ..
                 } => output.push((*entering_id, target)),
                 OrdinaryCompositionChild::Wait { .. } => {}
+                OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
                     for child in children {
                         bindings(child, output);
@@ -1552,6 +1567,35 @@ impl CanonicalAuthoringScene {
                                 .into(),
                         );
                     }
+                    continue;
+                }
+                OrdinaryCompositionChild::ValueTracker {
+                    tracker,
+                    target,
+                    options,
+                } => {
+                    if !tracker.is_in_store(self.scene.store()) {
+                        return Err(
+                            "ordinary composition ValueTracker belongs to another authoring store"
+                                .into(),
+                        );
+                    }
+                    self.scene
+                        .store()
+                        .borrow()
+                        .semantic_signal_state(tracker.node_id())
+                        .map_err(|error| error.to_string())?;
+                    if !target.is_finite() {
+                        return Err(
+                            "ordinary composition ValueTracker target must be finite".into()
+                        );
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
                     continue;
                 }
                 OrdinaryCompositionChild::Composition {
@@ -2558,6 +2602,26 @@ mod wasm {
                 .rate_func(rate_function))
         }
 
+        fn optional_options(
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<noon_core::AnimationOptions, JsValue> {
+            let mut options = noon_core::AnimationOptions::new();
+            if let Some(run_time) = child_run_time {
+                options = options.run_time(run_time);
+            }
+            if let Some(rate_function) = rate_function {
+                let rate_function = noon_core::RateFunction::from_semantic_id(&rate_function)
+                    .ok_or_else(|| {
+                        js_error(format!(
+                            "unsupported animation rate function semantic ID {rate_function:?}"
+                        ))
+                    })?;
+                options = options.rate_func(rate_function);
+            }
+            Ok(options)
+        }
+
         fn push_target(
             &mut self,
             object_id: &str,
@@ -2892,6 +2956,26 @@ mod wasm {
             }
             self.children.push(OrdinaryCompositionChild::Wait {
                 duration: child_run_time,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendValueTracker)]
+        pub fn append_value_tracker(
+            &mut self,
+            tracker: &WasmValueTrackerHandle,
+            target: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<(), JsValue> {
+            if !target.is_finite() {
+                return Err(js_error("ValueTracker target must be finite"));
+            }
+            tracker.tracker_in(&tracker.store)?;
+            self.children.push(OrdinaryCompositionChild::ValueTracker {
+                tracker: tracker.tracker.clone(),
+                target,
+                options: Self::optional_options(child_run_time, rate_function)?,
             });
             Ok(())
         }
@@ -5593,6 +5677,76 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_mixed_candidate_activates_scalar_and_object_or_rolls_back_together() {
+        let mut context = CanonicalAuthoringScene::default();
+        let square = context.scene.square(0.8).unwrap();
+        context.bind_mobject(ObjectId::new(0), &square).unwrap();
+        let tracker = context.create_value_tracker(0.0).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        let invalid = [
+            OrdinaryCompositionChild::Rotate {
+                entering_id: None,
+                target: square.clone(),
+                angle: std::f64::consts::PI,
+                options,
+            },
+            OrdinaryCompositionChild::ValueTracker {
+                tracker: tracker.clone(),
+                target: f64::NAN,
+                options,
+            },
+        ];
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &invalid,
+                composition,
+                play,
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let valid = [
+            OrdinaryCompositionChild::Rotate {
+                entering_id: None,
+                target: square.clone(),
+                angle: std::f64::consts::PI,
+                options,
+            },
+            OrdinaryCompositionChild::ValueTracker {
+                tracker: tracker.clone(),
+                target: 4.0,
+                options,
+            },
+        ];
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &valid,
+                composition,
+                play,
+            )
+            .unwrap();
+        assert_eq!(end, 1.0);
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(0.5).unwrap();
+        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
+        assert!(
+            (player.live_effective(&square).unwrap().transform.rotation
+                - std::f32::consts::FRAC_PI_2)
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
     fn mixed_sequence_keeps_rotate_before_transform_in_one_shared_segment() {
         let mut context = CanonicalAuthoringScene::default();
         let rotating = context.scene.square(0.8).unwrap();
@@ -6454,7 +6608,7 @@ mod tests {
             .unwrap()
             .scalar_timeline()
             .to_vec();
-        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = timeline[1] else {
+        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = &timeline[1] else {
             panic!("expected a second scalar track")
         };
         assert_eq!(second.timing().start_time, 3.0);

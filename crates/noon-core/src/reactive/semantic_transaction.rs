@@ -15,7 +15,7 @@ use super::{
     SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
     SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
 };
-use crate::TrackTiming;
+use crate::{CompositionTimeMap, TrackTiming};
 
 mod prepared;
 pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
@@ -61,6 +61,7 @@ pub enum SemanticMutation {
         from: f64,
         to: f64,
         timing: TrackTiming,
+        time_map: CompositionTimeMap,
     },
     SetScalarSignalAt {
         signal: SemanticNodeId,
@@ -379,11 +380,29 @@ impl SemanticMutationTransaction {
         to: f64,
         timing: TrackTiming,
     ) -> &mut Self {
+        self.add_scalar_signal_track_with_time_map(
+            signal,
+            from,
+            to,
+            timing,
+            CompositionTimeMap::identity(),
+        )
+    }
+
+    pub fn add_scalar_signal_track_with_time_map(
+        &mut self,
+        signal: SemanticNodeId,
+        from: f64,
+        to: f64,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+    ) -> &mut Self {
         self.mutations.push(SemanticMutation::AddScalarSignalTrack {
             signal,
             from,
             to,
             timing,
+            time_map,
         });
         self
     }
@@ -768,6 +787,24 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::Add {
                     target: target.into(),
                 },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage one scalar input animation without allocating object identity.
+    pub fn create_scalar_animation(
+        &mut self,
+        signal: SemanticNodeId,
+        target: f64,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::SetScalar { signal, target },
                 options,
             ),
         });
@@ -1292,6 +1329,7 @@ impl SemanticMutationTransaction {
                     from,
                     to,
                     timing,
+                    time_map,
                 } => {
                     if targets.contains(&SemanticMutationKey::Signal(*signal)) {
                         return Err(SemanticMutationTransactionError::Signal {
@@ -1299,15 +1337,21 @@ impl SemanticMutationTransaction {
                             error: SemanticSignalError::TimelineOwnedSignal { signal: *signal },
                         });
                     }
-                    let track = SemanticScalarSignalTrack::new(*signal, *from, *to, *timing);
+                    let track = SemanticScalarSignalTrack::new_with_time_map(
+                        *signal,
+                        *from,
+                        *to,
+                        *timing,
+                        time_map.clone(),
+                    );
                     let existing_last = store
                         .semantic_signal_state(*signal)
                         .ok()
-                        .and_then(|state| state.scalar_timeline().last().copied());
+                        .and_then(|state| state.scalar_timeline().last());
                     let timeline = staged_signal_timeline.entry(*signal).or_default();
-                    let previous = timeline.last().copied().or(existing_last);
+                    let previous = timeline.last().or(existing_last);
                     store
-                        .validate_semantic_scalar_signal_track_after(track, previous)
+                        .validate_semantic_scalar_signal_track_after(&track, previous)
                         .map_err(|error| SemanticMutationTransactionError::SignalTrack {
                             index,
                             error,
@@ -1330,12 +1374,12 @@ impl SemanticMutationTransaction {
                     let existing_last = store
                         .semantic_signal_state(*signal)
                         .ok()
-                        .and_then(|state| state.scalar_timeline().last().copied());
+                        .and_then(|state| state.scalar_timeline().last());
                     let timeline = staged_signal_timeline.entry(*signal).or_default();
-                    let previous = timeline.last().copied().or(existing_last);
+                    let previous = timeline.last().or(existing_last);
                     store
                         .validate_semantic_scalar_signal_entry_after(
-                            SemanticScalarSignalTimelineEntry::Hold(hold),
+                            &SemanticScalarSignalTimelineEntry::Hold(hold),
                             previous,
                         )
                         .map_err(|error| SemanticMutationTransactionError::SignalTrack {

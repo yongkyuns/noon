@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BinaryHeap},
+    collections::{BTreeMap, BinaryHeap, HashSet},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -346,6 +346,20 @@ pub struct PreparedComputeInputEnrollment {
     value: ReactiveValue,
 }
 
+/// One validated sparse append of multiple input signals at a single compute revision.
+#[derive(Clone, Debug)]
+pub struct PreparedComputeInputEnrollmentBatch {
+    identity: u64,
+    expected_revision: u64,
+    inputs: Vec<(SignalId, ReactiveValue)>,
+}
+
+impl PreparedComputeInputEnrollmentBatch {
+    pub fn is_empty(&self) -> bool {
+        self.inputs.is_empty()
+    }
+}
+
 impl PreparedComputeInputBatch {
     pub fn update(&self) -> &ReactiveUpdate {
         &self.update
@@ -445,6 +459,36 @@ impl ComputeState {
         })
     }
 
+    /// Preflight an exact-ID sparse input append as one atomic compute revision.
+    pub fn prepare_input_enrollment_batch(
+        &self,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<PreparedComputeInputEnrollmentBatch, ReactiveError> {
+        let mut signals = HashSet::with_capacity(inputs.len());
+        for (signal, value) in inputs {
+            if self.program.reference.signal_indices.contains_key(signal)
+                || !signals.insert(*signal)
+            {
+                return Err(ReactiveError::DuplicateSignal(*signal));
+            }
+            validate_reactive_value(*signal, value)?;
+        }
+        self.program
+            .reference
+            .signals
+            .len()
+            .checked_add(inputs.len())
+            .ok_or(ReactiveError::SignalIdExhausted)?;
+        self.revision
+            .checked_add(1)
+            .ok_or(ReactiveError::ComputeRevisionExhausted)?;
+        Ok(PreparedComputeInputEnrollmentBatch {
+            identity: self.identity,
+            expected_revision: self.revision,
+            inputs: inputs.to_vec(),
+        })
+    }
+
     pub fn commit_input_enrollment(
         &mut self,
         prepared: PreparedComputeInputEnrollment,
@@ -467,28 +511,62 @@ impl ComputeState {
         if self.program.reference.signal_indices.contains_key(&signal) {
             return Err(PreparedComputeCommitError::DuplicateSignal(signal));
         }
-        let index = self.program.reference.signals.len();
-        self.program.reference.signal_indices.insert(signal, index);
-        self.program.reference.signals.push(super::CompiledSignal {
-            id: signal,
-            source: SignalSource::Input(prepared.value.clone()),
-        });
-        self.program.reference.topological_order.push(index);
-        self.program.reference.topological_rank.push(index);
-        self.program.reference.dependents.push(Vec::new());
-        self.program.reference.bindings_by_signal.push(Vec::new());
-        self.program
-            .reference
-            .initial_values
-            .push(prepared.value.clone());
-        self.program.kernels.push(None);
-        self.values.push(prepared.value);
-        self.queued.push(false);
+        self.append_input_signal(signal, prepared.value);
         self.revision = self
             .revision
             .checked_add(1)
             .ok_or(PreparedComputeCommitError::RevisionExhausted)?;
         Ok(())
+    }
+
+    /// Commit a prepared sparse input append with one revision transition.
+    pub fn commit_input_enrollment_batch(
+        &mut self,
+        prepared: PreparedComputeInputEnrollmentBatch,
+    ) -> Result<(), PreparedComputeCommitError> {
+        if prepared.identity != self.identity {
+            return Err(PreparedComputeCommitError::ForeignState);
+        }
+        if prepared.expected_revision != self.revision {
+            return Err(PreparedComputeCommitError::StaleRevision);
+        }
+        if prepared.inputs.is_empty() {
+            return Ok(());
+        }
+        let next_revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(PreparedComputeCommitError::RevisionExhausted)?;
+        let mut signals = HashSet::with_capacity(prepared.inputs.len());
+        for (signal, _) in &prepared.inputs {
+            if self.program.reference.signal_indices.contains_key(signal)
+                || !signals.insert(*signal)
+            {
+                return Err(PreparedComputeCommitError::DuplicateSignal(*signal));
+            }
+        }
+        for (signal, value) in prepared.inputs {
+            self.append_input_signal(signal, value);
+        }
+        self.revision = next_revision;
+        Ok(())
+    }
+
+    fn append_input_signal(&mut self, signal: SignalId, value: ReactiveValue) {
+        let index = self.program.reference.signals.len();
+        self.program.reference.signal_indices.insert(signal, index);
+        self.program.reference.signals.push(super::CompiledSignal {
+            id: signal,
+            source: SignalSource::Input(value.clone()),
+        });
+        self.program.reference.topological_order.push(index);
+        self.program.reference.topological_rank.push(index);
+        self.program.reference.dependents.push(Vec::new());
+        self.program.reference.bindings_by_signal.push(Vec::new());
+        self.program.reference.initial_values.push(value.clone());
+        self.program.kernels.push(None);
+        self.values.push(value);
+        self.queued.push(false);
     }
 
     pub fn set_input(
@@ -1309,6 +1387,70 @@ mod tests {
             Err(PreparedComputeCommitError::DuplicateSignal(existing))
         );
         assert_eq!(state.value(existing), Some(&ReactiveValue::Scalar(1.0)));
+    }
+
+    #[test]
+    fn prepared_enrollment_batch_commits_two_inputs_at_one_revision() {
+        let scene = SemanticScene::new();
+        let mut state = scene
+            .compile_reactive()
+            .unwrap()
+            .into_compute()
+            .unwrap()
+            .instantiate();
+        let first = SignalId::new(41);
+        let second = SignalId::new(42);
+        let prepared = state
+            .prepare_input_enrollment_batch(&[
+                (first, ReactiveValue::Scalar(1.0)),
+                (second, ReactiveValue::Scalar(2.0)),
+            ])
+            .unwrap();
+        let revision = state.revision;
+
+        state.commit_input_enrollment_batch(prepared).unwrap();
+        assert_eq!(state.revision, revision + 1);
+        assert_eq!(state.value(first), Some(&ReactiveValue::Scalar(1.0)));
+        assert_eq!(state.value(second), Some(&ReactiveValue::Scalar(2.0)));
+    }
+
+    #[test]
+    fn enrollment_batch_rejects_duplicates_and_stale_preflight_without_mutation() {
+        let scene = SemanticScene::new();
+        let mut state = scene
+            .compile_reactive()
+            .unwrap()
+            .into_compute()
+            .unwrap()
+            .instantiate();
+        let duplicate = SignalId::new(41);
+        assert!(matches!(
+            state.prepare_input_enrollment_batch(&[
+                (duplicate, ReactiveValue::Scalar(1.0)),
+                (duplicate, ReactiveValue::Scalar(2.0)),
+            ]),
+            Err(ReactiveError::DuplicateSignal(signal)) if signal == duplicate
+        ));
+        assert_eq!(state.value(duplicate), None);
+
+        let stale_signal = SignalId::new(42);
+        let current_signal = SignalId::new(43);
+        let stale = state
+            .prepare_input_enrollment_batch(&[(stale_signal, ReactiveValue::Scalar(3.0))])
+            .unwrap();
+        let current = state
+            .prepare_input_enrollment_batch(&[(current_signal, ReactiveValue::Scalar(4.0))])
+            .unwrap();
+        state.commit_input_enrollment_batch(current).unwrap();
+        assert_eq!(
+            state.commit_input_enrollment_batch(stale),
+            Err(PreparedComputeCommitError::StaleRevision)
+        );
+        assert_eq!(state.value(stale_signal), None);
+        assert_eq!(
+            state.value(current_signal),
+            Some(&ReactiveValue::Scalar(4.0))
+        );
     }
 
     fn next(state: &mut u64) -> u64 {

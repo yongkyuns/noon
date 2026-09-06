@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_detached_tracker_requires_explicit_live_association() {
+    fn detached_tracker_play_scopes_and_enrolls_with_its_activation() {
         let scene = Scene::new();
         let detached = scene
             .store()
@@ -415,26 +415,28 @@ mod tests {
         let tracker = ValueTracker::from_semantic_node(Rc::clone(scene.store()), detached);
         let mut session = scene.execution_session().unwrap();
         assert!(session.effective_signal_value(detached).is_none());
-        assert!(
-            scene
-                .live(&mut session)
-                .declare_and_activate_value_tracker(
-                    &tracker,
-                    5.0,
-                    1.0,
-                    noon_core::RateFunction::Linear,
-                )
-                .is_err()
-        );
-
-        scene
+        let before = session.publication_context().scene_revision();
+        let segment = scene
             .live(&mut session)
-            .associate_value_tracker(&tracker)
+            .declare_and_activate_value_tracker(&tracker, 5.0, 1.0, noon_core::RateFunction::Linear)
             .unwrap();
+        assert_eq!(
+            session.publication_context().scene_revision(),
+            before.checked_next().unwrap()
+        );
+        assert!(scene
+            .store()
+            .borrow()
+            .is_semantic_signal_scoped(scene.root(), tracker.node_id()));
         assert_eq!(
             session.effective_signal_value(detached),
             Some(&noon_core::ReactiveValue::Scalar(4.0))
         );
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
     }
 
     #[test]
@@ -532,7 +534,7 @@ mod tests {
             .unwrap()
             .scalar_timeline();
         assert_eq!(timeline.len(), 2);
-        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = timeline[1] else {
+        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = &timeline[1] else {
             panic!("expected a second scalar track")
         };
         assert_eq!(second.from(), 4.0);
