@@ -78,6 +78,7 @@ impl NativeExecutionSource for StaticExecutionSource {
     fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError> {
         self.callbacks
             .advance_to(&mut self.session, requested_time)
+            .map(|_| ())
             .map_err(Into::into)
     }
 

@@ -29,6 +29,7 @@ use crate::{
 /// time, and interpolation remain in the shared session.
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+#[derive(Debug)]
 pub struct WasmLiveSegmentWake {
     present_now: bool,
     cadence: BrowserExecutionCadence,
