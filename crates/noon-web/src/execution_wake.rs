@@ -42,10 +42,8 @@ impl BrowserExecutionWakePlan {
     /// boundary. A pure `wait()` can therefore request a timer without manufacturing
     /// a no-op runtime track or giving the browser its own timeline model.
     pub fn from_segment(session: &ExecutionSession, segment: ExecutionSegment) -> Self {
-        Self::from_parts(
-            session.wake_state().frame_pending(),
-            session.segment_state(segment).timeline(),
-        )
+        let wake = session.wake_state();
+        Self::from_parts(wake.frame_pending(), session.segment_state(segment).timeline())
     }
 
     /// Project one target-neutral runtime wake observation into browser primitives.

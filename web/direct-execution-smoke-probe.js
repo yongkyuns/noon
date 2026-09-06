@@ -3,6 +3,7 @@ import {
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
   createDirectNativeSignalsSmokeRenderer,
+  createDirectOrdinaryAffineContinuationSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
@@ -280,6 +281,86 @@ async function directOrdinaryAffinePlayProof(expectedBackend) {
   }
   if (endpointLuma < 250 || firstEndpointLuma > 60 || shiftedLuma > 60) {
     throw new Error(`direct ordinary affine did not render its x=5 endpoint ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
+async function directOrdinaryAffineContinuationProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryAffineContinuationSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow || initial.cadence !== "animation-frame") {
+    throw new Error(`direct continuation did not start its shared animation: ${JSON.stringify(initial)}`);
+  }
+  await presentDirectFrame(renderer);
+
+  if (!renderer.advanceDirectRealtime(1000)) {
+    throw new Error("direct continuation did not publish its first midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const firstMidpointLuma = await sampleRenderedNeighborhood(canvas, 1, -0.5);
+
+  if (!renderer.advanceDirectRealtime(2000)) {
+    throw new Error("direct continuation did not publish its first endpoint");
+  }
+  await presentDirectFrame(renderer);
+  const firstEndpointLuma = await sampleRenderedNeighborhood(canvas, 2, -1);
+  const waitDirective = JSON.parse(renderer.directWakeDirectiveJson(2000));
+  const noSyntheticWaitDraw = renderer.render() === false;
+  if (waitDirective.cadence !== "timer" || waitDirective.delayMs < 999 || waitDirective.delayMs > 1001) {
+    throw new Error(`direct continuation did not retain its shared wait deadline: ${JSON.stringify(waitDirective)}`);
+  }
+
+  if (!renderer.advanceDirectRealtime(3000)) {
+    throw new Error("direct continuation did not resume from its wait endpoint");
+  }
+  await presentDirectFrame(renderer);
+  const resumedEditLuma = await sampleRenderedNeighborhood(canvas, 3, -1);
+
+  if (!renderer.advanceDirectRealtime(3500)) {
+    throw new Error("direct continuation did not publish its second midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const secondMidpointLuma = await sampleRenderedNeighborhood(canvas, 4, -1);
+
+  if (!renderer.advanceDirectRealtime(4000)) {
+    throw new Error("direct continuation did not publish its final endpoint");
+  }
+  await presentDirectFrame(renderer);
+  const finalLuma = await sampleRenderedNeighborhood(canvas, 5, -1);
+  const finalDirective = JSON.parse(renderer.directWakeDirectiveJson(4000));
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    firstMidpointLuma,
+    firstEndpointLuma,
+    resumedEditLuma,
+    secondMidpointLuma,
+    finalLuma,
+    noSyntheticWaitDraw,
+    waitDelayMs: waitDirective.delayMs,
+    finalCadence: finalDirective.cadence,
+  };
+  if (metrics.backend !== expectedBackend || metrics.authoredTime !== 4) {
+    throw new Error(`direct continuation selected an invalid runtime ${JSON.stringify(metrics)}`);
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
+    throw new Error(`direct continuation produced invalid renderer metrics ${JSON.stringify(metrics)}`);
+  }
+  if (
+    firstMidpointLuma < 180 ||
+    firstEndpointLuma < 180 ||
+    resumedEditLuma < 180 ||
+    secondMidpointLuma < 180 ||
+    finalLuma < 180 ||
+    !noSyntheticWaitDraw ||
+    metrics.finalCadence !== "idle"
+  ) {
+    throw new Error(`direct continuation pixels or lifecycle are invalid ${JSON.stringify(metrics)}`);
   }
   return metrics;
 }
@@ -606,6 +687,7 @@ async function start() {
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
+  metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
   metrics.ordinaryCompositionPlay = await directOrdinaryCompositionPlayProof(expectedBackend);
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);

@@ -347,6 +347,29 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM ordinary affine play retained an earlier barrier position",
   );
   assert.equal(
+    direct.metrics.ordinaryAffineContinuation?.backend,
+    expectedBackend,
+    "direct Rust/WASM continuation did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryAffineContinuation?.authoredTime,
+    4,
+    "direct Rust/WASM continuation did not retain its shared authored time",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffineContinuation?.firstMidpointLuma >= 180 &&
+      direct.metrics.ordinaryAffineContinuation?.secondMidpointLuma >= 180 &&
+      direct.metrics.ordinaryAffineContinuation?.finalLuma >= 180,
+    "direct Rust/WASM continuation did not visibly render both midpoints and final endpoint",
+  );
+  assert.ok(
+    direct.metrics.ordinaryAffineContinuation?.noSyntheticWaitDraw &&
+      direct.metrics.ordinaryAffineContinuation?.waitDelayMs >= 999 &&
+      direct.metrics.ordinaryAffineContinuation?.waitDelayMs <= 1001 &&
+      direct.metrics.ordinaryAffineContinuation?.finalCadence === "idle",
+    "direct Rust/WASM continuation did not preserve its wait deadline and final resume lifecycle",
+  );
+  assert.equal(
     direct.metrics.ordinaryCompositionPlay?.backend,
     expectedBackend,
     "direct Rust/WASM ordinary composition did not use the selected renderer backend",

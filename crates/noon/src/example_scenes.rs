@@ -4,8 +4,9 @@ use std::error::Error;
 
 use crate::{
     AnimationOptions, Color, ExecutionSession, ExecutionSessionInputError, HostCallbackId,
-    RateFunction, ReactiveValue, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind,
-    SemanticPaint, SemanticVec3, TransformToRequest, Vec2,
+    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, ReactiveValue,
+    RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticPaint, SemanticVec3,
+    TransformToRequest, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -210,6 +211,168 @@ pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
     }
     assert_eq!(session.frame().time, 4.0);
     Ok(session)
+}
+
+/// Ordinary Rust continuation used unchanged by native and direct Rust/WASM hosts.
+///
+/// It owns only direct Rust locals and shared semantic handles. Every interval,
+/// endpoint, completion, and authored mutation goes through the borrowed
+/// [`LiveSession`], so a host only drives the returned segment and admits its
+/// renderer publication.
+pub struct OrdinaryAffineContinuation {
+    circle: Mobject,
+    first_target: Mobject,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryAffineContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        let linear = |duration| {
+            AnimationOptions::new()
+                .run_time(duration)
+                .rate_func(RateFunction::Linear)
+        };
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.declare_and_activate_transform_to(
+                    &self.circle,
+                    &self.first_target,
+                    linear(2.0),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                self.stage = 2;
+                live.wait_segment(1.0)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            2 => {
+                // This resumes after the wait's no-op endpoint. It proves that
+                // authored edits and late targets keep using the one live session.
+                live.shift(&self.circle, 1.0, 0.0)
+                    .map_err(|error| error.to_string())?;
+                let late_target = live
+                    .target_editor(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                live.set_translation(&late_target, 5.0, -1.0)
+                    .map_err(|error| error.to_string())?;
+                self.stage = 3;
+                live.declare_and_activate_transform_to(&self.circle, &late_target, linear(1.0))
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            3 => {
+                self.stage = 4;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary affine continuation resumed after it finished".to_owned()),
+        }
+    }
+}
+
+/// Build the ordinary affine continuation program without selecting a platform host.
+///
+/// The scene matches the ordinary affine example: an opaque blue radius-0.4 circle
+/// moves to `(2, -1)` over two seconds, waits one second, is shifted to `(3, -1)`,
+/// then a late live target moves it to `(5, -1)` over one second.
+pub fn ordinary_affine_continuation_program(
+) -> Result<LiveProgram<OrdinaryAffineContinuation>, String> {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.4).map_err(|error| error.to_string())?;
+    circle
+        .set_fill(0.0, 0.4, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
+
+    let mut first_target = circle.target_editor().map_err(|error| error.to_string())?;
+    first_target
+        .set_translation(2.0, -1.0)
+        .map_err(|error| error.to_string())?;
+    scene
+        .into_live_program(OrdinaryAffineContinuation {
+            circle,
+            first_target,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use crate::LiveProgramStatus;
+
+    #[test]
+    fn ordinary_affine_continuation_uses_shared_segments_and_publication_admission() {
+        let mut program = ordinary_affine_continuation_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[0].transform.translation,
+            Vec2::new(1.0, -0.5)
+        );
+
+        let endpoint = program.drive_to(&mut callbacks, 2.0).unwrap();
+        assert!(matches!(endpoint, LiveProgramStatus::PublicationPending(_)));
+        let publication = program.take_renderer_publication().context();
+        assert!(matches!(
+            program.admit_publication(publication).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        ));
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 3.0).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        ));
+        assert!(
+            !program.session().wake_state().frame_pending(),
+            "an unchanged wait endpoint must not create a synthetic renderer publication"
+        );
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 3.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[0].transform.translation,
+            Vec2::new(4.0, -1.0)
+        );
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 4.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert_eq!(
+            program.session().frame().objects[0].transform.translation,
+            Vec2::new(5.0, -1.0)
+        );
+    }
 }
 
 /// Execute paired flat Parallel and Sequence compositions on one live runtime.

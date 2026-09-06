@@ -117,6 +117,16 @@ pub async fn create_direct_ordinary_affine_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Browser proof that a direct Rust continuation keeps one scene/session across
+/// visible play, wait, authored edit, late target, and exact renderer admission.
+#[wasm_bindgen(js_name = createDirectOrdinaryAffineContinuationSmokeRenderer)]
+pub async fn create_direct_ordinary_affine_continuation_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_affine_continuation_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that flat Parallel/Sequence composition uses the same typed
 /// target-neutral session as the native Rust example.
 #[wasm_bindgen(js_name = createDirectOrdinaryCompositionPlaySmokeRenderer)]

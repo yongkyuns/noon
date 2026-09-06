@@ -72,10 +72,13 @@ for (const forbidden of [
 for (const required of [
   "let camera = session.camera().map_err(js_error)?;",
   "self.sync_camera(camera)?;",
-  "BrowserExecutionWakePlan::from_session(session)",
-  "session.wake_state().frame_pending()",
+  "BrowserExecutionWakePlan::from_runtime(self.program.wake_state())",
+  "LiveProgram",
+  "program.drive_to",
+  "program.admit_publication",
+  "direct.drive_to(target_time)",
   "session.take_renderer_publication()",
-  ".advance_to(session, target_time)",
+  ".admit_rendered_publication(publication_context)",
   "directWakeDirectiveJson",
   "advanceDirectRealtime",
 ]) {
@@ -85,7 +88,7 @@ for (const required of [
   );
 }
 assert.equal(
-  directCanvasHost.includes("let publication = session.take_renderer_publication();"),
+  directCanvasHost.includes("let publication = direct.take_renderer_publication();"),
   true,
   "direct canvas host must consume one typed publication only after presentation work begins",
 );
@@ -133,6 +136,7 @@ for (const required of [
   "textDrawCalls",
   "createDirectAffineCallbackSmokeRenderer",
   "createDirectAffineCompletionSmokeRenderer",
+  "createDirectOrdinaryAffineContinuationSmokeRenderer",
   "createDirectOrdinaryAffinePlaySmokeRenderer",
   "createDirectOrdinaryCompositionPlaySmokeRenderer",
   "createDirectOrdinaryStylePlaySmokeRenderer",
@@ -190,6 +194,8 @@ for (const required of [
   "direct.metrics.affineCompletion?.endpointLuma",
   "direct.metrics.ordinaryAffinePlay?.authoredTime",
   "direct.metrics.ordinaryAffinePlay?.endpointLuma",
+  "direct.metrics.ordinaryAffineContinuation?.authoredTime",
+  "direct.metrics.ordinaryAffineContinuation?.secondMidpointLuma",
   "direct.metrics.ordinaryCompositionPlay?.leftColor",
   "direct.metrics.ordinaryCompositionPlay?.rightColor",
   "direct.metrics.ordinaryStylePlay?.endpointColor",

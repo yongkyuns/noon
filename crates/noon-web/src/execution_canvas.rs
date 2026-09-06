@@ -13,7 +13,10 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 mod wasm {
     use std::mem;
 
-    use noon::{ExecutionSession, RustHostCallbackTable};
+    use noon::{
+        ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RendererPublication,
+        RustHostCallbackTable,
+    };
     use noon_core::{
         Camera2DState, GeometryRef, NativeEventOccurrence, NativeEventSource, NativeInputValue,
         NativeStateSource, ObjectId, ReactiveValue, Rect, SemanticNodeId, Transform2D, Vec2,
@@ -160,22 +163,229 @@ mod wasm {
         timestamp_query_supported: bool,
     }
 
-    struct DirectExecutionSource {
-        session: ExecutionSession,
-        callbacks: RustHostCallbackTable,
-        next_native_event_sequence: u64,
+    /// Narrow direct-host view of a shared live continuation program.
+    ///
+    /// A continuation keeps its scene and session encapsulated; the canvas may
+    /// only drive its current segment, consume a renderer publication, admit that
+    /// exact publication after presentation, and forward typed platform input.
+    trait DirectLiveProgram {
+        fn session(&self) -> &ExecutionSession;
+        fn wake_plan(&self) -> BrowserExecutionWakePlan;
+        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery;
+        /// Returns whether this operation resumed a subsequent continuation stage.
+        fn drive_to(&mut self, requested_time: f64) -> Result<bool, JsValue>;
+        fn take_renderer_publication(&mut self) -> RendererPublication<'_>;
+        fn admit_rendered_publication(
+            &mut self,
+            publication: noon_core::PublicationContext,
+        ) -> Result<bool, JsValue>;
+        fn set_native_state_input(
+            &mut self,
+            source: NativeStateSource,
+            value: NativeInputValue,
+        ) -> Result<(), JsValue>;
+        fn emit_native_event(
+            &mut self,
+            occurrence: NativeEventOccurrence,
+        ) -> Result<(), JsValue>;
     }
 
-    impl DirectExecutionSource {
+    struct DirectLiveProgramAdapter<C> {
+        program: LiveProgram<C>,
+        callbacks: RustHostCallbackTable,
+    }
+
+    impl<C> DirectLiveProgramAdapter<C>
+    where
+        C: LiveContinuation + 'static,
+        C::Error: std::fmt::Display,
+    {
+        fn new(mut program: LiveProgram<C>) -> Result<Self, JsValue> {
+            let status = program.resume().map_err(js_error)?;
+            if !matches!(status, LiveProgramStatus::Awaiting(_) | LiveProgramStatus::Finished) {
+                return Err(js_message(
+                    "direct live continuation did not begin at an await or finished state",
+                ));
+            }
+            Ok(Self {
+                program,
+                callbacks: RustHostCallbackTable::new(),
+            })
+        }
+
+        fn resume_if_ready(&mut self) -> Result<bool, JsValue> {
+            if matches!(self.program.status(), LiveProgramStatus::ReadyToResume) {
+                self.program.resume().map_err(js_error)?;
+                return Ok(true);
+            }
+            Ok(false)
+        }
+    }
+
+    impl<C> DirectLiveProgram for DirectLiveProgramAdapter<C>
+    where
+        C: LiveContinuation + 'static,
+        C::Error: std::fmt::Display,
+    {
+        fn session(&self) -> &ExecutionSession {
+            self.program.session()
+        }
+
+        fn wake_plan(&self) -> BrowserExecutionWakePlan {
+            BrowserExecutionWakePlan::from_runtime(self.program.wake_state())
+        }
+
+        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery {
+            self.program.query_viewport(bounds)
+        }
+
+        fn drive_to(&mut self, requested_time: f64) -> Result<bool, JsValue> {
+            self.program
+                .drive_to(&mut self.callbacks, requested_time)
+                .map_err(js_error)?;
+            self.resume_if_ready()
+        }
+
+        fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+            self.program.take_renderer_publication()
+        }
+
+        fn admit_rendered_publication(
+            &mut self,
+            publication: noon_core::PublicationContext,
+        ) -> Result<bool, JsValue> {
+            if !matches!(self.program.status(), LiveProgramStatus::PublicationPending(_)) {
+                return Ok(false);
+            }
+            self.program.admit_publication(publication).map_err(js_error)?;
+            self.resume_if_ready()
+        }
+
         fn set_native_state_input(
             &mut self,
             source: NativeStateSource,
             value: NativeInputValue,
         ) -> Result<(), JsValue> {
-            self.session
+            self.program
                 .set_native_state_input(source, value)
-                .map_err(js_error)?;
-            Ok(())
+                .map(|_| ())
+                .map_err(js_error)
+        }
+
+        fn emit_native_event(
+            &mut self,
+            occurrence: NativeEventOccurrence,
+        ) -> Result<(), JsValue> {
+            self.program
+                .emit_native_event(occurrence)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+    }
+
+    enum DirectSourceAuthority {
+        Session {
+            session: ExecutionSession,
+            callbacks: RustHostCallbackTable,
+        },
+        Program(Box<dyn DirectLiveProgram>),
+    }
+
+    struct DirectExecutionSource {
+        authority: DirectSourceAuthority,
+        next_native_event_sequence: u64,
+    }
+
+    impl DirectExecutionSource {
+        fn from_session(session: ExecutionSession, callbacks: RustHostCallbackTable) -> Self {
+            Self {
+                authority: DirectSourceAuthority::Session { session, callbacks },
+                next_native_event_sequence: 0,
+            }
+        }
+
+        fn from_live_program<C>(program: LiveProgram<C>) -> Result<Self, JsValue>
+        where
+            C: LiveContinuation + 'static,
+            C::Error: std::fmt::Display,
+        {
+            Ok(Self {
+                authority: DirectSourceAuthority::Program(Box::new(
+                    DirectLiveProgramAdapter::new(program)?,
+                )),
+                next_native_event_sequence: 0,
+            })
+        }
+
+        fn session(&self) -> &ExecutionSession {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => session,
+                DirectSourceAuthority::Program(program) => program.session(),
+            }
+        }
+
+        fn session_mut(&mut self) -> Option<&mut ExecutionSession> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => Some(session),
+                DirectSourceAuthority::Program(_) => None,
+            }
+        }
+
+        fn wake_plan(&self) -> BrowserExecutionWakePlan {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    BrowserExecutionWakePlan::from_session(session)
+                }
+                DirectSourceAuthority::Program(program) => program.wake_plan(),
+            }
+        }
+
+        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session.query_viewport(bounds),
+                DirectSourceAuthority::Program(program) => program.query_viewport(bounds),
+            }
+        }
+
+        fn drive_to(&mut self, requested_time: f64) -> Result<bool, JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, callbacks } => callbacks
+                    .advance_to(session, requested_time)
+                    .map(|_| false)
+                    .map_err(js_error),
+                DirectSourceAuthority::Program(program) => program.drive_to(requested_time),
+            }
+        }
+
+        fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session.take_renderer_publication(),
+                DirectSourceAuthority::Program(program) => program.take_renderer_publication(),
+            }
+        }
+
+        fn admit_rendered_publication(
+            &mut self,
+            publication: noon_core::PublicationContext,
+        ) -> Result<bool, JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { .. } => Ok(false),
+                DirectSourceAuthority::Program(program) => program.admit_rendered_publication(publication),
+            }
+        }
+
+        fn set_native_state_input(
+            &mut self,
+            source: NativeStateSource,
+            value: NativeInputValue,
+        ) -> Result<(), JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session
+                    .set_native_state_input(source, value)
+                    .map(|_| ())
+                    .map_err(js_error),
+                DirectSourceAuthority::Program(program) => program.set_native_state_input(source, value),
+            }
         }
 
         fn emit_native_event(&mut self, source: NativeEventSource) -> Result<(), JsValue> {
@@ -183,9 +393,14 @@ mod wasm {
             let next = sequence
                 .checked_add(1)
                 .ok_or_else(|| js_message("native input event sequence exhausted"))?;
-            self.session
-                .emit_native_event(NativeEventOccurrence::new(sequence, source))
-                .map_err(js_error)?;
+            let occurrence = NativeEventOccurrence::new(sequence, source);
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => session
+                    .emit_native_event(occurrence)
+                    .map(|_| ())
+                    .map_err(js_error)?,
+                DirectSourceAuthority::Program(program) => program.emit_native_event(occurrence)?,
+            }
             self.next_native_event_sequence = next;
             Ok(())
         }
@@ -200,7 +415,7 @@ mod wasm {
         fn frame(&self) -> Option<&FrameState> {
             match self {
                 Self::Transport(mirror) => mirror.frame(),
-                Self::Direct(direct) => Some(direct.session.frame()),
+                Self::Direct(direct) => Some(direct.session().frame()),
             }
         }
 
@@ -208,7 +423,7 @@ mod wasm {
             match self {
                 Self::Transport(mirror) => mirror.live_object_count(),
                 Self::Direct(direct) => direct
-                    .session
+                    .session()
                     .frame()
                     .presences
                     .iter()
@@ -234,23 +449,14 @@ mod wasm {
         fn direct(&self) -> Option<&ExecutionSession> {
             match self {
                 Self::Transport(_) => None,
-                Self::Direct(direct) => Some(&direct.session),
+                Self::Direct(direct) => Some(direct.session()),
             }
         }
 
         fn direct_mut(&mut self) -> Option<&mut ExecutionSession> {
             match self {
                 Self::Transport(_) => None,
-                Self::Direct(direct) => Some(&mut direct.session),
-            }
-        }
-
-        fn direct_parts_mut(
-            &mut self,
-        ) -> Option<(&mut ExecutionSession, &mut RustHostCallbackTable)> {
-            match self {
-                Self::Transport(_) => None,
-                Self::Direct(direct) => Some((&mut direct.session, &mut direct.callbacks)),
+                Self::Direct(direct) => direct.session_mut(),
             }
         }
 
@@ -367,7 +573,7 @@ mod wasm {
             let changes_pending = match &self.source {
                 CanvasExecutionSource::Transport(_) => !self.pending_changes.is_empty(),
                 CanvasExecutionSource::Direct(direct) => {
-                    direct.session.wake_state().frame_pending()
+                    direct.session().wake_state().frame_pending()
                 }
             };
             if !self.drawable || !changes_pending {
@@ -646,17 +852,21 @@ mod wasm {
             let Some(target_time) = target_time else {
                 return Ok(false);
             };
-            let (pending, camera) = {
-                let (session, callbacks) = self.source.direct_parts_mut().ok_or_else(|| {
+            let (pending, camera, resumed) = {
+                let direct = self.source.direct_source_mut().ok_or_else(|| {
                     js_message("direct realtime APIs require a direct ExecutionSession source")
                 })?;
-                callbacks
-                    .advance_to(session, target_time)
-                    .map_err(js_error)?;
-                let camera = session.camera().map_err(js_error)?;
-                (session.wake_state().frame_pending(), camera)
+                let resumed = direct.drive_to(target_time)?;
+                let camera = direct.session().camera().map_err(js_error)?;
+                (direct.session().wake_state().frame_pending(), camera, resumed)
             };
             self.sync_camera(camera)?;
+            if resumed {
+                // The program has started a distinct canonical segment. Re-anchor
+                // only this derived wall conversion so late timer delivery or host
+                // rendering time is not charged to the new authored interval.
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            }
 
             let (next_plan, next_scene_time) = self.direct_wake_observation()?;
             self.direct_wake_clock
@@ -1056,11 +1266,34 @@ mod wasm {
             let camera = session.camera().map_err(js_error)?;
             Self::create_with_source(
                 canvas,
-                CanvasExecutionSource::Direct(DirectExecutionSource {
-                    session,
-                    callbacks,
-                    next_native_event_sequence: 0,
-                }),
+                CanvasExecutionSource::Direct(DirectExecutionSource::from_session(
+                    session, callbacks,
+                )),
+                FrameChanges::default(),
+                camera.center,
+                camera.height,
+            )
+            .await
+        }
+
+        /// Build the browser canvas host from one shared Rust continuation program.
+        ///
+        /// The program owns its consumed semantic scene, matching execution session,
+        /// continuation state, completion, and resume gates. JavaScript receives only
+        /// the normal canvas renderer and its derived RAF/timer directives.
+        pub async fn create_from_live_program<C>(
+            canvas: OffscreenCanvas,
+            program: LiveProgram<C>,
+        ) -> Result<Self, JsValue>
+        where
+            C: LiveContinuation + 'static,
+            C::Error: std::fmt::Display,
+        {
+            let source = DirectExecutionSource::from_live_program(program)?;
+            let camera = source.session().camera().map_err(js_error)?;
+            Self::create_with_source(
+                canvas,
+                CanvasExecutionSource::Direct(source),
                 FrameChanges::default(),
                 camera.center,
                 camera.height,
@@ -1166,8 +1399,8 @@ mod wasm {
                     js_message("typed native input requires a direct ExecutionSession source")
                 })?;
                 apply(direct)?;
-                let camera = direct.session.camera().map_err(js_error)?;
-                (direct.session.wake_state().frame_pending(), camera)
+                let camera = direct.session().camera().map_err(js_error)?;
+                (direct.session().wake_state().frame_pending(), camera)
             };
             self.sync_camera(camera)?;
             Ok(pending)
@@ -1204,13 +1437,15 @@ mod wasm {
         }
 
         fn direct_wake_observation(&self) -> Result<(BrowserExecutionWakePlan, f64), JsValue> {
-            let session = self.source.direct().ok_or_else(|| {
-                js_message("direct wake APIs require a direct ExecutionSession source")
-            })?;
-            Ok((
-                BrowserExecutionWakePlan::from_session(session),
-                session.frame().time,
-            ))
+            let direct = match &self.source {
+                CanvasExecutionSource::Transport(_) => {
+                    return Err(js_message(
+                        "direct wake APIs require a direct ExecutionSession source",
+                    ));
+                }
+                CanvasExecutionSource::Direct(direct) => direct,
+            };
+            Ok((direct.wake_plan(), direct.session().frame().time))
         }
 
         fn direct_scene_time_at(&self, wall_time_ms: f64) -> Result<f64, JsValue> {
@@ -1292,58 +1527,63 @@ mod wasm {
                 ))
                 .map_err(js_error)?
             };
-            let session = self.source.direct_mut().ok_or_else(|| {
-                js_message("direct retained rendering requires a direct ExecutionSession source")
-            })?;
             let camera = self.renderer.camera();
             let half_extent = camera.world_size * 0.5;
-            let visibility = session.query_viewport(Rect::new(
-                camera.center - half_extent,
-                camera.center + half_extent,
-            ));
-            let publication = session.take_renderer_publication();
-            let prepared = self
-                .direct_preparer
-                .prepare_publication_visible(
+            let publication_context;
+            let draw = {
+                let direct = self.source.direct_source_mut().ok_or_else(|| {
+                    js_message("direct retained rendering requires a direct ExecutionSession source")
+                })?;
+                let visibility = direct.query_viewport(Rect::new(
+                    camera.center - half_extent,
+                    camera.center + half_extent,
+                ));
+                let publication = direct.take_renderer_publication();
+                publication_context = publication.context();
+                let prepared = self
+                    .direct_preparer
+                    .prepare_publication_visible(
+                        &self.device,
+                        &self.queue,
+                        &publication,
+                        visibility.object_indices(),
+                        metrics,
+                    )
+                    .map_err(js_error)?;
+                let upload = self.renderer.upload_retained(
                     &self.device,
                     &self.queue,
-                    &publication,
-                    visibility.object_indices(),
-                    metrics,
-                )
-                .map_err(js_error)?;
-            let upload = self.renderer.upload_retained(
-                &self.device,
-                &self.queue,
-                &prepared,
-                &mut self.direct_text_gpu,
-            );
-            self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
-            self.last_bytes_uploaded = upload
-                .geometry
-                .bytes_uploaded
-                .saturating_add(upload.text.bytes_uploaded);
-            self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
-
-            let view = surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Noon direct execution render frame"),
-                });
-            let draw = self
-                .renderer
-                .encode_retained(
-                    &mut encoder,
-                    &view,
                     &prepared,
-                    &self.direct_text_gpu,
-                    self.clear_color,
-                )
-                .map_err(js_error)?;
-            self.queue.submit(Some(encoder.finish()));
+                    &mut self.direct_text_gpu,
+                );
+                self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
+                self.last_bytes_uploaded = upload
+                    .geometry
+                    .bytes_uploaded
+                    .saturating_add(upload.text.bytes_uploaded);
+                self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
+
+                let view = surface_texture
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let mut encoder = self
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Noon direct execution render frame"),
+                    });
+                let draw = self
+                    .renderer
+                    .encode_retained(
+                        &mut encoder,
+                        &view,
+                        &prepared,
+                        &self.direct_text_gpu,
+                        self.clear_color,
+                    )
+                    .map_err(js_error)?;
+                self.queue.submit(Some(encoder.finish()));
+                draw
+            };
             self.queue.present(surface_texture);
             self.last_draw_calls = draw
                 .geometry
@@ -1356,6 +1596,16 @@ mod wasm {
                 .saturating_add(draw.text.instances_drawn);
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
+            }
+            let resumed = self
+                .source
+                .direct_source_mut()
+                .expect("direct renderer source was checked before rendering")
+                .admit_rendered_publication(publication_context)?;
+            if resumed {
+                // Endpoint admission is the only place presentation may release a
+                // continuation. Its next wake must start from that host boundary.
+                self.direct_wake_clock = BrowserExecutionWakeClock::default();
             }
             Ok(true)
         }
