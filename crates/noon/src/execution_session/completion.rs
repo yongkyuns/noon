@@ -461,6 +461,66 @@ mod tests {
     }
 
     #[test]
+    fn fill_completion_preserves_bound_stroke_sibling() {
+        let mut store = SemanticStore::new();
+        let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        source.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        source.style.stroke_opacity = 1.0;
+        let object = store.insert_semantic_object(source);
+        store.attach_to_scene(object).unwrap();
+        let stroke_opacity = store.insert_semantic_input_signal(0.65_f64).unwrap();
+        store
+            .bind_semantic_signal(
+                stroke_opacity,
+                object,
+                SemanticObjectProperty::StrokeOpacity,
+            )
+            .unwrap();
+
+        let mut target = store.semantic_object_state_checked(object).unwrap().clone();
+        target.style.fill = Some(SemanticPaint::Solid(Color::RED));
+        target.style.fill_opacity = 0.4;
+        let target = store.insert_semantic_object(target);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        session.advance_segment_to(segment, 2.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+
+        let authored = &store.semantic_object_state_checked(object).unwrap().style;
+        assert_eq!(authored.fill, Some(SemanticPaint::Solid(Color::RED)));
+        assert_eq!(authored.fill_opacity, 0.4);
+        assert_eq!(authored.stroke, Some(SemanticPaint::Solid(Color::WHITE)));
+        assert_eq!(authored.stroke_opacity, 1.0);
+        let effective = session.frame().objects[0].style;
+        assert_eq!(
+            effective.fill,
+            Some(Color {
+                alpha: 0.4,
+                ..Color::RED
+            })
+        );
+        assert_eq!(
+            effective.stroke,
+            Some(Color {
+                alpha: 0.65,
+                ..Color::WHITE
+            })
+        );
+    }
+
+    #[test]
     fn style_composition_rejects_unsupported_time_mapping_before_activation() {
         let mut store = SemanticStore::new();
         let object =

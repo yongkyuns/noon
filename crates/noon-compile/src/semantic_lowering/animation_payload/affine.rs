@@ -686,7 +686,8 @@ pub(super) fn lower_affine_channels(
     )?;
     let stroke_changed = source.style.stroke != target.style.stroke
         || source.style.stroke_opacity != target.style.stroke_opacity
-        || from.style.stroke != target_style.stroke;
+        || (from.style.stroke != target_style.stroke
+            && !has_binding(source, SemanticObjectProperty::StrokeOpacity));
     push_affine_channel(
         source,
         SemanticObjectProperty::StrokeOpacity,
@@ -1192,6 +1193,55 @@ mod tests {
             assert_eq!(prepared.tracks().len(), 1);
             assert_eq!(prepared.tracks()[0].property, Property::Position);
         }
+    }
+
+    #[test]
+    fn unchanged_bound_stroke_remains_reactive_for_predeclared_and_prepared_transform() {
+        let mut store = SemanticStore::new();
+        let object = visible_object(&mut store);
+        let signal = store.insert_semantic_input_signal(0.65_f64).unwrap();
+        store
+            .bind_semantic_signal(signal, object, SemanticObjectProperty::StrokeOpacity)
+            .unwrap();
+        let mut target = store.semantic_object_state_checked(object).unwrap().clone();
+        target.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let index = index(&store);
+        let current = EffectiveAnimationProperties {
+            transform: Transform2D::default(),
+            style: Style {
+                stroke: Some(Color {
+                    alpha: 0.65,
+                    ..Color::WHITE
+                }),
+                ..Style::default()
+            },
+        };
+
+        let predeclared = lower_semantic_affine_animation_tracks(
+            &store,
+            &schedule(&store, &index, animation),
+            |_| Some(current),
+        )
+        .unwrap();
+        assert_eq!(predeclared.len(), 1);
+        assert_eq!(predeclared.tracks()[0].property, Property::Position);
+
+        let prepared = crate::lower_prepared_semantic_transform_to(
+            &store,
+            &index,
+            object,
+            target,
+            AnimationOptions::new(),
+            0.0,
+            |_| Some(current),
+        )
+        .unwrap();
+        assert_eq!(prepared.tracks().len(), 1);
+        assert_eq!(prepared.tracks()[0].property, Property::Position);
     }
 
     #[test]
