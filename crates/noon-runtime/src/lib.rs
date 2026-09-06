@@ -26,11 +26,10 @@ use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, ExecutionPatch,
     TransformGeometryPlan,
 };
-use noon_core::PublicationContext;
+use noon_core::{mapped_continuous_progress, PublicationContext};
 use noon_core::{
-    mapped_continuous_progress, Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand,
-    Property, ScenePatch, StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D, Vec2,
-    VectorPath,
+    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
+    StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D, Vec2, VectorPath,
 };
 use noon_core::{ObjectContentRef, TextResourceHandle};
 
