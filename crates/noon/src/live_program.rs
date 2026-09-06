@@ -179,7 +179,9 @@ impl<C: LiveContinuation> LiveProgram<C> {
         self.ensure_host_input_available("deliver native state input")?;
         self.session
             .set_native_state_input(source, value)
-            .map_err(LiveProgramError::Input)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(self.session.frame())
     }
 
     /// Deliver one ordered native event without exposing mutable session authority.
@@ -190,7 +192,9 @@ impl<C: LiveContinuation> LiveProgram<C> {
         self.ensure_host_input_available("deliver a native event")?;
         self.session
             .emit_native_event(occurrence)
-            .map_err(LiveProgramError::Input)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(self.session.frame())
     }
 
     /// Consume the runtime's current renderer-facing invalidation without copying state.
@@ -328,13 +332,16 @@ impl<C: LiveContinuation> LiveProgram<C> {
         &self,
         operation: &'static str,
     ) -> Result<(), LiveProgramError<C::Error>> {
-        if matches!(
-            self.phase,
-            LiveProgramPhase::PublicationPending(_) | LiveProgramPhase::Terminal
-        ) {
+        if matches!(self.phase, LiveProgramPhase::Terminal) {
             return Err(self.invalid_state(operation));
         }
         Ok(())
+    }
+
+    fn refresh_pending_publication(&mut self) {
+        if matches!(self.phase, LiveProgramPhase::PublicationPending(_)) {
+            self.phase = LiveProgramPhase::PublicationPending(self.session.publication_context());
+        }
     }
 }
 
@@ -392,6 +399,8 @@ mod tests {
         let mut scene = Scene::new();
         let source = scene.circle(0.4).unwrap();
         scene.add(&source).unwrap();
+        let opacity = scene.control_signal("opacity", 1.0).unwrap();
+        scene.bind_opacity(&source, &opacity).unwrap();
         let mut target = source.target_editor().unwrap();
         target.set_translation(2.0, -1.0).unwrap();
         let resumes = Rc::new(RefCell::new(0));
@@ -434,8 +443,39 @@ mod tests {
             Err(LiveProgramError::PublicationStillPending { .. })
         ));
 
+        // Unbound platform samples are valid no-ops and retain the exact endpoint receipt.
+        program
+            .set_native_state_input(
+                NativeStateSource::PointerPosition,
+                NativeInputValue::Vec2(Vec2::new(12.0, 8.0)),
+            )
+            .unwrap();
+        assert_eq!(
+            program.status(),
+            LiveProgramStatus::PublicationPending(endpoint)
+        );
+
+        // Bound input may publish while authoring remains suspended. The host must
+        // admit the new coherent receipt rather than the superseded endpoint receipt.
+        program
+            .set_native_state_input(
+                NativeStateSource::Control {
+                    name: "opacity".to_owned(),
+                },
+                NativeInputValue::Scalar(0.5),
+            )
+            .unwrap();
+        let LiveProgramStatus::PublicationPending(latest) = program.status() else {
+            panic!("native input must preserve the endpoint presentation barrier")
+        };
+        assert_ne!(latest, endpoint);
+        assert!(matches!(
+            program.admit_publication(endpoint),
+            Err(LiveProgramError::PublicationMismatch { .. })
+        ));
+
         let admitted = program.take_renderer_publication().context();
-        assert_eq!(admitted, endpoint);
+        assert_eq!(admitted, latest);
         assert_eq!(
             program.admit_publication(admitted).unwrap(),
             LiveProgramStatus::ReadyToResume
