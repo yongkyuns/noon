@@ -256,7 +256,7 @@ const expectedTypeSurface = [
   "beginOrdinaryCreate(",
   "export class WasmOrdinaryCreateParallelBuilder",
   "appendCreate(object_id: string, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",
-  "beginOrdinaryCreateParallel(play_run_time?: number | null, rate_function: string): WasmOrdinaryCreateParallelBuilder",
+  "beginOrdinaryCreateParallel(play_run_time: number | null | undefined, rate_function: string): WasmOrdinaryCreateParallelBuilder",
   "ordinaryPlayCreateParallel(candidate: WasmOrdinaryCreateParallelBuilder): number",
   "beginOrdinaryCreateParallelSegment(candidate: WasmOrdinaryCreateParallelBuilder): number",
   "liveContainsMobject(",
