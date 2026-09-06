@@ -246,6 +246,13 @@ try {
     );
     assert.ok(authoredObjectCount(entry, result, retained) > 0, `${entry.id}: expected scene objects`);
     assertDurationContract(entry, result);
+    if (["parity-create-circle", "parity-square-to-circle"].includes(entry.id)) {
+      const reveal = result.document.tracks.find((track) => track.property === "reveal");
+      assert.ok(reveal, `${entry.id}: explicit export lost its Create reveal track`);
+      assert.deepEqual(reveal.values, { scalar: { from: 0, to: 1 } });
+      assert.equal(reveal.timing.start_time, 0);
+      assert.equal(reveal.timing.duration, 1);
+    }
     if (entry.id === retainedTextAnimationId) {
       assertRetainedShrinkTrack(result, retained);
     }

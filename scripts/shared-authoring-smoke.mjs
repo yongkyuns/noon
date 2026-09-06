@@ -520,6 +520,26 @@ try {
       expectedFinalCenter: [0, 0],
     },
     {
+      filename: "manim_parity_square_and_circle.py",
+      objectCount: 2,
+      expectedDuration: 1,
+      endpointTime: null,
+      expectedFinalCenter: [1.25, 0],
+    },
+    {
+      filename: "manim_parity_square_to_circle.py",
+      objectCount: 0,
+      expectedDuration: 3,
+      endpointTime: null,
+    },
+    {
+      filename: "manim_parity_animated_square_to_circle.py",
+      objectCount: 1,
+      expectedDuration: 4,
+      endpointTime: null,
+      expectedFinalCenter: [0, 0],
+    },
+    {
       filename: "manim_example_move_to_target.py",
       objectCount: 1,
       expectedDuration: 1,
@@ -603,6 +623,9 @@ try {
             transportMode: "transferable",
           };
           if (authored.duration > 0) options.loopDurationSeconds = authored.duration;
+          if (!authored.semanticExecution) {
+            throw new Error(`${filename}: ordinary source did not produce a semantic execution descriptor`);
+          }
           await execution.startSemanticExecution(authored.semanticExecution, options);
         }
 
@@ -612,7 +635,7 @@ try {
             latest = (await execution.metrics()).metrics;
             if (
               latest.objectCount === objectCount &&
-              latest.drawCalls > 0 &&
+              (objectCount === 0 || latest.drawCalls > 0) &&
               latest.presentedFrames > afterPresentedFrames
             ) return latest;
             await new Promise((resolve) => setTimeout(resolve, 20));
@@ -629,7 +652,7 @@ try {
           const rendered = await waitForFrame(initial.presentedFrames);
           endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
         }
-        retainForInspection = endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition;
+        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition;
         if (retainForInspection) harness.liveExampleExecution = execution;
         return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
@@ -637,7 +660,16 @@ try {
       }
     }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
-    assert.ok(result.metrics.drawCalls > 0, `${filename}: no draw calls`);
+    if (objectCount === 0) {
+      assert.equal(result.metrics.drawCalls, 0, `${filename}: removed object still draws`);
+      const pixels = visiblePixelStats(
+        await page.locator(`#${result.canvasId}`).screenshot(),
+        (red, green, blue) => Math.max(red, green, blue) > 80,
+      );
+      assert.equal(pixels.count, 0, `${filename}: removed object remains visible`);
+    } else {
+      assert.ok(result.metrics.drawCalls > 0, `${filename}: no draw calls`);
+    }
     if (expectedDuration !== null) {
       assert.equal(result.duration, expectedDuration, `${filename}: canonical live duration`);
     }
@@ -701,7 +733,7 @@ try {
       assert.ok(pixels.width > 50, `${filename}: replacement text has no glyph extent`);
       assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
     }
-    if (endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition) {
+    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition) {
       await page.evaluate(() => {
         window.sharedAuthoringSmoke.liveExampleExecution.terminate();
         window.sharedAuthoringSmoke.liveExampleExecution = null;
