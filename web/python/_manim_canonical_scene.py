@@ -374,6 +374,8 @@ def _prepare_semantic_continuation_callbacks(
 
     session_id = _manim_updaters.prepare_canonical_callbacks(scene, context)
     if session_id is None:
+        session_id = _manim_updaters.canonical_callback_session_id(scene)
+    if session_id is None:
         return
     from js import noonSetSemanticContinuationCallbackSession
 
