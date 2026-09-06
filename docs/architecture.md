@@ -448,15 +448,17 @@ Examples: `ValueTracker`, pointer position, viewport size, property bindings, bu
 
 Evaluate only the dirty dependency closure.
 
-### Traceable host expression
+#### Optional host-expression capture
+
+Capture is an optional frontend translation/lowering optimization, not another execution class, runtime, or Phase A exit requirement. Its result belongs to the existing immutable, timeline, or native-reactive class according to its dependencies. Reuse shared typed semantic expressions and reactive lowering rather than introducing a frontend-owned expression graph or interpreter.
 
 A frontend may offer a constrained host-expression subset that can be captured or traced into Noon-owned expression/reactive IR. Once successfully lowered, that behavior is native execution and does not require the host interpreter on the frame path.
 
-Examples may include pure arithmetic over trackers/signals, supported vector operations, property bindings, and other expressions whose dependencies and side-effect semantics Noon can represent explicitly.
+Examples may include pure arithmetic over trackers/signals, supported vector operations, property bindings, and other expressions whose dependencies and side-effect semantics Noon can represent explicitly. Captured closure values and guards require explicit validity/invalidation rules; mutable host state cannot silently become a frozen constant.
 
 Tracing/capture is a frontend translation mechanism, not a new semantic authority. It must preserve observable semantics and must not speculatively execute arbitrary host code in a way that duplicates or hides external side effects. An implementation may require an explicit traceable API/subset where transparent tracing would be unsafe.
 
-If a host expression cannot be represented faithfully, it remains **Host dynamic** rather than being silently approximated. A failed trace must not poison unrelated static/timeline/native-reactive work.
+If a host expression cannot be represented faithfully, it remains **Host dynamic** rather than being silently approximated. Unsupported capture must be detected before committing semantic mutations or running effectful host code; falling back must not replay an arbitrary callback or duplicate its side effects. An explicit capture-only API may reject unsupported input, while a callback API may retain the original host-dynamic behavior and ordering. A failed trace must not poison unrelated static/timeline/native-reactive work.
 
 ### Host dynamic
 
@@ -464,7 +466,7 @@ Correct behavior requires arbitrary host-language execution.
 
 Examples: an updater containing arbitrary Python control flow or an event handler that calls user Python code with effects Noon cannot model.
 
-Represent this explicitly as host callback slots. A few host-dynamic dependencies must not make unrelated static/timeline/reactive/traceable content dynamic.
+Represent this explicitly as host callback slots. A few host-dynamic dependencies must not make unrelated static/timeline/native-reactive content dynamic.
 
 Execution classification is an implementation choice, not permission to reorder observable semantic updater execution. If authored/compatibility updater order is `native A -> host B -> native C`, the execution plan must preserve that order, for example as native regions separated by a host-callback barrier. Independent work may be fused, parallelized or reordered only when the compiler/runtime can prove that the difference is unobservable.
 
@@ -505,6 +507,8 @@ It is not required to preserve the Semantic Scene's ergonomic hierarchy.
 Execution grouping is derived and disposable. It is legal for the compiler to split one semantic family across execution groups or combine compatible semantic leaves under one execution transform/instance domain. Such grouping must preserve identity mapping, ordering, hit-testing and mutation semantics and must be invalidated/reformed locally when the assumptions enabling the specialization stop holding.
 
 The Execution Plan is not a frozen representation of the entire host-language program. Sequential Python authoring, editor actions, compiled Rust event handlers, hot reload and other producers may publish later semantic revisions that require a new or incrementally changed execution projection.
+
+Replaceable does not mean rebuilt for each operation. Ordinary changes use impact-local preparation and atomic semantic/execution publication, preserving compatible semantic identity, runtime time/state, active drivers and retained resources. Revision transitions occur at an atomic safe point and must preserve, or explicitly reject before publication, any active execution segment, pending callback token and pending publication receipt. The previous coherent revision remains usable if preparation fails; effective-only driver updates continue to advance frame state without semantic relowering. Plan replacement does not authorize resetting the live runtime or reconstructing unrelated scene state.
 
 `noon-core` should converge on this normalized execution-level responsibility. Authoring compatibility helpers do not belong there.
 
@@ -1144,7 +1148,7 @@ Rules:
 35. A clean settled scene can sleep and wake on relevant work without advancing authored time unnecessarily.
 36. Long-running live-edit/resource/event churn has bounded reclamation/backpressure behavior; memory must not scale indefinitely with historical mutations or stalled ordered input.
 37. Frontends share semantic behavior, not a source-language execution model: Rust may use compiled control flow while Python uses interpreter continuation and editor/live inputs use declarative commands.
-38. The Execution Plan is a derived, replaceable projection of a published Semantic Scene revision; it is never the sole authority or a frozen compilation of the entire future host program.
+38. The Execution Plan is a derived, replaceable projection of a published Semantic Scene revision; it cannot become the authority for authored semantics or a frozen compilation of the entire future host program.
 39. Runtime-editable scene/design data does not imply runtime interpretation of arbitrary Rust source; source hot reload/recompilation and semantic live mutation are distinct mechanisms.
 40. Host expressions that can be captured faithfully may lower into native Noon expression/reactive IR; unsupported or effectful host behavior remains explicit host dynamic behavior rather than being silently approximated.
 
@@ -1277,7 +1281,7 @@ Every supported Python feature must use shared semantic behavior and add represe
 
 - finish native pointer/keyboard/viewport ingress;
 - lower known updater/constraint behavior to native reactive dependencies;
-- allow a constrained traceable host-expression subset to lower into native reactive/expression IR where semantics and side effects can be captured faithfully, with explicit host-dynamic fallback otherwise;
+- evaluate optional host-expression capture under #955 C1 when measurements and compatibility needs justify it; any supported subset must reuse shared native lowering, preserve side effects and define explicit unsupported-input behavior;
 - make runtime wake/settle and fixed publication ordering explicit so timeline and native interaction can coexist without a second interactive scene mode;
 - finish arbitrary host callback slots with ordered mixed native/host evaluation, coherent transactional overlays, callback read views, effective-vs-authored write classification, provisional structural identity, driver arbitration and explicit latency/backpressure policy;
 - make retained family/text updates resident and dirty-member-local;
@@ -1332,7 +1336,7 @@ Required categories:
 - script-continuation tests where logical post-`play()` completion exposes coherent effective state across Python interpreter continuation, native Rust compiled/awaited control flow and yielding browser/WASM host mechanics;
 - authored/base versus effective-state getter tests before/during/after active drivers;
 - effective-updater tests proving ordinary per-frame host/native driver writes can advance `FrameEpoch` without advancing `SceneRevision`/`ExecutionRevision` or triggering semantic relowering;
-- traceable-host tests proving supported pure expressions lower to native execution with no host callback on the frame path, plus explicit fallback tests for unsupported/effectful behavior;
+- if optional host-expression capture is implemented, tests proving supported expressions use existing native execution without a host callback on the frame path, plus rejection/fallback tests that preserve side effects and ordering;
 - frame-publication tests proving each `FrameEpoch` references one coherent semantic/execution revision pair and renderer/query consumers see the same pair;
 - mutation atomicity/rollback tests including failure after semantic staging but before lowering/resource preparation completes;
 - structural callback tests covering provisional object construction -> mutation -> membership -> read -> atomic publish/abort;
