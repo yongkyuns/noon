@@ -186,6 +186,10 @@ pub enum RetainedPreparedObjectOutcome {
     Unsupported(ObjectId),
     VisibilityProjectionUnavailable,
     FamilyProjectionUnavailable,
+    /// A geometry-only frame compacted its source paths into the shared mega-path
+    /// stream. The prepared source slot does not retain an exact object-to-mega
+    /// instance range, so upload observation must not guess one.
+    MegaPathMappingUnavailable,
 }
 
 impl PreparedRetainedGpuFrame<'_> {
@@ -230,6 +234,9 @@ impl PreparedRetainedGpuFrame<'_> {
                 })?;
             if geometry.object != object {
                 return Err(RetainedPreparedObjectOutcome::Absent);
+            }
+            if geometry_path_mapping_is_compacted(&self.geometry, &geometry) {
+                return Err(RetainedPreparedObjectOutcome::MegaPathMappingUnavailable);
             }
             let Some(submission_membership) = geometry.submission_membership else {
                 return Err(RetainedPreparedObjectOutcome::VisibilityProjectionUnavailable);
@@ -310,6 +317,17 @@ impl PreparedRetainedGpuFrame<'_> {
             instances_repacked: self.geometry.stats.instances_repacked,
         })
     }
+}
+
+fn geometry_path_mapping_is_compacted(
+    frame: &crate::PreparedFrame<'_>,
+    geometry: &crate::PreparedGeometryObjectObservation,
+) -> bool {
+    matches!(geometry.primitive, RenderPrimitive::Path { .. })
+        && frame
+            .render_batches
+            .iter()
+            .any(|batch| matches!(batch.primitive, RenderPrimitive::MegaPath { .. }))
 }
 
 fn observed_glyph_ranges(
@@ -2823,6 +2841,36 @@ mod tests {
         )
     }
 
+    fn geometry_only_mega_path_frame() -> FrameState {
+        let path = |id, y| {
+            let mut style = Style::default();
+            style.fill = None;
+            style.stroke = Some(Color::WHITE);
+            style.stroke_width = 0.01;
+            FrameObjectState {
+                id: ObjectId::new(id),
+                content: ObjectContentRef::Geometry(GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                )),
+                text_bounds: None,
+                transform: Transform2D::IDENTITY,
+                style,
+                appearance: 1.0,
+            }
+        };
+        FrameState {
+            time: 0.0,
+            objects: vec![path(1, 0.0), path(2, 0.2)],
+            presences: vec![true, true],
+            reveals: vec![1.0, 1.0],
+            morphs: vec![0.0, 0.0],
+            render_geometries: vec![None, None],
+            render_transforms: vec![None, None],
+        }
+    }
+
     fn outline_key(glyph_id: GlyphId) -> OutlineKey {
         OutlineKey {
             font: FontResourceHandle {
@@ -3165,6 +3213,38 @@ mod tests {
         queue.submit(Some(encoder.finish()));
         assert!(draw.geometry.draw_calls > 0);
         assert!(draw.text.draw_calls > 0);
+    }
+
+    #[test]
+    fn observed_geometry_only_mega_path_is_explicitly_unavailable() {
+        let frame = geometry_only_mega_path_frame();
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+
+        assert!(prepared.geometry_only);
+        assert!(prepared.geometry.render_batches.iter().any(|batch| {
+            matches!(batch.primitive, RenderPrimitive::MegaPath { .. })
+        }));
+        assert!(matches!(
+            prepared.observe_object(0, ObjectId::new(1)),
+            Err(RetainedPreparedObjectOutcome::MegaPathMappingUnavailable)
+        ));
     }
 
     #[test]

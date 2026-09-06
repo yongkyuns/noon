@@ -370,6 +370,14 @@ pub(crate) fn finish_renderer_observation(
                 resource: "family_projection_mapping",
             };
         }
+        Err(RetainedPreparedObjectOutcome::MegaPathMappingUnavailable) => {
+            return RendererObservationOutcome::ResourceUnavailable {
+                schema_version: RENDERER_OBSERVATION_VERSION,
+                publication: target.request.publication,
+                slot: target.request.slot,
+                resource: "mega_path_instance_mapping",
+            };
+        }
     };
     let geometry = prepared.geometry;
     let target_write = if let Some(geometry) = geometry {
@@ -775,6 +783,33 @@ mod tests {
         );
         assert!(observation.draw.submission_membership);
         assert_eq!(observation.draw.text_instances_drawn, 3);
+    }
+
+    #[test]
+    fn compacted_path_observation_reports_its_missing_source_mapping() {
+        let mirror = mirror();
+        let slot = TransportSlotId {
+            slot: 4,
+            generation: 2,
+        };
+        let target = resolve_renderer_observation_target(request(0, slot), &mirror).unwrap();
+        let outcome = finish_renderer_observation(
+            target,
+            Err(RetainedPreparedObjectOutcome::MegaPathMappingUnavailable),
+            &[],
+            RetainedUploadStats::default(),
+            RetainedDrawStats::default(),
+            4,
+            "WebGPU",
+            "success",
+        );
+        assert!(matches!(
+            outcome,
+            RendererObservationOutcome::ResourceUnavailable {
+                resource: "mega_path_instance_mapping",
+                ..
+            }
+        ));
     }
 
     #[test]
