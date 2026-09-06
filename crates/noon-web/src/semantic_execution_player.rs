@@ -82,7 +82,7 @@ pub struct SemanticExecutionPlayer {
     /// Continuation metadata for this one session-owned runtime, never a
     /// frontend scheduler or animation state mirror.
     #[cfg(any(target_arch = "wasm32", test))]
-    live_segment: Option<noon::ExecutionSegment>,
+    live_segment: Option<LiveSegmentReceipt>,
     /// Wall-to-authored conversion for one browser-host continuation lease. This derives
     /// targets from the current segment wake state; it is not a second timeline.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -91,6 +91,24 @@ pub struct SemanticExecutionPlayer {
     /// boundary. Returning and re-leasing this player preserves the sequence.
     #[cfg(any(target_arch = "wasm32", test))]
     next_native_event_sequence: u64,
+}
+
+/// A host continuation receipt retains its endpoint after completion for renderer
+/// recovery/scrubbing, while only Pending permits one begin/drive/complete lease.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy)]
+enum LiveSegmentReceipt {
+    Pending(noon::ExecutionSegment),
+    Completed(noon::ExecutionSegment),
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl LiveSegmentReceipt {
+    fn segment(self) -> noon::ExecutionSegment {
+        match self {
+            Self::Pending(segment) | Self::Completed(segment) => segment,
+        }
+    }
 }
 
 impl SemanticExecutionPlayer {
@@ -236,15 +254,15 @@ impl SemanticExecutionPlayer {
 
     /// The authored duration needed to hand this live session to presentation.
     ///
-    /// The current frame is authoritative once a segment completes. An active
-    /// continuation must also keep its endpoint addressable before it completes.
+    /// Retain the latest continuation endpoint across presentation scrubbing.
+    /// An active continuation must keep that endpoint addressable before completion.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_handoff_duration(&self) -> Option<f64> {
         self.semantics.as_ref()?;
         Some(
             self.live_segment
                 .map_or(self.session.frame().time, |segment| {
-                    self.session.frame().time.max(segment.end_time())
+                    self.session.frame().time.max(segment.segment().end_time())
                 }),
         )
     }
@@ -620,7 +638,7 @@ impl SemanticExecutionPlayer {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn require_completed_live_segment(&self) -> Result<(), String> {
-        if self.live_segment.is_some() {
+        if self.has_pending_live_segment() {
             return Err("complete the current live segment before continuing".into());
         }
         Ok(())
@@ -648,7 +666,7 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(segment);
+        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
@@ -683,7 +701,7 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(segment);
+        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
@@ -723,7 +741,7 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(segment);
+        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
@@ -769,20 +787,22 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(segment);
+        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_segment(&self) -> Result<noon::ExecutionSegment, String> {
-        self.live_segment
-            .ok_or_else(|| "play an animation or wait before driving a live segment".to_owned())
+        match self.live_segment {
+            Some(LiveSegmentReceipt::Pending(segment)) => Ok(segment),
+            _ => Err("play an animation or wait before driving a live segment".to_owned()),
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn has_pending_live_segment(&self) -> bool {
-        self.live_segment.is_some()
+        matches!(self.live_segment, Some(LiveSegmentReceipt::Pending(_)))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -882,9 +902,7 @@ impl SemanticExecutionPlayer {
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_complete_segment(&mut self) -> Result<(), String> {
-        let segment = self
-            .live_segment
-            .ok_or("play an animation or wait before completing a live segment")?;
+        let segment = self.live_segment()?;
         let semantics = self
             .semantics
             .clone()
@@ -899,7 +917,7 @@ impl SemanticExecutionPlayer {
         .complete_segment(segment)
         .map_err(|error| error.to_string())?;
         self.clock = clock;
-        self.live_segment = None;
+        self.live_segment = Some(LiveSegmentReceipt::Completed(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
