@@ -546,15 +546,24 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
 async function directLineMatchProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectLineMatchSmokeRenderer(canvas);
-  renderer.resize(canvas.width, canvas.height);
-  renderer.directWakeDirectiveJson(0);
-  await presentDirectFrame(renderer);
-  const middle = await sampleRenderedColor(canvas, 1.25, 0);
-  if (renderer.rendererBackend() !== expectedBackend || middle.red < 100 ||
-      middle.green > 120 || middle.blue > 120) {
-    throw new Error(`ordered Line callback did not preserve its red paint: ${JSON.stringify(middle)}`);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    await presentDirectFrame(renderer);
+    const middle = await sampleRenderedColor(canvas, 1.25, 0);
+    if (renderer.rendererBackend() !== expectedBackend || middle.red < 100 ||
+        middle.green > 120 || middle.blue > 120) {
+      throw new Error(`ordered Line callback did not preserve its red paint: ${JSON.stringify(middle)}`);
+    }
+    return { middle };
+  } finally {
+    renderer.free();
+    // Chromium caps active WebGL contexts. Release this completed proof's
+    // surface so the remaining fixtures keep their original canvas alive.
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
   }
-  return { middle };
 }
 
 async function directCallbackPaintProof(expectedBackend) {
