@@ -3848,6 +3848,18 @@ mod tests {
             .session_mut_for_test()
             .execution_slot_for_frame_index(0)
             .unwrap();
+        assert_eq!(context.ordinary_wait(0.3).unwrap(), 0.3);
+        let collision = context.scene.circle(0.25).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .live_add_mobject(ObjectId::new(0), &collision)
+            .is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context
+            .active_live_player()
+            .unwrap()
+            .live_effective(&collision)
+            .is_err());
 
         context.live_remove_mobject(&toggled).unwrap();
         assert!(context
@@ -3888,6 +3900,7 @@ mod tests {
                 .translation,
             Vec2::new(2.0, -1.0)
         );
+        assert_eq!(context.active_live_player().unwrap().time(), 0.3);
         assert_eq!(
             context
                 .active_live_player()
