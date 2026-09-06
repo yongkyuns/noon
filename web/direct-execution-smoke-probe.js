@@ -750,7 +750,12 @@ async function directDifferentRotationsProof(expectedBackend) {
     const endpointRight = await sampleRenderedColor(canvas, 2, 0.5);
 
     renderer.advanceDirectRealtime(3000);
-    const finalDirective = await settleDirectPublication(renderer, 3000);
+    // A completed wait can settle without publishing a dirty renderer frame.
+    // Follow the host wake contract instead of requiring a redundant draw.
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3000));
+    const finalDirective = wake.presentNow
+      ? await settleDirectPublication(renderer, 3000)
+      : wake;
     const metrics = {
       startLeft,
       startRight,
