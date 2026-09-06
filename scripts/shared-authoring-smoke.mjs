@@ -1212,6 +1212,34 @@ try {
     await stopSampledSource(page);
   }
 
+  const mixedScalarSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_mixed_scalar_composition.py"), "utf8",
+  );
+  await startSampledSource(page, mixedScalarSource, "scene-shared-mixed-scalar");
+  try {
+    const canvas = page.locator("#scene-shared-mixed-scalar");
+    for (const [time, x] of [
+      [0, -2], [0.25, -2], [0.5, -2], [1, -1.7195852],
+      [1.5, 0], [2.5, 2], [2.75, 1],
+    ]) {
+      await page.evaluate((time) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(time), time);
+      const screenshot = await canvas.screenshot();
+      for (const offset of [-0.15, 0.15]) {
+        const color = renderedWorldPixel(screenshot, x + offset, 1);
+        assert.ok(color.blue > color.red + 25, `mixed scalar composition at ${time}s: circle expected at ${x}`);
+      }
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   // Scalar tracker continuation keeps both values and timing in the returned
   // Rust player. Python remains suspended through both tracks and the wait.
   const externalSamples = await page.evaluate(async (source) => {

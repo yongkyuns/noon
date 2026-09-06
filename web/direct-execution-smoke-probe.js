@@ -18,6 +18,7 @@ const {
   createDirectOrdinaryDifferentRotationsSmokeRenderer,
   createDirectOrdinaryAffineLifecycleSmokeRenderer,
   createDirectOrdinaryCompositionSmokeRenderer,
+  createDirectMixedScalarCompositionSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -952,6 +953,41 @@ async function directTimedCompositionProof(expectedBackend) {
   }
 }
 
+async function directMixedScalarCompositionProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectMixedScalarCompositionSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    for (const [time, x] of [
+      [0, -2], [250, -2], [500, -2], [1000, -1.7195852],
+      [1500, 0], [2500, 2], [2750, 1], [3000, 1],
+    ]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      for (const offset of [-0.15, 0.15]) {
+        const color = await sampleRenderedColor(canvas, x + offset, 1);
+        if (color.blue <= color.red + 25) {
+          throw new Error(`direct mixed scalar composition at ${time}ms: circle expected at ${x}, got ${JSON.stringify(color)}`);
+        }
+      }
+      samples.push({ time, x });
+    }
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3000));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 3 ||
+        renderer.objectCount() !== 2 || wake.cadence !== "idle") {
+      throw new Error("direct mixed composition did not complete its shared continuation");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directMovingCameraCenterProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectMovingCameraCenterSmokeRenderer(canvas);
@@ -1553,6 +1589,7 @@ async function start() {
   metrics.differentRotations = await directDifferentRotationsProof(expectedBackend);
   metrics.affineLifecycle = await directAffineLifecycleProof(expectedBackend);
   metrics.timedComposition = await directTimedCompositionProof(expectedBackend);
+  metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);

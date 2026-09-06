@@ -1342,11 +1342,14 @@ def _build_canonical_composition_candidate(
     candidate.setCompositionRateFunction(
         _compat._easing_from_rate_func(group.rate_func) if group is not None else "linear"
     )
-    play_rate = _canonical_composition_rate_id(kwargs)
+    # For flat Scene.play arguments, shared child option resolution already
+    # applies the play rate. Only an explicit group gets a root rate override.
+    play_rate = _canonical_composition_rate_id(kwargs) if group is not None else None
     if play_rate is not None:
         candidate.setPlayRateFunction(play_rate)
     reservations: list[tuple[_base.Mobject, object]] = []
     removals: list[_base.Mobject] = []
+    tracker_associations: list[_reactive.ValueTracker] = []
     next_object_id = self._next_object_id
 
     def reserve(target: _base.Mobject):
@@ -1364,6 +1367,25 @@ def _build_canonical_composition_candidate(
             nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
+            return
+        if _canonical_tracker_builder(animation):
+            tracker = animation.tracker
+            if animation.target_value is None:
+                raise ValueError("ValueTracker.animate must call set_value or increment_value")
+            canonical = tracker._canonical_context_handle()
+            if canonical is not None:
+                tracker_context, handle = canonical
+                if tracker._scene is not self or tracker_context is not context:
+                    raise ValueError("ValueTracker belongs to another Scene")
+            else:
+                if tracker._scene is not None:
+                    raise ValueError("ValueTracker belongs to another Scene")
+                handle = tracker._detached_canonical_handle()
+                tracker_associations.append(tracker)
+            child = _canonical_composition_child_options(animation, child_kwargs)
+            builder.appendValueTracker(
+                handle, float(animation.target_value), float(child.run_time), str(child.rate_func),
+            )
             return
         if isinstance(animation, _composition.Wait):
             if child_kwargs:
@@ -1477,7 +1499,7 @@ def _build_canonical_composition_candidate(
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:
         raise ValueError(str(error)) from None
-    return (candidate, reservations, removals) if supported else False
+    return (candidate, reservations, removals, tracker_associations) if supported else False
 
 
 def _play_canonical_composition(
@@ -1485,6 +1507,7 @@ def _play_canonical_composition(
     candidate: object,
     reservations: list[tuple[_base.Mobject, object]],
     removals: list[_base.Mobject],
+    tracker_associations: list[_reactive.ValueTracker],
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     if getattr(self, "_legacy_geometry_materialized", False):
         raise NotImplementedError(
@@ -1505,6 +1528,8 @@ def _play_canonical_composition(
             context.ordinaryPlayComposition(candidate)
     except Exception as error:
         raise ValueError(str(error)) from None
+    for tracker in tracker_associations:
+        tracker._commit_canonical_association(self, context)
     for source, reservation in reservations:
         handle = getattr(source, "_semantic_handle")
         _commit_typed_binding(source, self, reservation, handle)
@@ -1588,8 +1613,7 @@ def _play(self, *args, **kwargs):
                 )
             return _play_legacy_compatibility(self, *args, **kwargs)
         if candidate is not None:
-            candidate, reservations, removals = candidate
-            return _play_canonical_composition(self, candidate, reservations, removals)
+            return _play_canonical_composition(self, *candidate)
 
     canonical_uncreates = [
         target
@@ -1736,19 +1760,10 @@ def _play(self, *args, **kwargs):
             lag_ratio=kwargs.pop("lag_ratio", None),
             kwargs=kwargs,
         )
-    canonical_builders = (
-        []
-        if getattr(self, _EXPORT_DOCUMENT_CONSTRUCT, False)
-        else [argument for argument in args if _canonical_tracker_builder(argument)]
-    )
-    if canonical_builders:
-        if len(canonical_builders) != 1 or len(args) != 1:
-            raise NotImplementedError(
-                "canonical ValueTracker.play currently supports one scalar track without ordinary animations"
-            )
+    if len(args) == 1 and _canonical_tracker_builder(args[0]):
         return _play_canonical_tracker(
             self,
-            canonical_builders[0],
+            args[0],
             duration=kwargs.pop("duration", None),
             run_time=kwargs.pop("run_time", None),
             start_time=kwargs.pop("start_time", None),

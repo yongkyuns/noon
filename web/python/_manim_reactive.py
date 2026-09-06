@@ -180,7 +180,10 @@ class ValueTracker:
             context.associateValueTracker(handle)
         except Exception as error:
             raise ValueError(str(error)) from None
-        # Wrapper ownership changes only after the shared transaction publishes.
+        self._commit_canonical_association(scene, context)
+
+    def _commit_canonical_association(self, scene: _base.Scene, context: object) -> None:
+        """Publish wrapper metadata after Rust has atomically enrolled this handle."""
         self._scene = scene
         self._canonical_context = context
 
