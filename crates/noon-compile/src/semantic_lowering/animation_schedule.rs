@@ -1867,6 +1867,44 @@ mod tests {
     }
 
     #[test]
+    fn sequential_writes_to_one_scalar_signal_use_disjoint_mapped_windows() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let index = prepare_index(&store);
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        let first =
+            transaction.create_scalar_animation(signal, 1.0, AnimationOptions::new().run_time(1.0));
+        let second =
+            transaction.create_scalar_animation(signal, 2.0, AnimationOptions::new().run_time(1.0));
+        let root = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Sequence,
+            [first, second],
+            AnimationOptions::new().rate_func(RateFunction::Smooth),
+        );
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let schedule = lower_prepared_semantic_animation_schedule(
+            &prepared,
+            &index,
+            root,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        let tracks = derive_prepared_scalar_animation_tracks(&prepared, &schedule).unwrap();
+
+        assert_eq!(tracks.len(), 2);
+        assert_eq!((tracks[0].from(), tracks[0].to()), (0.0, 1.0));
+        assert_eq!((tracks[1].from(), tracks[1].to()), (1.0, 2.0));
+        assert_eq!(tracks[0].timing(), tracks[1].timing());
+        let first_window =
+            continuous_time_map_interval(tracks[0].timing(), tracks[0].time_map()).unwrap();
+        let second_window =
+            continuous_time_map_interval(tracks[1].timing(), tracks[1].time_map()).unwrap();
+        assert!(first_window.1 <= second_window.0);
+        prepared.with_scalar_signal_tracks(tracks).unwrap();
+    }
+
+    #[test]
     fn detached_target_is_not_admitted_into_execution_by_animation_scheduling() {
         let mut store = SemanticStore::new();
         let target = object(&mut store, 1.0);
