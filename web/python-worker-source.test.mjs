@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
+const canonicalScene = await readFile(
+  new URL("./python/_manim_canonical_scene.py", import.meta.url),
+  "utf8",
+);
 
 test("Python authoring worker keeps request validation helper", () => {
   assert.match(source, /function\s+validateRequest\s*\(/);
@@ -24,7 +28,10 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.match(source, /if\s*\(isContinuationControl\(event\.data\)\)/);
   assert.match(source, /void\s+handleContinuationControl\(event\.data\)/);
   assert.match(source, /requestQueue\s*=\s*requestQueue\.then\(\(\)\s*=>\s*handleRequest/);
-  assert.match(source, /await\s+execute_construct\(__noon_result\)/);
+  assert.match(
+    source,
+    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\)\s*\)/,
+  );
   assert.match(source, /continuation\.endpoint\.startContinuation\(continuation\.generation\)/);
   assert.match(source, /continuation\.runRequestId\s*!==\s*request\.continuationRunRequestId/);
   assert.match(source, /noonRequireSemanticContinuationActive/);
@@ -51,7 +58,10 @@ test("worker delegates every Scene construct lifecycle to the canonical adapter"
     source.indexOf("async function runAuthoringSource"),
     source.indexOf("async function runCallbackPhase"),
   );
-  assert.match(authoring, /await\s+execute_construct\(__noon_result\)/);
+  assert.match(
+    authoring,
+    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\)\s*\)/,
+  );
   assert.doesNotMatch(authoring, /__noon_result\.(?:setup|construct|tear_down)\(/);
   assert.doesNotMatch(authoring, /_(?:begin|finish)_(?:async|synchronous)_continuation_construct/);
 });
@@ -80,4 +90,20 @@ test("retired callback sessions release only after the active Python run unwinds
   finishRun();
   await released;
   assert.equal(releases, 1);
+});
+
+test("explicit document export bypasses continuation leasing before construct mutation", () => {
+  assert.match(
+    canonicalScene,
+    /if export_document and inspect\.iscoroutinefunction\(scene\.construct\):[\s\S]*?raise RuntimeError\([\s\S]*?"exportDocument cannot run an async Scene construct;/,
+  );
+  const rejection = canonicalScene.indexOf(
+    "if export_document and inspect.iscoroutinefunction(scene.construct):",
+  );
+  const setup = canonicalScene.indexOf("    scene.setup()", rejection);
+  assert.ok(rejection >= 0 && setup > rejection, "async export must reject before Scene.setup");
+  assert.match(
+    canonicalScene,
+    /if export_document:[\s\S]*?setattr\(scene, _EXPORT_DOCUMENT_CONSTRUCT, True\)[\s\S]*?scene\.construct\(\)[\s\S]*?setattr\(scene, _EXPORT_DOCUMENT_CONSTRUCT, False\)/,
+  );
 });

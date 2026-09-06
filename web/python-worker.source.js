@@ -737,7 +737,9 @@ else:
             f"select one explicitly via result = SceneClass(): {__noon_names}"
         )
     __noon_result = __noon_scene_classes[0]()
-    await execute_construct(__noon_result)
+    await execute_construct(
+        __noon_result, export_document=bool(__noon_export_document)
+    )
 
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"

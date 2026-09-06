@@ -50,6 +50,7 @@ _ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
 _ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
 _SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
+_EXPORT_DOCUMENT_CONSTRUCT = "_noon_export_document_construct"
 
 
 def _json(value: object) -> str:
@@ -296,11 +297,27 @@ def _semantic_continuation_active(scene: _base.Scene) -> bool:
     return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
 
 
-async def execute_construct(scene: _base.Scene) -> None:
+async def execute_construct(
+    scene: _base.Scene, *, export_document: bool = False
+) -> None:
     """Run one Scene construct lifecycle with its canonical continuation mode."""
+    if export_document and inspect.iscoroutinefunction(scene.construct):
+        raise RuntimeError(
+            "exportDocument cannot run an async Scene construct; "
+            "async source requires a semantic continuation renderer"
+        )
     scene.setup()
     try:
-        if inspect.iscoroutinefunction(scene.construct):
+        if export_document:
+            # #959 owns this explicit codec/export boundary. Ordinary supported
+            # operations retain their existing Rust endpoint helpers here; they
+            # must not request a renderer continuation lease from an exporter.
+            setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, True)
+            try:
+                scene.construct()
+            finally:
+                setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
+        elif inspect.iscoroutinefunction(scene.construct):
             _begin_async_continuation_construct(scene)
             try:
                 await scene.construct()
