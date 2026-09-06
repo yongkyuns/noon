@@ -16,6 +16,7 @@ const {
   createDirectOrdinaryCreatePlaySmokeRenderer,
   createDirectOrdinarySquareToCircleSmokeRenderer,
   createDirectOrdinaryDifferentRotationsSmokeRenderer,
+  createDirectOrdinaryAffineLifecycleSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -839,6 +840,72 @@ async function directDifferentRotationsProof(expectedBackend) {
   }
 }
 
+async function directAffineLifecycleProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryAffineLifecycleSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    // A zero-scale screen-space stroke may leave one rasterized pixel at its exact anchor.
+    // Sample inside the eventual footprint but away from that singular point.
+    const collapsedNearAnchor = await sampleRenderedColor(canvas, -1.75, 0);
+    const collapsedCenter = await sampleRenderedColor(canvas, 0, 0);
+
+    if (!renderer.advanceDirectRealtime(500)) {
+      throw new Error("direct affine lifecycle did not publish its grow midpoint");
+    }
+    await settleDirectPublication(renderer, 500);
+    const growMidpoint = await sampleRenderedColor(canvas, -1, 0);
+
+    if (!renderer.advanceDirectRealtime(1000)) {
+      throw new Error("direct affine lifecycle did not publish its restored grow endpoint");
+    }
+    await settleDirectPublication(renderer, 1000);
+    const restoredEndpoint = await sampleRenderedColor(canvas, 0, 0);
+    const restoredCount = renderer.objectCount();
+
+    if (!renderer.advanceDirectRealtime(1500)) {
+      throw new Error("direct affine lifecycle did not publish its shrink midpoint");
+    }
+    await settleDirectPublication(renderer, 1500);
+    const shrinkMidpoint = await sampleRenderedColor(canvas, 0, 0);
+
+    renderer.advanceDirectRealtime(2000);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(2000));
+    const finalDirective = wake.presentNow
+      ? await settleDirectPublication(renderer, 2000)
+      : wake;
+    const removed = await sampleRenderedColor(canvas, 0, 0);
+    const metrics = {
+      collapsedNearAnchor,
+      collapsedCenter,
+      growMidpoint,
+      restoredEndpoint,
+      restoredCount,
+      shrinkMidpoint,
+      removed,
+      time: renderer.time(),
+      objectCount: renderer.objectCount(),
+      cadence: finalDirective.cadence,
+    };
+    const dark = (color) => color.red + color.green + color.blue < 60;
+    const blue = (color) => color.blue > color.red + 25 && color.blue > color.green + 10;
+    if (renderer.rendererBackend() !== expectedBackend || metrics.time !== 2 ||
+        metrics.objectCount !== 0 || metrics.restoredCount !== 1 ||
+        metrics.cadence !== "idle" || !dark(collapsedNearAnchor) || !dark(collapsedCenter) ||
+        !blue(growMidpoint) || !blue(restoredEndpoint) || !blue(shrinkMidpoint) ||
+        !dark(removed)) {
+      throw new Error(`direct affine lifecycle pixels or completion are invalid: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directMovingCameraCenterProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectMovingCameraCenterSmokeRenderer(canvas);
@@ -1438,6 +1505,7 @@ async function start() {
   metrics.livePrimitiveConstruction = await directLivePrimitiveConstructionProof(expectedBackend);
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
   metrics.differentRotations = await directDifferentRotationsProof(expectedBackend);
+  metrics.affineLifecycle = await directAffineLifecycleProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);
