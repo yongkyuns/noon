@@ -79,7 +79,11 @@ fn callback_barrier_stays_target_local_in_a_large_canonical_session() {
     assert_eq!(overlay.time(), 0.25);
     assert_eq!(overlay.delta_time(), 0.25);
     assert_eq!(overlay.objects().count(), 1);
-    assert_eq!(overlay.staged_row_count(), 1);
+    assert_eq!(
+        overlay.staged_row_count(),
+        0,
+        "the initial static advance needs no timeline or prior-driver rows"
+    );
     assert_eq!(overlay.prior_driver_row_count(), 0);
 
     let transform = Transform2D {
@@ -106,9 +110,13 @@ fn callback_barrier_stays_target_local_in_a_large_canonical_session() {
         0.0,
         "preflight does not publish early"
     );
-    session
-        .commit_required_callback_phase(overlay.finish())
-        .unwrap();
+    let batch = overlay.finish();
+    assert_eq!(
+        batch.writes().len(),
+        2,
+        "only target transform and style are written"
+    );
+    session.commit_required_callback_phase(batch).unwrap();
     assert_eq!(session.frame().time, 0.25);
     assert_eq!(
         session.take_frame_changes().object_indices(),
