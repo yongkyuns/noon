@@ -14,6 +14,12 @@ use noon_runtime::{
 
 use super::ExecutionSession;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SemanticPublicationPurpose {
+    AuthoredMutation,
+    SegmentCompletion,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionPublicationError {
     RequiredCallbackPending,
@@ -125,7 +131,13 @@ impl ExecutionSession {
         store: &mut SemanticStore,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
-        self.apply_semantic_transaction_with_execution(store, transaction, Vec::new(), None)
+        self.apply_semantic_transaction_with_execution(
+            store,
+            transaction,
+            Vec::new(),
+            None,
+            SemanticPublicationPurpose::AuthoredMutation,
+        )
     }
 
     pub(crate) fn apply_semantic_transaction_with_execution(
@@ -134,11 +146,14 @@ impl ExecutionSession {
         transaction: SemanticMutationTransaction,
         execution_prefix: Vec<ExecutionPatch>,
         effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
         }
-        if self.pending_segment_completion.is_some() && execution_prefix.is_empty() {
+        if self.pending_segment_completion.is_some()
+            && purpose != SemanticPublicationPurpose::SegmentCompletion
+        {
             return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
         }
         self.require_published_store(store)?;
@@ -151,6 +166,7 @@ impl ExecutionSession {
             prepared,
             execution_prefix,
             effective,
+            purpose,
         )
     }
 
@@ -164,11 +180,14 @@ impl ExecutionSession {
         prepared: PreparedSemanticMutationTransaction<'_>,
         execution_prefix: Vec<ExecutionPatch>,
         effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
         }
-        if self.pending_segment_completion.is_some() && execution_prefix.is_empty() {
+        if self.pending_segment_completion.is_some()
+            && purpose != SemanticPublicationPurpose::SegmentCompletion
+        {
             return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
         }
         self.require_published_store(prepared.store())?;

@@ -10,6 +10,7 @@ mod transform;
 use std::cmp::Ordering;
 use std::{collections::BTreeMap, sync::Arc};
 
+use noon_core::resolve_track_timing;
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
     CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId, ObjectStateField, Property,
@@ -1379,13 +1380,19 @@ fn compile_track(
     track: &TrackDefinition,
     object_index: u32,
 ) -> Result<CompiledTrack, TransformCompileFailure> {
+    let timing = resolve_track_timing(track).expect("track was validated before compilation");
+    let time_map = if track.property.is_instant() {
+        CompositionTimeMap::identity()
+    } else {
+        track.time_map.clone()
+    };
     Ok(CompiledTrack {
         id: track.id,
         object_index,
         property: track.property,
         values: track.values.clone(),
-        timing: track.timing,
-        time_map: track.time_map.clone(),
+        timing,
+        time_map,
         transform_geometry_plan: compile_transform_geometry_plan(track)?,
         reconciled: false,
     })
@@ -1707,6 +1714,40 @@ mod tests {
             .unwrap();
         let compiled = CompiledScene::compile(&scene).unwrap();
         assert_eq!(compiled.tracks()[0].time_map, map);
+    }
+
+    #[test]
+    fn mapped_presence_compiles_to_one_scheduler_event() {
+        let mut store = SemanticStore::new();
+        let node = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+            noon_core::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        store.attach_semantic_object(node).unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        let object = index.execution_object_id(node).unwrap();
+        compiled
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(0),
+                object,
+                property: Property::Presence,
+                values: TrackValues::Bool {
+                    from: false,
+                    to: true,
+                },
+                timing: TrackTiming::new(3.0, 4.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                    0.25,
+                    0.5,
+                    RateFunction::Linear,
+                )]),
+            }))
+            .unwrap();
+        let track = &compiled.tracks()[0];
+        assert_eq!(track.timing, TrackTiming::instant(4.0));
+        assert!(track.time_map.is_identity());
     }
 
     #[test]

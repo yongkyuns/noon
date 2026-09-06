@@ -93,6 +93,13 @@ pub enum SemanticAnimationIntent {
     },
     /// Introduce one detached semantic leaf through the shared geometry reveal channel.
     Create { target: SemanticNodeId },
+    /// Admit one detached semantic leaf at its scheduled composition position.
+    ///
+    /// Membership is prepared atomically with the enclosing activation; the
+    /// execution plan resolves the leaf's mapped Presence transition.
+    Add { target: SemanticNodeId },
+    /// Consume authored composition time without targeting an execution object.
+    Wait,
     /// Compose existing semantic animation declarations in stable authored order.
     ///
     /// Children use the same scene-global animation identities as leaf animations;
@@ -111,8 +118,9 @@ impl SemanticAnimationIntent {
             | Self::Rotate { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
-            | Self::Create { target } => Some(*target),
-            Self::Composition { .. } => None,
+            | Self::Create { target }
+            | Self::Add { target } => Some(*target),
+            Self::Wait | Self::Composition { .. } => None,
         }
     }
 
@@ -123,6 +131,8 @@ impl SemanticAnimationIntent {
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
+            | Self::Add { .. }
+            | Self::Wait
             | Self::Composition { .. } => None,
         }
     }
@@ -133,7 +143,9 @@ impl SemanticAnimationIntent {
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
-            | Self::Create { .. } => None,
+            | Self::Create { .. }
+            | Self::Add { .. }
+            | Self::Wait => None,
             Self::Composition { kind, .. } => Some(*kind),
         }
     }
@@ -144,7 +156,9 @@ impl SemanticAnimationIntent {
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
-            | Self::Create { .. } => &[],
+            | Self::Create { .. }
+            | Self::Add { .. }
+            | Self::Wait => &[],
             Self::Composition { children, .. } => children,
         }
     }
@@ -235,6 +249,20 @@ impl From<AnimationOptionsError> for SemanticAnimationError {
     fn from(value: AnimationOptionsError) -> Self {
         Self::Options(value)
     }
+}
+
+fn validate_authored_add_animation_options(
+    options: AnimationOptions,
+) -> Result<(), AnimationOptionsError> {
+    if let Some(run_time) = options.run_time {
+        if !run_time.is_finite() || run_time < 0.0 {
+            return Err(AnimationOptionsError::InvalidRunTime(run_time));
+        }
+    }
+    validate_authored_animation_options(AnimationOptions {
+        run_time: None,
+        ..options
+    })
 }
 
 fn validate_authored_animation_options(
@@ -384,6 +412,39 @@ impl SemanticStore {
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::Create { target },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one timed detached-membership declaration.
+    pub fn insert_semantic_add_animation(
+        &mut self,
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        validate_authored_add_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Add { target },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one targetless timed composition leaf.
+    pub fn insert_semantic_wait_animation(
+        &mut self,
+        duration: f64,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        let options = AnimationOptions::new().run_time(duration);
+        self.set_last_mutation_writes(0);
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Wait,
                 options,
             )),
         )

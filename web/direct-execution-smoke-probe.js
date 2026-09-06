@@ -17,6 +17,7 @@ const {
   createDirectOrdinarySquareToCircleSmokeRenderer,
   createDirectOrdinaryDifferentRotationsSmokeRenderer,
   createDirectOrdinaryAffineLifecycleSmokeRenderer,
+  createDirectOrdinaryCompositionSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -906,6 +907,51 @@ async function directAffineLifecycleProof(expectedBackend) {
   }
 }
 
+async function directTimedCompositionProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryCompositionSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    const samples = [];
+    // Smooth parent time puts the second Add after .4s and before .5s,
+    // and the third after .6s and before .8s. Child durations total 1s.
+    for (const [time, expected] of [
+      [0, [true, false, false]],
+      [400, [true, false, false]],
+      [500, [true, true, false]],
+      [600, [true, true, false]],
+      [800, [true, true, true]],
+      [1000, [true, true, true]],
+      [1250, [true, true, true]],
+      [1800, [false, true, true]],
+      [2000, [false, false, true]],
+      [2250, [true, false, false]],
+      [2500, [true, false, false]],
+    ]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const colors = [];
+      for (const x of [-2, 0, 2]) colors.push(await sampleRenderedColor(canvas, x, 0));
+      const visible = colors.map((color) => color.blue > color.red + 25);
+      if (visible.some((value, index) => value !== expected[index])) {
+        throw new Error(`direct timed composition at ${time}ms: ${JSON.stringify({ visible, expected, colors })}`);
+      }
+      samples.push({ time, visible });
+    }
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(2500));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 2.5 ||
+        renderer.objectCount() !== 1 || wake.cadence !== "idle") {
+      throw new Error("direct timed composition did not complete its shared continuation");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directMovingCameraCenterProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectMovingCameraCenterSmokeRenderer(canvas);
@@ -1506,6 +1552,7 @@ async function start() {
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
   metrics.differentRotations = await directDifferentRotationsProof(expectedBackend);
   metrics.affineLifecycle = await directAffineLifecycleProof(expectedBackend);
+  metrics.timedComposition = await directTimedCompositionProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);

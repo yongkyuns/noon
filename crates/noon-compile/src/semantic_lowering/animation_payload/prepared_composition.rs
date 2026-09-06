@@ -113,19 +113,10 @@ pub enum PreparedSemanticAnimationLoweringError {
         target: SemanticTransactionNodeRef,
         appearance: f32,
     },
-    UnsupportedFadeComposition {
-        animation: SemanticTransactionNodeRef,
-    },
     UnsupportedFadeOptions {
         animation: SemanticTransactionNodeRef,
     },
-    UnsupportedCreateComposition {
-        animation: SemanticTransactionNodeRef,
-    },
     UnsupportedCreateOptions {
-        animation: SemanticTransactionNodeRef,
-    },
-    UnsupportedAffineLifecycleComposition {
         animation: SemanticTransactionNodeRef,
     },
     UnsupportedAffineLifecycleOptions {
@@ -303,13 +294,6 @@ where
                         },
                     );
                 }
-                if !leaf.time_map.is_identity() {
-                    return Err(
-                        PreparedSemanticAnimationLoweringError::UnsupportedFadeComposition {
-                            animation: leaf.animation,
-                        },
-                    );
-                }
                 if !source.signal_bindings().is_empty() {
                     return Err(
                         PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
@@ -366,13 +350,6 @@ where
                         },
                     );
                 }
-                if !leaf.time_map.is_identity() {
-                    return Err(
-                        PreparedSemanticAnimationLoweringError::UnsupportedAffineLifecycleComposition {
-                            animation: leaf.animation,
-                        },
-                    );
-                }
                 let from = capture_effective(
                     leaf,
                     source,
@@ -402,13 +379,6 @@ where
                         },
                     );
                 }
-                if !leaf.time_map.is_identity() && !is_flat_parallel_time_map(&leaf.time_map) {
-                    return Err(
-                        PreparedSemanticAnimationLoweringError::UnsupportedCreateComposition {
-                            animation: leaf.animation,
-                        },
-                    );
-                }
                 if !source.signal_bindings().is_empty() {
                     return Err(
                         PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
@@ -431,6 +401,39 @@ where
                     },
                 }
             }
+            PreparedSemanticScheduledAnimationPayload::Add => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.remover
+                    || leaf.options.reverse_rate_function
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                            animation: leaf.animation,
+                            remover: leaf.options.remover,
+                            introducer: leaf.options.introducer,
+                        },
+                    );
+                }
+                if !source.signal_bindings().is_empty() {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
+                            animation: leaf.animation,
+                            target: leaf.target,
+                            property: SemanticObjectProperty::Presence,
+                        },
+                    );
+                }
+                super::affine::LoweredAffineChannel {
+                    property: Property::Presence,
+                    conflict_property: SemanticObjectProperty::Presence,
+                    completion: SemanticAnimationCompletion::Release,
+                    values: TrackValues::Bool {
+                        from: false,
+                        to: true,
+                    },
+                }
+            }
         };
         push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
     }
@@ -441,16 +444,6 @@ where
         run_time: schedule.run_time(),
         tracks,
     })
-}
-
-/// Create reveal tracks support one flat Parallel parent. The parent may apply
-/// any shared rate function, but every child must occupy its full interval;
-/// lagged, sequential, and nested compositions remain unavailable.
-fn is_flat_parallel_time_map(time_map: &noon_core::CompositionTimeMap) -> bool {
-    matches!(
-        time_map.steps.as_slice(),
-        [step] if step.start == 0.0 && step.duration == 1.0
-    )
 }
 
 fn capture_effective<F>(
@@ -1021,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_sequential_create_remains_unavailable_before_publication() {
+    fn prepared_sequential_create_preserves_order_before_publication() {
         let mut store = noon_core::SemanticStore::new();
         let root = store.insert_family();
         let circle =
@@ -1046,17 +1039,25 @@ mod tests {
         let before = store.scene_revision();
         let prepared = transaction.prepare(&mut store).unwrap();
 
-        assert!(matches!(
-            lower_prepared_semantic_animation_composition(
-                &prepared,
-                &index,
-                composition,
-                0.0,
-                AnimationOptions::new(),
-                |_| None,
-            ),
-            Err(PreparedSemanticAnimationLoweringError::UnsupportedCreateComposition { .. })
-        ));
+        let activation = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            composition,
+            0.0,
+            AnimationOptions::new(),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(activation.run_time(), 2.0);
+        assert_eq!(activation.tracks().len(), 2);
+        let first = &activation.tracks()[0];
+        let second = &activation.tracks()[1];
+        assert_eq!(first.property, Property::Reveal);
+        assert_eq!(second.property, Property::Reveal);
+        assert_eq!(first.time_map.evaluate(0.25).alpha, 0.5);
+        assert_eq!(second.time_map.evaluate(0.25).alpha, 0.0);
+        assert_eq!(first.time_map.evaluate(0.75).alpha, 1.0);
+        assert_eq!(second.time_map.evaluate(0.75).alpha, 0.5);
         drop(prepared);
         assert_eq!(store.scene_revision(), before);
     }

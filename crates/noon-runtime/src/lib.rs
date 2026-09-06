@@ -2526,6 +2526,54 @@ mod tests {
     }
 
     #[test]
+    fn nested_mapped_presence_has_one_forward_and_seek_boundary() {
+        let mut store = noon_core::SemanticStore::new();
+        let node = store.insert_semantic_object(noon_core::SemanticObjectState::new(
+            noon_core::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        store.attach_semantic_object(node).unwrap();
+        let mut index = noon_compile::SemanticExecutionIndex::new();
+        let (mut compiled, _) = noon_compile::lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        let object = index.execution_object_id(node).unwrap();
+        compiled
+            .apply_execution_patch(&noon_compile::ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(0),
+                object,
+                property: Property::Presence,
+                values: TrackValues::Bool {
+                    from: false,
+                    to: true,
+                },
+                timing: TrackTiming::new(2.0, 4.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::from_steps(vec![
+                    CompositionTimeMapStep::new(0.2, 0.6, RateFunction::Smooth),
+                    CompositionTimeMapStep::new(0.5, 0.5, RateFunction::Linear),
+                ]),
+            }))
+            .unwrap();
+        let boundary = compiled.tracks()[0].timing.start_time;
+        assert!(boundary > 2.0 && boundary < 6.0);
+
+        let mut forward = SceneInstance::new(compiled.clone());
+        forward.advance_to(boundary - 1e-6).unwrap();
+        assert!(!forward.frame().is_present(0));
+        forward.advance_to(boundary).unwrap();
+        assert!(forward.frame().is_present(0));
+        assert_eq!(forward.last_timeline_scheduler_stats().events_crossed, 1);
+        forward.advance_to(boundary + 0.25).unwrap();
+        assert!(forward.frame().is_present(0));
+        assert_eq!(forward.last_timeline_scheduler_stats().groups_requested, 0);
+
+        let mut direct = SceneInstance::new(compiled);
+        direct.seek(boundary).unwrap();
+        assert_eq!(direct.frame(), forward.seek(boundary).unwrap());
+        direct.seek(boundary - 1e-6).unwrap();
+        assert!(!direct.frame().is_present(0));
+    }
+
+    #[test]
     fn reveal_endpoints_midpoint_and_prestart_state_are_deterministic() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::path(

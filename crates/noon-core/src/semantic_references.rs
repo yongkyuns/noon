@@ -345,9 +345,11 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             SemanticAnimationIntent::Rotate { target, .. }
             | SemanticAnimationIntent::Fade { target, .. }
             | SemanticAnimationIntent::AffineLifecycle { target, .. }
-            | SemanticAnimationIntent::Create { target } => {
+            | SemanticAnimationIntent::Create { target }
+            | SemanticAnimationIntent::Add { target } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
             }
+            SemanticAnimationIntent::Wait => {}
             SemanticAnimationIntent::Composition { children, .. } => {
                 references.extend(
                     children

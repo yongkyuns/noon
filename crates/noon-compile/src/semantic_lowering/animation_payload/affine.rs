@@ -489,6 +489,7 @@ where
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
+            | SemanticScheduledAnimationPayload::Add
             | SemanticScheduledAnimationPayload::Rotate { .. } => {
                 return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation: leaf.animation,
@@ -566,6 +567,11 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
+        SemanticAnimationIntent::Add { target }
+            if *target == leaf.target && leaf.payload == SemanticScheduledAnimationPayload::Add =>
+        {
+            Ok(())
+        }
         SemanticAnimationIntent::AffineLifecycle {
             target,
             direction,
@@ -591,6 +597,7 @@ fn scheduled_target_state(leaf: &SemanticScheduledAnimationLeaf) -> SemanticNode
         SemanticScheduledAnimationPayload::Fade { .. }
         | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
         | SemanticScheduledAnimationPayload::Create
+        | SemanticScheduledAnimationPayload::Add
         | SemanticScheduledAnimationPayload::Rotate { .. } => {
             unreachable!("affine payload errors are only produced for TransformTo leaves")
         }
@@ -1327,7 +1334,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Reveal => 7,
         Property::Transform => 8,
         Property::Morph => 9,
-        _ => unreachable!("shared animation payload lowering only registers supported drivers"),
+        Property::Presence => 10,
     };
     (object.get(), slot)
 }

@@ -455,7 +455,11 @@ fn validate_track_time_fields(timing: TrackTiming) -> Result<(), TimelineError> 
 }
 
 pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), TimelineError> {
-    validate_track_timing(track.property, track.timing)?;
+    if track.property.is_instant() && !track.time_map.is_identity() {
+        validate_continuous_track_timing(track.timing)?;
+    } else {
+        validate_track_timing(track.property, track.timing)?;
+    }
     let expected = track.property.value_kind();
     let actual = track.values.value_kind();
     if expected != actual {
@@ -473,13 +477,39 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     track
         .values
         .validate_numeric_values(track.object, track.property)?;
-    if track.timing.is_instant() && !track.time_map.is_identity() {
+    if track.timing.is_instant() && !track.property.is_instant() && !track.time_map.is_identity() {
         return Err(TimelineError::InstantTrackCannotUseTimeMap(track.property));
     }
     track
         .time_map
         .validate()
-        .map_err(TimelineError::InvalidCompositionTimeMap)
+        .map_err(TimelineError::InvalidCompositionTimeMap)?;
+    if track.property.is_instant() && !track.time_map.is_identity() {
+        track
+            .time_map
+            .monotone_event_alpha()
+            .map_err(TimelineError::InvalidCompositionTimeMap)?;
+    }
+    Ok(())
+}
+
+/// Resolve authored timing into the timing consumed by the execution scheduler.
+///
+/// A mapped discrete track carries its composition root interval during semantic
+/// lowering. It is compiled to one instant boundary so playback and direct seek
+/// use the same event scheduler and cannot replay a reversing time-map event.
+pub fn resolve_track_timing(track: &TrackDefinition) -> Result<TrackTiming, TimelineError> {
+    validate_track_definition(track)?;
+    if !track.property.is_instant() || track.time_map.is_identity() {
+        return Ok(track.timing);
+    }
+    let alpha = track
+        .time_map
+        .monotone_event_alpha()
+        .map_err(TimelineError::InvalidCompositionTimeMap)?;
+    Ok(TrackTiming::instant(
+        track.timing.start_time + track.timing.duration * alpha,
+    ))
 }
 
 impl SceneDefinition {
@@ -790,6 +820,59 @@ mod tests {
             )
             .expect("ordinary properties may be assigned at an exact timestamp");
         assert_eq!(track, TrackId::new(0));
+    }
+
+    #[test]
+    fn mapped_presence_resolves_to_its_nested_monotone_boundary() {
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(1),
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::new(4.0, 6.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::from_steps(vec![
+                CompositionTimeMapStep::new(0.25, 0.5, RateFunction::Linear),
+                CompositionTimeMapStep::new(0.5, 0.5, RateFunction::Linear),
+            ]),
+        };
+        assert_eq!(resolve_track_timing(&track), Ok(TrackTiming::instant(7.0)));
+
+        let mut zero_root = track.clone();
+        zero_root.timing = TrackTiming::new(2.0, 0.0, RateFunction::Linear);
+        assert_eq!(
+            resolve_track_timing(&zero_root),
+            Ok(TrackTiming::instant(2.0))
+        );
+    }
+
+    #[test]
+    fn mapped_presence_rejects_reversing_rate_during_validation() {
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(1),
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                0.0,
+                1.0,
+                RateFunction::ThereAndBack,
+            )]),
+        };
+        let error = validate_track_definition(&track)
+            .expect_err("a reversing parent has no single presence boundary");
+        assert!(matches!(
+            error,
+            TimelineError::InvalidCompositionTimeMap(
+                CompositionTimeMapError::UnsupportedDiscreteRate { .. }
+            )
+        ));
     }
 
     #[test]

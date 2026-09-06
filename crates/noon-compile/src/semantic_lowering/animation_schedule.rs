@@ -1,8 +1,9 @@
 use noon_core::{
-    resolve_animation_options, resolve_composition_schedule, AnimationDefaults, AnimationOptions,
-    AnimationOptionsError, CompositionError, CompositionInterval, CompositionTimeMap,
-    CompositionTimeMapStep, ObjectId, PreparedSemanticMutationTransaction, RateFunction,
-    ResolvedAnimationOptions, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    resolve_add_animation_options, resolve_animation_options, resolve_composition_schedule,
+    AnimationDefaults, AnimationOptions, AnimationOptionsError, CompositionError,
+    CompositionInterval, CompositionTimeMap, CompositionTimeMapStep, ObjectId,
+    PreparedSemanticMutationTransaction, RateFunction, ResolvedAnimationOptions,
+    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticAnimationError, SemanticAnimationIntent,
     SemanticFadeDirection, SemanticNodeId, SemanticStore, SemanticTransactionAnimationIntent,
     SemanticTransactionNodeRef, SemanticTransactionReadError, SemanticTransformInterpolation,
@@ -69,6 +70,7 @@ pub enum SemanticScheduledAnimationPayload {
         endpoint: SemanticAffineLifecycleEndpoint,
     },
     Create,
+    Add,
 }
 
 /// One scheduled semantic animation leaf ready for payload-specific track lowering.
@@ -144,6 +146,7 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         endpoint: SemanticAffineLifecycleEndpoint,
     },
     Create,
+    Add,
 }
 
 /// One scheduled leaf whose authored identities are still transaction-local.
@@ -335,6 +338,7 @@ pub fn lower_semantic_animation_schedule(
                         endpoint,
                     },
                     ScheduledAnimationPayload::Create => SemanticScheduledAnimationPayload::Create,
+                    ScheduledAnimationPayload::Add => SemanticScheduledAnimationPayload::Add,
                 },
                 timing: leaf.timing,
                 time_map: leaf.time_map,
@@ -394,6 +398,9 @@ pub fn lower_prepared_semantic_animation_schedule(
                     ScheduledAnimationPayload::Create => {
                         PreparedSemanticScheduledAnimationPayload::Create
                     }
+                    ScheduledAnimationPayload::Add => {
+                        PreparedSemanticScheduledAnimationPayload::Add
+                    }
                 },
                 timing: leaf.timing,
                 time_map: leaf.time_map,
@@ -432,6 +439,10 @@ enum AnimationDeclarationIntent<R> {
     Create {
         target: R,
     },
+    Add {
+        target: R,
+    },
+    Wait,
     Composition {
         kind: SemanticAnimationCompositionKind,
         children: Vec<R>,
@@ -524,6 +535,13 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     .map_err(SemanticAnimationError::Target)?;
                 AnimationDeclarationIntent::Create { target: *target }
             }
+            SemanticAnimationIntent::Add { target } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::Add { target: *target }
+            }
+            SemanticAnimationIntent::Wait => AnimationDeclarationIntent::Wait,
             SemanticAnimationIntent::Composition { kind, children } => {
                 AnimationDeclarationIntent::Composition {
                     kind: *kind,
@@ -610,6 +628,10 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             target: (*target).into(),
                         }
                     }
+                    SemanticAnimationIntent::Add { target } => AnimationDeclarationIntent::Add {
+                        target: (*target).into(),
+                    },
+                    SemanticAnimationIntent::Wait => AnimationDeclarationIntent::Wait,
                     SemanticAnimationIntent::Composition { kind, children } => {
                         AnimationDeclarationIntent::Composition {
                             kind: *kind,
@@ -658,6 +680,10 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticTransactionAnimationIntent::Create { target } => {
                         AnimationDeclarationIntent::Create { target: *target }
                     }
+                    SemanticTransactionAnimationIntent::Add { target } => {
+                        AnimationDeclarationIntent::Add { target: *target }
+                    }
+                    SemanticTransactionAnimationIntent::Wait => AnimationDeclarationIntent::Wait,
                     SemanticTransactionAnimationIntent::Composition { kind, children } => {
                         AnimationDeclarationIntent::Composition {
                             kind: *kind,
@@ -696,12 +722,13 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
-            AnimationDeclarationIntent::Create { target } => {
+            AnimationDeclarationIntent::Create { target }
+            | AnimationDeclarationIntent::Add { target } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
-            AnimationDeclarationIntent::Composition { .. } => {}
+            AnimationDeclarationIntent::Wait | AnimationDeclarationIntent::Composition { .. } => {}
         }
         Ok(AnimationDeclaration { intent, options })
     }
@@ -752,6 +779,7 @@ enum ScheduledAnimationPayload<R> {
         endpoint: SemanticAffineLifecycleEndpoint,
     },
     Create,
+    Add,
 }
 
 #[derive(Clone, Debug)]
@@ -829,6 +857,7 @@ struct PlannedAnimation<R> {
 
 #[derive(Clone, Debug)]
 enum PlannedAnimationKind<R> {
+    Wait,
     Leaf {
         target: R,
         execution_object_id: ObjectId,
@@ -1040,6 +1069,64 @@ where
                 },
             })
         }
+        AnimationDeclarationIntent::Add { target } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options = resolve_add_animation_options(
+                AnimationDefaults {
+                    introducer: true,
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            if !options.introducer || options.remover {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::Add,
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::Wait => {
+            let options =
+                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
+                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            if options.lag_ratio != 0.0
+                || options.path_arc != 0.0
+                || options.remover
+                || options.introducer
+                || options.reverse_rate_function
+            {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Wait,
+            })
+        }
         AnimationDeclarationIntent::Composition { kind, children } => {
             let mut planned_children = Vec::with_capacity(children.len());
             for child in children {
@@ -1070,8 +1157,12 @@ where
                 remover: false,
                 introducer: false,
             };
-            let options = resolve_animation_options(defaults, state.options, play_options)
-                .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            let options = if intrinsic.run_time == 0.0 {
+                resolve_add_animation_options(defaults, state.options, play_options)
+            } else {
+                resolve_animation_options(defaults, state.options, play_options)
+            }
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
             if options.remover || options.introducer {
                 return Err(
                     AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
@@ -1084,7 +1175,7 @@ where
             let schedule = resolve_composition_schedule(
                 &child_run_times,
                 options.lag_ratio,
-                Some(options.run_time),
+                (options.run_time > 0.0).then_some(options.run_time),
             )
             .map_err(|error| AnimationSchedulePlanError::Composition { animation, error })?;
 
@@ -1095,7 +1186,7 @@ where
                 .map(|(child_index, (animation_plan, interval))| {
                     if !interval.start_time.is_finite()
                         || !interval.duration.is_finite()
-                        || interval.duration <= 0.0
+                        || interval.duration < 0.0
                     {
                         return Err(AnimationSchedulePlanError::InvalidResolvedInterval {
                             animation,
@@ -1129,20 +1220,33 @@ fn collect_leaves<R: Copy>(
     leaves: &mut Vec<ScheduledAnimationLeaf<R>>,
 ) {
     match &plan.kind {
+        PlannedAnimationKind::Wait => {}
         PlannedAnimationKind::Leaf {
             target,
             execution_object_id,
             payload,
             options,
-        } => leaves.push(ScheduledAnimationLeaf {
-            animation: plan.animation,
-            target: *target,
-            execution_object_id: *execution_object_id,
-            payload: *payload,
-            timing: TrackTiming::new(root_start_time, root_run_time, options.rate_func),
-            time_map: CompositionTimeMap::from_steps(steps.clone()),
-            options: *options,
-        }),
+        } => {
+            let instant_add =
+                matches!(payload, ScheduledAnimationPayload::Add) && root_run_time == 0.0;
+            leaves.push(ScheduledAnimationLeaf {
+                animation: plan.animation,
+                target: *target,
+                execution_object_id: *execution_object_id,
+                payload: *payload,
+                timing: if instant_add {
+                    TrackTiming::instant(root_start_time)
+                } else {
+                    TrackTiming::new(root_start_time, root_run_time, options.rate_func)
+                },
+                time_map: if instant_add {
+                    CompositionTimeMap::identity()
+                } else {
+                    CompositionTimeMap::from_steps(steps.clone())
+                },
+                options: *options,
+            });
+        }
         PlannedAnimationKind::Composition {
             rate_func,
             children,
@@ -1528,5 +1632,36 @@ mod tests {
             ),
             Err(SemanticAnimationScheduleError::InvalidStartTime(value)) if value.is_nan()
         ));
+    }
+}
+
+#[cfg(test)]
+mod recursive_wait_tests {
+    use super::*;
+
+    #[test]
+    fn nested_targetless_waits_keep_their_authored_sequence_duration_without_leaves() {
+        let mut store = SemanticStore::new();
+        let first = store.insert_semantic_wait_animation(0.2).unwrap();
+        let second = store.insert_semantic_wait_animation(0.2).unwrap();
+        let inner = store
+            .insert_semantic_sequence_animation(
+                &[second],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let root = store
+            .insert_semantic_sequence_animation(
+                &[first, inner],
+                AnimationOptions::new().rate_func(RateFunction::Smooth),
+            )
+            .unwrap();
+        let index = SemanticExecutionIndex::new();
+
+        let schedule =
+            lower_semantic_animation_schedule(&store, &index, root, 0.0, AnimationOptions::new())
+                .unwrap();
+        assert!((schedule.run_time() - 0.4).abs() < 1e-12);
+        assert!(schedule.leaves().is_empty());
     }
 }

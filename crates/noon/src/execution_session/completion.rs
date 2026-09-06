@@ -272,7 +272,7 @@ impl ExecutionSession {
 
         let crate::execution_segment::PendingSegmentCompletionKind::ObjectTracks {
             lifecycle_root,
-            lifecycle_removal,
+            lifecycle_removals,
             entries,
         } = &pending.kind
         else {
@@ -280,8 +280,8 @@ impl ExecutionSession {
         };
 
         let mut semantic = SemanticMutationTransaction::new();
-        if let Some((root, target)) = lifecycle_removal {
-            semantic.remove_member(*root, *target);
+        for &(root, target) in lifecycle_removals {
+            semantic.remove_member(root, target);
         }
         let mut release = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -361,12 +361,17 @@ impl ExecutionSession {
                 | SemanticAnimationCompletion::RevealLifecycle { .. }
                 | SemanticAnimationCompletion::Release => {}
             }
-            release.push(ExecutionPatch::ReconcileTrack {
-                track: entry.track,
-                object: entry.execution_object,
-                property: entry.property,
-                end_time: entry.end_time,
-            });
+            // Discrete channels have no active driver to release or endpoint to
+            // bake into authored state. Retain their event history so seeking an
+            // already completed composition still reproduces membership timing.
+            if !entry.property.is_instant() {
+                release.push(ExecutionPatch::ReconcileTrack {
+                    track: entry.track,
+                    object: entry.execution_object,
+                    property: entry.property,
+                    end_time: entry.end_time,
+                });
+            }
         }
 
         let mut effective = Vec::new();
@@ -431,7 +436,13 @@ impl ExecutionSession {
                 )
             })?;
 
-        self.apply_semantic_transaction_with_execution(store, semantic, release, Some(effective))?;
+        self.apply_semantic_transaction_with_execution(
+            store,
+            semantic,
+            release,
+            Some(effective),
+            super::publication::SemanticPublicationPurpose::SegmentCompletion,
+        )?;
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
         self.last_callback_receipt = None;

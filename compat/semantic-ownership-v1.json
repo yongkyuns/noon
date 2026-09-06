@@ -218,8 +218,8 @@
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_composition.py", "symbol": "_schedule_composition"},
       "shared_owner": {"language": "rust", "path": "crates/noon-core/src/reactive/composition.rs", "symbol": "CompositionSchedule/resolve_composition_schedule"},
-      "reason": "Rust resolves child intervals, but Python still recursively flattens the composition tree and authors the resulting time-map steps.",
-      "replacement": "Move composition tree lowering and time-map attachment to the shared Rust authoring facade; Python should retain only syntax adaptation.",
+      "reason": "Ordinary nested Transform/Rotate, Add/Wait, Create/Fade and affine lifecycle requests now lower as one shared Rust composition tree. Indication, border/fill, and unsupported lifecycle/family consumers still use Python recursive flattening and time-map construction.",
+      "replacement": "Move remaining effects and family consumers onto the existing shared recursive composition operation, then delete the Python scheduler and time-map construction; retain only syntax adaptation.",
       "migration_issue": "#61"
     },
     {

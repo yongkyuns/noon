@@ -52,7 +52,7 @@ pub(crate) struct SegmentCompletionEntry {
 pub(crate) enum PendingSegmentCompletionKind {
     ObjectTracks {
         lifecycle_root: Option<SemanticNodeId>,
-        lifecycle_removal: Option<(SemanticNodeId, SemanticNodeId)>,
+        lifecycle_removals: Vec<(SemanticNodeId, SemanticNodeId)>,
         entries: Vec<SegmentCompletionEntry>,
     },
     ScalarTrack {

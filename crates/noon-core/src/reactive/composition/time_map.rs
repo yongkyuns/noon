@@ -79,7 +79,7 @@ impl CompositionTimeMap {
                     value: step.start,
                 });
             }
-            if !step.duration.is_finite() || step.duration <= 0.0 {
+            if !step.duration.is_finite() || step.duration < 0.0 {
                 return Err(CompositionTimeMapError::InvalidDuration {
                     index,
                     value: step.duration,
@@ -106,6 +106,60 @@ impl CompositionTimeMap {
         }
         sample
     }
+
+    /// Resolve the root alpha at which a discrete leaf first begins.
+    ///
+    /// Discrete events cannot sample a time map every frame: doing so would make
+    /// an event repeat when a parent rate reverses. Compilation therefore turns a
+    /// supported map into one ordinary scheduler timestamp. The supported rate
+    /// functions are continuous and monotone, so walking the nested intervals
+    /// from leaf to root has one deterministic lower boundary.
+    pub fn monotone_event_alpha(&self) -> Result<f64, CompositionTimeMapError> {
+        self.validate()?;
+        let mut required_alpha = 0.0;
+        for (index, step) in self.steps.iter().copied().enumerate().rev() {
+            let required_warp = step.start + step.duration * required_alpha;
+            required_alpha = inverse_monotone_rate(step.rate_func, required_warp).ok_or(
+                CompositionTimeMapError::UnsupportedDiscreteRate {
+                    index,
+                    rate_func: step.rate_func,
+                },
+            )?;
+        }
+        Ok(required_alpha)
+    }
+}
+
+fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
+    let value = value.clamp(0.0, 1.0);
+    match rate_func {
+        RateFunction::Linear => Some(value),
+        RateFunction::Smooth
+        | RateFunction::RushInto
+        | RateFunction::RushFrom
+        | RateFunction::EaseInOutCubic => {
+            if value <= 0.0 {
+                return Some(0.0);
+            }
+            if value >= 1.0 {
+                return Some(1.0);
+            }
+            let mut lower = 0.0_f64;
+            let mut upper = 1.0_f64;
+            // Evaluation is defined in f32. A fixed search derives the earliest
+            // representable root boundary whose shared evaluator reaches value.
+            for _ in 0..64 {
+                let middle = lower + (upper - lower) * 0.5;
+                if f64::from(rate_func.evaluate(middle as f32)) < value {
+                    lower = middle;
+                } else {
+                    upper = middle;
+                }
+            }
+            Some(upper)
+        }
+        RateFunction::ThereAndBack | RateFunction::StepStart | RateFunction::StepEnd => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,9 +181,21 @@ impl CompositionTimeSample {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CompositionTimeMapError {
-    InvalidStart { index: usize, value: f64 },
-    InvalidDuration { index: usize, value: f64 },
-    IntervalOutsideParent { index: usize },
+    InvalidStart {
+        index: usize,
+        value: f64,
+    },
+    InvalidDuration {
+        index: usize,
+        value: f64,
+    },
+    IntervalOutsideParent {
+        index: usize,
+    },
+    UnsupportedDiscreteRate {
+        index: usize,
+        rate_func: RateFunction,
+    },
 }
 
 impl std::fmt::Display for CompositionTimeMapError {
@@ -141,11 +207,18 @@ impl std::fmt::Display for CompositionTimeMapError {
             ),
             Self::InvalidDuration { index, value } => write!(
                 formatter,
-                "composition time-map step {index} duration must be finite and positive, got {value}"
+                "composition time-map step {index} duration must be finite and non-negative, got {value}"
             ),
             Self::IntervalOutsideParent { index } => write!(
                 formatter,
                 "composition time-map step {index} extends outside its parent interval"
+            ),
+            Self::UnsupportedDiscreteRate {
+                index,
+                rate_func,
+            } => write!(
+                formatter,
+                "composition time-map step {index} uses {rate_func:?}, which has no single deterministic discrete-event boundary"
             ),
         }
     }
@@ -169,6 +242,56 @@ mod tests {
         assert_eq!(map.evaluate(0.5).alpha, 0.5);
         assert_eq!(map.evaluate(0.75).alpha, 1.0);
         assert!(map.evaluate(0.9).finished);
+    }
+
+    #[test]
+    fn zero_width_interval_is_an_exact_instant_boundary() {
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.5,
+            0.0,
+            RateFunction::Linear,
+        )]);
+        assert!(map.validate().is_ok());
+        assert!(!map.evaluate(0.5 - f32::EPSILON).begun);
+        assert_eq!(
+            map.evaluate(0.5),
+            CompositionTimeSample {
+                alpha: 1.0,
+                begun: true,
+                finished: true,
+            }
+        );
+        assert_eq!(map.evaluate(0.75).alpha, 1.0);
+        assert_eq!(map.monotone_event_alpha(), Ok(0.5));
+    }
+
+    #[test]
+    fn zero_width_root_end_event_resolves_to_one() {
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            1.0,
+            0.0,
+            RateFunction::Smooth,
+        )]);
+        // Smooth uses f32 and may round to one just before the endpoint. The
+        // discrete compiler boundary remains exactly the root endpoint.
+        assert!(!map.evaluate(0.9).begun);
+        assert!(map.evaluate(1.0).begun);
+        assert_eq!(map.monotone_event_alpha(), Ok(1.0));
+    }
+
+    #[test]
+    fn negative_and_non_finite_widths_remain_invalid() {
+        for duration in [-f64::EPSILON, f64::NAN, f64::INFINITY] {
+            let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                0.5,
+                duration,
+                RateFunction::Linear,
+            )]);
+            assert!(matches!(
+                map.validate(),
+                Err(CompositionTimeMapError::InvalidDuration { .. })
+            ));
+        }
     }
 
     #[test]
@@ -203,5 +326,33 @@ mod tests {
         ]);
         assert!(!map.evaluate(0.25).begun);
         assert_eq!(map.evaluate(0.75).alpha, 0.5);
+    }
+
+    #[test]
+    fn nested_monotone_event_boundary_is_resolved_inside_out() {
+        let map = CompositionTimeMap::from_steps(vec![
+            CompositionTimeMapStep::new(0.2, 0.6, RateFunction::Smooth),
+            CompositionTimeMapStep::new(0.5, 0.5, RateFunction::Linear),
+        ]);
+        let boundary = map.monotone_event_alpha().unwrap();
+        assert!(!map.evaluate((boundary - 1e-6) as f32).begun);
+        assert!(map.evaluate(boundary as f32).begun);
+    }
+
+    #[test]
+    fn reversing_and_discontinuous_rates_have_no_single_event_boundary() {
+        for rate_func in [
+            RateFunction::ThereAndBack,
+            RateFunction::StepStart,
+            RateFunction::StepEnd,
+        ] {
+            let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                0.25, 0.5, rate_func,
+            )]);
+            assert!(matches!(
+                map.monotone_event_alpha(),
+                Err(CompositionTimeMapError::UnsupportedDiscreteRate { .. })
+            ));
+        }
     }
 }

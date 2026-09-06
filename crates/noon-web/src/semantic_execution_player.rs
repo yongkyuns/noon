@@ -987,13 +987,13 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    /// Atomically admit and activate one mixed point-transform/angular-path composition.
+    /// Atomically admit and activate one recursive composition request through the shared
+    /// session. The request remains inert until this call; schedule, admission, and runtime
+    /// publication stay owned by Rust.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_declare_and_activate_animation_composition(
+    pub(crate) fn live_declare_and_activate_composition(
         &mut self,
-        kind: noon_core::SemanticAnimationCompositionKind,
-        children: &[noon::AnimationCompositionRequest<'_>],
-        composition_options: noon_core::AnimationOptions,
+        request: &noon::AnimationCompositionRequest<'_>,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
         self.require_completed_live_segment()?;
@@ -1007,12 +1007,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         )
-        .declare_and_activate_animation_composition(
-            kind,
-            children,
-            composition_options,
-            play_options,
-        )
+        .declare_and_activate_composition(request, play_options)
         .map_err(|error| error.to_string())?;
         let end_time = segment.end_time();
         self.clock = self

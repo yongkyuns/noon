@@ -40,6 +40,10 @@ pub enum SemanticTransactionAnimationIntent {
     Create {
         target: SemanticTransactionNodeRef,
     },
+    Add {
+        target: SemanticTransactionNodeRef,
+    },
+    Wait,
     Composition {
         kind: SemanticAnimationCompositionKind,
         children: Vec<SemanticTransactionNodeRef>,
@@ -57,8 +61,9 @@ impl SemanticTransactionAnimationIntent {
             Self::Rotate { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
-            | Self::Create { target } => Some([Some(*target), None]),
-            Self::Composition { .. } => None,
+            | Self::Create { target }
+            | Self::Add { target } => Some([Some(*target), None]),
+            Self::Wait | Self::Composition { .. } => None,
         };
         let children = match self {
             Self::Composition { children, .. } => children.as_slice(),
@@ -66,7 +71,9 @@ impl SemanticTransactionAnimationIntent {
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
-            | Self::Create { .. } => &[],
+            | Self::Create { .. }
+            | Self::Add { .. }
+            | Self::Wait => &[],
         };
         leaf.into_iter()
             .flatten()
@@ -136,6 +143,10 @@ impl SemanticTransactionAnimation {
                     target: (*target).into(),
                 }
             }
+            SemanticAnimationIntent::Add { target } => SemanticTransactionAnimationIntent::Add {
+                target: (*target).into(),
+            },
+            SemanticAnimationIntent::Wait => SemanticTransactionAnimationIntent::Wait,
             SemanticAnimationIntent::Composition { kind, children } => {
                 SemanticTransactionAnimationIntent::Composition {
                     kind: *kind,
@@ -186,6 +197,10 @@ impl SemanticTransactionAnimation {
                     target: resolve_node_ref(*target, committed),
                 }
             }
+            SemanticTransactionAnimationIntent::Add { target } => SemanticAnimationIntent::Add {
+                target: resolve_node_ref(*target, committed),
+            },
+            SemanticTransactionAnimationIntent::Wait => SemanticAnimationIntent::Wait,
             SemanticTransactionAnimationIntent::Composition { kind, children } => {
                 SemanticAnimationIntent::Composition {
                     kind: *kind,
@@ -219,7 +234,14 @@ pub(super) fn preflight_transaction_animation(
     staged_object_order: &mut Vec<SemanticTransactionNodeRef>,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
-    preflight_animation_options(animation.options(), index)?;
+    if matches!(
+        animation.intent(),
+        SemanticTransactionAnimationIntent::Add { .. }
+    ) {
+        preflight_add_animation_options(animation.options(), index)?;
+    } else {
+        preflight_animation_options(animation.options(), index)?;
+    }
     match animation.intent() {
         SemanticTransactionAnimationIntent::TransformTo {
             target,
@@ -278,6 +300,11 @@ pub(super) fn preflight_transaction_animation(
             catalog.ensure_animation_target(*target, index)?;
             catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
         }
+        SemanticTransactionAnimationIntent::Add { target } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+        }
+        SemanticTransactionAnimationIntent::Wait => {}
         SemanticTransactionAnimationIntent::Composition { children, .. } => {
             if children.is_empty() {
                 return Err(SemanticMutationTransactionError::EmptyAnimationComposition { index });
@@ -299,6 +326,25 @@ pub(super) fn preflight_transaction_animation(
     }
     available_pending_animations.insert(token);
     Ok(())
+}
+
+fn preflight_add_animation_options(
+    options: AnimationOptions,
+    index: usize,
+) -> Result<(), SemanticMutationTransactionError> {
+    if options
+        .run_time
+        .is_some_and(|run_time| !run_time.is_finite() || run_time < 0.0)
+    {
+        return Err(SemanticMutationTransactionError::InvalidAnimationRunTime { index });
+    }
+    preflight_animation_options(
+        AnimationOptions {
+            run_time: None,
+            ..options
+        },
+        index,
+    )
 }
 
 pub(super) fn preflight_animation_options(
@@ -361,6 +407,12 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::Create { target } => store
             .insert_semantic_create_animation(*target, options)
             .expect("preflighted semantic Create insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::Add { target } => store
+            .insert_semantic_add_animation(*target, options)
+            .expect("preflighted semantic Add insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::Wait => store
+            .insert_semantic_wait_animation(options.run_time.expect("preflighted wait has duration"))
+            .expect("preflighted semantic Wait insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Composition { kind, children } => match kind {
             SemanticAnimationCompositionKind::Parallel => store
                 .insert_semantic_parallel_animation(children, options)

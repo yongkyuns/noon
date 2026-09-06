@@ -117,18 +117,44 @@ pub struct TransformToRequest<'a> {
     options: AnimationOptions,
 }
 
-/// One typed leaf in an atomic live animation composition.
-#[derive(Clone, Copy)]
+/// One inert typed node in an atomic recursive live animation composition.
+///
+/// Nested children are owned so a caller can build a regular Rust tree without arenas or borrowed
+/// slices. Only opaque semantic handles are borrowed; the tree does not contain a schedule,
+/// runtime state, or a second scene representation.
+#[derive(Clone)]
 pub enum AnimationCompositionRequest<'a> {
-    /// Transform a source toward an authored target using the requested interpolation.
     TransformTo(TransformToRequest<'a>),
-    /// Rotate a centered 2D leaf along an angular path.
     Rotate {
-        /// The authored semantic object affected by this leaf.
         target: &'a Mobject,
-        /// Signed 2D rotation in radians.
         angle: f64,
-        /// Leaf-local authored timing options.
+        options: AnimationOptions,
+    },
+    Wait {
+        duration: f64,
+    },
+    Add {
+        target: &'a Mobject,
+        options: AnimationOptions,
+    },
+    Fade {
+        target: &'a Mobject,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    },
+    Create {
+        target: &'a Mobject,
+        options: AnimationOptions,
+    },
+    AffineLifecycle {
+        target: &'a Mobject,
+        direction: AffineLifecycleDirection,
+        endpoint: AffineLifecycleEndpoint,
+        options: AnimationOptions,
+    },
+    Composition {
+        kind: SemanticAnimationCompositionKind,
+        children: Vec<AnimationCompositionRequest<'a>>,
         options: AnimationOptions,
     },
 }
@@ -643,35 +669,7 @@ impl<'a> LiveSession<'a> {
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, LiveSessionError> {
         self.require_mobject(target)?;
-        let endpoint = match endpoint {
-            AffineLifecycleEndpoint::Point {
-                x,
-                y,
-                rotation_offset,
-                point_color,
-            } => SemanticAffineLifecycleEndpoint {
-                point: SemanticVec3::new(x, y, 0.0),
-                rotation_offset,
-                point_color,
-            },
-            AffineLifecycleEndpoint::EffectiveCenter => {
-                if direction != AffineLifecycleDirection::RemoveTo {
-                    return Err(LiveSessionError::Mobject(
-                        "effective-center lifecycle endpoints require a live removal target".into(),
-                    ));
-                }
-                let center = if self.contains(target)? {
-                    self.effective_layout(target)?.center
-                } else {
-                    target.center().map_err(LiveSessionError::Mobject)?
-                };
-                SemanticAffineLifecycleEndpoint {
-                    point: SemanticVec3::new(center.0, center.1, 0.0),
-                    rotation_offset: 0.0,
-                    point_color: None,
-                }
-            }
-        };
+        let endpoint = self.resolve_affine_lifecycle_endpoint(target, direction, endpoint)?;
         let mut store = self.store.borrow_mut();
         self.session
             .declare_and_activate_affine_lifecycle(
@@ -685,7 +683,10 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
-    /// Atomically admit one detached leaf, reverse Reveal, and remove it at completion.
+    /// Reverse one leaf's Reveal and remove it at completion.
+    ///
+    /// The shared declaration accepts either a detached leaf, which it admits atomically, or
+    /// one direct live member of this session root. In both cases completion owns removal.
     pub fn declare_and_activate_uncreate(
         &mut self,
         target: &Mobject,
@@ -720,11 +721,24 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
-    /// Atomically author and activate one flat Parallel or Sequence of TransformTo leaves.
+    /// Atomically author and activate one recursive shared composition.
     ///
-    /// All handles are checked before the semantic transaction is built. Rust snapshots the target
-    /// states into that transaction, then completes schedule lowering, effective capture, and
-    /// runtime preflight before any target, leaf, or root receives permanent identity.
+    /// Every opaque handle is checked before the session receives the inert tree. The session then
+    /// validates membership/lifecycle constraints and stages one semantic mutation transaction;
+    /// this facade owns neither a schedule nor a runtime copy.
+    pub fn declare_and_activate_composition(
+        &mut self,
+        request: &AnimationCompositionRequest<'_>,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = self.execution_composition_request(request)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_composition(&mut store, self.root, &request, play_options)
+            .map_err(Into::into)
+    }
+
+    /// Direct transform convenience built on the same recursive declaration path.
     pub fn declare_and_activate_transform_composition(
         &mut self,
         kind: SemanticAnimationCompositionKind,
@@ -732,35 +746,19 @@ impl<'a> LiveSession<'a> {
         composition_options: AnimationOptions,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, LiveSessionError> {
-        for child in children {
-            self.require_mobject(child.source)?;
-            self.require_mobject(child.target_state)?;
-        }
-        let children = children
-            .iter()
-            .map(
-                |child| crate::execution_session::SemanticCompositionRequest::TransformTo {
-                    source: child.source.node_id(),
-                    target_state: child.target_state.node_id(),
-                    interpolation: child.interpolation,
-                    options: child.options,
-                },
-            )
-            .collect::<Vec<_>>();
-        let mut store = self.store.borrow_mut();
-        self.session
-            .declare_and_activate_mixed_composition(
-                &mut store,
-                kind,
-                &children,
-                composition_options,
-                play_options,
-                None,
-            )
-            .map_err(Into::into)
+        let request = AnimationCompositionRequest::Composition {
+            kind,
+            children: children
+                .iter()
+                .copied()
+                .map(AnimationCompositionRequest::TransformTo)
+                .collect(),
+            options: composition_options,
+        };
+        self.declare_and_activate_composition(&request, play_options)
     }
 
-    /// Atomically admit detached leaves and activate mixed point-transform/angular-path leaves.
+    /// Flat caller convenience over the same recursive composition operation.
     pub fn declare_and_activate_animation_composition(
         &mut self,
         kind: SemanticAnimationCompositionKind,
@@ -768,50 +766,136 @@ impl<'a> LiveSession<'a> {
         composition_options: AnimationOptions,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, LiveSessionError> {
-        for child in children {
-            match child {
-                AnimationCompositionRequest::TransformTo(child) => {
-                    self.require_mobject(child.source)?;
-                    self.require_mobject(child.target_state)?;
+        let request = AnimationCompositionRequest::Composition {
+            kind,
+            children: children.to_vec(),
+            options: composition_options,
+        };
+        self.declare_and_activate_composition(&request, play_options)
+    }
+
+    fn resolve_affine_lifecycle_endpoint(
+        &self,
+        target: &Mobject,
+        direction: AffineLifecycleDirection,
+        endpoint: AffineLifecycleEndpoint,
+    ) -> Result<SemanticAffineLifecycleEndpoint, LiveSessionError> {
+        match endpoint {
+            AffineLifecycleEndpoint::Point {
+                x,
+                y,
+                rotation_offset,
+                point_color,
+            } => Ok(SemanticAffineLifecycleEndpoint {
+                point: SemanticVec3::new(x, y, 0.0),
+                rotation_offset,
+                point_color,
+            }),
+            AffineLifecycleEndpoint::EffectiveCenter => {
+                if direction != AffineLifecycleDirection::RemoveTo {
+                    return Err(LiveSessionError::Mobject(
+                        "effective-center lifecycle endpoints require a live removal target".into(),
+                    ));
                 }
-                AnimationCompositionRequest::Rotate { target, .. } => {
-                    self.require_mobject(target)?;
-                }
+                let center = if self.contains(target)? {
+                    self.effective_layout(target)?.center
+                } else {
+                    target.center().map_err(LiveSessionError::Mobject)?
+                };
+                Ok(SemanticAffineLifecycleEndpoint {
+                    point: SemanticVec3::new(center.0, center.1, 0.0),
+                    rotation_offset: 0.0,
+                    point_color: None,
+                })
             }
         }
-        let children = children
-            .iter()
-            .map(|child| match child {
-                AnimationCompositionRequest::TransformTo(child) => {
-                    crate::execution_session::SemanticCompositionRequest::TransformTo {
-                        source: child.source.node_id(),
-                        target_state: child.target_state.node_id(),
-                        interpolation: child.interpolation,
-                        options: child.options,
-                    }
+    }
+
+    fn execution_composition_request(
+        &self,
+        request: &AnimationCompositionRequest<'_>,
+    ) -> Result<crate::execution_session::SemanticCompositionRequest, LiveSessionError> {
+        use crate::execution_session::SemanticCompositionRequest as Request;
+        Ok(match request {
+            AnimationCompositionRequest::TransformTo(child) => {
+                self.require_mobject(child.source)?;
+                self.require_mobject(child.target_state)?;
+                Request::TransformTo {
+                    source: child.source.node_id(),
+                    target_state: child.target_state.node_id(),
+                    interpolation: child.interpolation,
+                    options: child.options,
                 }
-                AnimationCompositionRequest::Rotate {
-                    target,
-                    angle,
-                    options,
-                } => crate::execution_session::SemanticCompositionRequest::Rotate {
+            }
+            AnimationCompositionRequest::Rotate {
+                target,
+                angle,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::Rotate {
                     target: target.node_id(),
                     angle: *angle,
                     options: *options,
-                },
-            })
-            .collect::<Vec<_>>();
-        let mut store = self.store.borrow_mut();
-        self.session
-            .declare_and_activate_mixed_composition(
-                &mut store,
+                }
+            }
+            AnimationCompositionRequest::Wait { duration } => Request::Wait {
+                duration: *duration,
+            },
+            AnimationCompositionRequest::Add { target, options } => {
+                self.require_mobject(target)?;
+                Request::Add {
+                    target: target.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::Fade {
+                target,
+                direction,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::Fade {
+                    target: target.node_id(),
+                    direction: *direction,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::Create { target, options } => {
+                self.require_mobject(target)?;
+                Request::Create {
+                    target: target.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::AffineLifecycle {
+                target,
+                direction,
+                endpoint,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::AffineLifecycle {
+                    target: target.node_id(),
+                    direction: *direction,
+                    endpoint: self
+                        .resolve_affine_lifecycle_endpoint(target, *direction, *endpoint)?,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::Composition {
                 kind,
-                &children,
-                composition_options,
-                play_options,
-                Some(self.root),
-            )
-            .map_err(Into::into)
+                children,
+                options,
+            } => Request::Composition {
+                kind: *kind,
+                children: children
+                    .iter()
+                    .map(|child| self.execution_composition_request(child))
+                    .collect::<Result<Vec<_>, _>>()?,
+                options: *options,
+            },
+        })
     }
 
     /// Start a continuation wait without allocating a scheduler track.
@@ -2041,6 +2125,37 @@ mod tests {
     }
 
     #[test]
+    fn uncreate_reverses_and_removes_a_direct_bound_leaf() {
+        let mut scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let semantic_id = square.node_id();
+        let authored = square.state().unwrap();
+        scene.add(&square).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_uncreate(
+                &square,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(live.session.frame().reveal(0), 1.0);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        assert_eq!(live.session.frame().reveal(0), 0.0);
+        live.complete_segment(segment).unwrap();
+        assert!(!live.contains(&square).unwrap());
+        assert_eq!(square.node_id(), semantic_id);
+        assert_eq!(square.state().unwrap(), authored);
+    }
+
+    #[test]
     fn uncreate_rejects_asymmetric_rate_before_admission() {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
@@ -2615,5 +2730,121 @@ mod tests {
         assert_eq!(live.session.publication_context(), before);
         assert!(live.session.take_frame_changes().is_empty());
         assert!(live.session.execution_object_id(fading.node_id()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod recursive_composition_tests {
+    use super::*;
+    use crate::Scene;
+    use noon_core::RateFunction;
+
+    fn linear(duration: f64) -> AnimationOptions {
+        AnimationOptions::new()
+            .run_time(duration)
+            .rate_func(RateFunction::Linear)
+    }
+
+    #[test]
+    fn nested_add_and_wait_publish_one_membership_batch_and_one_segment() {
+        let scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = first.store().borrow().len();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Sequence,
+            options: AnimationOptions::new().rate_func(RateFunction::Smooth),
+            children: vec![
+                AnimationCompositionRequest::Add {
+                    target: &first,
+                    options: linear(0.2),
+                },
+                AnimationCompositionRequest::Composition {
+                    kind: SemanticAnimationCompositionKind::Sequence,
+                    options: AnimationOptions::new().rate_func(RateFunction::Linear),
+                    children: vec![
+                        AnimationCompositionRequest::Wait { duration: 0.2 },
+                        AnimationCompositionRequest::Add {
+                            target: &second,
+                            options: linear(0.2),
+                        },
+                    ],
+                },
+            ],
+        };
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+
+        assert!((segment.duration() - 0.6).abs() < 1e-12);
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        assert_eq!(first.store().borrow().len(), before_nodes + 5);
+        assert!(live.contains(&first).unwrap());
+        assert!(live.contains(&second).unwrap());
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+
+        let second_execution = live
+            .session
+            .execution_object_id(second.node_id())
+            .expect("admitted leaf keeps one execution identity");
+        let early = live.session.seek(segment.start_time() + 0.1).unwrap();
+        let second_index = early
+            .objects
+            .iter()
+            .position(|object| object.id == second_execution)
+            .expect("admitted leaf keeps one runtime slot");
+        assert!(!early.is_present(second_index));
+        assert!(live
+            .session
+            .seek(segment.end_time())
+            .unwrap()
+            .is_present(second_index));
+    }
+
+    #[test]
+    fn repeated_detached_add_is_rejected_before_any_publication() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new(),
+            children: vec![
+                AnimationCompositionRequest::Add {
+                    target: &square,
+                    options: linear(0.2),
+                },
+                AnimationCompositionRequest::Add {
+                    target: &square,
+                    options: linear(0.2),
+                },
+            ],
+        };
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new());
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::CreateTarget {
+                    error: crate::ExecutionSessionCreateError::DuplicateTarget,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
     }
 }

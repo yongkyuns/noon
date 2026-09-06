@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon_core::{
-    validate_style, validate_track_definition, validate_transform, ObjectContentRef, ObjectId,
-    Property, TrackDefinition, TrackId, TrackValues,
+    resolve_track_timing, validate_style, validate_track_definition, validate_transform,
+    ObjectContentRef, ObjectId, Property, TrackDefinition, TrackId, TrackValues,
 };
 
 use crate::{
@@ -37,12 +37,13 @@ impl TrackShadow {
     }
 
     fn from_definition(track: &TrackDefinition, object_index: u32) -> Self {
+        let timing = resolve_track_timing(track).expect("track was validated before preflight");
         Self {
             id: track.id,
             object_index,
             property: track.property,
-            start_time: track.timing.start_time,
-            duration: track.timing.duration,
+            start_time: timing.start_time,
+            duration: timing.duration,
             reconciled: false,
             presence: presence_endpoints(track.property, &track.values),
         }
