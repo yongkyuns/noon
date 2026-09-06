@@ -135,7 +135,7 @@ def _scale_in_place_builder(
     # geometry-only authoring and worker startup remain untouched.
     import _manim_typst as _typst
 
-    if isinstance(mobject, _typst._RetainedTextMobject):
+    if factor != 0.0 and isinstance(mobject, _typst._RetainedTextMobject):
         import _manim_retained_animate as _retained_animate
 
         _retained_animate.install()
@@ -155,6 +155,7 @@ def _scale_in_place_builder(
             self.source = mobject
             self.mobject = mobject
             self.scale_factor = factor
+            self._canonical_affine_lifecycle = "shrink" if factor == 0.0 else None
             self.anim_args = dict(animation_kwargs)
             self.cannot_pass_args = True
             self.is_chaining = False

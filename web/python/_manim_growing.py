@@ -241,6 +241,22 @@ def _growing_scene_play(
     lag_ratio: float | None = None,
     **kwargs: Any,
 ) -> _compat.Scene:
+    if getattr(self, "_canonical_authoring_context", None) is not None and not getattr(
+        self, "_export_document_construct", False
+    ):
+        import _manim_canonical_scene as _canonical_scene
+
+        return _canonical_scene._play(
+            self,
+            *animations,
+            duration=duration,
+            run_time=run_time,
+            start_time=start_time,
+            easing=easing,
+            rate_func=rate_func,
+            lag_ratio=lag_ratio,
+            **kwargs,
+        )
     grows = [animation for animation in animations if isinstance(animation, GrowFromPoint)]
     if not grows:
         return _ORIGINAL_SCENE_PLAY(
