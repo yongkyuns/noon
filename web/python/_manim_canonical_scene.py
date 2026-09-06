@@ -1529,27 +1529,25 @@ def _play(self, *args, **kwargs):
     # Grow/Spin/Shrink are shared Rust lifecycle operations even while an
     # explicit export document is being authored. Only the other compatibility
     # animations use the document codec below.
-    # Grow/Spin retain an export-friendly single-leaf route. Mixed and
-    # grouped lifecycle requests are classified by the shared composition
-    # builder below so sibling order and admission stay in one transaction.
+    # Single-leaf Grow/Spin/Shrink retain the export-friendly shared lifecycle
+    # route. Mixed and grouped lifecycle requests are classified by the shared
+    # composition builder below so sibling order and admission stay atomic.
     if len(args) == 1:
-        growing = sys.modules.get("_manim_growing")
-        if growing is not None and isinstance(args[0], growing.GrowFromPoint):
-            classified = _canonical_affine_lifecycle_animation(self, args[0])
-            if classified is not None:
-                target, animation = classified
-                return _play_canonical_affine_lifecycle(
-                    self,
-                    target,
-                    animation,
-                    duration=kwargs.pop("duration", None),
-                    run_time=kwargs.pop("run_time", None),
-                    start_time=kwargs.pop("start_time", None),
-                    easing=kwargs.pop("easing", None),
-                    rate_func=kwargs.pop("rate_func", None),
-                    lag_ratio=kwargs.pop("lag_ratio", None),
-                    kwargs=kwargs,
-                )
+        classified = _canonical_affine_lifecycle_animation(self, args[0])
+        if classified is not None:
+            target, animation = classified
+            return _play_canonical_affine_lifecycle(
+                self,
+                target,
+                animation,
+                duration=kwargs.pop("duration", None),
+                run_time=kwargs.pop("run_time", None),
+                start_time=kwargs.pop("start_time", None),
+                easing=kwargs.pop("easing", None),
+                rate_func=kwargs.pop("rate_func", None),
+                lag_ratio=kwargs.pop("lag_ratio", None),
+                kwargs=kwargs,
+            )
     # An explicit document request authors tracks for its external artifact.
     # Completing a live segment here would discard the exported animation and
     # mix runtime completion with the codec's authored-time cursor.
