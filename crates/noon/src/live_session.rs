@@ -1920,7 +1920,7 @@ mod tests {
             result,
             Err(LiveSessionError::Activation(
                 ExecutionSessionAnimationError::FadeTarget {
-                    error: ExecutionSessionFadeError::TargetIsNotDetached,
+                    error: crate::ExecutionSessionFadeError::TargetIsNotDetached,
                     ..
                 }
             ))
@@ -1984,7 +1984,7 @@ mod tests {
             result,
             Err(LiveSessionError::Activation(
                 ExecutionSessionAnimationError::FadeTarget {
-                    error: ExecutionSessionFadeError::TargetIsAliased,
+                    error: crate::ExecutionSessionFadeError::TargetIsAliased,
                     ..
                 }
             ))

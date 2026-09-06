@@ -6327,11 +6327,11 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_first_fade_entry_keeps_context_unbootstrapped() {
+    fn invalid_first_fade_entry_keeps_context_unbootstrapped() {
         let mut context = CanonicalAuthoringScene::default();
         let text = context
             .scene
-            .text(noon::Text::new("unsupported entry"))
+            .text(noon::Text::new("resource entry"))
             .unwrap();
         let before = context.scene.store().borrow().scene_revision();
         let id = ObjectId::new(0);
@@ -6342,7 +6342,7 @@ mod tests {
                 &text,
                 SemanticFadeDirection::In,
                 AnimationOptions::new()
-                    .run_time(1.0)
+                    .run_time(-1.0)
                     .rate_func(RateFunction::Linear),
             )
             .is_err());

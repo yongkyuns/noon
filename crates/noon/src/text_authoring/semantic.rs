@@ -320,29 +320,29 @@ mod tests {
         assert!(session.text_resources().get(label_resource).is_none());
         assert!(session.text_resources().get(unrelated_resource).is_none());
 
+        let segment = {
+            let mut live = scene.live(&mut session);
+            let segment = live
+                .declare_and_activate_affine_lifecycle(
+                    &label,
+                    crate::AffineLifecycleDirection::RemoveTo,
+                    crate::AffineLifecycleEndpoint::EffectiveCenter,
+                    AnimationOptions::new().run_time(1.0),
+                )
+                .unwrap();
+
+            assert!(live.contains(&label).unwrap());
+            assert_eq!(label.node_id(), semantic_id);
+            assert_eq!(live.authored(&label).unwrap(), authored);
+            segment
+        };
+        assert_eq!(session.frame().objects.len(), 1);
+        assert_eq!(session.frame().objects[0].text(), Some(label_resource));
+        assert!(session.frame().objects[0].text_bounds.is_some());
+        assert!(session.text_resources().get(label_resource).is_some());
+        assert!(session.text_resources().get(unrelated_resource).is_none());
+
         let mut live = scene.live(&mut session);
-        let segment = live
-            .declare_and_activate_affine_lifecycle(
-                &label,
-                crate::AffineLifecycleDirection::RemoveTo,
-                crate::AffineLifecycleEndpoint::EffectiveCenter,
-                AnimationOptions::new().run_time(1.0),
-            )
-            .unwrap();
-
-        assert!(live.contains(&label).unwrap());
-        assert_eq!(label.node_id(), semantic_id);
-        assert_eq!(live.authored(&label).unwrap(), authored);
-        assert_eq!(live.session.frame().objects.len(), 1);
-        assert_eq!(live.session.frame().objects[0].text(), Some(label_resource));
-        assert!(live.session.frame().objects[0].text_bounds.is_some());
-        assert!(live.session.text_resources().get(label_resource).is_some());
-        assert!(live
-            .session
-            .text_resources()
-            .get(unrelated_resource)
-            .is_none());
-
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
         live.complete_segment(segment).unwrap();
@@ -366,6 +366,7 @@ mod tests {
             .borrow_mut()
             .insert_semantic_object(noon_core::SemanticObjectState::new(missing_resource));
         let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
         let before = session.publication_context();
 
         let result = session.declare_and_activate_affine_lifecycle(
