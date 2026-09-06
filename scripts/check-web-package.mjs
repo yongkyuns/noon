@@ -264,10 +264,12 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(",
+    "export function createDirectOrdinaryPaintPlaySmokeRenderer(",
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectOrdinaryPaintPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryStylePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
   );
 }

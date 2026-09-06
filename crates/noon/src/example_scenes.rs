@@ -271,6 +271,68 @@ pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
     Ok(session)
 }
 
+/// Execute one ordinary Manim paint animation and a following authored edit.
+///
+/// Both fill and stroke use the shared color and paint-opacity operations. The
+/// exact midpoint and endpoint assertions protect their independent starting
+/// colors, while the final yellow edit proves completion released both drivers.
+pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.4)?;
+    circle.set_fill(0.0, 0.0, 1.0, 1.0)?;
+    circle.set_stroke_color(1.0, 1.0, 1.0, 1.0)?;
+    scene.add(&circle)?;
+
+    let mut session = scene.execution_session()?;
+    {
+        let mut live = scene.live(&mut session);
+        let target = live.target_editor(&circle)?;
+        live.set_color(&target, 1.0, 0.0, 0.0, 1.0)?;
+        live.set_opacity(&target, 0.5)?;
+
+        let segment = live.declare_and_activate_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )?;
+        live.advance_segment_to(segment, 1.0)?;
+        let midpoint = live.effective(&circle)?.style;
+        assert_eq!(midpoint.fill, Some(Color::rgba(0.5, 0.0, 0.5, 0.75)));
+        assert_eq!(midpoint.stroke, Some(Color::rgba(1.0, 0.5, 0.5, 0.75)));
+        assert_eq!(midpoint.opacity, 1.0);
+
+        live.advance_segment_to(segment, segment.end_time())?;
+        let endpoint = live.effective(&circle)?.style;
+        assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.5)));
+        assert_eq!(endpoint.stroke, Some(Color::rgba(1.0, 0.0, 0.0, 0.5)));
+        assert_eq!(endpoint.opacity, 1.0);
+        live.complete_segment(segment)?;
+
+        live.set_color(&circle, 1.0, 1.0, 0.0, 1.0)?;
+        live.set_opacity(&circle, 1.0)?;
+        let final_style = live.authored(&circle)?.style;
+        assert_eq!(
+            final_style.fill,
+            Some(SemanticPaint::Solid(Color::rgb(1.0, 1.0, 0.0)))
+        );
+        assert_eq!(
+            final_style.stroke,
+            Some(SemanticPaint::Solid(Color::rgb(1.0, 1.0, 0.0)))
+        );
+        assert_eq!(final_style.fill_opacity, 1.0);
+        assert_eq!(final_style.stroke_opacity, 1.0);
+        assert_eq!(final_style.object_opacity, 1.0);
+        let effective = live.effective(&circle)?.style;
+        assert_eq!(effective.fill, Some(Color::rgb(1.0, 1.0, 0.0)));
+        assert_eq!(effective.stroke, Some(Color::rgb(1.0, 1.0, 0.0)));
+        assert_eq!(effective.opacity, 1.0);
+    }
+    assert_eq!(session.frame().time, 2.0);
+    Ok(session)
+}
+
 /// Build and settle the paired canonical scalar `ValueTracker` example.
 ///
 /// Signal-track scheduling, interpolation, binding evaluation, and direct-write

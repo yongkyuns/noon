@@ -442,6 +442,14 @@ try {
       expectedFinalColor: "green",
     },
     {
+      filename: "ordinary_paint_play.py",
+      objectCount: 1,
+      expectedDuration: 2,
+      endpointTime: null,
+      expectedFinalCenter: [0, 0],
+      expectedFinalColor: "yellow",
+    },
+    {
       filename: "live_value_tracker.py",
       objectCount: 1,
       expectedDuration: 2,
@@ -548,6 +556,13 @@ try {
           finalPixels.meanGreen > finalPixels.meanRed + 30 &&
             finalPixels.meanGreen > finalPixels.meanBlue + 30,
           `${filename}: post-completion green style edit was not rendered: ${JSON.stringify(finalPixels)}`,
+        );
+      }
+      if (expectedFinalColor === "yellow") {
+        assert.ok(
+          finalPixels.meanRed > finalPixels.meanBlue + 30 &&
+            finalPixels.meanGreen > finalPixels.meanBlue + 30,
+          `${filename}: post-completion yellow paint edit was not rendered: ${JSON.stringify(finalPixels)}`,
         );
       }
     }
