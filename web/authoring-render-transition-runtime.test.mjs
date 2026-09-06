@@ -279,6 +279,39 @@ test("idle continuation retries a pending surface publication without advancing 
   assert.equal(harness.animationFrames.length, 0);
 });
 
+test("paused semantic wake presents exact samples without leaving an animation-frame poll", async () => {
+  const harness = await createManagedWakeHarness([true, true]);
+  assert.equal(vm.runInContext("presentedFrames", harness.context), 1);
+  assert.equal(harness.animationFrames.length, 0, "the initial dirty frame settles to idle");
+  assert.equal(harness.nextPort.messages.filter((message) => message.type === "tick").length, 0);
+
+  vm.runInContext(
+    'consumeDelta("exact-paused-sample", {session:14, sequence:3});',
+    harness.context,
+  );
+  assert.equal(vm.runInContext("presentedFrames", harness.context), 2);
+  assert.equal(
+    harness.nextPort.messages.filter((message) => message.type === "execution_presented").at(-1)
+      .sequence,
+    3,
+  );
+  assert.equal(harness.animationFrames.length, 0, "an exact paused sample does not restart RAF");
+  assert.equal(harness.nextPort.messages.filter((message) => message.type === "tick").length, 0);
+
+  vm.runInContext(
+    'handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});',
+    harness.context,
+  );
+  assert.equal(harness.animationFrames.length, 1, "resume cadence schedules one engine drive");
+  harness.animationFrames.shift()(25);
+  assert.equal(harness.nextPort.messages.filter((message) => message.type === "tick").length, 1);
+  assert.equal(
+    harness.animationFrames.length,
+    0,
+    "the engine response must authorize any later animation-frame drive",
+  );
+});
+
 test("replacement cancels an obsolete continuation deadline before it can tick the next engine", async () => {
   const harness = await createManagedWakeHarness();
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:1000});', harness.context);

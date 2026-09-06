@@ -60,7 +60,7 @@ export async function attachSemanticEngine(
   let pendingPresentation = null;
   let continuationActive = false;
   let continuationGeneration = continuation?.generation ?? null;
-  let continuationWakeCadence = null;
+  let executionWakeCadence = null;
   let pendingRendererObservation = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
@@ -193,10 +193,9 @@ export async function attachSemanticEngine(
     }
     return { type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" };
   };
-  const emitContinuationWake = (cadence, timerAfterMilliseconds, force = false) => {
-    if (continuation === null) return;
-    if (!force && cadence === "idle" && continuationWakeCadence === "idle") return;
-    continuationWakeCadence = cadence;
+  const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
+    if (!force && cadence === "idle" && executionWakeCadence === "idle") return;
+    executionWakeCadence = cadence;
     renderPort.postMessage({
       type: "execution_wake",
       cadence,
@@ -217,7 +216,7 @@ export async function attachSemanticEngine(
         (!Number.isFinite(timerAfterMilliseconds) || timerAfterMilliseconds < 0)) {
       throw new Error("semantic continuation timer wake has an invalid delay");
     }
-    if (emit) emitContinuationWake(cadence, timerAfterMilliseconds, force);
+    if (emit) emitExecutionWake(cadence, timerAfterMilliseconds, force);
     return { cadence, timerAfterMilliseconds };
   };
   const noteRendererObservation = (message) => {
@@ -402,7 +401,7 @@ export async function attachSemanticEngine(
     if (!continuationActive || player === null) return;
     const { cadence, timerAfterMilliseconds } = observeContinuationWake(wallTime, false, false);
     if (cadence === "idle" || (cadence === "timer" && timerAfterMilliseconds > 0)) {
-      emitContinuationWake(cadence, timerAfterMilliseconds);
+      emitExecutionWake(cadence, timerAfterMilliseconds);
       return;
     }
 
@@ -449,7 +448,7 @@ export async function attachSemanticEngine(
         return;
       }
 
-      emitContinuationWake("idle", null, true);
+      emitExecutionWake("idle", null, true);
       if (!await settleContinuationPublication(readyPublication)) return;
       player.completeLiveSegment();
       const completionPublication = send(player.drainDeltaJson());
@@ -458,7 +457,7 @@ export async function attachSemanticEngine(
       player = null;
       continuationActive = false;
       context.returnExecutionPlayer(completedPlayer);
-      emitContinuationWake("idle", null);
+      emitExecutionWake("idle", null);
       continuation?.onComplete(continuationGeneration);
       return;
     }
@@ -473,8 +472,14 @@ export async function attachSemanticEngine(
       let rendererObservation = null;
       try {
         switch (message.type) {
-          case "pause": player.pause(); break;
-          case "resume": player.resume(); break;
+          case "pause":
+            player.pause();
+            emitExecutionWake("idle", null, true);
+            break;
+          case "resume":
+            player.resume();
+            emitExecutionWake("animation_frame", null, true);
+            break;
           case "set_loop_duration": player.setLoopDuration(message.loopDurationSeconds); break;
           case "seek": latestTick = null; send(player.seekDeltaJson(message.time)); break;
           case "restart_playback": latestTick = null; send(player.seekDeltaJson(0)); break;
@@ -528,6 +533,10 @@ export async function attachSemanticEngine(
               await driveContinuation(performance.now());
             } else if (player !== null) {
               await publishCallbackPhase(player.tickCallbackPhaseJson(timestamp));
+              emitExecutionWake(
+                player.isPlaying() ? "animation_frame" : "idle",
+                null,
+              );
             }
           } catch (error) {
             // Session progression errors are terminal for opaque callbacks too:
@@ -671,7 +680,15 @@ export async function attachSemanticEngine(
     controlPort.start();
     renderPort.start();
     continuationActive = continuation !== null;
-    if (continuationActive) observeContinuationWake(performance.now(), true);
+    if (continuationActive) {
+      observeContinuationWake(performance.now(), true);
+    } else {
+      emitExecutionWake(
+        player.isPlaying() ? "animation_frame" : "idle",
+        null,
+        true,
+      );
+    }
     post({ type: "ready", transportMode });
   } catch (error) { stop(); throw error; }
   return {

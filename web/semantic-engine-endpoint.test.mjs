@@ -173,7 +173,10 @@ test("semantic producer installs mixed resources before its retained snapshot an
     f.render.port2.postMessage({ type: "execution_ack", session: delta.session, sequence: delta.sequence });
     assert.equal((await request(f.control.port2, "pause", 1)).playing, false);
     assert.equal((await request(f.control.port2, "resume", 2)).playing, true);
-    const changed = next(f.render.port2);
+    const changed = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta",
+    );
     assert.equal((await request(f.control.port2, "seek", 3, { time: 0.5 })).time, 0.5);
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(await changed).json).time, 0.5);
     assert.equal((await request(f.control.port2, "apply_patch", 4)).type, "error");
@@ -188,15 +191,22 @@ test("initially paused semantic execution presents time zero without automatic a
   const f = fixture("transferable", null, null, { initiallyPaused: true });
   let endpoint;
   try {
+    let tickCalls = 0;
     f.player.tickCallbackPhaseJson = (timestamp) => {
+      tickCalls += 1;
       if (f.player.isPlaying()) f.player.seekDeltaJson(timestamp / 1_000);
       return null;
     };
     const ready = next(f.control.port2);
     const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    const initialWake = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_wake",
+    );
     endpoint = await f.attach();
     await ready;
     const delta = await initial;
+    assert.equal((await initialWake).cadence, "idle");
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(delta).json).time, 0);
     assert.equal(f.player.isPlaying(), false);
     f.render.port2.postMessage({
@@ -209,10 +219,24 @@ test("initially paused semantic execution presents time zero without automatic a
     await turn();
     await turn();
     assert.equal(f.player.time(), 0, "renderer wakes must not advance an initially paused player");
+    assert.equal(tickCalls, 1, "only the deliberately injected tick reaches the paused player");
 
     const advanced = await request(f.control.port2, "advance_to", 79, { time: 0.25 });
     assert.equal(advanced.time, 0.25);
     assert.equal(advanced.playing, false);
+
+    const resumedWake = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_wake" && message.cadence === "animation_frame",
+    );
+    assert.equal((await request(f.control.port2, "resume", 80)).playing, true);
+    assert.equal((await resumedWake).cadence, "animation_frame");
+    const pausedWake = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_wake" && message.cadence === "idle",
+    );
+    assert.equal((await request(f.control.port2, "pause", 81)).playing, false);
+    assert.equal((await pausedWake).cadence, "idle");
   } finally { endpoint?.stop(); f.close(); }
 });
 
@@ -1100,12 +1124,16 @@ test("required initial callback withholds the first delta until its exact batch 
     };
     const resources = nextMatching(f.render.port2, (message) => message.type === "retained_resources");
     const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    const wake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
     const attached = f.attach();
     await resources;
     let early = false;
+    let wakeEarly = false;
     initial.then(() => { early = true; });
+    wake.then(() => { wakeEarly = true; });
     await turn();
     assert.equal(early, false);
+    assert.equal(wakeEarly, false, "the renderer stays unscheduled behind the initial barrier");
     assert.equal(committed, 0);
     assert.equal(callbackObservedPaused, true);
     resolvePhase("{\"token\":{\"sequence\":\"0\"},\"writes\":[]}");
@@ -1113,6 +1141,7 @@ test("required initial callback withholds the first delta until its exact batch 
     assert.equal(committed, 1);
     const delta = await initial;
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(delta).json).snapshot, true);
+    assert.equal((await wake).cadence, "idle");
     endpoint.stop();
   } finally { f.close(); }
 });
