@@ -22,17 +22,26 @@ impl LiveContinuation for TimedComposition {
                 let add = AnimationOptions::new().run_time(0.2);
                 let nested = vec![
                     Request::Wait { duration: 0.2 },
-                    Request::Add { target: &self.squares[1], options: add },
+                    Request::Add {
+                        target: &self.squares[1],
+                        options: add,
+                    },
                     Request::Wait { duration: 0.2 },
                 ];
                 let children = vec![
-                    Request::Add { target: &self.squares[0], options: add },
+                    Request::Add {
+                        target: &self.squares[0],
+                        options: add,
+                    },
                     Request::Composition {
                         kind: Kind::Sequence,
                         children: nested,
                         options: AnimationOptions::new().rate_func(RateFunction::Linear),
                     },
-                    Request::Add { target: &self.squares[2], options: add },
+                    Request::Add {
+                        target: &self.squares[2],
+                        options: add,
+                    },
                 ];
                 let request = Request::Composition {
                     kind: Kind::Sequence,
@@ -81,6 +90,7 @@ pub fn program() -> Result<LiveProgram<TimedComposition>, String> {
             0.7,
         )?;
     }
-    scene.into_live_program(TimedComposition { squares, stage: 0 })
+    scene
+        .into_live_program(TimedComposition { squares, stage: 0 })
         .map_err(|error| error.to_string())
 }
