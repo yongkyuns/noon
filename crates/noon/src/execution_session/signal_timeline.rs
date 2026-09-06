@@ -1,24 +1,26 @@
-use std::{collections::BTreeSet, ops::Range};
+use std::collections::{BTreeSet, HashMap};
 
-use noon_compile::CompiledScalarSignalTrack;
+use noon_compile::{CompiledScalarSignalTimelineEntry, CompiledScalarSignalTrack};
 use noon_core::{evaluate_scalar_track, ReactiveValue, SemanticNodeId, SignalId};
 use noon_runtime::TimelineWakeState;
 
 #[derive(Clone, Debug)]
-struct SignalTrackGroup {
+struct SignalTimelineGroup {
     semantic: SemanticNodeId,
     execution: SignalId,
-    tracks: Range<usize>,
+    initial: f32,
+    entries: Vec<CompiledScalarSignalTimelineEntry>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum EventKind {
     End,
+    Hold,
     Start,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct SignalTrackEvent {
+struct SignalTimelineEvent {
     time: f64,
     group: usize,
     kind: EventKind,
@@ -37,11 +39,55 @@ impl SignalTimelinePreview {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum SignalTimelineAppendError {
+    NotAtCurrentTime { current: f64, entry: f64 },
+    EventInterleaving { current: f64, tail: f64 },
+    SignalExecutionMismatch { signal: SemanticNodeId },
+    SignalInitialMismatch { signal: SemanticNodeId },
+}
+
+impl std::fmt::Display for SignalTimelineAppendError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAtCurrentTime { current, entry } => write!(
+                formatter,
+                "scalar timeline entry starts at {entry}, expected current authored time {current}"
+            ),
+            Self::EventInterleaving { current, tail } => write!(
+                formatter,
+                "scalar timeline entry at {current} would interleave before event tail {tail}"
+            ),
+            Self::SignalExecutionMismatch { signal } => write!(
+                formatter,
+                "semantic signal {}:{} changed its derived execution identity",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::SignalInitialMismatch { signal } => write!(
+                formatter,
+                "semantic signal {}:{} changed its compiled initial value",
+                signal.slot(),
+                signal.generation()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SignalTimelineAppendError {}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PreparedSignalTimelineAppend {
+    entry: CompiledScalarSignalTimelineEntry,
+    group: Option<usize>,
+    consumed_events: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct SignalTimelineSchedule {
-    groups: Vec<SignalTrackGroup>,
-    tracks: Vec<CompiledScalarSignalTrack>,
-    events: Vec<SignalTrackEvent>,
+    groups: Vec<SignalTimelineGroup>,
+    group_by_signal: HashMap<SemanticNodeId, usize>,
+    events: Vec<SignalTimelineEvent>,
     event_cursor: usize,
     active: BTreeSet<usize>,
     owned_signals: BTreeSet<SemanticNodeId>,
@@ -49,37 +95,37 @@ pub(super) struct SignalTimelineSchedule {
 }
 
 impl SignalTimelineSchedule {
-    pub(super) fn new(tracks: Vec<CompiledScalarSignalTrack>) -> Self {
-        let mut groups = Vec::<SignalTrackGroup>::new();
-        let mut start = 0;
-        while start < tracks.len() {
-            let execution = tracks[start].execution_signal();
-            let semantic = tracks[start].semantic_signal();
-            let mut end = start + 1;
-            while end < tracks.len() && tracks[end].execution_signal() == execution {
-                end += 1;
-            }
-            groups.push(SignalTrackGroup {
-                semantic,
-                execution,
-                tracks: start..end,
+    pub(super) fn new(entries: Vec<CompiledScalarSignalTimelineEntry>) -> Self {
+        let mut groups = Vec::<SignalTimelineGroup>::new();
+        let mut group_by_signal = HashMap::new();
+        for entry in entries {
+            let semantic = entry.semantic_signal();
+            let execution = entry.execution_signal();
+            let group = *group_by_signal.entry(semantic).or_insert_with(|| {
+                let group = groups.len();
+                groups.push(SignalTimelineGroup {
+                    semantic,
+                    execution,
+                    initial: entry.initial_value(),
+                    entries: Vec::new(),
+                });
+                group
             });
-            start = end;
+            debug_assert_eq!(groups[group].execution, execution);
+            groups[group].entries.push(entry);
         }
+
         let mut events = Vec::new();
-        for (group, range) in groups.iter().map(|group| group.tracks.clone()).enumerate() {
-            for track in &tracks[range] {
-                let timing = track.timing();
-                events.push(SignalTrackEvent {
-                    time: timing.start_time,
-                    group,
-                    kind: EventKind::Start,
-                });
-                events.push(SignalTrackEvent {
-                    time: timing.start_time + timing.duration,
-                    group,
-                    kind: EventKind::End,
-                });
+        let mut owned_signals = BTreeSet::new();
+        for (group_index, group) in groups.iter().enumerate() {
+            if matches!(
+                group.entries.last(),
+                Some(CompiledScalarSignalTimelineEntry::Track(_))
+            ) {
+                owned_signals.insert(group.semantic);
+            }
+            for entry in &group.entries {
+                append_events(&mut events, group_index, *entry);
             }
         }
         events.sort_by(|lhs, rhs| {
@@ -88,10 +134,10 @@ impl SignalTimelineSchedule {
                 .then_with(|| lhs.kind.cmp(&rhs.kind))
                 .then_with(|| lhs.group.cmp(&rhs.group))
         });
-        let owned_signals = groups.iter().map(|group| group.semantic).collect();
+
         let mut schedule = Self {
             groups,
-            tracks,
+            group_by_signal,
             events,
             owned_signals,
             ..Self::default()
@@ -107,12 +153,86 @@ impl SignalTimelineSchedule {
         self.owned_signals.contains(&signal)
     }
 
+    /// Whether this signal has any authored timeline meaning. Raw execution
+    /// input must never override such a signal, including after a Hold releases
+    /// ordinary authoring ownership or while the runtime is seeking history.
+    pub(super) fn has_history(&self, signal: SemanticNodeId) -> bool {
+        self.group_by_signal.contains_key(&signal)
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.groups.is_empty()
     }
 
     pub(super) fn is_coherent_at(&self, current: f64, requested: f64) -> bool {
         self.initialized && current == requested
+    }
+
+    pub(super) fn prepare_append(
+        &self,
+        entry: CompiledScalarSignalTimelineEntry,
+        current: f64,
+    ) -> Result<PreparedSignalTimelineAppend, SignalTimelineAppendError> {
+        if entry.start_time() != current {
+            return Err(SignalTimelineAppendError::NotAtCurrentTime {
+                current,
+                entry: entry.start_time(),
+            });
+        }
+        if let Some(tail) = self.events.last().map(|event| event.time) {
+            if tail > current {
+                return Err(SignalTimelineAppendError::EventInterleaving { current, tail });
+            }
+        }
+        let group = self.group_by_signal.get(&entry.semantic_signal()).copied();
+        if group.is_some_and(|group| self.groups[group].execution != entry.execution_signal()) {
+            return Err(SignalTimelineAppendError::SignalExecutionMismatch {
+                signal: entry.semantic_signal(),
+            });
+        }
+        if group.is_some_and(|group| self.groups[group].initial != entry.initial_value()) {
+            return Err(SignalTimelineAppendError::SignalInitialMismatch {
+                signal: entry.semantic_signal(),
+            });
+        }
+        Ok(PreparedSignalTimelineAppend {
+            entry,
+            group,
+            consumed_events: match entry {
+                CompiledScalarSignalTimelineEntry::Track(_) => 1,
+                CompiledScalarSignalTimelineEntry::Hold(_) => 1,
+            },
+        })
+    }
+
+    pub(super) fn commit_append(&mut self, prepared: PreparedSignalTimelineAppend) {
+        let group = prepared.group.unwrap_or_else(|| {
+            let group = self.groups.len();
+            self.groups.push(SignalTimelineGroup {
+                semantic: prepared.entry.semantic_signal(),
+                execution: prepared.entry.execution_signal(),
+                initial: prepared.entry.initial_value(),
+                entries: Vec::new(),
+            });
+            self.group_by_signal
+                .insert(prepared.entry.semantic_signal(), group);
+            group
+        });
+        self.groups[group].entries.push(prepared.entry);
+        let old_event_len = self.events.len();
+        append_events(&mut self.events, group, prepared.entry);
+        self.event_cursor = old_event_len + prepared.consumed_events;
+        match prepared.entry {
+            CompiledScalarSignalTimelineEntry::Track(_) => {
+                self.active.insert(group);
+                self.owned_signals.insert(prepared.entry.semantic_signal());
+            }
+            CompiledScalarSignalTimelineEntry::Hold(_) => {
+                self.active.remove(&group);
+                self.owned_signals.remove(&prepared.entry.semantic_signal());
+            }
+        }
+        self.initialized = true;
     }
 
     pub(super) fn preview(&self, current: f64, time: f64) -> SignalTimelinePreview {
@@ -131,7 +251,7 @@ impl SignalTimelineSchedule {
                 EventKind::Start => {
                     active.insert(event.group);
                 }
-                EventKind::End => {
+                EventKind::End | EventKind::Hold => {
                     active.remove(&event.group);
                 }
             }
@@ -146,7 +266,7 @@ impl SignalTimelineSchedule {
                     let group = &self.groups[group];
                     (
                         group.execution,
-                        ReactiveValue::Scalar(value_at(&self.tracks[group.tracks.clone()], time)),
+                        ReactiveValue::Scalar(value_at(&group.entries, group.initial, time)),
                     )
                 })
                 .collect(),
@@ -157,14 +277,16 @@ impl SignalTimelineSchedule {
         let event_cursor = self.events.partition_point(|event| event.time <= time);
         let mut active = BTreeSet::new();
         for (index, group) in self.groups.iter().enumerate() {
-            let group_tracks = &self.tracks[group.tracks.clone()];
-            let next = group_tracks.partition_point(|track| track.timing().start_time <= time);
+            let next = group
+                .entries
+                .partition_point(|entry| entry.start_time() <= time);
             if next == 0 {
                 continue;
             }
-            let track = group_tracks[next - 1];
-            if time < track.timing().start_time + track.timing().duration {
-                active.insert(index);
+            if let CompiledScalarSignalTimelineEntry::Track(track) = group.entries[next - 1] {
+                if time < track_end(track) {
+                    active.insert(index);
+                }
             }
         }
         SignalTimelinePreview {
@@ -176,7 +298,7 @@ impl SignalTimelineSchedule {
                 .map(|group| {
                     (
                         group.execution,
-                        ReactiveValue::Scalar(value_at(&self.tracks[group.tracks.clone()], time)),
+                        ReactiveValue::Scalar(value_at(&group.entries, group.initial, time)),
                     )
                 })
                 .collect(),
@@ -203,13 +325,60 @@ impl SignalTimelineSchedule {
                 })
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn entry_count(&self) -> usize {
+        self.groups.iter().map(|group| group.entries.len()).sum()
+    }
+
+    #[cfg(test)]
+    pub(super) fn event_count(&self) -> usize {
+        self.events.len()
+    }
 }
 
-fn value_at(tracks: &[CompiledScalarSignalTrack], time: f64) -> f32 {
-    let next = tracks.partition_point(|track| track.timing().start_time <= time);
-    if next == 0 {
-        return tracks[0].from();
+fn append_events(
+    events: &mut Vec<SignalTimelineEvent>,
+    group: usize,
+    entry: CompiledScalarSignalTimelineEntry,
+) {
+    match entry {
+        CompiledScalarSignalTimelineEntry::Track(track) => {
+            events.push(SignalTimelineEvent {
+                time: track.timing().start_time,
+                group,
+                kind: EventKind::Start,
+            });
+            events.push(SignalTimelineEvent {
+                time: track_end(track),
+                group,
+                kind: EventKind::End,
+            });
+        }
+        CompiledScalarSignalTimelineEntry::Hold(hold) => {
+            events.push(SignalTimelineEvent {
+                time: hold.start_time(),
+                group,
+                kind: EventKind::Hold,
+            });
+        }
     }
-    let track = tracks[next - 1];
-    evaluate_scalar_track(track.from() as f64, track.to() as f64, track.timing(), time) as f32
+}
+
+fn track_end(track: CompiledScalarSignalTrack) -> f64 {
+    track.timing().start_time + track.timing().duration
+}
+
+fn value_at(entries: &[CompiledScalarSignalTimelineEntry], initial: f32, time: f64) -> f32 {
+    let next = entries.partition_point(|entry| entry.start_time() <= time);
+    if next == 0 {
+        return initial;
+    }
+    match entries[next - 1] {
+        CompiledScalarSignalTimelineEntry::Track(track) => {
+            evaluate_scalar_track(track.from() as f64, track.to() as f64, track.timing(), time)
+                as f32
+        }
+        CompiledScalarSignalTimelineEntry::Hold(hold) => hold.value(),
+    }
 }

@@ -3,13 +3,14 @@ use noon_compile::{
 };
 use noon_core::{
     ExecutionRevision, FrameEpoch, MutationTransaction, ObjectId, PublicationContext,
-    SceneRevision, Transform2D,
+    ReactiveValue, SceneRevision, SignalId, Transform2D,
 };
 use std::collections::HashSet;
 
 use crate::{
     apply_effective_property_to_row, frame_row_mut, FrameObjectState, FrameRowState, FrameState,
-    PreparedEffectivePropertyBatch, SceneInstance,
+    PreparedEffectivePropertyBatch, PreparedFrameCommitError, PreparedFrameEvaluation,
+    SceneInstance,
 };
 
 /// Retain the final value write in each region bounded by structural/timeline
@@ -49,7 +50,29 @@ pub enum AuthoredPublicationError {
     ExecutionRevisionExhausted(ExecutionRevision),
     FrameEpochExhausted(FrameEpoch),
     StaleEffectiveCarryForward,
+    Evaluation(crate::EvaluationError),
+    PreparedFrame(PreparedFrameCommitError),
     Compile(CompilePatchError),
+}
+
+/// Reserved revision transition for an authored mutation whose derived execution
+/// change is owned by the enclosing execution session rather than object patches.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedAuthoredPlanChange {
+    runtime: crate::RuntimeIdentity,
+    expected: PublicationContext,
+    scene_revision: SceneRevision,
+    execution_revision: ExecutionRevision,
+    frame_epoch: FrameEpoch,
+}
+
+/// A fully validated authored plan revision plus a sparse reactive update at the
+/// current frame. The semantic owner prepares this before committing its matching
+/// timeline entry, then applies both under one publication context.
+#[derive(Clone, Debug)]
+pub struct PreparedAuthoredReactivePlanChange {
+    plan: PreparedAuthoredPlanChange,
+    frame: PreparedFrameEvaluation,
 }
 
 impl std::fmt::Display for AuthoredPublicationError {
@@ -72,6 +95,8 @@ impl std::fmt::Display for AuthoredPublicationError {
             Self::StaleEffectiveCarryForward => formatter.write_str(
                 "effective carry-forward does not belong to the current runtime publication",
             ),
+            Self::Evaluation(error) => error.fmt(formatter),
+            Self::PreparedFrame(error) => error.fmt(formatter),
             Self::Compile(error) => write!(formatter, "authored transaction failed: {error}"),
         }
     }
@@ -86,6 +111,111 @@ impl From<CompilePatchError> for AuthoredPublicationError {
 }
 
 impl SceneInstance {
+    pub fn prepare_authored_plan_change(
+        &self,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+    ) -> Result<PreparedAuthoredPlanChange, AuthoredPublicationError> {
+        let current = self.publication_context();
+        if expected != current {
+            return Err(AuthoredPublicationError::StalePublication {
+                expected,
+                actual: current,
+            });
+        }
+        if current.scene_revision().checked_next() != Some(scene_revision) {
+            return Err(AuthoredPublicationError::InvalidSceneRevision {
+                current: current.scene_revision(),
+                proposed: scene_revision,
+            });
+        }
+        let execution_revision = current.execution_revision().checked_next().ok_or(
+            AuthoredPublicationError::ExecutionRevisionExhausted(current.execution_revision()),
+        )?;
+        let frame_epoch = current.frame_epoch().checked_next().ok_or(
+            AuthoredPublicationError::FrameEpochExhausted(current.frame_epoch()),
+        )?;
+        Ok(PreparedAuthoredPlanChange {
+            runtime: self.runtime_identity(),
+            expected,
+            scene_revision,
+            execution_revision,
+            frame_epoch,
+        })
+    }
+
+    pub fn apply_prepared_authored_plan_change(
+        &mut self,
+        prepared: PreparedAuthoredPlanChange,
+    ) -> Result<&FrameState, AuthoredPublicationError> {
+        let current = self.publication_context();
+        if prepared.runtime != self.runtime_identity() || prepared.expected != current {
+            return Err(AuthoredPublicationError::StalePublication {
+                expected: prepared.expected,
+                actual: current,
+            });
+        }
+        self.publication = PublicationContext::new(
+            prepared.scene_revision,
+            prepared.execution_revision,
+            prepared.frame_epoch,
+        );
+        Ok(&self.frame)
+    }
+
+    /// Prepare one current-time reactive value change and the authored plan
+    /// revision that makes it persistent. Work is limited to the dirty reactive
+    /// dependency closure; neither the scene nor the runtime is cloned.
+    pub fn prepare_authored_reactive_plan_change(
+        &mut self,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<PreparedAuthoredReactivePlanChange, AuthoredPublicationError> {
+        let plan = self.prepare_authored_plan_change(expected, scene_revision)?;
+        let time = self.frame.time;
+        let frame = self
+            .prepare_advance_to_with_reactive_inputs(time, inputs)
+            .map_err(AuthoredPublicationError::Evaluation)?;
+        let effective = PreparedEffectivePropertyBatch {
+            runtime: self.identity,
+            expected,
+            writes: Vec::new(),
+        };
+        self.preflight_prepared_frame_commit(&frame, &effective)
+            .map_err(AuthoredPublicationError::PreparedFrame)?;
+        Ok(PreparedAuthoredReactivePlanChange { plan, frame })
+    }
+
+    /// Publish one preflighted persistent reactive value and its authored plan
+    /// revision. The caller holds exclusive semantic/runtime ownership across its
+    /// infallible semantic commit and this synchronous derived commit.
+    pub fn apply_prepared_authored_reactive_plan_change(
+        &mut self,
+        prepared: PreparedAuthoredReactivePlanChange,
+    ) -> Result<&FrameState, AuthoredPublicationError> {
+        let current = self.publication_context();
+        if prepared.plan.runtime != self.runtime_identity() || prepared.plan.expected != current {
+            return Err(AuthoredPublicationError::StalePublication {
+                expected: prepared.plan.expected,
+                actual: current,
+            });
+        }
+        let effective = PreparedEffectivePropertyBatch {
+            runtime: self.identity,
+            expected: current,
+            writes: Vec::new(),
+        };
+        self.commit_prepared_frame(prepared.frame, effective)
+            .map_err(AuthoredPublicationError::PreparedFrame)?;
+        self.publication = PublicationContext::new(
+            prepared.plan.scene_revision,
+            prepared.plan.execution_revision,
+            prepared.plan.frame_epoch,
+        );
+        Ok(&self.frame)
+    }
+
     pub fn preflight_effective_carry_forward(
         &self,
         effective: &PreparedEffectivePropertyBatch,

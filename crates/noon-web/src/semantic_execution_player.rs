@@ -858,6 +858,38 @@ impl SemanticExecutionPlayer {
         Ok(end_time)
     }
 
+    /// Atomically append and activate one canonical scalar tracker interval,
+    /// retaining its ordinary continuation segment in this player.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_declare_and_activate_value_tracker(
+        &mut self,
+        tracker: &noon::ValueTracker,
+        target: f64,
+        duration: f64,
+        rate_func: noon_core::RateFunction,
+    ) -> Result<f64, String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let segment = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .declare_and_activate_value_tracker(tracker, target, duration, rate_func)
+        .map_err(|error| error.to_string())?;
+        let end_time = segment.end_time();
+        self.clock = self
+            .live_clock_at(self.session.frame().time, end_time, true)
+            .expect("validated scalar segment must produce a valid presentation clock");
+        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
+        self.live_wake_clock = BrowserExecutionWakeClock::default();
+        Ok(end_time)
+    }
+
     /// Create a detached target through the retained session so its semantic
     /// publication remains coherent with this runtime. Detached target rows do
     /// not create execution objects or frame work.
@@ -1098,14 +1130,18 @@ impl SemanticExecutionPlayer {
         if !value.is_finite() {
             return Err("ValueTracker value must be finite".into());
         }
-        let value = value as f32;
-        if !value.is_finite() {
-            return Err("ValueTracker value is outside the runtime scalar range".into());
-        }
-        self.session
-            .set_reactive_input(tracker.node_id(), value)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .set_value(tracker, value)
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
