@@ -20,15 +20,15 @@ class OrdinaryLivePrimitiveConstruction(Scene):
 
         circle = Circle(
             radius=0.3,
-            position=(2.0, -1.0, 0.0),
-            scale=(1.5, 1.5, 0.0),
+            position=(2.0, -1.0),
+            scale=(1.5, 1.5),
             fill=Color(0.0, 0.4, 1.0, 0.6),
             stroke_width=8.0,
             stroke_opacity=0.9,
         )
         square = Square(
             side_length=0.5,
-            position=(-2.0, 1.0, 0.0),
+            position=(-2.0, 1.0),
             rotation=0.25,
             color=Color(0.2, 0.9, 0.3),
             fill_opacity=0.7,
@@ -38,6 +38,3 @@ class OrdinaryLivePrimitiveConstruction(Scene):
 
         assert circle.get_center() == (2.0, -1.0)
         assert square.get_center() == (-2.0, 1.0)
-
-
-result = OrdinaryLivePrimitiveConstruction()

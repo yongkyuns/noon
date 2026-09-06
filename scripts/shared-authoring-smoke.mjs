@@ -987,7 +987,9 @@ try {
   // A source-owned wait barrier keeps newly constructed primitives detached until
   // the continuation resumes. Their first rendered appearance must come from the
   // same publication that admits both Circle and Square.
-  const primitiveConstruction = await page.evaluate(async (source) => {
+  console.log("Checking live primitive construction after a wait");
+  let primitiveTimeout;
+  const primitiveConstruction = await Promise.race([page.evaluate(async (source) => {
     const harness = window.sharedAuthoringSmoke;
     const canvas = document.createElement("canvas");
     canvas.id = "scene-ordinary-live-primitive-construction";
@@ -1012,14 +1014,19 @@ try {
         resolveAttached();
       },
     });
-    authoredPromise.catch(rejectAttached);
+    authoredPromise.then(
+      () => rejectAttached(new Error("primitive source returned without registering a continuation")),
+      rejectAttached,
+    );
     await attached;
     const before = (await execution.metrics()).metrics;
     if (before.objectCount !== 1) {
       throw new Error(`detached primitive construction published ${before.objectCount} objects before the wait barrier`);
     }
-    await execution.sampleToAuthoredTime(1);
-    const authored = await authoredPromise;
+    const [, authored] = await Promise.all([
+      execution.sampleToAuthoredTime(1),
+      authoredPromise,
+    ]);
     let after = null;
     for (let attempt = 0; attempt < 150; attempt += 1) {
       after = (await execution.metrics()).metrics;
@@ -1032,7 +1039,9 @@ try {
       before,
       after,
     };
-  }, primitiveConstructionSource);
+  }, primitiveConstructionSource), new Promise((_, reject) => {
+    primitiveTimeout = setTimeout(() => reject(new Error("live primitive construction did not complete within 45 seconds")), 45_000);
+  })]).finally(() => clearTimeout(primitiveTimeout));
   assert.equal(primitiveConstruction.duration, 1);
   assert.equal(primitiveConstruction.before.objectCount, 1);
   assert.equal(primitiveConstruction.after.objectCount, 3);
