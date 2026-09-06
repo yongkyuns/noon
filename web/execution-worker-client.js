@@ -630,11 +630,12 @@ export class ExecutionWorkerClient {
   async switchToSemanticExecution(
     contextId,
     authoringClient,
-    { loopDurationSeconds = null, callbackSessionId = null } = {},
+    { loopDurationSeconds = null, callbackSessionId = null, continuationGeneration = null } = {},
   ) {
     return this.#transitionSemanticExecution(contextId, authoringClient, {
       loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
       callbackSessionId: validateOptionalCallbackSessionId(callbackSessionId),
+      continuationGeneration: validateOptionalContinuationGeneration(continuationGeneration),
       renderCommand:
         this.#mode === EXECUTION_MODE_LEGACY ? "switch_engine" : "rebuild_engine",
     });
@@ -643,7 +644,12 @@ export class ExecutionWorkerClient {
   async #transitionSemanticExecution(
     contextId,
     authoringClient,
-    { loopDurationSeconds, callbackSessionId, renderCommand },
+    {
+      loopDurationSeconds,
+      callbackSessionId,
+      continuationGeneration = null,
+      renderCommand,
+    },
   ) {
     this.#requireStarted();
     validateSemanticContextId(contextId);
@@ -674,8 +680,8 @@ export class ExecutionWorkerClient {
           duration,
           nextSession,
           callbackSessionId,
-          null,
-          !wasPlaying,
+          continuationGeneration,
+          continuationGeneration === null ? !wasPlaying : false,
         ),
       );
       [candidateReady] = await Promise.all([candidateReadyPromise, attached]);
@@ -726,7 +732,7 @@ export class ExecutionWorkerClient {
       }));
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
-      this.#playing = wasPlaying;
+      this.#playing = continuationGeneration === null ? wasPlaying : true;
       this.#mode = EXECUTION_MODE_SEMANTIC;
       this.#sceneJson = null;
       this.#sceneSpecJson = null;

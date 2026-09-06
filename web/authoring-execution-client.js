@@ -264,6 +264,7 @@ export class AuthoringExecutionClient {
       const ready = await this.#player.switchToSemanticExecution(semantic.contextId, authoringClient, {
         loopDurationSeconds: duration,
         callbackSessionId: semantic.callbackSessionId,
+        continuationGeneration: semantic.continuationGeneration,
       });
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
