@@ -362,6 +362,20 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
+    /// Ordinary continuation declarations reuse an existing local lease as-is.
+    /// Only the first declaration bootstraps a player; an explicit new run uses
+    /// `live_player`/`prepare_execution_run` and owns any recovery transition.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn active_or_bootstrap_live_player(
+        &mut self,
+        duration: f64,
+    ) -> Result<&mut crate::SemanticExecutionPlayer, String> {
+        if self.live_player.is_none() {
+            self.live_player(duration)?;
+        }
+        self.active_live_player()
+    }
+
     /// Report only the Rust-owned lifecycle of this context's retained player.
     /// Python uses this derived observation to choose its wrapper dispatch; it
     /// never records or advances lifecycle state itself.
@@ -710,7 +724,7 @@ impl CanonicalAuthoringScene {
             .live_handoff_duration()
             .unwrap_or_else(|| self.scene.time())
             .max(options.run_time.unwrap_or(1.0));
-        let player = self.live_player(bootstrap_duration)?;
+        let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
         if player.has_required_callbacks() {
             return Err(
                 "ordinary asynchronous affine animation does not support required callbacks".into(),
@@ -746,7 +760,7 @@ impl CanonicalAuthoringScene {
                     .or(composition_options.run_time)
                     .unwrap_or(1.0),
             );
-        let player = self.live_player(bootstrap_duration)?;
+        let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
         if player.has_required_callbacks() {
             return Err(
                 "ordinary composition with required callbacks needs an asynchronous continuation"
@@ -3300,6 +3314,35 @@ mod tests {
             context.mobject_layout(&circle).unwrap(),
             (2.0, -1.0, f64::from(0.8_f32), f64::from(0.8_f32))
         );
+
+        let next_target = context.live_target_editor(&circle).unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_shift(&next_target, 2.0, 0.0)
+            .unwrap();
+        let next_endpoint = context
+            .begin_ordinary_transform_to(
+                &circle,
+                &next_target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
+        let mut resumed = context.resume_execution_player().unwrap();
+        resumed.live_advance_segment_to(next_endpoint).unwrap();
+        resumed.live_complete_segment().unwrap();
+        assert_eq!(
+            resumed
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(4.0, -1.0)
+        );
+        context.return_execution_player(resumed).unwrap();
     }
 
     #[test]
