@@ -113,19 +113,10 @@ pub enum PreparedSemanticAnimationLoweringError {
         target: SemanticTransactionNodeRef,
         appearance: f32,
     },
-    UnsupportedFadeComposition {
-        animation: SemanticTransactionNodeRef,
-    },
     UnsupportedFadeOptions {
         animation: SemanticTransactionNodeRef,
     },
-    UnsupportedCreateComposition {
-        animation: SemanticTransactionNodeRef,
-    },
     UnsupportedCreateOptions {
-        animation: SemanticTransactionNodeRef,
-    },
-    UnsupportedAffineLifecycleComposition {
         animation: SemanticTransactionNodeRef,
     },
     UnsupportedAffineLifecycleOptions {
@@ -1023,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_sequential_create_remains_unavailable_before_publication() {
+    fn prepared_sequential_create_preserves_order_before_publication() {
         let mut store = noon_core::SemanticStore::new();
         let root = store.insert_family();
         let circle =
@@ -1048,17 +1039,25 @@ mod tests {
         let before = store.scene_revision();
         let prepared = transaction.prepare(&mut store).unwrap();
 
-        assert!(matches!(
-            lower_prepared_semantic_animation_composition(
-                &prepared,
-                &index,
-                composition,
-                0.0,
-                AnimationOptions::new(),
-                |_| None,
-            ),
-            Err(PreparedSemanticAnimationLoweringError::UnsupportedCreateComposition { .. })
-        ));
+        let activation = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            composition,
+            0.0,
+            AnimationOptions::new(),
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(activation.run_time(), 2.0);
+        assert_eq!(activation.tracks().len(), 2);
+        let first = &activation.tracks()[0];
+        let second = &activation.tracks()[1];
+        assert_eq!(first.property, Property::Reveal);
+        assert_eq!(second.property, Property::Reveal);
+        assert_eq!(first.time_map.evaluate(0.25).alpha, 0.5);
+        assert_eq!(second.time_map.evaluate(0.25).alpha, 0.0);
+        assert_eq!(first.time_map.evaluate(0.75).alpha, 1.0);
+        assert_eq!(second.time_map.evaluate(0.75).alpha, 0.5);
         drop(prepared);
         assert_eq!(store.scene_revision(), before);
     }
