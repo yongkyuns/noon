@@ -82,6 +82,24 @@ class CallbackContextTests(unittest.TestCase):
 
 
 class CanonicalCallbackPropertyRowTests(unittest.TestCase):
+    def test_style_wire_uses_rust_default_and_preserves_explicit_mode(self) -> None:
+        omitted_default = _object(0)["style"]
+        self.assertNotIn("stroke_width_mode", omitted_default)
+
+        default_style = updaters._PhaseStyle.from_wire(omitted_default)
+        self.assertEqual(default_style.stroke_width_mode, "scale_with_object")
+        self.assertEqual(
+            default_style.to_wire()["stroke_width_mode"], "scale_with_object"
+        )
+
+        explicit_style = updaters._PhaseStyle.from_wire(
+            {**omitted_default, "stroke_width_mode": "screen_space"}
+        )
+        self.assertEqual(explicit_style.stroke_width_mode, "screen_space")
+        self.assertEqual(
+            explicit_style.to_wire()["stroke_width_mode"], "screen_space"
+        )
+
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
         compat.install()
