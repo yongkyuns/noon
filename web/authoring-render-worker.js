@@ -244,10 +244,11 @@ function resize(message) {
   }
   renderer.resize(width, height);
   if (!drainGpuDiagnostics()) return;
-  // Retained resize queues a frame only when the surface dimensions actually
-  // change. Treating a redundant resize as pending wedges transport backpressure:
-  // renderer.render() correctly returns false while needsPresent stays true.
-  if (mode === MODE_RETAINED && dimensionsChanged) {
+  // Surface changes need a presentation even when a semantic continuation has
+  // completed and its engine is idle. Redundant resizes must remain a no-op:
+  // render() correctly returns false while an unnecessary needsPresent would
+  // wedge transport backpressure.
+  if (dimensionsChanged) {
     needsPresent = true;
     tryPresent();
     if (engineWake !== null) scheduleFrame();

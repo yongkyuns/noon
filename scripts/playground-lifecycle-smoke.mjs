@@ -99,7 +99,12 @@ async function waitForFrameAfter(page, previousFrames, expectedObjectCount, view
   // A completed source-owned scene is intentionally idle. Exercise the public
   // resize path after activation to prove the existing runtime and surface can
   // still invalidate and present work after the page resumes.
+  const previousWidth = await page.locator("#scene").evaluate((canvas) => canvas.clientWidth);
   await page.setViewportSize(viewport);
+  await page.waitForFunction(
+    (width) => document.querySelector("#scene").clientWidth !== width,
+    previousWidth,
+  );
   await page.waitForFunction(
     (previous) => {
       const status = document.querySelector("#status");
@@ -197,7 +202,7 @@ try {
     page,
     diagnostics.snapshots.frozen.presentedFrames,
     diagnostics.snapshots.baseline.objectCount,
-    { width: 1001, height: 700 },
+    { width: 640, height: 700 },
     "resume after page freeze",
   );
   assert.equal(

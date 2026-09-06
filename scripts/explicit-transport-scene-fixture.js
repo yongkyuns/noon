@@ -15,8 +15,10 @@ export function createExplicitTransportSceneJson(wasm) {
 
   // These worker fixtures assert active playback and repeated presentation, so
   // give the otherwise static transport scene a real authored semantic track.
-  const circleTarget = circle.targetEditor();
-  circleTarget.moveTo(-0.4, 0.6);
-  scene.ordinaryPlayTransformTo(circle, circleTarget, 4.0, "linear");
+  const animation = scene.animate(circle);
+  animation.moveTo(-0.4, 0.6);
+  const batch = scene.createPlayBatch();
+  scene.appendAnimate(batch, animation);
+  scene.playBatch(batch, 4.0, "linear");
   return scene.sceneJson();
 }
