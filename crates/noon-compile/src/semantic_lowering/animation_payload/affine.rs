@@ -2,9 +2,9 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
     validate_track_definition, ObjectId, Property, SemanticAnimationError, SemanticAnimationIntent,
-    SemanticLoweringError, SemanticNodeId, SemanticObjectProperty, SemanticSceneOperationError,
-    SemanticSignalValue, SemanticStore, Style, TimelineError, TrackDefinition, TrackId,
-    TrackValues, Transform2D,
+    SemanticFadeDirection, SemanticLoweringError, SemanticNodeId, SemanticObjectProperty,
+    SemanticSceneOperationError, SemanticSignalValue, SemanticStore, Style, TimelineError,
+    TrackDefinition, TrackId, TrackValues, Transform2D,
 };
 
 use super::super::{
@@ -13,6 +13,7 @@ use super::super::{
         SemanticLoweringError as StyleLoweringError,
     },
     SemanticAnimationScheduleProjection, SemanticScheduledAnimationLeaf,
+    SemanticScheduledAnimationPayload,
 };
 use super::transform_payload::{
     validate_transform_payload_shape, SemanticAffineAnimationField, TransformPayloadValidationIssue,
@@ -23,6 +24,7 @@ use super::transform_payload::{
 pub struct EffectiveAnimationProperties {
     pub transform: Transform2D,
     pub style: Style,
+    pub appearance: f32,
 }
 
 /// Exact authored reconciliation performed when one execution channel is released.
@@ -40,6 +42,8 @@ pub enum SemanticAnimationCompletion {
         paint: Option<noon_core::SemanticPaint>,
         opacity: f64,
     },
+    /// Execution-only lifecycle completion. Appearance is not authored object state.
+    Fade { direction: SemanticFadeDirection },
 }
 
 /// One existing execution-timeline channel lowered from an activated semantic animation.
@@ -418,8 +422,16 @@ where
 
     for leaf in schedule.leaves() {
         validate_leaf_matches_declaration(store, leaf)?;
+        let target_state = match leaf.payload {
+            SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
+            SemanticScheduledAnimationPayload::Fade { .. } => {
+                return Err(SemanticAffineAnimationTrackError::ScheduleMismatch {
+                    animation: leaf.animation,
+                });
+            }
+        };
         let source = object_state(store, leaf, leaf.target)?;
-        let target = object_state(store, leaf, leaf.target_state)?;
+        let target = object_state(store, leaf, target_state)?;
         validate_affine_payload(source, target, leaf.options)
             .map_err(|issue| existing_payload_error(leaf, issue))?;
         let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
@@ -478,10 +490,26 @@ fn validate_leaf_matches_declaration(
         SemanticAnimationIntent::TransformTo {
             target,
             target_state,
-        } if *target == leaf.target && *target_state == leaf.target_state => Ok(()),
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::TransformTo {
+                    target_state: *target_state,
+                } =>
+        {
+            Ok(())
+        }
         _ => Err(SemanticAffineAnimationTrackError::ScheduleMismatch {
             animation: leaf.animation,
         }),
+    }
+}
+
+fn scheduled_target_state(leaf: &SemanticScheduledAnimationLeaf) -> SemanticNodeId {
+    match leaf.payload {
+        SemanticScheduledAnimationPayload::TransformTo { target_state } => target_state,
+        SemanticScheduledAnimationPayload::Fade { .. } => {
+            unreachable!("affine payload errors are only produced for TransformTo leaves")
+        }
     }
 }
 
@@ -760,35 +788,35 @@ fn existing_payload_error(
             SemanticAffineAnimationTrackError::UnsupportedContentChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state: scheduled_target_state(leaf),
             }
         }
         AffinePayloadIssue::UnsupportedStyleChange => {
             SemanticAffineAnimationTrackError::UnsupportedStyleChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state: scheduled_target_state(leaf),
             }
         }
         AffinePayloadIssue::UnsupportedPainterOrderChange => {
             SemanticAffineAnimationTrackError::UnsupportedPainterOrderChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state: scheduled_target_state(leaf),
             }
         }
         AffinePayloadIssue::UnsupportedBindingChange => {
             SemanticAffineAnimationTrackError::UnsupportedBindingChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state: scheduled_target_state(leaf),
             }
         }
         AffinePayloadIssue::UnsupportedDepthChange(field) => {
             SemanticAffineAnimationTrackError::UnsupportedDepthChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state: scheduled_target_state(leaf),
                 field,
             }
         }
@@ -810,7 +838,7 @@ fn existing_payload_error(
         AffinePayloadIssue::InvalidTargetValue { field, error } => {
             SemanticAffineAnimationTrackError::InvalidTargetValue {
                 animation: leaf.animation,
-                target_state: leaf.target_state,
+                target_state: scheduled_target_state(leaf),
                 field,
                 error,
             }
@@ -818,15 +846,15 @@ fn existing_payload_error(
         AffinePayloadIssue::TargetValueOutOfRange(field) => {
             SemanticAffineAnimationTrackError::TargetValueOutOfRange {
                 animation: leaf.animation,
-                target_state: leaf.target_state,
+                target_state: scheduled_target_state(leaf),
                 field,
             }
         }
         AffinePayloadIssue::InvalidTargetStyle(error) => {
             SemanticAffineAnimationTrackError::InvalidTargetStyle {
                 animation: leaf.animation,
-                target_state: leaf.target_state,
-                error: error.with_node(leaf.target_state),
+                target_state: scheduled_target_state(leaf),
+                error: error.with_node(scheduled_target_state(leaf)),
             }
         }
     }
@@ -882,6 +910,7 @@ mod tests {
         EffectiveAnimationProperties {
             transform,
             style: Style::default(),
+            appearance: 1.0,
         }
     }
 
@@ -995,6 +1024,7 @@ mod tests {
                 Some(EffectiveAnimationProperties {
                     transform: Transform2D::default(),
                     style: current,
+                    appearance: 1.0,
                 })
             },
         )
@@ -1186,6 +1216,7 @@ mod tests {
                 }),
                 ..Style::default()
             },
+            appearance: 1.0,
         };
 
         let predeclared = lower_semantic_affine_animation_tracks(
@@ -1245,7 +1276,9 @@ mod tests {
             .unwrap();
         let index = index(&store);
         let mut leaf = schedule(&store, &index, animation).leaves()[0].clone();
-        leaf.target_state = target;
+        leaf.payload = SemanticScheduledAnimationPayload::TransformTo {
+            target_state: target,
+        };
 
         assert_eq!(
             validate_leaf_matches_declaration(&store, &leaf),

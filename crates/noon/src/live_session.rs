@@ -19,9 +19,9 @@ use crate::{
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, PublicationContext, SemanticAnimationCompositionKind,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
-    Style, Transform2D,
+    SemanticFadeDirection, SemanticMutationTransaction, SemanticMutationTransactionResult,
+    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSignalValue,
+    SemanticStore, SemanticStyle, Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -198,6 +198,15 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Check whether a handle is currently a direct member of this live scene root.
+    pub fn contains(&self, mobject: &Mobject) -> Result<bool, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        self.store
+            .borrow()
+            .is_direct_member(self.root, mobject.node_id())
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))
+    }
+
     /// Replace one live object's content with content already authored in this store.
     /// Transform, style, semantic identity, and family membership stay unchanged.
     pub fn replace_content(
@@ -353,6 +362,20 @@ impl<'a> LiveSession<'a> {
                 target.node_id(),
                 options,
             )
+            .map_err(Into::into)
+    }
+
+    /// Atomically author and activate one canonical single-leaf FadeIn or FadeOut.
+    pub fn declare_and_activate_fade(
+        &mut self,
+        target: &Mobject,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(target)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_fade(&mut store, self.root, target.node_id(), direction, options)
             .map_err(Into::into)
     }
 
@@ -1295,5 +1318,112 @@ mod tests {
 
         assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
         assert_eq!(session.frame().objects.len(), 4);
+    }
+
+    #[test]
+    fn single_leaf_fade_enters_exits_and_readds_the_same_handle_locally() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let fading = scene.circle(1.0).unwrap();
+        scene.add(&anchor).unwrap();
+        let fading_node = fading.node_id();
+        let authored_before = fading.state().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let anchor_slot = session.execution_slot_for_frame_index(0).unwrap();
+        session.take_frame_changes();
+
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let fade_in = {
+            let mut live = scene.live(&mut session);
+            assert!(!live.contains(&fading).unwrap());
+            let segment = live
+                .declare_and_activate_fade(&fading, SemanticFadeDirection::In, options)
+                .unwrap();
+            assert!(live.contains(&fading).unwrap());
+            assert_eq!(live.effective(&fading).unwrap().appearance, 0.0);
+            let publication = live.session.last_structural_publication_stats();
+            assert_eq!(publication.entered_objects, 1);
+            assert_eq!(publication.exited_objects, 0);
+            assert_eq!(publication.preparation.object_states_lowered, 1);
+            assert_eq!(live.session.take_frame_changes().object_indices().len(), 1);
+            segment
+        };
+        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
+
+        {
+            let mut live = scene.live(&mut session);
+            live.advance_segment_to(fade_in, 0.5).unwrap();
+            assert_eq!(live.effective(&fading).unwrap().appearance, 0.5);
+            live.advance_segment_to(fade_in, fade_in.end_time())
+                .unwrap();
+            live.complete_segment(fade_in).unwrap();
+            assert_eq!(live.effective(&fading).unwrap().appearance, 1.0);
+            assert_eq!(live.authored(&fading).unwrap(), authored_before);
+        }
+
+        let fade_out = {
+            let mut live = scene.live(&mut session);
+            live.declare_and_activate_fade(&fading, SemanticFadeDirection::Out, options)
+                .unwrap()
+        };
+        {
+            let mut live = scene.live(&mut session);
+            live.advance_segment_to(fade_out, 1.5).unwrap();
+            assert_eq!(live.effective(&fading).unwrap().appearance, 0.5);
+            live.advance_segment_to(fade_out, fade_out.end_time())
+                .unwrap();
+            assert!(live.contains(&fading).unwrap());
+            live.complete_segment(fade_out).unwrap();
+            assert!(!live.contains(&fading).unwrap());
+            assert!(live.effective(&fading).is_err());
+            let publication = live.session.last_structural_publication_stats();
+            assert_eq!(publication.entered_objects, 0);
+            assert_eq!(publication.exited_objects, 1);
+
+            live.add(&fading).unwrap();
+            assert!(live.contains(&fading).unwrap());
+            assert_eq!(live.effective(&fading).unwrap().appearance, 1.0);
+            assert_eq!(fading.node_id(), fading_node);
+            assert_eq!(live.authored(&fading).unwrap(), authored_before);
+        }
+        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
+    }
+
+    #[test]
+    fn fade_target_and_option_failures_leave_membership_and_publication_unchanged() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let fading = scene.circle(1.0).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let mut live = scene.live(&mut session);
+        assert!(live
+            .declare_and_activate_fade(
+                &fading,
+                SemanticFadeDirection::Out,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .is_err());
+        assert!(live
+            .declare_and_activate_fade(
+                &fading,
+                SemanticFadeDirection::In,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear)
+                    .lag_ratio(0.5),
+            )
+            .is_err());
+        assert!(!live.contains(&fading).unwrap());
+        assert_eq!(live.session.publication_context(), before);
+        assert!(live.session.take_frame_changes().is_empty());
+        assert!(live.session.execution_object_id(fading.node_id()).is_none());
     }
 }

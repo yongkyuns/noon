@@ -155,6 +155,22 @@ impl PreparedSemanticPublication {
         self.entries.len()
     }
 
+    /// Conservative create patches for existing detached identities.
+    ///
+    /// Prepared animation activation uses these only for fallible runtime shape validation before
+    /// semantic commit. Exact net entry remains bound from the committed membership update.
+    pub fn conservative_existing_entry_patches(&self) -> Vec<ExecutionPatch> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                let semantic = entry.object.existing()?;
+                let mut compiled = entry.compiled.clone();
+                compiled.id = semantic_execution_object_id(semantic);
+                Some(ExecutionPatch::CreateObject(compiled))
+            })
+            .collect()
+    }
+
     pub const fn stats(&self) -> SemanticPublicationPreparationStats {
         self.stats
     }

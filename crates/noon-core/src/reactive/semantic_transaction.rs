@@ -7,11 +7,11 @@ use super::semantic_declarations::{
 use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
     AnimationOptions, HostCallbackId, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
-    SemanticObjectState, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
-    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticUpdaterRegistration, StoredGeometry,
+    SemanticFadeDirection, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
+    SemanticObjectProperty, SemanticObjectState, SemanticScalarSignalTrack,
+    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
+    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
+    SemanticStore, SemanticStoreError, SemanticStyle, SemanticUpdaterRegistration, StoredGeometry,
 };
 use crate::TrackTiming;
 
@@ -597,6 +597,27 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::TransformTo {
                     target: target.into(),
                     target_state: target_state.into(),
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage a single-leaf fade declaration and return its transaction-local token.
+    pub fn create_fade_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Fade {
+                    target: target.into(),
+                    direction,
                 },
                 options,
             ),

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     AnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationIntent,
-    SemanticAnimationState, SemanticObjectState, StoredGeometry,
+    SemanticAnimationState, SemanticFadeDirection, SemanticObjectState, StoredGeometry,
 };
 
 fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
@@ -59,6 +59,31 @@ fn add_animation_commits_one_authored_animation_and_reports_its_identity() {
         panic!("expected one animation-added impact")
     };
     assert_eq!(store.semantic_animation_state(*animation).unwrap(), &state);
+    assert_eq!(store.len(), before_len + 1);
+    assert_eq!(store.last_mutation_stats().slots_written, 1);
+}
+
+#[test]
+fn prepared_fade_retains_one_semantic_target_and_direction() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let before_len = store.len();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = transaction.create_fade_animation(
+        target,
+        SemanticFadeDirection::Out,
+        AnimationOptions::new().run_time(0.75),
+    );
+
+    let result = transaction.apply(&mut store).unwrap();
+    let animation = result.resolve(local).unwrap();
+    assert_eq!(
+        store.semantic_animation_state(animation).unwrap().intent(),
+        &SemanticAnimationIntent::Fade {
+            target,
+            direction: SemanticFadeDirection::Out,
+        }
+    );
     assert_eq!(store.len(), before_len + 1);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
 }

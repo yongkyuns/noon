@@ -26,7 +26,7 @@ use noon_compile::{
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
     NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, ReactiveError, ReactiveValue,
-    Rect, SemanticAnimationCompositionKind, SemanticMutationTransaction,
+    Rect, SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
     SemanticSceneOperationError, SemanticStore, SemanticTransactionNodeRef, TimelineError, TrackId,
 };
@@ -179,6 +179,37 @@ impl std::fmt::Display for ExecutionSessionCameraError {
 
 impl std::error::Error for ExecutionSessionCameraError {}
 
+/// Unsupported lifecycle shape for the bounded canonical leaf-fade operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecutionSessionFadeError {
+    TargetIsNotDetached,
+    TargetIsNotDirectRootMember,
+    TargetIsAliased,
+    ReactiveBindingsUnsupported,
+    RequiredCallbacksUnsupported,
+}
+
+impl std::fmt::Display for ExecutionSessionFadeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TargetIsNotDetached => formatter.write_str("FadeIn target must be detached"),
+            Self::TargetIsNotDirectRootMember => {
+                formatter.write_str("FadeOut target must be a direct member of this scene root")
+            }
+            Self::TargetIsAliased => {
+                formatter.write_str("single-leaf fade does not support aliased family membership")
+            }
+            Self::ReactiveBindingsUnsupported => formatter
+                .write_str("single-leaf fade does not yet support reactive object bindings"),
+            Self::RequiredCallbacksUnsupported => {
+                formatter.write_str("single-leaf fade does not yet support required host callbacks")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ExecutionSessionFadeError {}
+
 /// Error produced while activating one authoritative semantic animation declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionAnimationError {
@@ -196,6 +227,10 @@ pub enum ExecutionSessionAnimationError {
     TargetState {
         target: SemanticNodeId,
         error: SemanticSceneOperationError,
+    },
+    FadeTarget {
+        target: SemanticNodeId,
+        error: ExecutionSessionFadeError,
     },
     PreparedTrack(TimelineError),
     Publication(CompilePatchError),
@@ -237,6 +272,12 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
             Self::TargetState { target, error } => write!(
                 formatter,
                 "animation target-state node {}:{} is invalid: {error}",
+                target.slot(),
+                target.generation()
+            ),
+            Self::FadeTarget { target, error } => write!(
+                formatter,
+                "fade target {}:{} is invalid: {error}",
                 target.slot(),
                 target.generation()
             ),
@@ -761,6 +802,7 @@ impl ExecutionSession {
             Some(EffectiveAnimationProperties {
                 transform: row.transform,
                 style: row.style,
+                appearance: row.appearance,
             })
         })?;
         if tracks.is_empty() {
@@ -807,6 +849,7 @@ impl ExecutionSession {
         self.pending_segment_completion = Some(PendingSegmentCompletion {
             token,
             activation_scene_revision: store.scene_revision(),
+            lifecycle_root: None,
             entries: completions,
         });
         self.next_activation_track_id = next_track_id;
@@ -836,6 +879,7 @@ impl ExecutionSession {
             declaration,
             root,
             AnimationOptions::new(),
+            None,
         )
     }
 
@@ -864,7 +908,93 @@ impl ExecutionSession {
             })
             .collect::<Result<Vec<_>, ExecutionSessionAnimationError>>()?;
         let root = declaration.create_animation_composition(kind, children, composition_options);
-        self.declare_and_activate_prepared_animation(store, declaration, root, play_options)
+        self.declare_and_activate_prepared_animation(store, declaration, root, play_options, None)
+    }
+
+    /// Atomically declare and activate one canonical single-leaf fade.
+    ///
+    /// FadeIn admits one detached existing object and its appearance-zero track in one
+    /// publication. FadeOut keeps membership until exact segment completion removes it with the
+    /// appearance driver. No lifecycle state is retained outside the semantic store/session.
+    pub fn declare_and_activate_fade(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        self.require_fade_target(store, root, target, direction)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        if direction == SemanticFadeDirection::In {
+            declaration.add_member(root, target);
+        }
+        let animation = declaration.create_fade_animation(target, direction, options);
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            animation,
+            AnimationOptions::new(),
+            Some((root, direction)),
+        )
+    }
+
+    fn require_fade_target(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        if !self.callback_schedule.is_empty() {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
+            });
+        }
+        let state = store
+            .semantic_object_state_checked(target)
+            .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?;
+        if !state.signal_bindings().is_empty() {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::ReactiveBindingsUnsupported,
+            });
+        }
+        let node = store
+            .node(target)
+            .expect("validated semantic object has a live node");
+        match direction {
+            SemanticFadeDirection::In => {
+                if node.is_scene_owned()
+                    || !node.parents().is_empty()
+                    || self.execution_index.execution_object_id(target).is_some()
+                {
+                    return Err(ExecutionSessionAnimationError::FadeTarget {
+                        target,
+                        error: ExecutionSessionFadeError::TargetIsNotDetached,
+                    });
+                }
+            }
+            SemanticFadeDirection::Out => {
+                if node.parents().len() > 1 {
+                    return Err(ExecutionSessionAnimationError::FadeTarget {
+                        target,
+                        error: ExecutionSessionFadeError::TargetIsAliased,
+                    });
+                }
+                if node.parents() != [root]
+                    || self.execution_index.execution_object_id(target).is_none()
+                {
+                    return Err(ExecutionSessionAnimationError::FadeTarget {
+                        target,
+                        error: ExecutionSessionFadeError::TargetIsNotDirectRootMember,
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     fn require_animation_declaration_context(
@@ -907,6 +1037,7 @@ impl ExecutionSession {
         declaration: SemanticMutationTransaction,
         root: noon_core::SemanticLocalNodeToken,
         play_options: AnimationOptions,
+        lifecycle: Option<(SemanticNodeId, SemanticFadeDirection)>,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         let prepared = declaration.prepare(store).map_err(|error| {
             ExecutionSessionAnimationError::AuthoredPublication(
@@ -925,6 +1056,7 @@ impl ExecutionSession {
                 Some(EffectiveAnimationProperties {
                     transform: row.transform,
                     style: row.style,
+                    appearance: row.appearance,
                 })
             },
         )?;
@@ -951,9 +1083,20 @@ impl ExecutionSession {
             next_track_id = raw_id.checked_add(1);
         }
 
-        self.runtime
-            .preflight_reconcilable_track_additions(&definitions)
-            .map_err(ExecutionSessionAnimationError::Publication)?;
+        if matches!(lifecycle, Some((_, SemanticFadeDirection::In))) {
+            let existing_tracks = definitions
+                .iter()
+                .filter(|definition| self.runtime.contains_object(definition.object))
+                .cloned()
+                .collect::<Vec<_>>();
+            self.runtime
+                .preflight_reconcilable_track_additions(&existing_tracks)
+                .map_err(ExecutionSessionAnimationError::Publication)?;
+        } else {
+            self.runtime
+                .preflight_reconcilable_track_additions(&definitions)
+                .map_err(ExecutionSessionAnimationError::Publication)?;
+        }
 
         let (token, next_segment_sequence) = if definitions.is_empty() {
             (None, self.next_segment_sequence)
@@ -1000,6 +1143,7 @@ impl ExecutionSession {
             self.pending_segment_completion = Some(PendingSegmentCompletion {
                 token,
                 activation_scene_revision,
+                lifecycle_root: lifecycle.map(|(root, _)| root),
                 entries,
             });
         }

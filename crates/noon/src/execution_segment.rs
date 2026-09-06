@@ -52,6 +52,7 @@ pub(crate) struct SegmentCompletionEntry {
 pub(crate) struct PendingSegmentCompletion {
     pub token: ExecutionSegmentToken,
     pub activation_scene_revision: noon_core::SceneRevision,
+    pub lifecycle_root: Option<SemanticNodeId>,
     pub entries: Vec<SegmentCompletionEntry>,
 }
 

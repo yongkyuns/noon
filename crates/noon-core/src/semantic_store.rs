@@ -929,6 +929,25 @@ impl SemanticStore {
         self.scene_nodes
     }
 
+    /// Check one direct family edge without materializing or scanning its ordered members.
+    pub fn is_direct_member(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<bool, SemanticStoreError> {
+        let family_id = family;
+        let family = self
+            .node(family_id)
+            .ok_or(SemanticStoreError::UnknownNode(family_id))?;
+        if !matches!(family.kind(), SemanticNodeKind::Family) {
+            return Err(SemanticStoreError::NotFamily(family_id));
+        }
+        if self.node(member).is_none() {
+            return Err(SemanticStoreError::UnknownNode(member));
+        }
+        Ok(family.members.contains(member))
+    }
+
     /// Add an ordered family edge. A member may belong to multiple families.
     ///
     /// Direct duplicate lookup and ordered append are O(1); cycle validation is

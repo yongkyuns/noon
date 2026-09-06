@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use noon_compile::{ExecutionPatch, SemanticAnimationCompletion};
 use noon_core::{
-    SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty, SemanticSignalValue,
-    SemanticStore,
+    SemanticFadeDirection, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty,
+    SemanticSignalValue, SemanticStore,
 };
 use noon_runtime::{EffectivePropertyWrite, FrameState, RuntimeIdentity};
 
@@ -175,6 +175,19 @@ impl ExecutionSession {
 
         let mut semantic = SemanticMutationTransaction::new();
         let mut release = Vec::with_capacity(pending.entries.len());
+        for entry in &pending.entries {
+            if matches!(
+                &entry.completion,
+                SemanticAnimationCompletion::Fade {
+                    direction: SemanticFadeDirection::Out
+                }
+            ) {
+                let root = pending
+                    .lifecycle_root
+                    .expect("prepared FadeOut completion retains its scene root");
+                semantic.remove_member(root, entry.semantic_object);
+            }
+        }
 
         // Paint channels carry only their exact semantic fields. Start from the
         // current authored style once per affected object, merge every completed
@@ -231,7 +244,8 @@ impl ExecutionSession {
                     }
                 }
                 SemanticAnimationCompletion::Fill { .. }
-                | SemanticAnimationCompletion::Stroke { .. } => {}
+                | SemanticAnimationCompletion::Stroke { .. }
+                | SemanticAnimationCompletion::Fade { .. } => {}
             }
             release.push(ExecutionPatch::ReconcileTrack {
                 track: entry.track,

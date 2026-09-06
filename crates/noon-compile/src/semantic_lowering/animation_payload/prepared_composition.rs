@@ -2,14 +2,14 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
     validate_track_definition, AnimationOptions, ObjectId, PreparedSemanticMutationTransaction,
-    Property, SemanticLoweringError, SemanticObjectProperty, SemanticTransactionNodeRef,
-    SemanticTransactionReadError, TimelineError, TrackDefinition, TrackId, TrackTiming,
-    TrackValues,
+    Property, SemanticFadeDirection, SemanticLoweringError, SemanticObjectProperty,
+    SemanticTransactionNodeRef, SemanticTransactionReadError, TimelineError, TrackDefinition,
+    TrackId, TrackTiming, TrackValues,
 };
 
 use super::super::{
     lower_prepared_semantic_animation_schedule, PreparedSemanticAnimationScheduleError,
-    SemanticExecutionIndex, SemanticExecutionValueError,
+    PreparedSemanticScheduledAnimationPayload, SemanticExecutionIndex, SemanticExecutionValueError,
 };
 use super::affine::{
     driver_key, lower_affine_channels, validate_affine_payload, AffinePayloadIssue,
@@ -108,6 +108,17 @@ pub enum PreparedSemanticAnimationLoweringError {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
     },
+    InvalidEffectiveAppearance {
+        animation: SemanticTransactionNodeRef,
+        target: SemanticTransactionNodeRef,
+        appearance: f32,
+    },
+    UnsupportedFadeComposition {
+        animation: SemanticTransactionNodeRef,
+    },
+    UnsupportedFadeOptions {
+        animation: SemanticTransactionNodeRef,
+    },
     UnsupportedContentChange {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
@@ -179,7 +190,7 @@ impl std::fmt::Display for PreparedSemanticAnimationLoweringError {
 
 impl std::error::Error for PreparedSemanticAnimationLoweringError {}
 
-/// Lower one prepared animation graph through the canonical schedule and affine payload paths.
+/// Lower one prepared animation graph through the canonical schedule and shared payload paths.
 ///
 /// Effective properties are captured at most once per affected execution object. The function
 /// reads only staged animation/object dependencies and does not allocate semantic or execution
@@ -211,55 +222,81 @@ where
                 error,
             }
         })?;
-        let target = prepared.object_state(leaf.target_state).map_err(|error| {
-            PreparedSemanticAnimationLoweringError::Target {
-                animation: leaf.animation,
-                node: leaf.target_state,
-                error,
+        let channel = match leaf.payload {
+            PreparedSemanticScheduledAnimationPayload::TransformTo { target_state } => {
+                let target = prepared.object_state(target_state).map_err(|error| {
+                    PreparedSemanticAnimationLoweringError::Target {
+                        animation: leaf.animation,
+                        node: target_state,
+                        error,
+                    }
+                })?;
+                validate_affine_payload(source, target, leaf.options)
+                    .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
+                let from = capture_effective(leaf, &mut captures, &mut effective_properties)?;
+                let channels = lower_affine_channels(source, target, from)
+                    .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
+                for channel in channels {
+                    push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+                continue;
             }
-        })?;
-        validate_affine_payload(source, target, leaf.options)
-            .map_err(|issue| prepared_payload_error(leaf, issue))?;
-        let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
-            captured
-        } else {
-            let captured = effective_properties(leaf.execution_object_id).ok_or(
-                PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
-                    animation: leaf.animation,
-                    target: leaf.target,
-                    execution_object_id: leaf.execution_object_id,
-                },
-            )?;
-            captures.insert(leaf.execution_object_id, captured);
-            captured
+            PreparedSemanticScheduledAnimationPayload::Fade { direction } => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.reverse_rate_function
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedFadeOptions {
+                            animation: leaf.animation,
+                        },
+                    );
+                }
+                if !leaf.time_map.is_identity() {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedFadeComposition {
+                            animation: leaf.animation,
+                        },
+                    );
+                }
+                if !source.signal_bindings().is_empty() {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
+                            animation: leaf.animation,
+                            target: leaf.target,
+                            property: SemanticObjectProperty::Presence,
+                        },
+                    );
+                }
+                let from = match direction {
+                    SemanticFadeDirection::In => 0.0,
+                    SemanticFadeDirection::Out => {
+                        capture_effective(leaf, &mut captures, &mut effective_properties)?
+                            .appearance
+                    }
+                };
+                if !from.is_finite() || !(0.0..=1.0).contains(&from) {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::InvalidEffectiveAppearance {
+                            animation: leaf.animation,
+                            target: leaf.target,
+                            appearance: from,
+                        },
+                    );
+                }
+                let to = match direction {
+                    SemanticFadeDirection::In => 1.0,
+                    SemanticFadeDirection::Out => 0.0,
+                };
+                super::affine::LoweredAffineChannel {
+                    property: Property::Appearance,
+                    conflict_property: SemanticObjectProperty::Presence,
+                    completion: SemanticAnimationCompletion::Fade { direction },
+                    values: TrackValues::Scalar { from, to },
+                }
+            }
         };
-        let channels = lower_affine_channels(source, target, from)
-            .map_err(|issue| prepared_payload_error(leaf, issue))?;
-        for channel in channels {
-            match driven.entry(driver_key(leaf.execution_object_id, channel.property)) {
-                Entry::Occupied(entry) => {
-                    return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
-                        first_animation: *entry.get(),
-                        next_animation: leaf.animation,
-                        target: leaf.target,
-                        property: channel.conflict_property,
-                    });
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert(leaf.animation);
-                }
-            }
-            tracks.push(PreparedSemanticAnimationTrack {
-                animation: leaf.animation,
-                target: leaf.target,
-                execution_object_id: leaf.execution_object_id,
-                property: channel.property,
-                completion: channel.completion,
-                values: channel.values,
-                timing: leaf.timing,
-                time_map: leaf.time_map.clone(),
-            });
-        }
+        push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
     }
 
     Ok(PreparedSemanticAnimationActivation {
@@ -270,8 +307,63 @@ where
     })
 }
 
+fn capture_effective<F>(
+    leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
+    captures: &mut HashMap<ObjectId, EffectiveAnimationProperties>,
+    effective_properties: &mut F,
+) -> Result<EffectiveAnimationProperties, PreparedSemanticAnimationLoweringError>
+where
+    F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
+{
+    if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+        return Ok(captured);
+    }
+    let captured = effective_properties(leaf.execution_object_id).ok_or(
+        PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+            animation: leaf.animation,
+            target: leaf.target,
+            execution_object_id: leaf.execution_object_id,
+        },
+    )?;
+    captures.insert(leaf.execution_object_id, captured);
+    Ok(captured)
+}
+
+fn push_prepared_channel(
+    leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
+    channel: super::affine::LoweredAffineChannel,
+    driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
+    tracks: &mut Vec<PreparedSemanticAnimationTrack>,
+) -> Result<(), PreparedSemanticAnimationLoweringError> {
+    match driven.entry(driver_key(leaf.execution_object_id, channel.property)) {
+        Entry::Occupied(entry) => {
+            return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
+                first_animation: *entry.get(),
+                next_animation: leaf.animation,
+                target: leaf.target,
+                property: channel.conflict_property,
+            });
+        }
+        Entry::Vacant(entry) => {
+            entry.insert(leaf.animation);
+        }
+    }
+    tracks.push(PreparedSemanticAnimationTrack {
+        animation: leaf.animation,
+        target: leaf.target,
+        execution_object_id: leaf.execution_object_id,
+        property: channel.property,
+        completion: channel.completion,
+        values: channel.values,
+        timing: leaf.timing,
+        time_map: leaf.time_map.clone(),
+    });
+    Ok(())
+}
+
 fn prepared_payload_error(
     leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
+    target_state: SemanticTransactionNodeRef,
     issue: AffinePayloadIssue,
 ) -> PreparedSemanticAnimationLoweringError {
     match issue {
@@ -291,35 +383,35 @@ fn prepared_payload_error(
             PreparedSemanticAnimationLoweringError::UnsupportedContentChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedStyleChange => {
             PreparedSemanticAnimationLoweringError::UnsupportedStyleChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedPainterOrderChange => {
             PreparedSemanticAnimationLoweringError::UnsupportedPainterOrderChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedBindingChange => {
             PreparedSemanticAnimationLoweringError::UnsupportedBindingChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedDepthChange(field) => {
             PreparedSemanticAnimationLoweringError::UnsupportedDepthChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: leaf.target_state,
+                target_state,
                 field,
             }
         }
@@ -341,7 +433,7 @@ fn prepared_payload_error(
         AffinePayloadIssue::InvalidTargetValue { field, error } => {
             PreparedSemanticAnimationLoweringError::InvalidTargetValue {
                 animation: leaf.animation,
-                target_state: leaf.target_state,
+                target_state,
                 field,
                 error,
             }
@@ -349,14 +441,14 @@ fn prepared_payload_error(
         AffinePayloadIssue::TargetValueOutOfRange(field) => {
             PreparedSemanticAnimationLoweringError::TargetValueOutOfRange {
                 animation: leaf.animation,
-                target_state: leaf.target_state,
+                target_state,
                 field,
             }
         }
         AffinePayloadIssue::InvalidTargetStyle(error) => {
             PreparedSemanticAnimationLoweringError::InvalidTargetStyle {
                 animation: leaf.animation,
-                target_state: leaf.target_state,
+                target_state,
                 error,
             }
         }
@@ -396,6 +488,7 @@ mod tests {
                 ..Transform2D::IDENTITY
             },
             style: noon_core::Style::default(),
+            appearance: 1.0,
         }
     }
 

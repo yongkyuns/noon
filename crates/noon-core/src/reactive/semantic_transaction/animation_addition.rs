@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     AnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationIntent,
-    SemanticAnimationState, SemanticObjectState,
+    SemanticAnimationState, SemanticFadeDirection, SemanticObjectState,
 };
 
 use super::{
@@ -22,6 +22,10 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
     },
+    Fade {
+        target: SemanticTransactionNodeRef,
+        direction: SemanticFadeDirection,
+    },
     Composition {
         kind: SemanticAnimationCompositionKind,
         children: Vec<SemanticTransactionNodeRef>,
@@ -30,19 +34,20 @@ pub enum SemanticTransactionAnimationIntent {
 
 impl SemanticTransactionAnimationIntent {
     pub fn node_references(&self) -> impl Iterator<Item = SemanticTransactionNodeRef> + '_ {
-        let transform = match self {
+        let leaf = match self {
             Self::TransformTo {
                 target,
                 target_state,
-            } => Some([*target, *target_state]),
+            } => Some([Some(*target), Some(*target_state)]),
+            Self::Fade { target, .. } => Some([Some(*target), None]),
             Self::Composition { .. } => None,
         };
         let children = match self {
             Self::Composition { children, .. } => children.as_slice(),
-            Self::TransformTo { .. } => &[],
+            Self::TransformTo { .. } | Self::Fade { .. } => &[],
         };
-        transform
-            .into_iter()
+        leaf.into_iter()
+            .flatten()
             .flatten()
             .chain(children.iter().copied())
     }
@@ -81,6 +86,12 @@ impl SemanticTransactionAnimation {
                 target: (*target).into(),
                 target_state: (*target_state).into(),
             },
+            SemanticAnimationIntent::Fade { target, direction } => {
+                SemanticTransactionAnimationIntent::Fade {
+                    target: (*target).into(),
+                    direction: *direction,
+                }
+            }
             SemanticAnimationIntent::Composition { kind, children } => {
                 SemanticTransactionAnimationIntent::Composition {
                     kind: *kind,
@@ -103,6 +114,12 @@ impl SemanticTransactionAnimation {
                 target: resolve_node_ref(*target, committed),
                 target_state: resolve_node_ref(*target_state, committed),
             },
+            SemanticTransactionAnimationIntent::Fade { target, direction } => {
+                SemanticAnimationIntent::Fade {
+                    target: resolve_node_ref(*target, committed),
+                    direction: *direction,
+                }
+            }
             SemanticTransactionAnimationIntent::Composition { kind, children } => {
                 SemanticAnimationIntent::Composition {
                     kind: *kind,
@@ -168,6 +185,10 @@ pub(super) fn preflight_transaction_animation(
                 });
             }
         }
+        SemanticTransactionAnimationIntent::Fade { target, .. } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+        }
         SemanticTransactionAnimationIntent::Composition { children, .. } => {
             if children.is_empty() {
                 return Err(SemanticMutationTransactionError::EmptyAnimationComposition { index });
@@ -229,6 +250,9 @@ pub(super) fn commit_add_animation(
         } => store
             .insert_semantic_transform_animation(*target, *target_state, options)
             .expect("preflighted semantic animation insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::Fade { target, direction } => store
+            .insert_semantic_fade_animation(*target, *direction, options)
+            .expect("preflighted semantic fade insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Composition { kind, children } => match kind {
             SemanticAnimationCompositionKind::Parallel => store
                 .insert_semantic_parallel_animation(children, options)

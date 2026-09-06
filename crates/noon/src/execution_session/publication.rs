@@ -180,6 +180,9 @@ impl ExecutionSession {
         )
         .map_err(ExecutionSessionPublicationError::Lowering)?;
         let preparation_stats = publication.stats();
+        let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) = execution_prefix
+            .into_iter()
+            .partition(|patch| matches!(patch, ExecutionPatch::AddTrack(_)));
         let mut conservative_patches = execution_prefix.clone();
         conservative_patches.extend_from_slice(publication.value_transaction().mutations());
         conservative_patches.extend(
@@ -189,6 +192,10 @@ impl ExecutionSession {
                 .copied()
                 .map(ExecutionPatch::RemoveObject),
         );
+        if !execution_suffix.is_empty() {
+            conservative_patches.extend(publication.conservative_existing_entry_patches());
+        }
+        conservative_patches.extend(execution_suffix.iter().cloned());
         let conservative = ExecutionMutationTransaction::from_mutations(conservative_patches);
         let structural_change_possible =
             publication.possible_entry_count() != 0 || !publication.possible_exits().is_empty();
@@ -226,7 +233,8 @@ impl ExecutionSession {
         let execution = ExecutionMutationTransaction::from_mutations(
             execution_prefix
                 .into_iter()
-                .chain(execution.mutations().iter().cloned()),
+                .chain(execution.mutations().iter().cloned())
+                .chain(execution_suffix),
         );
         self.runtime
             .apply_authored_execution_transaction_with_effective(

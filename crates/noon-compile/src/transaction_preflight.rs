@@ -371,6 +371,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Fill
                             | Property::Stroke
                             | Property::Opacity
+                            | Property::Appearance
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
