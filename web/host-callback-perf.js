@@ -1,40 +1,55 @@
-import initNoonWeb, { HostScenePlayer } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
 
+const SAMPLE_RATE_HZ = 60;
+const SAMPLE_STEP_SECONDS = 1 / SAMPLE_RATE_HZ;
 const parameters = new URLSearchParams(location.search);
 const objectCount = positiveInteger("objects", 1_000);
 const activeCount = positiveInteger("active", 1);
 const warmupFrames = positiveInteger("warmup", 30);
 const measuredFrames = positiveInteger("frames", 300);
-if (activeCount > objectCount) throw new Error("active updater count cannot exceed object count");
+if (activeCount > objectCount) throw new Error("active object count cannot exceed object count");
 
 const status = document.querySelector("#status");
 const output = document.querySelector("#json");
-const encoder = new TextEncoder();
-let client = null;
+let authoring = null;
 
 try {
-  await initNoonWeb();
-  client = new PythonAuthoringClient();
-  await client.ready();
+  authoring = new PythonAuthoringClient();
+  await authoring.ready();
 
-  const native = await author(nativeSource(objectCount, activeCount));
-  const host = await author(hostSource(objectCount, activeCount));
-  if (native.callbacks !== null) throw new Error("native comparison scene unexpectedly registered callbacks");
-  if (host.callbacks === null) throw new Error("host comparison scene did not register callbacks");
+  // Leave enough authored extent for startup ticks plus every exact benchmark
+  // sample. The endpoint, rather than this harness, remains the execution clock.
+  const workloadDurationSeconds =
+    (warmupFrames + measuredFrames) * SAMPLE_STEP_SECONDS + 2;
+  const native = await author(nativeSource(objectCount, activeCount, workloadDurationSeconds));
+  const host = await author(hostSource(objectCount, activeCount, workloadDurationSeconds));
+  if (native.semanticExecution.callbackSessionId !== undefined) {
+    throw new Error("native comparison scene unexpectedly registered callbacks");
+  }
+  if (host.semanticExecution.callbackSessionId === undefined) {
+    throw new Error("host comparison scene did not register callbacks");
+  }
 
-  status.value = `Native baseline · ${activeCount}/${objectCount} active…`;
-  const nativeResult = await measureNative(native.document);
+  status.value = `Native timeline · ${activeCount}/${objectCount} active…`;
+  const nativeResult = await measureWorkload(native, workloadDurationSeconds);
   status.value = `Python updater · ${activeCount}/${objectCount} active…`;
-  const hostResult = await measureHost(host);
+  const hostResult = await measureWorkload(host, workloadDurationSeconds);
 
   const report = {
-    schemaVersion: 1,
-    benchmark: "Noon native versus Python host callback frame cost",
+    schemaVersion: 2,
+    benchmark: "Noon canonical native timeline versus Python callback advance round trip",
     generatedAt: new Date().toISOString(),
-    workload: { objects: objectCount, active: activeCount, warmupFrames, measuredFrames },
+    workload: {
+      objects: objectCount,
+      active: activeCount,
+      warmupFrames,
+      measuredFrames,
+      authoredSampleRateHz: SAMPLE_RATE_HZ,
+      semantics: "the first active objects translate right at 0.1 authored units per second",
+    },
     environment: {
       userAgent: navigator.userAgent,
       hardwareConcurrency: navigator.hardwareConcurrency ?? null,
@@ -43,19 +58,25 @@ try {
     native: nativeResult,
     host: hostResult,
     overhead: {
-      frameWorkP95Ms: difference(hostResult.frameWorkMs?.p95, nativeResult.frameWorkMs?.p95),
-      cadenceP95Ms: difference(hostResult.frameIntervalMs?.p95, nativeResult.frameIntervalMs?.p95),
-      callbackRoundTripP95Ms: hostResult.callbackRoundTripMs?.p95 ?? null,
-      callbackSnapshotBytesP50: hostResult.callbackSnapshotBytes?.p50 ?? null,
-      patchBytesP50: hostResult.patchBytes?.p50 ?? null,
+      advanceRoundTripP95Ms: difference(
+        hostResult.advanceRoundTripMs?.p95,
+        nativeResult.advanceRoundTripMs?.p95,
+      ),
+      cadenceP95Ms: difference(
+        hostResult.frameIntervalMs?.p95,
+        nativeResult.frameIntervalMs?.p95,
+      ),
+      lastPublicationUploadBytes: difference(
+        hostResult.locality.lastPublication.bytesUploaded,
+        nativeResult.locality.lastPublication.bytesUploaded,
+      ),
     },
   };
   window.__NOON_HOST_CALLBACK_PERF__ = report;
   output.textContent = JSON.stringify(report, null, 2);
   status.value =
-    `Complete · native work p95 ${format(nativeResult.frameWorkMs?.p95)} ms · ` +
-    `host p95 ${format(hostResult.frameWorkMs?.p95)} ms · ` +
-    `callback ${format(hostResult.callbackRoundTripMs?.p95)} ms`;
+    `Complete · native round trip p95 ${format(nativeResult.advanceRoundTripMs?.p95)} ms · ` +
+    `host ${format(hostResult.advanceRoundTripMs?.p95)} ms`;
   status.dataset.state = "complete";
   console.log("NOON_HOST_CALLBACK_PERF", report);
 } catch (error) {
@@ -63,158 +84,148 @@ try {
   status.value = `Host callback profile failed: ${error}`;
   status.dataset.state = "error";
 } finally {
-  client?.terminate();
+  authoring?.terminate();
 }
 
 async function author(source) {
-  const result = await client.run(source);
-  if (result.kind !== "scene_document") throw new Error("performance source did not return a scene");
+  const result = await authoring.run(source);
+  if (result.kind !== "scene_document" || result.semanticExecution === null) {
+    throw new Error("performance source did not return canonical semantic execution");
+  }
   return result;
 }
 
-async function measureNative(document) {
-  const player = new HostScenePlayer(JSON.stringify(document), "[]");
+async function measureWorkload(authored, workloadDurationSeconds) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 320;
+  canvas.height = 180;
+  canvas.style.cssText =
+    "position:fixed;left:-10000px;top:0;width:320px;height:180px;pointer-events:none";
+  document.body.append(canvas);
+  const execution = new AuthoringExecutionClient(canvas);
   try {
-    for (let frame = 0; frame < warmupFrames; frame += 1) {
-      player.advanceTo((frame + 1) / 60);
+    const ready = await execution.startSemanticExecution(authored.semanticExecution, {
+      authoringClient: authoring,
+      loopDurationSeconds: workloadDurationSeconds,
+      transportMode: "transferable",
+    });
+    const started = await execution.state();
+    const paused = await execution.pause();
+    if (paused.playing !== false || !Number.isFinite(paused.time)) {
+      throw new Error("canonical performance endpoint did not pause coherently");
     }
-    const cadence = new FrameMetrics();
-    const work = new SampleWindow(measuredFrames);
+
+    // Start on the next exact 60 Hz authored-time boundary after any startup
+    // presentation. RAF paces samples only and never determines authored time.
+    const firstSampleIndex = Math.floor(paused.time * SAMPLE_RATE_HZ + 1e-9) + 1;
+    const sampleTime = (index) => (firstSampleIndex + index) * SAMPLE_STEP_SECONDS;
+    const finalTime = sampleTime(warmupFrames + measuredFrames - 1);
+    if (finalTime > workloadDurationSeconds) {
+      throw new Error("performance sample range exceeds the authored workload extent");
+    }
+
+    for (let frame = 0; frame < warmupFrames; frame += 1) {
+      await execution.advanceTo(sampleTime(frame));
+    }
+    const metricsBefore = await execution.metrics();
+    const cadence = new FrameMetrics({ targetHz: SAMPLE_RATE_HZ });
+    const roundTrip = new SampleWindow(measuredFrames);
     const jank = new BrowserJankMonitor();
-    let firstTimestamp = null;
     const start = performance.now();
     jank.start();
     for (let frame = 0; frame < measuredFrames; frame += 1) {
       const timestamp = await nextAnimationFrame();
-      firstTimestamp ??= timestamp;
-      const semanticTime = warmupFrames / 60 + (timestamp - firstTimestamp) / 1000 + 1 / 60;
       const began = performance.now();
-      player.advanceTo(semanticTime);
+      const requestedTime = sampleTime(warmupFrames + frame);
+      const advanced = await execution.advanceTo(requestedTime);
+      if (advanced.playing !== false || Math.abs(advanced.time - requestedTime) > 1e-9) {
+        throw new Error(`canonical endpoint did not publish exact time ${requestedTime}`);
+      }
       const elapsed = performance.now() - began;
-      cadence.record(timestamp, elapsed);
-      work.record(elapsed);
-    }
-    const end = performance.now();
-    jank.stop();
-    const frame = cadence.summary();
-    return {
-      frameWorkMs: work.summary(),
-      frameIntervalMs: frame.interval,
-      cadence: frame.cadence,
-      longTasks: jank.summary(start, end),
-    };
-  } finally {
-    player.free();
-  }
-}
-
-async function measureHost(authored) {
-  const player = new HostScenePlayer(
-    JSON.stringify(authored.document),
-    JSON.stringify(authored.callbacks.slots),
-  );
-  try {
-    let sequence = 0;
-    for (let frame = 0; frame < warmupFrames; frame += 1) {
-      player.advanceTo((frame + 1) / 60);
-      const snapshot = JSON.parse(player.callbackFrameJson());
-      const batch = await client.runCallbackPhase(authored.callbacks.session_id, snapshot, sequence);
-      player.commitPatchBatch(JSON.stringify(batch));
-      sequence += 1;
-    }
-
-    const cadence = new FrameMetrics();
-    const windows = {
-      work: new SampleWindow(measuredFrames),
-      advance: new SampleWindow(measuredFrames),
-      snapshot: new SampleWindow(measuredFrames),
-      parse: new SampleWindow(measuredFrames),
-      callback: new SampleWindow(measuredFrames),
-      serialize: new SampleWindow(measuredFrames),
-      commit: new SampleWindow(measuredFrames),
-      snapshotBytes: new SampleWindow(measuredFrames),
-      patchBytes: new SampleWindow(measuredFrames),
-      patchCount: new SampleWindow(measuredFrames),
-    };
-    const jank = new BrowserJankMonitor();
-    let firstTimestamp = null;
-    const start = performance.now();
-    jank.start();
-    for (let frame = 0; frame < measuredFrames; frame += 1) {
-      const timestamp = await nextAnimationFrame();
-      firstTimestamp ??= timestamp;
-      const semanticTime = warmupFrames / 60 + (timestamp - firstTimestamp) / 1000 + 1 / 60;
-      const frameStarted = performance.now();
-
-      let began = performance.now();
-      player.advanceTo(semanticTime);
-      windows.advance.record(performance.now() - began);
-
-      began = performance.now();
-      const snapshotJson = player.callbackFrameJson();
-      windows.snapshot.record(performance.now() - began);
-      windows.snapshotBytes.record(encoder.encode(snapshotJson).byteLength);
-
-      began = performance.now();
-      const snapshot = JSON.parse(snapshotJson);
-      windows.parse.record(performance.now() - began);
-
-      began = performance.now();
-      const batch = await client.runCallbackPhase(authored.callbacks.session_id, snapshot, sequence);
-      windows.callback.record(performance.now() - began);
-
-      began = performance.now();
-      const patchJson = JSON.stringify(batch);
-      windows.serialize.record(performance.now() - began);
-      windows.patchBytes.record(encoder.encode(patchJson).byteLength);
-      windows.patchCount.record(batch.patches.length);
-
-      began = performance.now();
-      player.commitPatchBatch(patchJson);
-      windows.commit.record(performance.now() - began);
-      sequence += 1;
-
-      const elapsed = performance.now() - frameStarted;
-      windows.work.record(elapsed);
+      roundTrip.record(elapsed);
       cadence.record(timestamp, elapsed);
     }
     const end = performance.now();
     jank.stop();
+    const metricsAfter = await execution.metrics();
+    const finalState = await execution.state();
     const frame = cadence.summary();
     return {
-      frameWorkMs: windows.work.summary(),
+      executionMode: execution.mode,
+      rendererBackend: execution.rendererBackend,
+      transportMode: ready.transportMode,
+      startup: {
+        beforePause: { time: started.time, playing: started.playing },
+        afterPause: { time: paused.time, playing: paused.playing },
+        firstExactSampleIndex: firstSampleIndex,
+      },
+      authoredSamples: {
+        warmupFirst: sampleTime(0),
+        measuredFirst: sampleTime(warmupFrames),
+        last: finalTime,
+        stepSeconds: SAMPLE_STEP_SECONDS,
+      },
+      advanceRoundTripMs: roundTrip.summary(),
       frameIntervalMs: frame.interval,
       cadence: frame.cadence,
-      advanceMs: windows.advance.summary(),
-      callbackSnapshotMs: windows.snapshot.summary(),
-      mainThreadParseMs: windows.parse.summary(),
-      callbackRoundTripMs: windows.callback.summary(),
-      patchSerializeMs: windows.serialize.summary(),
-      patchCommitMs: windows.commit.summary(),
-      callbackSnapshotBytes: windows.snapshotBytes.summary(),
-      patchBytes: windows.patchBytes.summary(),
-      patchCount: windows.patchCount.summary(),
       longTasks: jank.summary(start, end),
+      locality: localitySummary(metricsBefore, metricsAfter),
+      finalState: {
+        time: finalState.time,
+        playing: finalState.playing,
+      },
     };
   } finally {
-    player.free();
+    execution.terminate();
+    canvas.remove();
   }
 }
 
-function nativeSource(objects, active) {
+function localitySummary(before, after) {
+  const beforePresented = finiteCounter(before.presentedFrames, "starting presented frame count");
+  const afterPresented = finiteCounter(after.presentedFrames, "ending presented frame count");
+  const presentedFrames = afterPresented - beforePresented;
+  if (presentedFrames !== measuredFrames) {
+    throw new Error(
+      `exact advances presented ${presentedFrames} frames instead of ${measuredFrames}`,
+    );
+  }
+  const objectCountAfter = finiteCounter(after.objectCount, "renderer object count");
+  if (objectCountAfter !== objectCount) {
+    throw new Error(`renderer object count ${objectCountAfter} did not match ${objectCount}`);
+  }
+  return {
+    presentedFrames,
+    lastPublication: {
+      objectCount: objectCountAfter,
+      drawCalls: finiteCounter(after.drawCalls, "draw call count"),
+      instancesDrawn: finiteCounter(after.instancesDrawn, "instance count"),
+      bytesUploaded: finiteCounter(after.bytesUploaded, "uploaded byte count"),
+      geometryCacheMisses: finiteCounter(after.geometryCacheMisses, "geometry cache miss count"),
+      bufferedDeltas: finiteCounter(after.bufferedDeltas, "buffered delta count"),
+      needsPresent: Boolean(after.needsPresent),
+    },
+  };
+}
+
+function nativeSource(objects, active, duration) {
   return `
-from noon import Circle, Scene, Vec2
+from noon import Circle, RIGHT, Scene, linear
 scene = Scene()
 dots = [Circle(0.1) for _ in range(${objects})]
 for index, dot in enumerate(dots):
     scene.add(dot, key=f"dot.{index}")
-for index, dot in enumerate(dots[:${active}]):
-    scene.animate_position(dot, Vec2(0.0, 0.0), Vec2(1.0, 0.0), duration=60.0, key=f"move.{index}")
+progress = scene.value_tracker(0.0)
+for dot in dots[:${active}]:
+    scene.bind_position(dot, progress, direction=RIGHT * 0.1)
+scene.play(progress.animate(run_time=${duration}, rate_func=linear).set_value(${duration}))
+live = scene.live_execution(duration=${duration})
+live.evaluate(0.0)
 result = scene
 `;
 }
 
-function hostSource(objects, active) {
+function hostSource(objects, active, duration) {
   return `
 from noon import Circle, RIGHT, Scene
 scene = Scene()
@@ -227,12 +238,19 @@ def move(mobject, dt):
 
 for dot in dots[:${active}]:
     dot.add_updater(move)
+live = scene.live_execution(duration=${duration})
+assert live.wait(${duration}) == ${duration}
 result = scene
 `;
 }
 
 function nextAnimationFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
+function finiteCounter(value, name) {
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${name} must be finite and non-negative`);
+  return value;
 }
 
 function positiveInteger(name, fallback) {

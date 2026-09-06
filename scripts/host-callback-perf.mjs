@@ -47,17 +47,25 @@ try {
     const state = await page.locator("#status").getAttribute("data-state");
     if (state === "error") throw new Error(await page.locator("#status").textContent());
     const report = await page.evaluate(() => window.__NOON_HOST_CALLBACK_PERF__);
+    assert.equal(report.schemaVersion, 2);
+    assert.equal(report.workload.objects, testCase.objects);
+    assert.equal(report.workload.active, testCase.active);
+    assert.equal(report.native.locality.lastPublication.objectCount, testCase.objects);
+    assert.equal(report.host.locality.lastPublication.objectCount, testCase.objects);
+    assert.equal(report.native.finalState.playing, false);
+    assert.equal(report.host.finalState.playing, false);
     results.push(report);
     console.log(
-      `native ${fmt(report.native.frameWorkMs?.p95)} ms, host ${fmt(report.host.frameWorkMs?.p95)} ms, ` +
-        `callback ${fmt(report.host.callbackRoundTripMs?.p95)} ms, snapshot ${fmt(report.host.callbackSnapshotBytes?.p50)} B`,
+      `native ${fmt(report.native.advanceRoundTripMs?.p95)} ms, ` +
+        `host ${fmt(report.host.advanceRoundTripMs?.p95)} ms, ` +
+        `host upload ${fmt(report.host.locality.lastPublication.bytesUploaded)} B`,
     );
     await page.close();
   }
   const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
   const artifact = {
-    schemaVersion: 1,
-    benchmark: "Noon native versus Python host callback matrix",
+    schemaVersion: 2,
+    benchmark: "Noon canonical native timeline versus Python callback matrix",
     generatedAt: new Date().toISOString(),
     commit: commit.status === 0 ? commit.stdout.trim() : null,
     host: { platform: os.platform(), release: os.release(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? null },
