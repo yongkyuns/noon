@@ -837,6 +837,65 @@ try {
 
   // Scalar tracker continuation keeps both values and timing in the returned
   // Rust player. Python remains suspended through both tracks and the wait.
+  const externalSamples = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-external-samples";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    let resolveAttached;
+    let rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
+    });
+    let registrations = 0;
+    const authored = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(registration) {
+        registrations += 1;
+        await execution.startSemanticExecution(registration.semanticExecution, {
+          authoringClient: harness.authoring,
+          transportMode: "transferable",
+          pacing: "external_samples",
+        });
+        resolveAttached();
+      },
+    });
+    authored.catch(rejectAttached);
+    await attached;
+    try {
+      const initial = await execution.state();
+      const midpoint = await execution.sampleToAuthoredTime(1);
+      // One request crosses the first animation, wait, source edit and next play.
+      const crossing = await execution.sampleToAuthoredTime(3.5);
+      let rejectedBackwards = false;
+      try { await execution.sampleToAuthoredTime(3); }
+      catch { rejectedBackwards = true; }
+      const afterRejected = await execution.state();
+      const endpoint = await execution.sampleToAuthoredTime(4);
+      const result = await authored;
+      return { initial, midpoint, crossing, endpoint, afterRejected,
+        rejectedBackwards, registrations, duration: result.duration, canvasId: canvas.id };
+    } finally {
+      execution.terminate();
+    }
+  }, continuationSource);
+  assert.equal(externalSamples.initial.time, 0);
+  assert.equal(externalSamples.midpoint.time, 1);
+  assert.equal(externalSamples.crossing.time, 3.5);
+  assert.equal(externalSamples.afterRejected.time, 3.5);
+  assert.equal(externalSamples.rejectedBackwards, true);
+  assert.equal(externalSamples.endpoint.time, 4);
+  assert.equal(externalSamples.duration, 4);
+  assert.equal(externalSamples.registrations, 1);
+  const externalEndpointPixel = renderedWorldPixel(
+    await page.locator(`#${externalSamples.canvasId}`).screenshot(), 5, -1,
+  );
+  assert.ok(externalEndpointPixel.blue > 180,
+    `external sample did not present its exact endpoint: ${JSON.stringify(externalEndpointPixel)}`);
+
   const scalarContinuationSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_value_tracker_continuation.py"),
     "utf8",
