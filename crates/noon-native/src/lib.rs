@@ -7,12 +7,15 @@
 
 #![forbid(unsafe_code)]
 
+mod execution_source;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use noon::{
     EvaluationError, ExecutionSession, ExecutionSessionCameraError, ExecutionSessionInputError,
-    RendererPublication, RustHostCallbackError, RustHostCallbackTable, TimelineWakeState,
+    LiveContinuation, LiveProgram, RendererPublication, RustHostCallbackError,
+    RustHostCallbackTable, TimelineWakeState,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
@@ -26,6 +29,8 @@ use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
+
+use execution_source::{LiveProgramExecutionSource, NativeExecutionSource, StaticExecutionSource};
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.0,
@@ -60,6 +65,7 @@ pub enum NativeHostError {
     Callback(RustHostCallbackError),
     Camera(ExecutionSessionCameraError),
     Input(ExecutionSessionInputError),
+    Program(String),
 }
 
 impl std::fmt::Display for NativeHostError {
@@ -71,6 +77,7 @@ impl std::fmt::Display for NativeHostError {
             Self::Callback(error) => error.fmt(formatter),
             Self::Camera(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
+            Self::Program(message) => write!(formatter, "native live program error: {message}"),
         }
     }
 }
@@ -131,6 +138,63 @@ pub fn run_with_callbacks_and_config(
     callbacks: RustHostCallbackTable,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
+    run_source(
+        Box::new(StaticExecutionSource::new(session, callbacks)),
+        config,
+    )
+}
+
+/// Run one resumable Rust authoring continuation through the native viewport.
+pub fn run_live_program<C>(program: LiveProgram<C>) -> Result<(), NativeHostError>
+where
+    C: LiveContinuation + 'static,
+    C::Error: std::fmt::Display,
+{
+    run_live_program_with_config(program, NativeViewportConfig::default())
+}
+
+/// Run one resumable Rust authoring continuation with explicit host configuration.
+pub fn run_live_program_with_config<C>(
+    program: LiveProgram<C>,
+    config: NativeViewportConfig,
+) -> Result<(), NativeHostError>
+where
+    C: LiveContinuation + 'static,
+    C::Error: std::fmt::Display,
+{
+    run_live_program_with_callbacks_and_config(program, RustHostCallbackTable::new(), config)
+}
+
+/// Run one resumable Rust authoring continuation with direct Rust callbacks.
+pub fn run_live_program_with_callbacks<C>(
+    program: LiveProgram<C>,
+    callbacks: RustHostCallbackTable,
+) -> Result<(), NativeHostError>
+where
+    C: LiveContinuation + 'static,
+    C::Error: std::fmt::Display,
+{
+    run_live_program_with_callbacks_and_config(program, callbacks, NativeViewportConfig::default())
+}
+
+/// Run one resumable Rust authoring continuation with explicit host configuration.
+pub fn run_live_program_with_callbacks_and_config<C>(
+    program: LiveProgram<C>,
+    callbacks: RustHostCallbackTable,
+    config: NativeViewportConfig,
+) -> Result<(), NativeHostError>
+where
+    C: LiveContinuation + 'static,
+    C::Error: std::fmt::Display,
+{
+    let source = LiveProgramExecutionSource::new(program, callbacks)?;
+    run_source(Box::new(source), config)
+}
+
+fn run_source(
+    source: Box<dyn NativeExecutionSource>,
+    config: NativeViewportConfig,
+) -> Result<(), NativeHostError> {
     if config.width == 0 || config.height == 0 {
         return Err(NativeHostError::Platform(
             "initial viewport dimensions must be positive".to_owned(),
@@ -140,7 +204,7 @@ pub fn run_with_callbacks_and_config(
     let event_loop =
         EventLoop::new().map_err(|error| NativeHostError::Platform(error.to_string()))?;
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut app = NativeApp::new_with_callbacks(session, callbacks, config);
+    let mut app = NativeApp::from_source(source, config);
     event_loop
         .run_app(&mut app)
         .map_err(|error| NativeHostError::Platform(error.to_string()))?;
@@ -185,8 +249,7 @@ impl RealtimeClock {
 }
 
 struct NativeApp {
-    session: ExecutionSession,
-    callbacks: RustHostCallbackTable,
+    execution: Box<dyn NativeExecutionSource>,
     config: NativeViewportConfig,
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
@@ -207,17 +270,30 @@ struct NativeApp {
 impl NativeApp {
     #[cfg(test)]
     fn new(session: ExecutionSession, config: NativeViewportConfig) -> Self {
-        Self::new_with_callbacks(session, RustHostCallbackTable::new(), config)
+        Self::from_source(
+            Box::new(StaticExecutionSource::new(
+                session,
+                RustHostCallbackTable::new(),
+            )),
+            config,
+        )
     }
 
+    #[cfg(test)]
     fn new_with_callbacks(
         session: ExecutionSession,
         callbacks: RustHostCallbackTable,
         config: NativeViewportConfig,
     ) -> Self {
+        Self::from_source(
+            Box::new(StaticExecutionSource::new(session, callbacks)),
+            config,
+        )
+    }
+
+    fn from_source(source: Box<dyn NativeExecutionSource>, config: NativeViewportConfig) -> Self {
         Self {
-            session,
-            callbacks,
+            execution: source,
             config,
             window: None,
             gpu: None,
@@ -236,6 +312,18 @@ impl NativeApp {
         }
     }
 
+    #[cfg(test)]
+    fn session(&self) -> &ExecutionSession {
+        self.execution.session()
+    }
+
+    #[cfg(test)]
+    fn static_session_mut(&mut self) -> &mut ExecutionSession {
+        self.execution
+            .static_session_mut()
+            .expect("static native test must own an execution session")
+    }
+
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: NativeHostError) {
         if self.error.is_none() {
             self.error = Some(error);
@@ -248,8 +336,7 @@ impl NativeApp {
         source: NativeStateSource,
         value: NativeInputValue,
     ) -> Result<(), NativeHostError> {
-        self.session.set_native_state_input(source, value)?;
-        Ok(())
+        self.execution.set_native_state_input(source, value)
     }
 
     fn dispatch_event(&mut self, source: NativeEventSource) -> Result<(), NativeHostError> {
@@ -257,7 +344,7 @@ impl NativeApp {
         let next = sequence.checked_add(1).ok_or_else(|| {
             NativeHostError::Platform("native input event sequence exhausted".to_owned())
         })?;
-        self.session
+        self.execution
             .emit_native_event(NativeEventOccurrence::new(sequence, source))?;
         self.next_input_sequence = next;
         Ok(())
@@ -326,38 +413,36 @@ impl NativeApp {
             return None;
         }
         if self.realtime_clock.is_none() {
-            self.realtime_clock = Some(RealtimeClock::new(now, self.session.frame().time));
+            self.realtime_clock = Some(RealtimeClock::new(now, self.execution.frame_time()));
         }
         self.realtime_clock
     }
 
     fn advance_realtime_timeline(&mut self, now: Instant) -> Result<(), NativeHostError> {
-        let timeline = self.session.wake_state().timeline();
+        self.execution.resume_ready()?;
+        let timeline = self.execution.timeline();
         let Some(clock) = self.realtime_clock_for_timeline(timeline, now) else {
             return Ok(());
         };
         match timeline {
             TimelineWakeState::Continuous => {
-                self.callbacks
-                    .advance_to(&mut self.session, clock.scene_time_at(now))?;
+                self.execution.advance_to(clock.scene_time_at(now))?;
             }
             TimelineWakeState::Deadline(scene_time) => {
                 if clock
                     .wall_deadline(scene_time)
                     .is_some_and(|deadline| deadline <= now)
                 {
-                    self.callbacks
-                        .advance_to(&mut self.session, clock.scene_time_at(now).max(scene_time))?;
+                    self.execution
+                        .advance_to(clock.scene_time_at(now).max(scene_time))?;
                 }
             }
             TimelineWakeState::Quiescent => {
                 unreachable!("quiescent timeline has no realtime clock")
             }
         }
-        if matches!(
-            self.session.wake_state().timeline(),
-            TimelineWakeState::Quiescent
-        ) {
+        self.execution.resume_ready()?;
+        if matches!(self.execution.timeline(), TimelineWakeState::Quiescent) {
             self.realtime_clock = None;
         }
         Ok(())
@@ -375,7 +460,7 @@ impl NativeApp {
         if !self.publication_pending() {
             return Ok(());
         }
-        let camera = self.session.camera()?;
+        let camera = self.execution.camera()?;
         let acquired = {
             let gpu = self
                 .gpu
@@ -397,11 +482,11 @@ impl NativeApp {
         let viewport_bounds = camera
             .viewport_bounds(viewport_aspect)
             .ok_or_else(|| NativeHostError::Gpu("camera viewport is invalid".to_owned()))?;
-        let visibility = self.session.query_viewport(viewport_bounds);
+        let visibility = self.execution.query_viewport(viewport_bounds);
         let force_full_redraw = self.force_full_redraw;
         let Some(((surface_texture, reconfigure_after_present), publication)) =
             Self::take_renderer_publication_after_acquire(
-                &mut self.session,
+                self.execution.as_mut(),
                 force_full_redraw,
                 Some(acquired),
             )
@@ -453,12 +538,14 @@ impl NativeApp {
         if reconfigure_after_present {
             gpu.surface.configure(&gpu.device, &gpu.config);
         }
+        let presented = publication.context();
+        self.execution.admit_presented_publication(presented)?;
         self.force_full_redraw = false;
         Ok(())
     }
 
     fn publication_pending(&self) -> bool {
-        self.force_full_redraw || self.session.wake_state().frame_pending()
+        self.force_full_redraw || self.execution.frame_pending()
     }
 
     /// Bind runtime invalidation consumption to a successful surface acquisition.
@@ -466,12 +553,12 @@ impl NativeApp {
     /// A timeout, occlusion, or surface recovery leaves the session's pending
     /// publication intact so the next acquired surface receives the same changes.
     fn take_renderer_publication_after_acquire<T>(
-        session: &mut ExecutionSession,
+        execution: &mut dyn NativeExecutionSource,
         force_full_redraw: bool,
         acquired: Option<T>,
     ) -> Option<(T, RendererPublication<'_>)> {
         let acquired = acquired?;
-        let mut publication = session.take_renderer_publication();
+        let mut publication = execution.take_renderer_publication();
         if force_full_redraw {
             publication.invalidate_all();
         }
@@ -505,7 +592,7 @@ impl ApplicationHandler for NativeApp {
                 .as_ref()
                 .expect("resumed native host must own a window")
                 .clone();
-            let camera = match self.session.camera() {
+            let camera = match self.execution.camera() {
                 Ok(camera) => camera,
                 Err(error) => {
                     self.fail(event_loop, error.into());
@@ -542,7 +629,7 @@ impl ApplicationHandler for NativeApp {
                     self.fail(event_loop, error);
                     return;
                 }
-                let camera = match self.session.camera() {
+                let camera = match self.execution.camera() {
                     Ok(camera) => camera,
                     Err(error) => {
                         self.fail(event_loop, error.into());
@@ -590,14 +677,17 @@ impl ApplicationHandler for NativeApp {
             return;
         }
 
-        let wake = self.session.wake_state();
-        if self.force_full_redraw || wake.frame_pending() {
+        if let Err(error) = self.execution.resume_ready() {
+            self.fail(event_loop, error);
+            return;
+        }
+        if self.force_full_redraw || self.execution.frame_pending() {
             window.request_redraw();
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
         }
 
-        let timeline = wake.timeline();
+        let timeline = self.execution.timeline();
         let now = Instant::now();
         let clock = self.realtime_clock_for_timeline(timeline, now);
         match timeline {
@@ -807,7 +897,131 @@ fn gpu_viewport_aspect(width: u32, height: u32) -> Result<f32, NativeHostError> 
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use noon::{ContinuationStep, LiveSession, Scene};
+    use noon_core::{AnimationOptions, RateFunction};
+
     use super::*;
+
+    struct NativeWaitContinuation {
+        resumes: Rc<Cell<usize>>,
+        waiting: bool,
+    }
+
+    impl LiveContinuation for NativeWaitContinuation {
+        type Error = noon::LiveSessionError;
+
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            self.resumes.set(self.resumes.get() + 1);
+            if self.waiting {
+                Ok(ContinuationStep::Finished)
+            } else {
+                self.waiting = true;
+                Ok(ContinuationStep::Await(live.wait_segment(1.0)?))
+            }
+        }
+    }
+
+    #[test]
+    fn live_wait_resumes_at_its_runtime_deadline_without_a_renderer_publication() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(0.4).unwrap();
+        scene.add(&circle).unwrap();
+        let resumes = Rc::new(Cell::new(0));
+        let program = scene
+            .into_live_program(NativeWaitContinuation {
+                resumes: Rc::clone(&resumes),
+                waiting: false,
+            })
+            .unwrap();
+        let source =
+            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
+        app.execution.take_renderer_publication();
+        assert!(!app.publication_pending());
+        assert_eq!(resumes.get(), 1);
+
+        let origin = Instant::now();
+        app.advance_realtime_timeline(origin).unwrap();
+        app.advance_realtime_timeline(origin + Duration::from_millis(500))
+            .unwrap();
+        assert_eq!(resumes.get(), 1);
+        assert!(!app.publication_pending());
+
+        app.advance_realtime_timeline(origin + Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(resumes.get(), 2);
+        assert!(!app.publication_pending());
+        assert!(app.realtime_clock.is_none());
+    }
+
+    struct NativeAnimatedContinuation {
+        source: noon::Mobject,
+        target: noon::Mobject,
+        resumes: Rc<Cell<usize>>,
+        started: bool,
+    }
+
+    impl LiveContinuation for NativeAnimatedContinuation {
+        type Error = noon::LiveSessionError;
+
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            self.resumes.set(self.resumes.get() + 1);
+            if self.started {
+                Ok(ContinuationStep::Finished)
+            } else {
+                self.started = true;
+                Ok(ContinuationStep::Await(
+                    live.declare_and_activate_transform_to(
+                        &self.source,
+                        &self.target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )?,
+                ))
+            }
+        }
+    }
+
+    #[test]
+    fn live_endpoint_resumes_only_after_the_exact_presented_publication_is_admitted() {
+        let mut scene = Scene::new();
+        let source = scene.circle(0.4).unwrap();
+        scene.add(&source).unwrap();
+        let mut target = source.target_editor().unwrap();
+        target.set_translation(2.0, 0.0).unwrap();
+        let resumes = Rc::new(Cell::new(0));
+        let program = scene
+            .into_live_program(NativeAnimatedContinuation {
+                source,
+                target,
+                resumes: Rc::clone(&resumes),
+                started: false,
+            })
+            .unwrap();
+        let mut execution =
+            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let initial = execution.take_renderer_publication().context();
+        execution.advance_to(1.0).unwrap();
+        assert_eq!(resumes.get(), 1);
+
+        let endpoint = execution.take_renderer_publication().context();
+        execution.resume_ready().unwrap();
+        assert_eq!(
+            resumes.get(),
+            1,
+            "taking an endpoint publication before present must not resume authoring"
+        );
+        assert!(execution.admit_presented_publication(initial).is_err());
+        assert_eq!(resumes.get(), 1);
+
+        execution.admit_presented_publication(endpoint).unwrap();
+        execution.resume_ready().unwrap();
+        assert_eq!(resumes.get(), 2);
+    }
 
     #[test]
     fn realtime_clock_preserves_nonzero_authored_time_origin() {
@@ -858,7 +1072,7 @@ mod tests {
         assert!(app.realtime_clock.is_none());
 
         let restart_wall = original_wall + Duration::from_secs(30);
-        app.session
+        app.static_session_mut()
             .activate_animation(
                 &store,
                 animation,
@@ -868,20 +1082,20 @@ mod tests {
             )
             .unwrap();
         app.advance_realtime_timeline(restart_wall).unwrap();
-        assert_eq!(app.session.frame().time, 0.0);
+        assert_eq!(app.session().frame().time, 0.0);
 
         app.advance_realtime_timeline(restart_wall + Duration::from_millis(500))
             .unwrap();
-        assert!((app.session.frame().time - 0.5).abs() < 1.0e-9);
+        assert!((app.session().frame().time - 0.5).abs() < 1.0e-9);
         assert_eq!(
-            app.session.wake_state().timeline(),
+            app.session().wake_state().timeline(),
             TimelineWakeState::Continuous
         );
 
         app.advance_realtime_timeline(restart_wall + Duration::from_secs(2))
             .unwrap();
         assert_eq!(
-            app.session.wake_state().timeline(),
+            app.session().wake_state().timeline(),
             TimelineWakeState::Quiescent
         );
         assert!(app.realtime_clock.is_none());
@@ -935,8 +1149,11 @@ mod tests {
         app.advance_realtime_timeline(Instant::now()).unwrap();
 
         assert_eq!(invocations.get(), 1);
-        assert_eq!(app.session.frame().time, 0.0);
-        assert_eq!(app.session.frame().objects[0].transform.translation.y, 2.0);
+        assert_eq!(app.session().frame().time, 0.0);
+        assert_eq!(
+            app.session().frame().objects[0].transform.translation.y,
+            2.0
+        );
     }
 
     #[test]
@@ -1023,10 +1240,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            app.session.frame().objects[0].transform.translation,
+            app.session().frame().objects[0].transform.translation,
             Vec2::new(640.0, 360.0)
         );
-        assert_eq!(app.session.frame().time, 0.0);
+        assert_eq!(app.session().frame().time, 0.0);
 
         app.dispatch_event(NativeEventSource::KeyPress {
             code: "Space".to_owned(),
@@ -1036,8 +1253,8 @@ mod tests {
             code: "Space".to_owned(),
         })
         .unwrap();
-        assert_eq!(app.session.frame().objects[0].transform.rotation, 2.0);
-        assert_eq!(app.session.frame().time, 0.0);
+        assert_eq!(app.session().frame().objects[0].transform.rotation, 2.0);
+        assert_eq!(app.session().frame().time, 0.0);
         assert_eq!(app.next_input_sequence, 2);
     }
 
@@ -1066,7 +1283,7 @@ mod tests {
         let session = ExecutionSession::from_semantic_store(&store).unwrap();
         let mut app = NativeApp::new(session, NativeViewportConfig::default());
 
-        assert!(app.session.take_frame_changes().is_all());
+        assert!(app.execution.take_renderer_publication().changes().is_all());
         assert!(!app.publication_pending());
 
         app.dispatch_state(
@@ -1078,13 +1295,13 @@ mod tests {
         assert!(app.publication_pending());
         let force_full_redraw = app.force_full_redraw;
         assert!(NativeApp::take_renderer_publication_after_acquire::<()>(
-            &mut app.session,
+            app.execution.as_mut(),
             force_full_redraw,
             None,
         )
         .is_none());
         assert!(
-            app.session.wake_state().frame_pending(),
+            app.session().wake_state().frame_pending(),
             "a failed surface acquisition must not consume the runtime publication"
         );
         assert!(
@@ -1093,16 +1310,18 @@ mod tests {
         );
 
         let force_full_redraw = app.force_full_redraw;
-        let Some(((), publication)) = NativeApp::take_renderer_publication_after_acquire(
-            &mut app.session,
-            force_full_redraw,
-            Some(()),
-        ) else {
-            panic!("the retry must receive the pending runtime publication");
-        };
-        assert!(!publication.changes().is_all());
-        assert_eq!(publication.changes().object_indices(), &[0]);
-        assert!(!app.session.wake_state().frame_pending());
+        {
+            let Some(((), publication)) = NativeApp::take_renderer_publication_after_acquire(
+                app.execution.as_mut(),
+                force_full_redraw,
+                Some(()),
+            ) else {
+                panic!("the retry must receive the pending runtime publication");
+            };
+            assert!(!publication.changes().is_all());
+            assert_eq!(publication.changes().object_indices(), &[0]);
+        }
+        assert!(!app.session().wake_state().frame_pending());
     }
 
     #[cfg(target_os = "linux")]
