@@ -513,6 +513,13 @@ try {
       expectedFinalCenter: [5, -1],
     },
     {
+      filename: "manim_example_move_to_target.py",
+      objectCount: 1,
+      expectedDuration: 1,
+      endpointTime: null,
+      expectedFinalCenter: [2, 1],
+    },
+    {
       filename: "ordinary_composition_play.py",
       objectCount: 2,
       expectedDuration: 4,

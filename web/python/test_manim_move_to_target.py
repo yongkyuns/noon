@@ -60,6 +60,7 @@ class ManimMoveToTargetTests(unittest.TestCase):
                 def __init__(self):
                     self.calls = []
                 def _copy_for_animate_target(self):
+                    assert self.target is None
                     self.calls.append("target-editor")
                     return object()
                 def copy(self):
@@ -69,6 +70,19 @@ class ManimMoveToTargetTests(unittest.TestCase):
             captured = _manim_compat._mobject_generate_target(canonical)
             assert captured is canonical.target
             assert canonical.calls == ["target-editor"]
+            recaptured = _manim_compat._mobject_generate_target(canonical)
+            assert recaptured is canonical.target and recaptured is not captured
+            def rejected_capture():
+                assert canonical.target is None
+                raise ValueError("capture rejected")
+            canonical._copy_for_animate_target = rejected_capture
+            try:
+                _manim_compat._mobject_generate_target(canonical)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("rejected target capture succeeded")
+            assert canonical.target is recaptured
 
             # Unsupported subclasses reuse the aligned builder only for option
             # parsing. The canonical affine classifier must reject them before

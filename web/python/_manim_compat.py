@@ -988,7 +988,15 @@ def _mobject_generate_target(self: _BaseMobject, use_deepcopy: bool = False) -> 
     # objects retain their existing copy behavior until they have a typed handle.
     del use_deepcopy
     factory = getattr(self, "_copy_for_animate_target", None)
-    target = factory() if callable(factory) else self.copy()
+    previous = getattr(self, "target", None)
+    # A target must not recursively clone the previously generated target chain.
+    # Preserve the wrapper's previous target if shared capture is rejected.
+    self.target = None
+    try:
+        target = factory() if callable(factory) else self.copy()
+    except BaseException:
+        self.target = previous
+        raise
     self.target = target
     return target
 
