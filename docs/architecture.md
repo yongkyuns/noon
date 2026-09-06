@@ -28,6 +28,56 @@ Noon is a high-performance animation and interactive graphics system with:
 
 The authoring experience should feel like one continuously live scene. The implementation is deliberately not one continuously traversed host-language object graph: static, timeline, native-reactive and host-dynamic behavior are separated and specialized below the semantic boundary so large mostly-static scenes do not inherit the cost of their most dynamic feature.
 
+### Host-language execution invariant
+
+Noon unifies **scene semantics and engine execution**, not source-language execution.
+
+Rust, Python and future frontends are allowed to have fundamentally different host execution models:
+
+```text
+Rust source
+    |
+  rustc
+    |
+    v
+compiled Rust program -----------+
+                                 |
+Python source                    | typed/shared semantic operations
+    |                            |
+Python interpreter --------------+----> Semantic Scene
+                                 |
+editor/live declarations --------+
+    parser/diff/commands
+```
+
+A Rust application is ahead-of-time compiled. It may create, query and mutate a live Noon scene at runtime through code paths that were compiled ahead of time, but the live-scene model does not imply that arbitrary new Rust source can be interpreted inside the running process. Arbitrary Rust source changes require an explicit mechanism such as recompilation/hot reload, a plugin boundary, or a separate runtime-editable declarative language.
+
+Python may remain an interpreter-driven sequential authoring continuation. It may issue semantic operations, wait for a segment-completion barrier, inspect the resulting live state, execute more arbitrary Python, and then issue additional semantic operations. That is a host-language behavior, not a second scene/runtime architecture.
+
+Editor, hot-reload and future live-design inputs may be declarative or command-oriented. They converge on the same semantic mutation vocabulary rather than pretending to execute as Rust source.
+
+The shared contract is therefore:
+
+```text
+host-language execution
+        |
+        v
+shared Rust semantic operations
+        |
+        v
+Semantic Scene
+        |
+  incremental lowering
+        |
+        v
+Execution Plan revision
+        |
+        v
+Runtime -> Renderer
+```
+
+The Semantic Scene remains alive and authoritative across execution-plan revisions. An Execution Plan is a derived, replaceable specialization of the currently published semantics; it is not a compiled representation of the entire future host program.
+
 ### Rust-native product invariant
 
 The complete native Rust path is a direct, typed, in-process Rust pipeline:
@@ -155,7 +205,7 @@ There are four engine layers and exactly one authority at each layer:
 
 Platform hosts are integration shells around those layers. They own window/canvas/surface/event-loop/presentation mechanics, not semantic or runtime truth.
 
-The Rust public API is the first-class native authoring API for these layers. Python and future JS/TS adapt language syntax and host callbacks onto the same Rust semantic operations; they do not define separate engine layers.
+The Rust public API is the first-class native authoring API for these layers. Python and future JS/TS adapt language syntax and host callbacks onto the same Rust semantic operations; they do not define separate engine layers. This shared semantic boundary does not require the host languages above it to share a source-code execution mechanism.
 
 Serialization is not a fifth scene model. It is an optional codec around one of these representations for explicit external boundaries such as export/import, debugging, tests, persistence, or unavoidable cross-context transport.
 
@@ -194,7 +244,7 @@ Semantic operations    Runtime tick/wake
 
 The control-plane responsibility belongs with runtime/execution integration. It may coordinate script continuations, published frame epochs, wake/sleep, input delivery, ordered updater/callback evaluation and publication barriers, but it must not own a second scene, timeline, scheduler truth or renderer model.
 
-`play()`/`wait()`-class operations are **logical segment-completion barriers**, not necessarily blocking function calls and not exclusive interaction modes. Python may expose a barrier synchronously by suspending/blocking an authoring worker; native Rust may drive or await a session; browser/WASM code must be able to yield/await rather than blocking the event loop. Native input/reactive behavior may continue during playback when semantics allow it. An `interact()`-style API, if exposed, means the authoring continuation waits while the same live runtime continues processing input/reactive/callback/render work; it does not switch to another scene engine.
+`play()`/`wait()`-class operations are **logical segment-completion barriers**, not necessarily blocking function calls and not exclusive interaction modes. Python may expose a barrier synchronously by suspending/blocking an authoring worker; native Rust may drive or await a session through compiled control flow; browser/WASM code must be able to yield/await rather than blocking the event loop. Native input/reactive behavior may continue during playback when semantics allow it. An `interact()`-style API, if exposed, means the authoring continuation waits while the same live runtime continues processing input/reactive/callback/render work; it does not switch to another scene engine.
 
 ---
 
@@ -262,6 +312,8 @@ This is a one-way specialization rule: execution/render structure may be derived
 
 High-level behavior is implemented once in shared Rust semantic code.
 
+The frontend contract is semantic, not an assertion that all languages execute source code the same way. Frontends converge when they invoke the same semantic operations and observe the same resulting behavior.
+
 ### Rust public API
 
 Rust authoring is first-class, not a wrapper around Python, JavaScript, WASM, JSON, or a transport model.
@@ -271,6 +323,8 @@ The idiomatic Rust API calls shared semantic operations directly and must suppor
 A native Rust application must be able to build and render a Noon scene without initializing any language host or serialization subsystem.
 
 A Rust application compiled to WASM must be able to build and render the same Noon scene semantics to a browser canvas without serializing between in-process engine layers. Browser bootstrap code is platform integration, not an authoring or engine dependency.
+
+Rust runtime mutability does not imply runtime interpretation of arbitrary Rust source. New behavior introduced by source changes requires ordinary recompilation/hot reload or another explicit dynamic mechanism. Editor/live-scene mutations should therefore target semantic operations rather than inventing a Rust-source interpreter requirement.
 
 ### Python may own
 
@@ -331,7 +385,7 @@ logical segment completion
 resume host authoring continuation
 ```
 
-The host mechanism used to wait is target-specific: a Python worker may block/suspend, native Rust may drive/await, and browser/WASM must yield/await without blocking browser frame/input servicing.
+The host mechanism used to wait is target-specific: a Python worker may block/suspend an interpreter continuation, native Rust may drive/await through compiled control flow, and browser/WASM must yield/await without blocking browser frame/input servicing. These mechanisms need semantic equivalence at the barrier; they do not need identical host-language execution machinery.
 
 A segment is complete when:
 
@@ -353,7 +407,7 @@ The examples have different jobs:
 - the Rust example is the direct first-class product proof;
 - the Python example proves the language wrapper reaches equivalent shared Rust semantics;
 - both should exercise the normal lowering/runtime/renderer path appropriate to their target;
-- target bootstrap may differ, but scene semantics should be equivalent and reusable;
+- target bootstrap and host control flow may differ, but scene semantics should be equivalent and reusable;
 - cross-language qualification must not depend on serializing migration-era scene documents as the ordinary comparison mechanism.
 
 When a feature is supported in both Rust and Python, implementation is not complete merely because one frontend can demonstrate it.
@@ -362,7 +416,7 @@ When a feature is supported in both Rust and Python, implementation is not compl
 
 ## 5. Analysis and lowering
 
-The compiler lowers the Semantic Scene into an Execution Plan.
+The compiler lowers the Semantic Scene into an Execution Plan. This is **scene lowering/specialization**, not Rust source compilation and not execution of the future host program.
 
 For Rust, whether native or WASM, this is an ordinary typed in-memory Rust transformation when the compiler and runtime live in the same execution context. The Semantic Scene is not serialized into a wire document and reparsed by the compiler.
 
@@ -394,13 +448,23 @@ Examples: `ValueTracker`, pointer position, viewport size, property bindings, bu
 
 Evaluate only the dirty dependency closure.
 
+### Traceable host expression
+
+A frontend may offer a constrained host-expression subset that can be captured or traced into Noon-owned expression/reactive IR. Once successfully lowered, that behavior is native execution and does not require the host interpreter on the frame path.
+
+Examples may include pure arithmetic over trackers/signals, supported vector operations, property bindings, and other expressions whose dependencies and side-effect semantics Noon can represent explicitly.
+
+Tracing/capture is a frontend translation mechanism, not a new semantic authority. It must preserve observable semantics and must not speculatively execute arbitrary host code in a way that duplicates or hides external side effects. An implementation may require an explicit traceable API/subset where transparent tracing would be unsafe.
+
+If a host expression cannot be represented faithfully, it remains **Host dynamic** rather than being silently approximated. A failed trace must not poison unrelated static/timeline/native-reactive work.
+
 ### Host dynamic
 
 Correct behavior requires arbitrary host-language execution.
 
-Examples: an updater containing arbitrary Python control flow or an event handler that calls user Python code.
+Examples: an updater containing arbitrary Python control flow or an event handler that calls user Python code with effects Noon cannot model.
 
-Represent this explicitly as host callback slots. A few host-dynamic dependencies must not make unrelated static/timeline/reactive content dynamic.
+Represent this explicitly as host callback slots. A few host-dynamic dependencies must not make unrelated static/timeline/reactive/traceable content dynamic.
 
 Execution classification is an implementation choice, not permission to reorder observable semantic updater execution. If authored/compatibility updater order is `native A -> host B -> native C`, the execution plan must preserve that order, for example as native regions separated by a host-callback barrier. Independent work may be fused, parallelized or reordered only when the compiler/runtime can prove that the difference is unobservable.
 
@@ -427,7 +491,7 @@ It may contain:
 - immutable content/resource references;
 - resolved timeline channels and event schedules;
 - precomputed geometry/morph/reveal plans;
-- native reactive bytecode/graphs;
+- native reactive bytecode/graphs, including successfully captured/traceable host expressions;
 - mutable property slots;
 - ordered updater/evaluation regions with explicit host-callback barriers where needed;
 - host callback descriptors;
@@ -439,6 +503,8 @@ It may contain:
 It is not required to preserve the Semantic Scene's ergonomic hierarchy.
 
 Execution grouping is derived and disposable. It is legal for the compiler to split one semantic family across execution groups or combine compatible semantic leaves under one execution transform/instance domain. Such grouping must preserve identity mapping, ordering, hit-testing and mutation semantics and must be invalidated/reformed locally when the assumptions enabling the specialization stop holding.
+
+The Execution Plan is not a frozen representation of the entire host-language program. Sequential Python authoring, editor actions, compiled Rust event handlers, hot reload and other producers may publish later semantic revisions that require a new or incrementally changed execution projection.
 
 `noon-core` should converge on this normalized execution-level responsibility. Authoring compatibility helpers do not belong there.
 
@@ -501,7 +567,7 @@ Noon has a small fixed execution protocol rather than a public arbitrary system 
 
 The implementation may fuse, skip, parallelize or pipeline stages when observable ordering and revision/coherence rules remain identical. The phase model is a semantic ordering/publication contract, not permission to expose a general-purpose game-engine scheduler.
 
-There is no global rule that all native-reactive work runs before all host-dynamic work. Classification controls *how* an ordered region executes; semantic dependency/updater order controls *when* it executes.
+There is no global rule that all native-reactive work runs before all host-dynamic work. Classification controls *how* an ordered region executes; semantic dependency/updater order controls *when* it executes. A successfully traceable host expression belongs to a native region after lowering; an opaque callback remains a host barrier.
 
 `FrameEpoch` is the unit of coherent effective publication. Each published frame epoch references the exact semantic and execution revisions from which its effective state is derived:
 
@@ -704,7 +770,7 @@ A failed transaction publishes nothing. Provisional handles/resources created on
 
 ## 9. Host callbacks and interaction
 
-Native interaction is preferred when semantics are known. Arbitrary host behavior remains a supported first-class execution class.
+Native interaction is preferred when semantics are known. Traceable host expressions should lower to native execution when their semantics can be captured faithfully. Arbitrary host behavior remains a supported first-class execution class and explicit fallback.
 
 ### Native interaction path
 
@@ -722,7 +788,7 @@ mutable execution slots/domains
 retained renderer
 ```
 
-When behavior is fully native, no Python/JS host callback phase is required after authoring.
+When behavior is fully native, including behavior successfully captured into native expression/reactive IR, no Python/JS host callback phase is required after authoring.
 
 ### Ordered transactional host callback overlay
 
@@ -1077,6 +1143,10 @@ Rules:
 34. Normal frame/input/callback execution never depends on synchronous GPU-to-CPU readback.
 35. A clean settled scene can sleep and wake on relevant work without advancing authored time unnecessarily.
 36. Long-running live-edit/resource/event churn has bounded reclamation/backpressure behavior; memory must not scale indefinitely with historical mutations or stalled ordered input.
+37. Frontends share semantic behavior, not a source-language execution model: Rust may use compiled control flow while Python uses interpreter continuation and editor/live inputs use declarative commands.
+38. The Execution Plan is a derived, replaceable projection of a published Semantic Scene revision; it is never the sole authority or a frozen compilation of the entire future host program.
+39. Runtime-editable scene/design data does not imply runtime interpretation of arbitrary Rust source; source hot reload/recompilation and semantic live mutation are distinct mechanisms.
+40. Host expressions that can be captured faithfully may lower into native Noon expression/reactive IR; unsupported or effectful host behavior remains explicit host dynamic behavior rather than being silently approximated.
 
 ---
 
@@ -1108,6 +1178,7 @@ A1.6 specifically owns the typed/incremental `SemanticStore ->` existing compile
 - provide a supported native Rust host/viewer path that owns window/surface/event-loop/presentation integration outside `noon-render-wgpu`;
 - provide a direct Rust/WASM -> browser-canvas path that keeps the in-process engine boundaries typed and does not route through execution JSON/mirrors;
 - establish representative Rust scene code that can exercise the same semantics on native and browser targets with only target-host/bootstrap differences;
+- keep runtime scene mutation distinct from arbitrary Rust source execution; hot reload/recompilation or a future declarative live language is an explicit authoring mechanism, not an engine-layer requirement;
 - delete `noon::legacy` and compatibility aliases;
 - update internal users directly rather than adding adapters.
 
@@ -1120,6 +1191,7 @@ Detailed execution-host/session work is tracked by #969, including logical segme
 - bind Python `Scene`/`Mobject` wrappers directly to semantic handles;
 - delete Python-owned object/track allocation, painter ordering, scheduling, snapshot evaluation and rollback semantics;
 - preserve sequential Python authoring/continuation ergonomics through the shared execution-session/barrier contract rather than a Python scene engine;
+- make the host-specific nature of Python interpreter continuation explicit: semantic parity with Rust does not require identical source execution/control flow;
 - delete retained-text sidecar ownership;
 - remove monkey-patched canonical-scene migration code;
 - replace JSON bind/update/finalize calls with typed WASM calls.
@@ -1166,13 +1238,14 @@ Add structural CI/tests that prevent reintroduction of:
 - renderer-owned semantic state;
 - a general-purpose ECS/world or arbitrary user scheduler becoming the public semantic model;
 - ordinary effective driver writes being routed through semantic relowering merely because they came from a host updater;
-- local operations that fall back to full-scene/family/resource work during validation or execution without an explicit semantic or named maintenance reason.
+- local operations that fall back to full-scene/family/resource work during validation or execution without an explicit semantic or named maintenance reason;
+- assumptions that cross-language semantic parity requires identical host-language source execution.
 
 Add executable exit evidence for:
 
 - one representative Rust scene rendering in a native OS window through the typed engine path;
 - equivalent Rust semantics compiled to WASM rendering to a browser canvas through the typed engine path;
-- paired representative Rust/Python examples reaching equivalent shared semantics without relying on migration scene-document serialization.
+- paired representative Rust/Python examples reaching equivalent shared semantics without relying on migration scene-document serialization, while allowing their host-language control flow to differ.
 
 Detailed execution-host and paired-example exit work is tracked by #969.
 
@@ -1204,12 +1277,13 @@ Every supported Python feature must use shared semantic behavior and add represe
 
 - finish native pointer/keyboard/viewport ingress;
 - lower known updater/constraint behavior to native reactive dependencies;
+- allow a constrained traceable host-expression subset to lower into native reactive/expression IR where semantics and side effects can be captured faithfully, with explicit host-dynamic fallback otherwise;
 - make runtime wake/settle and fixed publication ordering explicit so timeline and native interaction can coexist without a second interactive scene mode;
 - finish arbitrary host callback slots with ordered mixed native/host evaluation, coherent transactional overlays, callback read views, effective-vs-authored write classification, provisional structural identity, driver arbitration and explicit latency/backpressure policy;
 - make retained family/text updates resident and dirty-member-local;
 - complete spatial culling and dirty GPU upload locality;
 - add editor/session state above semantic identity (selection, hover, drag, undo grouping);
-- implement hot reload by reconciling stable source/semantic identities and preserving compatible runtime/resource state;
+- implement hot reload by reconciling stable source/semantic identities and preserving compatible runtime/resource state; source-language recompilation/re-execution and semantic reconciliation remain distinct steps;
 - make stale async host/content results revision-safe and bind resource retirement to GPU completion rather than semantic publication alone.
 
 ### Ownership of the live-session/scalability contracts
@@ -1217,13 +1291,13 @@ Every supported Python feature must use shared semantic behavior and add represe
 The architecture above does not create a new roadmap phase or runtime owner. Existing cases own the implementation:
 
 - **#969 / Phase A2/A6** — logical execution-session/segment completion, frontend continuation mechanics for native and browser/WASM, and the single ordered/coherent publication lane between staged updates and the existing runtime/renderer path;
-- **#955 C1** — mixed native/host ordered updater evaluation, effective-driver-vs-authored-mutation classification, transactional callback overlay/read view, provisional structural identity, safe read-miss suspension semantics, slow-callback/backpressure policy and driver arbitration;
+- **#955 C1** — mixed native/host ordered updater evaluation, traceable-host lowering where supported, effective-driver-vs-authored-mutation classification, transactional callback overlay/read view, provisional structural identity, safe read-miss suspension semantics, slow-callback/backpressure policy and driver arbitration;
 - **#955 C2** — input sequencing, bounded discrete-event queue/backpressure/overflow semantics, input timestamp/time-domain semantics and replayable native input behavior;
 - **#955 C3/C4** — renderer-facing publication, immutable resource replacement/versioning, GPU-safe retirement and long-running resource locality;
 - **#955 C7** — high-fanout execution/render domains only as measurement-driven specialization once stable execution/locality layouts exist;
 - **A1.6** — the typed incremental SemanticStore-to-existing-execution handoff and impact/local-lowering foundation only; it must not grow another execution runtime/session abstraction.
 
-**Phase C exit:** common interaction works without Python; arbitrary Python callbacks are bounded and explicit; local edits stay local through validation, execution and rendering on both platform hosts; clean scenes settle and wake without unnecessary frame work.
+**Phase C exit:** common interaction works without Python; traceable supported host expressions can leave the frame path; arbitrary Python callbacks are bounded and explicit; local edits stay local through validation, execution and rendering on both platform hosts; clean scenes settle and wake without unnecessary frame work.
 
 ---
 
@@ -1251,13 +1325,14 @@ Required categories:
 - native Rust authoring -> lowering -> runtime -> renderer -> native-host smoke tests with no Python/JS/browser/serialization initialization;
 - direct Rust/WASM authoring -> lowering -> runtime -> renderer -> browser-canvas smoke tests with no JSON/wire round-trip between in-process engine layers;
 - structural checks that native and direct single-context Rust/WASM engine paths contain no JSON/wire round-trip between architecture layers;
-- Rust/Python semantic parity for equivalent authoring;
+- Rust/Python semantic parity for equivalent authoring even when the host-language continuation/control-flow mechanism differs;
 - paired executable Rust/Python examples for representative supported common semantics;
 - ManimCE v0.21 semantic/raster/timing differential tests for supported APIs;
 - direct-seek versus forward-playback tests;
-- script-continuation tests where logical post-`play()` completion exposes coherent effective state across Python, native Rust and yielding browser/WASM host mechanics;
+- script-continuation tests where logical post-`play()` completion exposes coherent effective state across Python interpreter continuation, native Rust compiled/awaited control flow and yielding browser/WASM host mechanics;
 - authored/base versus effective-state getter tests before/during/after active drivers;
 - effective-updater tests proving ordinary per-frame host/native driver writes can advance `FrameEpoch` without advancing `SceneRevision`/`ExecutionRevision` or triggering semantic relowering;
+- traceable-host tests proving supported pure expressions lower to native execution with no host callback on the frame path, plus explicit fallback tests for unsupported/effectful behavior;
 - frame-publication tests proving each `FrameEpoch` references one coherent semantic/execution revision pair and renderer/query consumers see the same pair;
 - mutation atomicity/rollback tests including failure after semantic staging but before lowering/resource preparation completes;
 - structural callback tests covering provisional object construction -> mutation -> membership -> read -> atomic publish/abort;
@@ -1333,6 +1408,8 @@ Before adding an abstraction, crate, scene representation or compatibility layer
 17. What bounds an ordered discrete-event queue if a required callback stalls, and what explicit policy applies when the source cannot be backpressured?
 18. Does a proposed optimization solve a measured or contractually unavoidable cost rather than importing another engine's architecture by analogy?
 19. If an operation is allowed to perform O(live-state) maintenance, is it an explicit/instrumented maintenance barrier rather than a hidden ordinary local-edit fallback?
+20. Is the design accidentally requiring Rust, Python and editor/live inputs to share a source-language execution model when only semantic parity is required?
+21. If host code is proposed for tracing/capture, are purity, side effects, unsupported operations and fallback semantics explicit enough that tracing cannot silently change observable behavior?
 
 For this greenfield project, deletion is preferred over compatibility scaffolding.
 
@@ -1355,6 +1432,10 @@ For this greenfield project, deletion is preferred over compatibility scaffoldin
 - separate architectures for text, Graph, interaction or 3D;
 - serializable wire structures dictating the in-memory semantic design;
 - running Python/JS object-graph traversal every frame for behavior that can be expressed as native timeline/reactive execution;
+- requiring identical host-language source execution/control-flow mechanisms for Rust and Python merely to achieve semantic parity;
+- treating the live-scene model as a requirement to interpret arbitrary Rust source at runtime;
+- treating one Execution Plan as a frozen compilation of all future host-language authoring decisions;
+- silently approximating unsupported/effectful host expressions merely to move them off the host path;
 - routing every host updater/property write through authored semantic mutation or relowering when the operation is only an effective runtime driver write;
 - automatically restarting arbitrary host callbacks on a cross-context read miss unless they are explicitly replay-safe/idempotent;
 - pretending Noon transaction rollback can undo arbitrary external host side effects;
