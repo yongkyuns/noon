@@ -12,7 +12,7 @@ use super::super::{
     PreparedSemanticScheduledAnimationPayload, SemanticExecutionIndex, SemanticExecutionValueError,
 };
 use super::affine::{
-    driver_key, lower_affine_channels, validate_affine_payload, AffinePayloadIssue,
+    driver_key, lower_transform_channels, validate_affine_payload, AffinePayloadIssue,
     EffectiveAnimationProperties, SemanticAnimationCompletion,
 };
 
@@ -240,7 +240,7 @@ where
                 validate_affine_payload(source, target, leaf.options)
                     .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 let from = capture_effective(leaf, &mut captures, &mut effective_properties)?;
-                let channels = lower_affine_channels(source, target, from)
+                let channels = lower_transform_channels(source, target, from)
                     .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
@@ -375,6 +375,22 @@ fn push_prepared_channel(
     driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
     tracks: &mut Vec<PreparedSemanticAnimationTrack>,
 ) -> Result<(), PreparedSemanticAnimationLoweringError> {
+    let transform_key = driver_key(leaf.execution_object_id, Property::Transform);
+    let umbrella_conflict = if channel.property == Property::Transform {
+        driven.iter().find_map(|((object, _), animation)| {
+            (*object == leaf.execution_object_id.get()).then_some(*animation)
+        })
+    } else {
+        driven.get(&transform_key).copied()
+    };
+    if let Some(first_animation) = umbrella_conflict {
+        return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
+            first_animation,
+            next_animation: leaf.animation,
+            target: leaf.target,
+            property: channel.conflict_property,
+        });
+    }
     match driven.entry(driver_key(leaf.execution_object_id, channel.property)) {
         Entry::Occupied(entry) => {
             return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
@@ -521,6 +537,15 @@ mod tests {
         target
     }
 
+    fn rectangle_target() -> SemanticObjectState {
+        let mut target = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(2.0, 2.0),
+        });
+        target.transform.translation = SemanticVec3::new(2.0, -1.0, 0.0);
+        target.style.fill_opacity = 0.5;
+        target
+    }
+
     fn effective(translation: Vec2) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
             transform: Transform2D {
@@ -634,6 +659,49 @@ mod tests {
             assert_eq!(prepared.timing, published.timing);
             assert_eq!(prepared.time_map, published.time_map);
         }
+    }
+
+    #[test]
+    fn analytic_content_morph_lowers_to_one_existing_object_track() {
+        let mut store = noon_core::SemanticStore::new();
+        let source = visible_circle(&mut store);
+        let mut index = SemanticExecutionIndex::new();
+        index.lower_scene(&store).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        let target = transaction.create_node(SemanticNodeCreation::object(rectangle_target()));
+        let animation =
+            transaction.create_transform_animation(source, target, AnimationOptions::new());
+        let prepared = transaction.prepare(&mut store).unwrap();
+
+        let activation = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            animation,
+            0.0,
+            AnimationOptions::new().run_time(2.0),
+            |_| Some(effective(Vec2::ZERO)),
+        )
+        .unwrap();
+
+        let [track] = activation.tracks() else {
+            panic!("content morph must use one shared Transform track")
+        };
+        assert_eq!(track.property, Property::Transform);
+        assert!(matches!(
+            &track.values,
+            TrackValues::Object { from, to }
+                if matches!(from.geometry, noon_core::GeometryRef::Circle { .. })
+                    && matches!(to.geometry, noon_core::GeometryRef::Rectangle { .. })
+        ));
+        assert!(matches!(
+            track.completion,
+            SemanticAnimationCompletion::ContentMorph {
+                content: noon_core::SemanticObjectContent::Geometry(
+                    StoredGeometry::Rectangle { .. }
+                ),
+                ..
+            }
+        ));
     }
 
     #[test]

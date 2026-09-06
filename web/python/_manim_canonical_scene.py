@@ -650,16 +650,10 @@ def _canonical_affine_animation(
         raise NotImplementedError(
             "canonical ordinary animation requires typed semantic Mobject handles"
         )
-    context = getattr(scene, "_canonical_authoring_context", None)
-    ownership = getattr(context, "liveExecutionOwnership", None)
-    if (
-        callable(ownership)
-        and str(ownership()) in {"active", "transferred", "returned"}
-        and getattr(target, "_canonical_live_target_context", None) is not context
-    ):
-        raise NotImplementedError(
-            "a canonical live Transform target must be copied from its source through the active session"
-        )
+    # A detached target may have been authored before live execution began, as in
+    # Manim's ordinary `circle = Circle(); Transform(square, circle)` pattern.
+    # Rust validates its generational identity, shared-store provenance, detached
+    # status, payload, and current publication revision before activation.
     return source, target, animation
 
 

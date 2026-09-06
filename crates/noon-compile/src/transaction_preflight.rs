@@ -267,7 +267,11 @@ pub(super) fn preflight_transaction_with_resources(
                     *text_bounds,
                 )?;
                 for property in [Property::Transform, Property::Morph] {
-                    if let Some(track) = overlay.channel(scene, index, property).first() {
+                    if let Some(track) = overlay
+                        .channel(scene, index, property)
+                        .iter()
+                        .find(|track| !track.reconciled)
+                    {
                         return Err(CompilePatchError::ContentReplacementHasGeometryDriver {
                             object: *object,
                             track: track.id,
@@ -366,6 +370,7 @@ pub(super) fn preflight_transaction_with_resources(
                     || !matches!(
                         reconciled.property,
                         Property::Position
+                            | Property::Transform
                             | Property::Rotation
                             | Property::Scale
                             | Property::Fill

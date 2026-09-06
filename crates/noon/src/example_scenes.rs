@@ -6,8 +6,8 @@ use crate::{
     AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
     LiveSession, Mobject, RateFunction, RustHostCallbackTable, Scene,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, TransformToRequest, ValueTracker,
-    Vec2,
+    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, TransformToRequest,
+    ValueTracker, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -1160,6 +1160,106 @@ pub fn ordinary_create_continuation_program(
         .map_err(|error| error.to_string())
 }
 
+/// Ordinary Create followed by a Circle/Rectangle content morph on one shared session.
+pub struct OrdinaryCreateThenContentMorph {
+    square: Mobject,
+    circle_target: Mobject,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryCreateThenContentMorph {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.declare_and_activate_create(
+                    &self.square,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Smooth),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                self.stage = 2;
+                live.declare_and_activate_transform_to(
+                    &self.square,
+                    &self.circle_target,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Smooth),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            2 => {
+                let authored = live
+                    .authored(&self.square)
+                    .map_err(|error| error.to_string())?;
+                if !matches!(
+                    authored.content,
+                    noon_core::SemanticObjectContent::Geometry(StoredGeometry::Circle { .. })
+                ) || authored.style
+                    != live
+                        .authored(&self.circle_target)
+                        .map_err(|error| error.to_string())?
+                        .style
+                {
+                    return Err("content morph did not publish its exact target endpoint".into());
+                }
+                self.stage = 3;
+                live.declare_and_activate_fade(
+                    &self.square,
+                    SemanticFadeDirection::Out,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Smooth),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            3 => {
+                if live
+                    .contains(&self.square)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err("SquareToCircle FadeOut did not detach its source".into());
+                }
+                self.stage = 4;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary content morph continuation resumed after it finished".into()),
+        }
+    }
+}
+
+/// Build the target-neutral Rust counterpart of Manim's ordinary SquareToCircle sequence.
+pub fn ordinary_create_then_content_morph_program(
+) -> Result<LiveProgram<OrdinaryCreateThenContentMorph>, String> {
+    let scene = Scene::new();
+    let mut square = scene.square(2.0).map_err(|error| error.to_string())?;
+    square
+        .rotate(std::f64::consts::FRAC_PI_4)
+        .map_err(|error| error.to_string())?;
+    let mut circle_target = scene.circle(1.0).map_err(|error| error.to_string())?;
+    circle_target
+        .set_fill(209.0 / 255.0, 71.0 / 255.0, 189.0 / 255.0, 0.5)
+        .map_err(|error| error.to_string())?;
+    scene
+        .into_live_program(OrdinaryCreateThenContentMorph {
+            square,
+            circle_target,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// Execute paired flat Parallel and Sequence compositions on one live runtime.
 ///
 /// Child intervals, root timing, transaction-local declaration identity, and
@@ -1718,6 +1818,58 @@ mod continuation_tests {
         let publication = program.take_renderer_publication().context();
         program.admit_publication(publication).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[test]
+    fn ordinary_create_continues_into_shared_content_morph() {
+        let mut program = ordinary_create_then_content_morph_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.take_renderer_publication();
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let create_publication = program.take_renderer_publication().context();
+        program.admit_publication(create_publication).unwrap();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!((program.session().frame().morph(0) - 0.5).abs() < 1e-6);
+        program.take_renderer_publication();
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 2.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let morph_publication = program.take_renderer_publication().context();
+        program.admit_publication(morph_publication).unwrap();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.session().frame().render_geometry(0),
+            Some(noon_core::GeometryRef::Circle { .. })
+        ));
+        program.take_renderer_publication();
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 3.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let fade_publication = program.take_renderer_publication().context();
+        program.admit_publication(fade_publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert!(!program.session().frame().is_present(0));
     }
 
     #[test]

@@ -658,6 +658,7 @@ impl CompiledScene {
                 || !matches!(
                     track.property,
                     Property::Position
+                        | Property::Transform
                         | Property::Rotation
                         | Property::Scale
                         | Property::Fill
@@ -1068,7 +1069,11 @@ impl CompiledScene {
                 )?;
                 for property in [Property::Transform, Property::Morph] {
                     let channel = CompiledChannelKey::new(index, property);
-                    if let Some(track) = self.channel_tracks(channel).first() {
+                    if let Some(track) = self
+                        .channel_tracks(channel)
+                        .iter()
+                        .find(|track| !track.reconciled)
+                    {
                         return Err(CompilePatchError::ContentReplacementHasGeometryDriver {
                             object: *object,
                             track: track.id,
@@ -1212,6 +1217,7 @@ impl CompiledScene {
                     || !matches!(
                         compiled.property,
                         Property::Position
+                            | Property::Transform
                             | Property::Rotation
                             | Property::Scale
                             | Property::Fill

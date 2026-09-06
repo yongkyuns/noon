@@ -142,7 +142,7 @@ pub(super) fn validate_transform_payload_shape(
             introducer: options.introducer,
         });
     }
-    if source.content != target.content {
+    if source.content != target.content && !is_supported_analytic_content_morph(source, target) {
         return Err(TransformPayloadValidationIssue::ContentChange);
     }
     if source.style.stroke_width != target.style.stroke_width
@@ -169,4 +169,22 @@ pub(super) fn validate_transform_payload_shape(
         ));
     }
     Ok(())
+}
+
+pub(super) fn is_supported_analytic_content_morph(
+    source: &noon_core::SemanticObjectState,
+    target: &noon_core::SemanticObjectState,
+) -> bool {
+    use noon_core::{SemanticObjectContent::Geometry, StoredGeometry};
+
+    matches!(
+        (source.content, target.content),
+        (
+            Geometry(StoredGeometry::Circle { .. }),
+            Geometry(StoredGeometry::Rectangle { .. })
+        ) | (
+            Geometry(StoredGeometry::Rectangle { .. }),
+            Geometry(StoredGeometry::Circle { .. })
+        )
+    )
 }
