@@ -21,7 +21,11 @@ pub(crate) trait NativeExecutionSource {
     fn timeline(&self) -> TimelineWakeState;
     fn frame_pending(&self) -> bool;
     fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError>;
-    fn resume_ready(&mut self) -> Result<(), NativeHostError>;
+    /// Resume one authoring continuation when its shared program is ready.
+    ///
+    /// The return value lets the platform clock reanchor only when application
+    /// code actually supplied the next segment.
+    fn resume_ready(&mut self) -> Result<bool, NativeHostError>;
     fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -82,8 +86,8 @@ impl NativeExecutionSource for StaticExecutionSource {
             .map_err(Into::into)
     }
 
-    fn resume_ready(&mut self) -> Result<(), NativeHostError> {
-        Ok(())
+    fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
+        Ok(false)
     }
 
     fn set_native_state_input(
@@ -165,13 +169,7 @@ where
     }
 
     fn timeline(&self) -> TimelineWakeState {
-        match self.program.status() {
-            LiveProgramStatus::Awaiting(segment) => segment.timeline(),
-            LiveProgramStatus::ReadyToResume
-            | LiveProgramStatus::PublicationPending(_)
-            | LiveProgramStatus::Finished
-            | LiveProgramStatus::Terminal => TimelineWakeState::Quiescent,
-        }
+        self.program.wake_state().timeline()
     }
 
     fn frame_pending(&self) -> bool {
@@ -185,13 +183,14 @@ where
             .map_err(|error| NativeHostError::Program(error.to_string()))
     }
 
-    fn resume_ready(&mut self) -> Result<(), NativeHostError> {
+    fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
         if self.program.status() == LiveProgramStatus::ReadyToResume {
             self.program
                 .resume()
                 .map_err(|error| NativeHostError::Program(error.to_string()))?;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     fn set_native_state_input(

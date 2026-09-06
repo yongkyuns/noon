@@ -418,8 +418,16 @@ impl NativeApp {
         self.realtime_clock
     }
 
+    fn resume_ready_and_reanchor(&mut self, now: Instant) -> Result<bool, NativeHostError> {
+        let resumed = self.execution.resume_ready()?;
+        if resumed {
+            self.realtime_clock = Some(RealtimeClock::new(now, self.execution.frame_time()));
+        }
+        Ok(resumed)
+    }
+
     fn advance_realtime_timeline(&mut self, now: Instant) -> Result<(), NativeHostError> {
-        self.execution.resume_ready()?;
+        self.resume_ready_and_reanchor(now)?;
         let timeline = self.execution.timeline();
         let Some(clock) = self.realtime_clock_for_timeline(timeline, now) else {
             return Ok(());
@@ -441,7 +449,7 @@ impl NativeApp {
                 unreachable!("quiescent timeline has no realtime clock")
             }
         }
-        self.execution.resume_ready()?;
+        self.resume_ready_and_reanchor(now)?;
         if matches!(self.execution.timeline(), TimelineWakeState::Quiescent) {
             self.realtime_clock = None;
         }
@@ -677,7 +685,7 @@ impl ApplicationHandler for NativeApp {
             return;
         }
 
-        if let Err(error) = self.execution.resume_ready() {
+        if let Err(error) = self.resume_ready_and_reanchor(Instant::now()) {
             self.fail(event_loop, error);
             return;
         }
@@ -955,6 +963,77 @@ mod tests {
         assert_eq!(resumes.get(), 2);
         assert!(!app.publication_pending());
         assert!(app.realtime_clock.is_none());
+    }
+
+    struct NativeWaitThenAnimateContinuation {
+        source: noon::Mobject,
+        target: noon::Mobject,
+        step: u8,
+    }
+
+    impl LiveContinuation for NativeWaitThenAnimateContinuation {
+        type Error = noon::LiveSessionError;
+
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            let step = self.step;
+            self.step += 1;
+            match step {
+                0 => Ok(ContinuationStep::Await(live.wait_segment(1.0)?)),
+                1 => Ok(ContinuationStep::Await(
+                    live.declare_and_activate_transform_to(
+                        &self.source,
+                        &self.target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )?,
+                )),
+                _ => Ok(ContinuationStep::Finished),
+            }
+        }
+    }
+
+    #[test]
+    fn late_wait_resume_reanchors_the_next_animation_to_resume_wall_time() {
+        let mut scene = Scene::new();
+        let source = scene.circle(0.4).unwrap();
+        scene.add(&source).unwrap();
+        let mut target = source.target_editor().unwrap();
+        target.set_translation(2.0, 0.0).unwrap();
+        let program = scene
+            .into_live_program(NativeWaitThenAnimateContinuation {
+                source,
+                target,
+                step: 0,
+            })
+            .unwrap();
+        let source =
+            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
+        app.execution.take_renderer_publication();
+
+        let origin = Instant::now();
+        app.advance_realtime_timeline(origin).unwrap();
+        let late_resume = origin + Duration::from_millis(1_700);
+        app.advance_realtime_timeline(late_resume).unwrap();
+
+        assert_eq!(app.session().frame().time, 1.0);
+        let reanchored = app
+            .realtime_clock
+            .expect("the next animation needs a clock");
+        assert_eq!(reanchored.wall_origin, late_resume);
+        assert_eq!(
+            reanchored.scene_origin, 1.0,
+            "the next segment must not inherit wall-time overshoot from the completed wait"
+        );
+
+        app.advance_realtime_timeline(late_resume + Duration::from_millis(500))
+            .unwrap();
+        assert!((app.session().frame().time - 1.5).abs() < 1.0e-9);
+        assert!(
+            (app.session().frame().objects[0].transform.translation.x - 1.0).abs() < 1.0e-6,
+            "the next animation must advance by only the wall time after resume"
+        );
     }
 
     struct NativeAnimatedContinuation {
