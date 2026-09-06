@@ -606,3 +606,72 @@ fn invalid_affine_lifecycle_endpoint_is_atomic() {
     assert_eq!(store.scene_revision(), before_revision);
     assert_eq!(store.last_mutation_stats().slots_written, 0);
 }
+
+#[test]
+fn nested_add_and_wait_declarations_commit_in_one_ordered_transaction() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 0.5);
+    let before_revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::new();
+    let add = transaction.create_add_animation(target, AnimationOptions::new().run_time(0.2));
+    let first_wait = transaction.create_wait_animation(0.2);
+    let nested = transaction.create_animation_composition(
+        SemanticAnimationCompositionKind::Sequence,
+        [first_wait],
+        AnimationOptions::new(),
+    );
+    let root = transaction.create_animation_composition(
+        SemanticAnimationCompositionKind::Sequence,
+        [add, nested],
+        AnimationOptions::new(),
+    );
+
+    let result = transaction.apply(&mut store).unwrap();
+    let root = result.resolve(root).unwrap();
+    let nested = result.resolve(nested).unwrap();
+    let add = result.resolve(add).unwrap();
+    let first_wait = result.resolve(first_wait).unwrap();
+    assert_eq!(
+        store
+            .semantic_animation_state(root)
+            .unwrap()
+            .intent()
+            .children(),
+        &[add, nested]
+    );
+    assert_eq!(
+        store
+            .semantic_animation_state(nested)
+            .unwrap()
+            .intent()
+            .children(),
+        &[first_wait]
+    );
+    assert_eq!(
+        store.semantic_animation_state(add).unwrap().intent(),
+        &SemanticAnimationIntent::Add { target }
+    );
+    assert_eq!(
+        store.semantic_animation_state(first_wait).unwrap().intent(),
+        &SemanticAnimationIntent::Wait
+    );
+    assert_eq!(store.scene_revision().get(), before_revision.get() + 1);
+}
+
+#[test]
+fn instant_add_accepts_zero_duration_without_relaxing_other_animation_leaves() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 0.5);
+    let mut transaction = SemanticMutationTransaction::new();
+    let add = transaction.create_add_animation(target, AnimationOptions::new().run_time(0.0));
+    let result = transaction.apply(&mut store).unwrap();
+    let add = result.resolve(add).unwrap();
+    assert_eq!(
+        store
+            .semantic_animation_state(add)
+            .unwrap()
+            .options()
+            .run_time,
+        Some(0.0)
+    );
+}

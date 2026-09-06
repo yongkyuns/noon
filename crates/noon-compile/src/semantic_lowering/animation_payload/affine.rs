@@ -566,6 +566,11 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
+        SemanticAnimationIntent::Add { target }
+            if *target == leaf.target && leaf.payload == SemanticScheduledAnimationPayload::Add =>
+        {
+            Ok(())
+        }
         SemanticAnimationIntent::AffineLifecycle {
             target,
             direction,
@@ -591,6 +596,7 @@ fn scheduled_target_state(leaf: &SemanticScheduledAnimationLeaf) -> SemanticNode
         SemanticScheduledAnimationPayload::Fade { .. }
         | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
         | SemanticScheduledAnimationPayload::Create
+        | SemanticScheduledAnimationPayload::Add
         | SemanticScheduledAnimationPayload::Rotate { .. } => {
             unreachable!("affine payload errors are only produced for TransformTo leaves")
         }

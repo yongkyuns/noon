@@ -755,6 +755,38 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage one timed structural admission declaration.
+    pub fn create_add_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Add {
+                    target: target.into(),
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage one targetless authored wait declaration.
+    pub fn create_wait_animation(&mut self, duration: f64) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Wait,
+                AnimationOptions::new().run_time(duration),
+            ),
+        });
+        token
+    }
+
     /// Stage an ordered animation composition whose children already exist or
     /// were staged earlier in this transaction.
     pub fn create_animation_composition<I, R>(

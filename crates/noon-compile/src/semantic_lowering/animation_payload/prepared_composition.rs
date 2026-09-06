@@ -303,13 +303,6 @@ where
                         },
                     );
                 }
-                if !leaf.time_map.is_identity() {
-                    return Err(
-                        PreparedSemanticAnimationLoweringError::UnsupportedFadeComposition {
-                            animation: leaf.animation,
-                        },
-                    );
-                }
                 if !source.signal_bindings().is_empty() {
                     return Err(
                         PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
@@ -366,13 +359,6 @@ where
                         },
                     );
                 }
-                if !leaf.time_map.is_identity() {
-                    return Err(
-                        PreparedSemanticAnimationLoweringError::UnsupportedAffineLifecycleComposition {
-                            animation: leaf.animation,
-                        },
-                    );
-                }
                 let from = capture_effective(
                     leaf,
                     source,
@@ -402,13 +388,6 @@ where
                         },
                     );
                 }
-                if !leaf.time_map.is_identity() && !is_flat_parallel_time_map(&leaf.time_map) {
-                    return Err(
-                        PreparedSemanticAnimationLoweringError::UnsupportedCreateComposition {
-                            animation: leaf.animation,
-                        },
-                    );
-                }
                 if !source.signal_bindings().is_empty() {
                     return Err(
                         PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
@@ -431,6 +410,39 @@ where
                     },
                 }
             }
+            PreparedSemanticScheduledAnimationPayload::Add => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.remover
+                    || leaf.options.reverse_rate_function
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                            animation: leaf.animation,
+                            remover: leaf.options.remover,
+                            introducer: leaf.options.introducer,
+                        },
+                    );
+                }
+                if !source.signal_bindings().is_empty() {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
+                            animation: leaf.animation,
+                            target: leaf.target,
+                            property: SemanticObjectProperty::Presence,
+                        },
+                    );
+                }
+                super::affine::LoweredAffineChannel {
+                    property: Property::Presence,
+                    conflict_property: SemanticObjectProperty::Presence,
+                    completion: SemanticAnimationCompletion::Release,
+                    values: TrackValues::Bool {
+                        from: false,
+                        to: true,
+                    },
+                }
+            }
         };
         push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
     }
@@ -441,16 +453,6 @@ where
         run_time: schedule.run_time(),
         tracks,
     })
-}
-
-/// Create reveal tracks support one flat Parallel parent. The parent may apply
-/// any shared rate function, but every child must occupy its full interval;
-/// lagged, sequential, and nested compositions remain unavailable.
-fn is_flat_parallel_time_map(time_map: &noon_core::CompositionTimeMap) -> bool {
-    matches!(
-        time_map.steps.as_slice(),
-        [step] if step.start == 0.0 && step.duration == 1.0
-    )
 }
 
 fn capture_effective<F>(

@@ -54,7 +54,7 @@ fn resolve_committed_node(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum PreparedAnimationLifecycle {
     Introduce(SemanticNodeId),
     FadeOut(SemanticNodeId),
@@ -63,9 +63,19 @@ enum PreparedAnimationLifecycle {
         target: SemanticNodeId,
         admitted: bool,
     },
+    Composition {
+        root: SemanticNodeId,
+        admits: bool,
+        removals: Vec<(SemanticNodeId, SemanticNodeId)>,
+    },
 }
 
-#[derive(Clone, Copy)]
+/// Inert recursive declaration input for one atomic live composition.
+///
+/// The tree borrows no execution state and owns only its child topology. All semantic
+/// identity, schedule lowering, admission, and runtime publication remain transaction-local
+/// until `declare_and_activate_composition` succeeds.
+#[derive(Clone)]
 pub(crate) enum SemanticCompositionRequest {
     TransformTo {
         source: SemanticNodeId,
@@ -78,27 +88,56 @@ pub(crate) enum SemanticCompositionRequest {
         angle: f64,
         options: AnimationOptions,
     },
+    Wait {
+        duration: f64,
+    },
+    Add {
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    },
+    Fade {
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    },
+    Create {
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    },
+    AffineLifecycle {
+        target: SemanticNodeId,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+        options: AnimationOptions,
+    },
+    Composition {
+        kind: SemanticAnimationCompositionKind,
+        children: Vec<SemanticCompositionRequest>,
+        options: AnimationOptions,
+    },
 }
 
 impl PreparedAnimationLifecycle {
-    const fn root(self) -> SemanticNodeId {
+    const fn root(&self) -> SemanticNodeId {
         match self {
-            Self::Introduce(root) | Self::FadeOut(root) | Self::AffineRemove { root, .. } => root,
+            Self::Introduce(root) | Self::FadeOut(root) | Self::AffineRemove { root, .. } => *root,
+            Self::Composition { root, .. } => *root,
         }
     }
 
-    const fn removal(self) -> Option<(SemanticNodeId, SemanticNodeId)> {
+    const fn removal(&self) -> Option<(SemanticNodeId, SemanticNodeId)> {
         match self {
-            Self::AffineRemove { root, target, .. } => Some((root, target)),
-            Self::Introduce(_) | Self::FadeOut(_) => None,
+            Self::AffineRemove { root, target, .. } => Some((*root, *target)),
+            Self::Introduce(_) | Self::FadeOut(_) | Self::Composition { .. } => None,
         }
     }
 
-    const fn admits(self) -> bool {
+    const fn admits(&self) -> bool {
         match self {
             Self::Introduce(_) => true,
-            Self::AffineRemove { admitted, .. } => admitted,
+            Self::AffineRemove { admitted, .. } => *admitted,
             Self::FadeOut(_) => false,
+            Self::Composition { admits, .. } => *admits,
         }
     }
 }
@@ -348,6 +387,7 @@ pub enum ExecutionSessionAnimationError {
         target: SemanticNodeId,
         error: ExecutionSessionCreateError,
     },
+    InvalidComposition(String),
     PreparedTrack(TimelineError),
     Publication(CompilePatchError),
     AuthoredPublication(ExecutionSessionPublicationError),
@@ -423,6 +463,7 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
                 target.slot(),
                 target.generation()
             ),
+            Self::InvalidComposition(error) => formatter.write_str(error),
             Self::PreparedTrack(error) => {
                 write!(formatter, "prepared animation track failed: {error}")
             }
@@ -1029,7 +1070,7 @@ impl ExecutionSession {
             activation_scene_revision: store.scene_revision(),
             kind: PendingSegmentCompletionKind::ObjectTracks {
                 lifecycle_root: None,
-                lifecycle_removal: None,
+                lifecycle_removals: Vec::new(),
                 entries: completions,
             },
         });
@@ -1352,12 +1393,52 @@ impl ExecutionSession {
         Ok(self.runtime.frame())
     }
 
-    /// Atomically declare and activate one flat Parallel or Sequence composition.
+    /// Atomically declare and activate one recursive semantic composition.
     ///
-    /// Each tuple is `(source, target_state, child_options)`. Immutable snapshots of every target,
-    /// all leaf declarations, and the root composition remain transaction-local while shared
-    /// schedule/payload lowering and runtime preflight run. Semantic identity is allocated once
-    /// only after every fallible step succeeds.
+    /// The declaration tree is inert input: every child declaration, detached admission,
+    /// target snapshot, schedule projection, and runtime publication is prepared before its
+    /// single semantic commit. Nested waits intentionally contribute no tracks; their authored
+    /// interval remains the returned shared execution segment.
+    pub(crate) fn declare_and_activate_composition(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        request: &SemanticCompositionRequest,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target: root,
+                error: ExecutionSessionCreateError::RootIsNotInExecutionDomain,
+            });
+        }
+        let mut declaration = SemanticMutationTransaction::new();
+        let mut admitted = HashSet::new();
+        let mut removals = Vec::new();
+        let animation = self.stage_composition_request(
+            store,
+            root,
+            request,
+            &mut declaration,
+            &mut admitted,
+            &mut removals,
+        )?;
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            animation,
+            play_options,
+            Some(PreparedAnimationLifecycle::Composition {
+                root,
+                admits: !admitted.is_empty(),
+                removals,
+            }),
+        )
+    }
+
+    /// Keep the direct transform convenience as a composition declaration; it owns no separate
+    /// lowering or activation path.
     pub fn declare_and_activate_transform_composition(
         &mut self,
         store: &mut SemanticStore,
@@ -1376,80 +1457,213 @@ impl ExecutionSession {
                     options: *options,
                 },
             )
-            .collect::<Vec<_>>();
-        self.declare_and_activate_mixed_composition(
-            store,
+            .collect();
+        let request = SemanticCompositionRequest::Composition {
             kind,
-            &children,
-            composition_options,
+            children,
+            options: composition_options,
+        };
+        // Transform-only callers operate on currently mounted sources, so no admission root is
+        // available through this low-level convenience. The public live facade uses the recursive
+        // root-aware entrypoint below.
+        self.declare_and_activate_composition_without_admission(store, &request, play_options)
+    }
+
+    fn declare_and_activate_composition_without_admission(
+        &mut self,
+        store: &mut SemanticStore,
+        request: &SemanticCompositionRequest,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        let animation =
+            self.stage_composition_request_without_admission(store, request, &mut declaration)?;
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            animation,
             play_options,
             None,
         )
     }
 
-    pub(crate) fn declare_and_activate_mixed_composition(
-        &mut self,
-        store: &mut SemanticStore,
-        kind: SemanticAnimationCompositionKind,
-        children: &[SemanticCompositionRequest],
-        composition_options: AnimationOptions,
-        play_options: AnimationOptions,
-        admission_root: Option<SemanticNodeId>,
-    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
-        self.require_animation_declaration_context(store)?;
-        let mut declaration = SemanticMutationTransaction::new();
-        if let Some(root) = admission_root {
-            let mut admitted = HashSet::new();
-            for child in children {
-                let target = match *child {
-                    SemanticCompositionRequest::TransformTo { source, .. } => source,
-                    SemanticCompositionRequest::Rotate { target, .. } => target,
-                };
-                if admitted.insert(target)
-                    && self.execution_index.execution_object_id(target).is_none()
-                {
-                    declaration.add_member(root, target);
+    fn stage_composition_request(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        request: &SemanticCompositionRequest,
+        declaration: &mut SemanticMutationTransaction,
+        admitted: &mut HashSet<SemanticNodeId>,
+        removals: &mut Vec<(SemanticNodeId, SemanticNodeId)>,
+    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        let admit = |target: SemanticNodeId,
+                     declaration: &mut SemanticMutationTransaction,
+                     admitted: &mut HashSet<SemanticNodeId>|
+         -> Result<(), ExecutionSessionAnimationError> {
+            let state = store
+                .semantic_object_state_checked(target)
+                .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?;
+            if !state.signal_bindings().is_empty() {
+                return Err(ExecutionSessionAnimationError::CreateTarget {
+                    target,
+                    error: ExecutionSessionCreateError::ReactiveBindingsUnsupported,
+                });
+            }
+            if self.execution_index.execution_object_id(target).is_some() {
+                return Ok(());
+            }
+            let node = store
+                .node(target)
+                .expect("validated semantic object has a live node");
+            if node.is_scene_owned()
+                || node
+                    .parents()
+                    .iter()
+                    .any(|parent| self.reachability.is_reachable(*parent))
+            {
+                return Err(ExecutionSessionAnimationError::CreateTarget {
+                    target,
+                    error: ExecutionSessionCreateError::TargetIsNotDetached,
+                });
+            }
+            if !admitted.insert(target) {
+                return Err(ExecutionSessionAnimationError::CreateTarget {
+                    target,
+                    error: ExecutionSessionCreateError::DuplicateTarget,
+                });
+            }
+            declaration.add_member(root, target);
+            Ok(())
+        };
+        match request {
+            SemanticCompositionRequest::TransformTo {
+                source,
+                target_state,
+                interpolation,
+                options,
+            } => {
+                admit(*source, declaration, admitted)?;
+                let target_state =
+                    self.stage_animation_target_state(store, declaration, *target_state)?;
+                Ok(declaration.create_transform_animation_with_interpolation(
+                    *source,
+                    target_state,
+                    *interpolation,
+                    *options,
+                ))
+            }
+            SemanticCompositionRequest::Rotate {
+                target,
+                angle,
+                options,
+            } => {
+                admit(*target, declaration, admitted)?;
+                Ok(declaration.create_rotate_animation(*target, *angle, *options))
+            }
+            SemanticCompositionRequest::Wait { duration } => {
+                if !duration.is_finite() || *duration < 0.0 {
+                    return Err(ExecutionSessionAnimationError::Segment(
+                        ExecutionSegmentError::InvalidDuration(*duration),
+                    ));
                 }
+                Ok(declaration.create_wait_animation(*duration))
+            }
+            SemanticCompositionRequest::Add { target, options } => {
+                admit(*target, declaration, admitted)?;
+                Ok(declaration.create_add_animation(*target, *options))
+            }
+            SemanticCompositionRequest::Fade {
+                target,
+                direction,
+                options,
+            } => {
+                self.require_fade_target(store, root, *target, *direction)?;
+                if *direction == SemanticFadeDirection::In {
+                    admit(*target, declaration, admitted)?;
+                }
+                Ok(declaration.create_fade_animation(*target, *direction, *options))
+            }
+            SemanticCompositionRequest::Create { target, options } => {
+                self.require_create_target(store, *target)?;
+                admit(*target, declaration, admitted)?;
+                Ok(declaration.create_create_animation(*target, *options))
+            }
+            SemanticCompositionRequest::AffineLifecycle {
+                target,
+                direction,
+                endpoint,
+                options,
+            } => {
+                let needs_admission =
+                    self.require_affine_lifecycle_target(store, root, *target, *direction)?;
+                if needs_admission {
+                    admit(*target, declaration, admitted)?;
+                }
+                if *direction == SemanticAffineLifecycleDirection::RemoveTo {
+                    removals.push((root, *target));
+                }
+                Ok(declaration
+                    .create_affine_lifecycle_animation(*target, *direction, *endpoint, *options))
+            }
+            SemanticCompositionRequest::Composition {
+                kind,
+                children,
+                options,
+            } => {
+                if children.is_empty() {
+                    return Err(ExecutionSessionAnimationError::CreateTarget {
+                        target: root,
+                        error: ExecutionSessionCreateError::EmptyParallel,
+                    });
+                }
+                let children = children
+                    .iter()
+                    .map(|child| {
+                        self.stage_composition_request(
+                            store,
+                            root,
+                            child,
+                            declaration,
+                            admitted,
+                            removals,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(declaration.create_animation_composition(*kind, children, *options))
             }
         }
-        let leaves = children
-            .iter()
-            .map(|child| {
-                Ok(match *child {
-                    SemanticCompositionRequest::TransformTo {
-                        source,
-                        target_state,
-                        interpolation,
-                        options,
-                    } => {
-                        let target_state = self.stage_animation_target_state(
-                            store,
-                            &mut declaration,
-                            target_state,
-                        )?;
-                        declaration.create_transform_animation_with_interpolation(
-                            source,
-                            target_state,
-                            interpolation,
-                            options,
-                        )
-                    }
-                    SemanticCompositionRequest::Rotate {
-                        target,
-                        angle,
-                        options,
-                    } => declaration.create_rotate_animation(target, angle, options),
-                })
-            })
-            .collect::<Result<Vec<_>, ExecutionSessionAnimationError>>()?;
-        let root = declaration.create_animation_composition(kind, leaves, composition_options);
-        self.declare_and_activate_prepared_animation(
-            store,
-            declaration,
-            root,
-            play_options,
-            admission_root.map(PreparedAnimationLifecycle::Introduce),
-        )
+    }
+
+    fn stage_composition_request_without_admission(
+        &self,
+        store: &SemanticStore,
+        request: &SemanticCompositionRequest,
+        declaration: &mut SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        match request {
+            SemanticCompositionRequest::TransformTo { source, target_state, interpolation, options } => {
+                if self.execution_index.execution_object_id(*source).is_none() {
+                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *source, error: ExecutionSessionCreateError::TargetIsNotDetached });
+                }
+                let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
+                Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *options))
+            }
+            SemanticCompositionRequest::Rotate { target, angle, options } => {
+                if self.execution_index.execution_object_id(*target).is_none() {
+                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
+                }
+                Ok(declaration.create_rotate_animation(*target, *angle, *options))
+            }
+            SemanticCompositionRequest::Wait { duration } => Ok(declaration.create_wait_animation(*duration)),
+            SemanticCompositionRequest::Composition { kind, children, options } => {
+                let children = children.iter().map(|child| self.stage_composition_request_without_admission(store, child, declaration)).collect::<Result<Vec<_>, _>>()?;
+                Ok(declaration.create_animation_composition(*kind, children, *options))
+            }
+            _ => Err(ExecutionSessionAnimationError::InvalidComposition(
+                "this direct convenience accepts only transform, rotate, wait, and nested composition leaves".into(),
+            )),
+        }
     }
 
     /// Atomically declare and activate one canonical single-leaf fade.
@@ -1888,7 +2102,10 @@ impl ExecutionSession {
             next_track_id = raw_id.checked_add(1);
         }
 
-        if lifecycle.is_some_and(PreparedAnimationLifecycle::admits) {
+        if lifecycle
+            .as_ref()
+            .is_some_and(PreparedAnimationLifecycle::admits)
+        {
             let existing_tracks = definitions
                 .iter()
                 .filter(|definition| self.runtime.contains_object(definition.object))
@@ -1949,8 +2166,17 @@ impl ExecutionSession {
                 token,
                 activation_scene_revision,
                 kind: PendingSegmentCompletionKind::ObjectTracks {
-                    lifecycle_root: lifecycle.map(PreparedAnimationLifecycle::root),
-                    lifecycle_removal: lifecycle.and_then(PreparedAnimationLifecycle::removal),
+                    lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
+                    lifecycle_removals: match lifecycle.as_ref() {
+                        Some(PreparedAnimationLifecycle::Composition { removals, .. }) => {
+                            removals.clone()
+                        }
+                        _ => lifecycle
+                            .as_ref()
+                            .and_then(|lifecycle| lifecycle.removal())
+                            .into_iter()
+                            .collect(),
+                    },
                     entries,
                 },
             });

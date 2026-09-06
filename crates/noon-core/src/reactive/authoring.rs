@@ -200,11 +200,58 @@ pub fn resolve_animation_options(
     .validate()
 }
 
+/// Resolve timing for targetless/structural instant leaves. The shared precedence rule is
+/// unchanged; only an exactly-zero duration is admitted so `Add()` can carry an exact boundary.
+pub fn resolve_add_animation_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    let options = ResolvedAnimationOptions {
+        run_time: play
+            .run_time
+            .or(animation.run_time)
+            .unwrap_or(defaults.run_time),
+        rate_func: play
+            .rate_func
+            .or(animation.rate_func)
+            .unwrap_or(defaults.rate_func),
+        lag_ratio: play
+            .lag_ratio
+            .or(animation.lag_ratio)
+            .unwrap_or(defaults.lag_ratio),
+        path_arc: play
+            .path_arc
+            .or(animation.path_arc)
+            .unwrap_or(defaults.path_arc),
+        reverse_rate_function: play
+            .reverse_rate_function
+            .or(animation.reverse_rate_function)
+            .unwrap_or(defaults.reverse_rate_function),
+        remover: play
+            .remover
+            .or(animation.remover)
+            .unwrap_or(defaults.remover),
+        introducer: play
+            .introducer
+            .or(animation.introducer)
+            .unwrap_or(defaults.introducer),
+    };
+    if !options.run_time.is_finite() || options.run_time < 0.0 {
+        return Err(AnimationOptionsError::InvalidRunTime(options.run_time));
+    }
+    options.validate_non_timing()
+}
+
 impl ResolvedAnimationOptions {
     pub fn validate(self) -> Result<Self, AnimationOptionsError> {
         if !self.run_time.is_finite() || self.run_time <= 0.0 {
             return Err(AnimationOptionsError::InvalidRunTime(self.run_time));
         }
+        self.validate_non_timing()
+    }
+
+    fn validate_non_timing(self) -> Result<Self, AnimationOptionsError> {
         if !self.lag_ratio.is_finite() || self.lag_ratio < 0.0 {
             return Err(AnimationOptionsError::InvalidLagRatio(self.lag_ratio));
         }

@@ -272,7 +272,7 @@ impl ExecutionSession {
 
         let crate::execution_segment::PendingSegmentCompletionKind::ObjectTracks {
             lifecycle_root,
-            lifecycle_removal,
+            lifecycle_removals,
             entries,
         } = &pending.kind
         else {
@@ -280,8 +280,8 @@ impl ExecutionSession {
         };
 
         let mut semantic = SemanticMutationTransaction::new();
-        if let Some((root, target)) = lifecycle_removal {
-            semantic.remove_member(*root, *target);
+        for &(root, target) in lifecycle_removals {
+            semantic.remove_member(root, target);
         }
         let mut release = Vec::with_capacity(entries.len());
         for entry in entries {
