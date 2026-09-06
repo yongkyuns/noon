@@ -39,6 +39,7 @@ export async function attachSemanticEngine(
   let pendingPresentation = null;
   let continuationActive = false;
   let continuationGeneration = continuation?.generation ?? null;
+  let continuationWakeCadence = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
@@ -102,9 +103,43 @@ export async function attachSemanticEngine(
   };
   const state = (type) => {
     if (player === null) {
-      throw new Error("semantic continuation is idle in its authoring context");
+      if (continuation === null) {
+        throw new Error("semantic continuation is idle in its authoring context");
+      }
+      const time = context.liveHandoffDuration();
+      if (!Number.isFinite(time) || time < 0) {
+        throw new Error("returned semantic continuation has no valid authored time");
+      }
+      return { type, time, playing: false, nextPatchSequence: "0" };
     }
     return { type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" };
+  };
+  const emitContinuationWake = (cadence, timerAfterMilliseconds, force = false) => {
+    if (continuation === null) return;
+    if (!force && cadence === "idle" && continuationWakeCadence === "idle") return;
+    if (!force && cadence === "timer" && continuationWakeCadence === "timer" &&
+        timerAfterMilliseconds > 0) return;
+    continuationWakeCadence = cadence;
+    renderPort.postMessage({
+      type: "execution_wake",
+      cadence,
+      timerAfterMilliseconds: timerAfterMilliseconds ?? null,
+    });
+  };
+  const observeContinuationWake = (wallTime, force = false, emit = true) => {
+    const wake = player.liveSegmentWake(wallTime);
+    const cadence = wake.cadence;
+    const timerAfterMilliseconds = wake.timerAfterMilliseconds;
+    wake.free?.();
+    if (cadence !== "animation_frame" && cadence !== "timer" && cadence !== "idle") {
+      throw new Error(`unknown semantic continuation wake cadence ${cadence}`);
+    }
+    if (cadence === "timer" &&
+        (!Number.isFinite(timerAfterMilliseconds) || timerAfterMilliseconds < 0)) {
+      throw new Error("semantic continuation timer wake has an invalid delay");
+    }
+    if (emit) emitContinuationWake(cadence, timerAfterMilliseconds, force);
+    return { cadence, timerAfterMilliseconds };
   };
   async function publishCallbackPhase(
     phaseJson,
@@ -199,19 +234,19 @@ export async function attachSemanticEngine(
 
   async function driveContinuation(wallTime) {
     if (!continuationActive || player === null) return;
-    const wake = player.liveSegmentWake(wallTime);
-    const cadence = wake.cadence;
-    const timerAfterMilliseconds = wake.timerAfterMilliseconds;
-    wake.free?.();
-    if (cadence === "idle" ||
-        (cadence === "timer" && timerAfterMilliseconds > 0)) return;
-    if (cadence !== "animation_frame" && cadence !== "timer") {
-      throw new Error(`unknown semantic continuation wake cadence ${cadence}`);
+    const { cadence, timerAfterMilliseconds } = observeContinuationWake(wallTime, false, false);
+    if (cadence === "idle" || (cadence === "timer" && timerAfterMilliseconds > 0)) {
+      emitContinuationWake(cadence, timerAfterMilliseconds);
+      return;
     }
     const reachedEndpoint = player.driveLiveSegmentFromWallTime(wallTime);
     const endpointPublication = send(player.drainDeltaJson());
-    if (!reachedEndpoint) return;
+    if (!reachedEndpoint) {
+      observeContinuationWake(wallTime, true);
+      return;
+    }
 
+    emitContinuationWake("idle", null, true);
     await awaitPresentation(endpointPublication);
     player.completeLiveSegment();
     const completionPublication = send(player.drainDeltaJson());
@@ -220,6 +255,7 @@ export async function attachSemanticEngine(
     player = null;
     continuationActive = false;
     context.returnExecutionPlayer(completedPlayer);
+    emitContinuationWake("idle", null);
     continuation?.onComplete(continuationGeneration);
   }
 
@@ -390,6 +426,7 @@ export async function attachSemanticEngine(
     controlPort.start();
     renderPort.start();
     continuationActive = continuation !== null;
+    if (continuationActive) observeContinuationWake(performance.now(), true);
     post({ type: "ready", transportMode });
   } catch (error) { stop(); throw error; }
   return {
@@ -411,6 +448,7 @@ export async function attachSemanticEngine(
       callbackFault = null;
       latestTick = null;
       send(player.drainDeltaJson());
+      observeContinuationWake(performance.now(), true);
       void drain();
     },
   };

@@ -112,6 +112,10 @@ test("semantic continuation returns one completed player before resuming and ret
   const f = fixture("transferable", null, continuation);
   let endpoint;
   try {
+    const wakes = [];
+    f.render.port2.on("message", (message) => {
+      if (message.type === "execution_wake") wakes.push(message.cadence);
+    });
     const ready = next(f.control.port2);
     const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
     endpoint = await f.attach();
@@ -130,18 +134,25 @@ test("semantic continuation returns one completed player before resuming and ret
     assert.equal(f.stats().completedSegments, 1);
     assert.equal(f.stats().returned, 1);
     assert.equal(f.stats().returnedPlayer, f.player);
+    assert.deepEqual(wakes, ["animation_frame", "idle"]);
+    const idleState = await request(f.control.port2, "state", 90);
+    assert.equal(idleState.time, 1);
+    assert.equal(idleState.playing, false);
 
     endpoint.startContinuation(9);
     assert.equal(f.stats().created, 1, "only the first attachment may bootstrap transport");
     assert.equal(f.stats().resumed, 1, "later await must retake the returned player");
     assert.equal(f.stats().resourceBundles, 1);
     assert.equal(f.stats().initialSnapshots, 1);
+    await turn();
+    assert.equal(wakes.at(-1), "animation_frame");
     f.render.port2.postMessage({ type: "tick", timestamp: 32 });
     await turn();
     await turn();
     assert.deepEqual(completions, [9, 9]);
     assert.equal(f.stats().completedSegments, 2);
     assert.equal(f.stats().returned, 2);
+    assert.equal(wakes.at(-1), "idle");
     assert.throws(() => endpoint.startContinuation(8), /stale semantic continuation generation/);
   } finally { endpoint?.stop(); f.close(); }
 });
@@ -159,12 +170,21 @@ test("semantic continuation drives a pure wait only when its Rust deadline is du
     f.player.liveSegmentWake = () => ({
       presentNow: false,
       cadence: "timer",
-      timerAfterMilliseconds: wakeCount++ === 0 ? 1_000 : 0,
+      timerAfterMilliseconds: wakeCount++ < 2 ? 1_000 : 0,
     });
     const ready = next(f.control.port2);
     const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    const initialWake = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_wake",
+    );
     endpoint = await f.attach();
     await ready;
+    assert.deepEqual(await initialWake, {
+      type: "execution_wake",
+      cadence: "timer",
+      timerAfterMilliseconds: 1_000,
+    });
     const initialDelta = await initial;
     f.render.port2.postMessage({
       type: "execution_presented",
