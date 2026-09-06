@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::RateFunction;
+use crate::TrackTiming;
 
 /// One root-to-leaf remapping step inside a nested animation composition.
 ///
@@ -115,8 +116,13 @@ impl CompositionTimeMap {
     /// functions are continuous and monotone, so walking the nested intervals
     /// from leaf to root has one deterministic lower boundary.
     pub fn monotone_event_alpha(&self) -> Result<f64, CompositionTimeMapError> {
+        self.monotone_root_alpha(0.0)
+    }
+
+    /// Resolve the root alpha corresponding to one leaf-local alpha for a monotone map.
+    pub fn monotone_root_alpha(&self, leaf_alpha: f64) -> Result<f64, CompositionTimeMapError> {
         self.validate()?;
-        let mut required_alpha = 0.0;
+        let mut required_alpha = leaf_alpha.clamp(0.0, 1.0);
         for (index, step) in self.steps.iter().copied().enumerate().rev() {
             let required_warp = step.start + step.duration * required_alpha;
             required_alpha = inverse_monotone_rate(step.rate_func, required_warp).ok_or(
@@ -128,6 +134,26 @@ impl CompositionTimeMap {
         }
         Ok(required_alpha)
     }
+}
+
+pub fn continuous_time_map_interval(
+    timing: TrackTiming,
+    time_map: &CompositionTimeMap,
+) -> Result<(f64, f64), CompositionTimeMapError> {
+    time_map.validate()?;
+    let (start_alpha, end_alpha) = match (
+        time_map.monotone_root_alpha(0.0),
+        time_map.monotone_root_alpha(1.0),
+    ) {
+        (Ok(start), Ok(end)) => (start, end),
+        (Err(CompositionTimeMapError::UnsupportedDiscreteRate { .. }), _)
+        | (_, Err(CompositionTimeMapError::UnsupportedDiscreteRate { .. })) => (0.0, 1.0),
+        (Err(error), _) | (_, Err(error)) => return Err(error),
+    };
+    Ok((
+        timing.start_time + timing.duration * start_alpha,
+        timing.start_time + timing.duration * end_alpha,
+    ))
 }
 
 fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
@@ -226,6 +252,32 @@ impl std::fmt::Display for CompositionTimeMapError {
 
 impl std::error::Error for CompositionTimeMapError {}
 
+/// Evaluate one continuous leaf against its root interval and nested composition map.
+///
+/// `None` means the mapped leaf has not begun. Exact root endpoints settle to the
+/// authored target even for reversing parent rates, matching runtime finish/seek semantics.
+pub fn mapped_continuous_progress(
+    timing: TrackTiming,
+    time_map: &CompositionTimeMap,
+    time: f64,
+) -> Option<f32> {
+    if time < timing.start_time {
+        return None;
+    }
+    if timing.is_instant() {
+        return Some(1.0);
+    }
+    if time >= timing.start_time + timing.duration {
+        return Some(1.0);
+    }
+    let raw = ((time - timing.start_time) / timing.duration).clamp(0.0, 1.0) as f32;
+    if time_map.is_identity() {
+        return Some(timing.easing.evaluate(raw));
+    }
+    let sample = time_map.evaluate(raw);
+    sample.begun.then(|| timing.easing.evaluate(sample.alpha))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +354,20 @@ mod tests {
             RateFunction::Smooth,
         )]);
         assert!((map.evaluate(0.25).alpha - RateFunction::Smooth.evaluate(0.25)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn shared_mapped_progress_honors_child_delay_and_root_endpoint() {
+        let timing = TrackTiming::new(2.0, 4.0, RateFunction::Linear);
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.5,
+            0.5,
+            RateFunction::Smooth,
+        )]);
+        assert_eq!(mapped_continuous_progress(timing, &map, 2.5), None);
+        assert_eq!(mapped_continuous_progress(timing, &map, 6.0), Some(1.0));
+        let progress = mapped_continuous_progress(timing, &map, 5.0).unwrap();
+        assert!(progress > 0.0 && progress < 1.0);
     }
 
     #[test]

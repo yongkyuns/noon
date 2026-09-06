@@ -1,8 +1,9 @@
 use super::*;
 use crate::{
-    AnimationOptions, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
-    SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticAnimationState,
-    SemanticFadeDirection, SemanticObjectState, SemanticVec3, StoredGeometry,
+    AnimationOptions, NativeStateSource, SemanticAffineLifecycleDirection,
+    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationIntent,
+    SemanticAnimationState, SemanticFadeDirection, SemanticObjectState, SemanticVec3,
+    StoredGeometry,
 };
 
 fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
@@ -674,4 +675,42 @@ fn instant_add_accepts_zero_duration_without_relaxing_other_animation_leaves() {
             .run_time,
         Some(0.0)
     );
+}
+
+#[test]
+fn scalar_animation_rejects_native_and_non_finite_targets_atomically() {
+    let mut store = SemanticStore::new();
+    let signal = store.insert_semantic_input_signal(0.0_f64).unwrap();
+    store
+        .bind_semantic_native_state_input(
+            signal,
+            NativeStateSource::Control {
+                name: "speed".to_owned(),
+            },
+        )
+        .unwrap();
+    let revision = store.scene_revision();
+    let mut native = SemanticMutationTransaction::new();
+    native.create_scalar_animation(signal, 1.0, AnimationOptions::new());
+    assert!(matches!(
+        native.apply(&mut store),
+        Err(SemanticMutationTransactionError::SignalTrack {
+            error: SemanticScalarSignalTrackError::NativeOwnedSignal(actual),
+            ..
+        }) if actual == signal
+    ));
+    assert_eq!(store.scene_revision(), revision);
+
+    store.clear_semantic_native_input(signal).unwrap();
+    let revision = store.scene_revision();
+    let mut invalid = SemanticMutationTransaction::new();
+    invalid.create_scalar_animation(signal, f64::NAN, AnimationOptions::new());
+    assert!(matches!(
+        invalid.apply(&mut store),
+        Err(SemanticMutationTransactionError::SignalTrack {
+            error: SemanticScalarSignalTrackError::NonFiniteValue { signal: actual, .. },
+            ..
+        }) if actual == signal
+    ));
+    assert_eq!(store.scene_revision(), revision);
 }

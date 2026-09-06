@@ -43,6 +43,10 @@ pub enum SemanticTransactionAnimationIntent {
     Add {
         target: SemanticTransactionNodeRef,
     },
+    SetScalar {
+        signal: SemanticNodeId,
+        target: f64,
+    },
     Wait,
     Composition {
         kind: SemanticAnimationCompositionKind,
@@ -63,6 +67,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
             | Self::Add { target } => Some([Some(*target), None]),
+            Self::SetScalar { signal, .. } => Some([Some((*signal).into()), None]),
             Self::Wait | Self::Composition { .. } => None,
         };
         let children = match self {
@@ -73,6 +78,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
             | Self::Add { .. }
+            | Self::SetScalar { .. }
             | Self::Wait => &[],
         };
         leaf.into_iter()
@@ -146,6 +152,12 @@ impl SemanticTransactionAnimation {
             SemanticAnimationIntent::Add { target } => SemanticTransactionAnimationIntent::Add {
                 target: (*target).into(),
             },
+            SemanticAnimationIntent::SetScalar { signal, target } => {
+                SemanticTransactionAnimationIntent::SetScalar {
+                    signal: *signal,
+                    target: *target,
+                }
+            }
             SemanticAnimationIntent::Wait => SemanticTransactionAnimationIntent::Wait,
             SemanticAnimationIntent::Composition { kind, children } => {
                 SemanticTransactionAnimationIntent::Composition {
@@ -200,6 +212,12 @@ impl SemanticTransactionAnimation {
             SemanticTransactionAnimationIntent::Add { target } => SemanticAnimationIntent::Add {
                 target: resolve_node_ref(*target, committed),
             },
+            SemanticTransactionAnimationIntent::SetScalar { signal, target } => {
+                SemanticAnimationIntent::SetScalar {
+                    signal: *signal,
+                    target: *target,
+                }
+            }
             SemanticTransactionAnimationIntent::Wait => SemanticAnimationIntent::Wait,
             SemanticTransactionAnimationIntent::Composition { kind, children } => {
                 SemanticAnimationIntent::Composition {
@@ -303,6 +321,9 @@ pub(super) fn preflight_transaction_animation(
         SemanticTransactionAnimationIntent::Add { target } => {
             catalog.ensure_animation_target(*target, index)?;
             catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+        }
+        SemanticTransactionAnimationIntent::SetScalar { signal, target } => {
+            catalog.ensure_scalar_animation_target(*signal, *target, index)?;
         }
         SemanticTransactionAnimationIntent::Wait => {}
         SemanticTransactionAnimationIntent::Composition { children, .. } => {
@@ -410,6 +431,9 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::Add { target } => store
             .insert_semantic_add_animation(*target, options)
             .expect("preflighted semantic Add insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::SetScalar { signal, target } => store
+            .insert_semantic_scalar_animation(*signal, *target, options)
+            .expect("preflighted semantic scalar animation insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Wait => store
             .insert_semantic_wait_animation(options.run_time.expect("preflighted wait has duration"))
             .expect("preflighted semantic Wait insertion must remain valid while transaction owns the store"),

@@ -349,6 +349,9 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             | SemanticAnimationIntent::Add { target } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
             }
+            SemanticAnimationIntent::SetScalar { signal, .. } => {
+                references.push((*signal, SemanticReferenceKind::AnimationTarget));
+            }
             SemanticAnimationIntent::Wait => {}
             SemanticAnimationIntent::Composition { children, .. } => {
                 references.extend(

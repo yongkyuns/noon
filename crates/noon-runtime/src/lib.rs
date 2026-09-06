@@ -28,8 +28,9 @@ use noon_compile::{
 };
 use noon_core::PublicationContext;
 use noon_core::{
-    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
-    StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D, Vec2, VectorPath,
+    mapped_continuous_progress, Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand,
+    Property, ScenePatch, StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D, Vec2,
+    VectorPath,
 };
 use noon_core::{ObjectContentRef, TextResourceHandle};
 
@@ -2208,27 +2209,7 @@ fn track_progress(track: &CompiledTrack, time: f64) -> f32 {
 }
 
 fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {
-    if time < track.timing.start_time {
-        return None;
-    }
-    if track.timing.is_instant() {
-        return Some(1.0);
-    }
-    let end = track.timing.start_time + track.timing.duration;
-    // Scene state is defined after animation finish/cleanup at the exact endpoint.
-    // This intentionally settles reversing group rates to the authored target,
-    // matching Manim's `finish()` semantics and Noon's deterministic seek model.
-    if time >= end {
-        return Some(1.0);
-    }
-    let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;
-    if track.time_map.is_identity() {
-        return Some(track.timing.easing.evaluate(raw));
-    }
-    let sample = track.time_map.evaluate(raw);
-    sample
-        .begun
-        .then(|| track.timing.easing.evaluate(sample.alpha))
+    mapped_continuous_progress(track.timing, &track.time_map, time)
 }
 
 fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {

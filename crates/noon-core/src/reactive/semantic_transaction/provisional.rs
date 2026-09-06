@@ -84,6 +84,17 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
+    pub(super) fn ensure_scalar_animation_target(
+        &self,
+        signal: SemanticNodeId,
+        target: f64,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        self.store
+            .validate_semantic_scalar_animation_target(signal, target)
+            .map_err(|error| SemanticMutationTransactionError::SignalTrack { index, error })
+    }
+
     pub(super) fn new(
         transaction: &'a SemanticMutationTransaction,
         store: &'a SemanticStore,

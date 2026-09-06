@@ -1,6 +1,6 @@
 use super::{
     AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
-    SemanticSceneOperationError, SemanticStore, SemanticVec3,
+    SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
 };
 use crate::Color;
 
@@ -98,6 +98,8 @@ pub enum SemanticAnimationIntent {
     /// Membership is prepared atomically with the enclosing activation; the
     /// execution plan resolves the leaf's mapped Presence transition.
     Add { target: SemanticNodeId },
+    /// Drive one existing scalar input signal through the shared authored timeline.
+    SetScalar { signal: SemanticNodeId, target: f64 },
     /// Consume authored composition time without targeting an execution object.
     Wait,
     /// Compose existing semantic animation declarations in stable authored order.
@@ -120,6 +122,7 @@ impl SemanticAnimationIntent {
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
             | Self::Add { target } => Some(*target),
+            Self::SetScalar { signal, .. } => Some(*signal),
             Self::Wait | Self::Composition { .. } => None,
         }
     }
@@ -132,6 +135,7 @@ impl SemanticAnimationIntent {
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
             | Self::Add { .. }
+            | Self::SetScalar { .. }
             | Self::Wait
             | Self::Composition { .. } => None,
         }
@@ -145,6 +149,7 @@ impl SemanticAnimationIntent {
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
             | Self::Add { .. }
+            | Self::SetScalar { .. }
             | Self::Wait => None,
             Self::Composition { kind, .. } => Some(*kind),
         }
@@ -158,6 +163,7 @@ impl SemanticAnimationIntent {
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
             | Self::Add { .. }
+            | Self::SetScalar { .. }
             | Self::Wait => &[],
             Self::Composition { children, .. } => children,
         }
@@ -199,6 +205,10 @@ pub enum SemanticAnimationError {
     SameTargetAndTargetState(SemanticNodeId),
     InvalidRotationAngle(f64),
     InvalidAffineLifecycleEndpoint,
+    Signal(SemanticSignalError),
+    NotScalarInputSignal(SemanticNodeId),
+    NativeOwnedSignal(SemanticNodeId),
+    InvalidScalarTarget(f64),
 }
 
 impl std::fmt::Display for SemanticAnimationError {
@@ -233,6 +243,25 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidAffineLifecycleEndpoint => formatter.write_str(
                 "affine lifecycle endpoint point and rotation offset must be finite 2D values",
             ),
+            Self::Signal(error) => error.fmt(formatter),
+            Self::NotScalarInputSignal(signal) => write!(
+                formatter,
+                "semantic signal {}:{} is not a scalar input",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NativeOwnedSignal(signal) => write!(
+                formatter,
+                "semantic signal {}:{} is owned by a native input",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::InvalidScalarTarget(value) => {
+                write!(
+                    formatter,
+                    "scalar animation target must be finite, got {value}"
+                )
+            }
         }
     }
 }
@@ -412,6 +441,40 @@ impl SemanticStore {
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::Create { target },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one scalar input animation declaration without allocating object identity.
+    pub fn insert_semantic_scalar_animation(
+        &mut self,
+        signal: SemanticNodeId,
+        target: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.validate_semantic_scalar_animation_target(signal, target)
+            .map_err(|error| match error {
+                super::SemanticScalarSignalTrackError::Signal(error) => {
+                    SemanticAnimationError::Signal(error)
+                }
+                super::SemanticScalarSignalTrackError::NotInputSignal(_)
+                | super::SemanticScalarSignalTrackError::NonScalarSignal(_) => {
+                    SemanticAnimationError::NotScalarInputSignal(signal)
+                }
+                super::SemanticScalarSignalTrackError::NativeOwnedSignal(_) => {
+                    SemanticAnimationError::NativeOwnedSignal(signal)
+                }
+                super::SemanticScalarSignalTrackError::NonFiniteValue { value, .. } => {
+                    SemanticAnimationError::InvalidScalarTarget(value)
+                }
+                _ => unreachable!("scalar animation validation does not inspect timeline shape"),
+            })?;
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::SetScalar { signal, target },
                 options,
             )),
         )

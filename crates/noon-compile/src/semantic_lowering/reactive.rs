@@ -30,7 +30,7 @@ pub struct SemanticReactiveProjection {
     timeline_signals: HashSet<SemanticNodeId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScalarSignalTrack {
     semantic_signal: SemanticNodeId,
     execution_signal: SignalId,
@@ -38,6 +38,7 @@ pub struct CompiledScalarSignalTrack {
     from: f32,
     to: f32,
     timing: noon_core::TrackTiming,
+    time_map: noon_core::CompositionTimeMap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,65 +72,73 @@ impl CompiledScalarSignalHold {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CompiledScalarSignalTimelineEntry {
     Track(CompiledScalarSignalTrack),
     Hold(CompiledScalarSignalHold),
 }
 
 impl CompiledScalarSignalTimelineEntry {
-    pub const fn semantic_signal(self) -> SemanticNodeId {
+    pub const fn semantic_signal(&self) -> SemanticNodeId {
         match self {
             Self::Track(track) => track.semantic_signal(),
             Self::Hold(hold) => hold.semantic_signal(),
         }
     }
 
-    pub const fn initial_value(self) -> f32 {
+    pub const fn initial_value(&self) -> f32 {
         match self {
             Self::Track(track) => track.initial_value(),
             Self::Hold(hold) => hold.initial_value(),
         }
     }
 
-    pub const fn execution_signal(self) -> SignalId {
+    pub const fn execution_signal(&self) -> SignalId {
         match self {
             Self::Track(track) => track.execution_signal(),
             Self::Hold(hold) => hold.execution_signal(),
         }
     }
 
-    pub const fn start_time(self) -> f64 {
+    pub fn start_time(&self) -> f64 {
         match self {
-            Self::Track(track) => track.timing().start_time,
+            Self::Track(track) => {
+                noon_core::continuous_time_map_interval(track.timing(), track.time_map())
+                    .expect("compiled scalar track retains a validated monotone time map")
+                    .0
+            }
             Self::Hold(hold) => hold.start_time(),
         }
     }
 }
 
 impl CompiledScalarSignalTrack {
-    pub const fn semantic_signal(self) -> SemanticNodeId {
+    pub const fn semantic_signal(&self) -> SemanticNodeId {
         self.semantic_signal
     }
 
-    pub const fn execution_signal(self) -> SignalId {
+    pub const fn execution_signal(&self) -> SignalId {
         self.execution_signal
     }
 
-    pub const fn from(self) -> f32 {
+    pub const fn from(&self) -> f32 {
         self.from
     }
 
-    pub const fn initial_value(self) -> f32 {
+    pub const fn initial_value(&self) -> f32 {
         self.initial_value
     }
 
-    pub const fn to(self) -> f32 {
+    pub const fn to(&self) -> f32 {
         self.to
     }
 
-    pub const fn timing(self) -> noon_core::TrackTiming {
+    pub const fn timing(&self) -> noon_core::TrackTiming {
         self.timing
+    }
+
+    pub const fn time_map(&self) -> &noon_core::CompositionTimeMap {
+        &self.time_map
     }
 }
 
@@ -272,9 +281,16 @@ pub fn lower_prepared_scalar_signal_timeline_entry(
                 from,
                 to,
                 timing,
-            } => SemanticScalarSignalTimelineEntry::Track(SemanticScalarSignalTrack::new(
-                *signal, *from, *to, *timing,
-            )),
+                time_map,
+            } => SemanticScalarSignalTimelineEntry::Track(
+                SemanticScalarSignalTrack::new_with_time_map(
+                    *signal,
+                    *from,
+                    *to,
+                    *timing,
+                    time_map.clone(),
+                ),
+            ),
             SemanticMutation::SetScalarSignalAt {
                 signal,
                 value,
@@ -305,6 +321,58 @@ pub fn lower_prepared_scalar_signal_timeline_entry(
         )?);
     }
     lowered.ok_or(PreparedScalarSignalTimelineError::ExpectedSingleEntry)
+}
+
+/// Lower every scalar timeline mutation in one already-preflighted publication batch.
+pub fn lower_prepared_scalar_signal_timeline_entries(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    projection: &SemanticReactiveProjection,
+) -> Result<Vec<CompiledScalarSignalTimelineEntry>, PreparedScalarSignalTimelineError> {
+    let mut lowered = Vec::new();
+    for (index, mutation) in prepared.candidate_mutations().enumerate() {
+        let entry = match mutation {
+            SemanticMutation::AddScalarSignalTrack {
+                signal,
+                from,
+                to,
+                timing,
+                time_map,
+            } => SemanticScalarSignalTimelineEntry::Track(
+                SemanticScalarSignalTrack::new_with_time_map(
+                    *signal,
+                    *from,
+                    *to,
+                    *timing,
+                    time_map.clone(),
+                ),
+            ),
+            SemanticMutation::SetScalarSignalAt {
+                signal,
+                value,
+                time,
+            } => SemanticScalarSignalTimelineEntry::Hold(SemanticScalarSignalHold::new(
+                *signal, *value, *time,
+            )),
+            _ => continue,
+        };
+        let execution_signal = projection.execution_signal_id(entry.signal()).ok_or(
+            PreparedScalarSignalTimelineError::UnknownExecutionSignal(entry.signal()),
+        )?;
+        let state = prepared
+            .store()
+            .semantic_signal_state(entry.signal())
+            .map_err(SemanticReactiveLoweringError::from)?;
+        let initial = match state.source() {
+            SemanticSignalSource::Input(SemanticSignalValue::Scalar(initial)) => *initial,
+            _ => return Err(PreparedScalarSignalTimelineError::UnsupportedMutation { index }),
+        };
+        lowered.push(lower_scalar_timeline_entry(
+            entry,
+            execution_signal,
+            initial,
+        )?);
+    }
+    Ok(lowered)
 }
 
 impl From<SemanticSignalError> for SemanticReactiveLoweringError {
@@ -440,7 +508,7 @@ pub fn lower_semantic_reactive_projection_for_roots(
         ));
         for entry in semantic_timeline {
             scalar_timeline.push(lower_scalar_timeline_entry(
-                *entry,
+                entry.clone(),
                 execution_signal,
                 authored_initial,
             )?);
@@ -618,6 +686,7 @@ fn lower_scalar_timeline_entry(
                 from: lower_scalar(semantic_signal, track.from())?,
                 to: lower_scalar(semantic_signal, track.to())?,
                 timing: track.timing(),
+                time_map: track.time_map().clone(),
             })
         }
         SemanticScalarSignalTimelineEntry::Hold(hold) => {

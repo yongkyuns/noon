@@ -76,6 +76,31 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         self.store
     }
 
+    /// Re-preflight this still-unpublished batch with compiler-derived scalar tracks.
+    ///
+    /// This narrow consuming extension keeps animation declarations, object mutations,
+    /// and their scheduled scalar leaves under one eventual semantic commit.
+    pub fn with_scalar_signal_tracks(
+        self,
+        tracks: impl IntoIterator<Item = SemanticScalarSignalTrack>,
+    ) -> Result<Self, SemanticMutationTransactionError> {
+        let Self {
+            store,
+            mut transaction,
+            ..
+        } = self;
+        for track in tracks {
+            transaction.add_scalar_signal_track_with_time_map(
+                track.signal(),
+                track.from(),
+                track.to(),
+                track.timing(),
+                track.time_map().clone(),
+            );
+        }
+        Self::new(transaction, store)
+    }
+
     /// All submitted mutations, preserving original indices and exact no-ops.
     pub fn mutations(&self) -> &[SemanticMutation] {
         self.transaction.mutations()
@@ -434,9 +459,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     from,
                     to,
                     timing,
+                    time_map,
                 } => {
                     store.add_validated_semantic_scalar_signal_track(
-                        SemanticScalarSignalTrack::new(signal, from, to, timing),
+                        SemanticScalarSignalTrack::new_with_time_map(
+                            signal, from, to, timing, time_map,
+                        ),
                     );
                     written_slots.insert(signal);
                     impacts.push(SemanticMutationImpact::SignalTimeline { signal });
