@@ -2711,7 +2711,7 @@ mod tests {
         let _ = preparer.prepare(&frame);
 
         frame.objects[1].transform.translation = Vec2::new(2.0, -3.0);
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects([1]));
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
         let unchanged = prepared.observe_object(0).unwrap();
         let changed = prepared.observe_object(1).unwrap();
 
