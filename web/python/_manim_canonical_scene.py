@@ -163,8 +163,8 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     context = _context(scene)
     if reservation.reuse_existing_identity:
         context.liveAdd(str(reservation.object.id), handle)
-    elif _semantic_continuation_active(scene):
-        # A resumed source continuation may introduce a newly constructed object after a
+    elif str(context.liveExecutionOwnership()) in {"active", "returned", "transferred"}:
+        # A resumed source continuation may introduce an object after a
         # play/wait barrier. Rust atomically publishes both root membership and execution-slot
         # enrollment before Python records its derived wrapper identity.
         context.liveAdd(str(reservation.object.id), handle)
