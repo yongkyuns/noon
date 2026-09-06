@@ -1016,7 +1016,9 @@ def _build_canonical_composition_candidate(
     return candidate if supported else False
 
 
-def _play_canonical_composition(self: _base.Scene, candidate: object) -> _base.Scene:
+def _play_canonical_composition(
+    self: _base.Scene, candidate: object
+) -> _base.Scene | _SemanticContinuationAwaitable:
     if getattr(self, "_legacy_geometry_materialized", False):
         raise NotImplementedError(
             "canonical ordinary composition cannot follow legacy geometry materialization"
@@ -1025,10 +1027,20 @@ def _play_canonical_composition(self: _base.Scene, candidate: object) -> _base.S
         raise NotImplementedError(
             "canonical ordinary composition cannot follow legacy Scene timing"
         )
+    context = _context(self)
     try:
-        _context(self).ordinaryPlayComposition(candidate)
+        if _semantic_continuation_active(self):
+            _require_semantic_continuation_active(self)
+            _prepare_semantic_continuation_callbacks(self, context)
+            context.beginOrdinaryComposition(candidate)
+        else:
+            context.ordinaryPlayComposition(candidate)
     except Exception as error:
         raise ValueError(str(error)) from None
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self)
+    if _synchronous_continuation_active(self):
+        return _synchronous_continuation_wait(self)
     return self
 
 
@@ -1085,10 +1097,6 @@ def _play(self, *args, **kwargs):
         )
 
     if (shape := _canonical_composition_shape(args)) is not None:
-        if _semantic_continuation_active(self):
-            raise NotImplementedError(
-                "realtime construct does not yet support animation composition"
-            )
         kind, animations, group = shape
         try:
             candidate = _build_canonical_composition_candidate(

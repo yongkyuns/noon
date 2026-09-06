@@ -6,6 +6,7 @@ import {
   createDirectOrdinaryAffineCallbackContinuationSmokeRenderer,
   createDirectOrdinaryAffineContinuationSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
+  createDirectOrdinaryCompositionContinuationSmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
@@ -575,6 +576,73 @@ async function directOrdinaryCompositionPlayProof(expectedBackend) {
   return metrics;
 }
 
+async function directOrdinaryCompositionContinuationProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryCompositionContinuationSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow || initial.cadence !== "animation-frame") {
+    throw new Error(`direct composition continuation did not start: ${JSON.stringify(initial)}`);
+  }
+  await presentDirectFrame(renderer);
+  if (!renderer.advanceDirectRealtime(1000)) {
+    throw new Error("direct composition continuation did not publish its parallel midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const leftMidpoint = await sampleRenderedColor(canvas, -2, 0.5);
+  const rightMidpoint = await sampleRenderedColor(canvas, 2, -0.5);
+
+  if (!renderer.advanceDirectRealtime(2000)) {
+    throw new Error("direct composition continuation did not complete its parallel segment");
+  }
+  await presentDirectFrame(renderer);
+  if (!renderer.advanceDirectRealtime(3000)) {
+    throw new Error("direct composition continuation did not publish its sequence midpoint");
+  }
+  await presentDirectFrame(renderer);
+  const leftSequence = await sampleRenderedColor(canvas, -2, 1);
+  const rightSequence = await sampleRenderedColor(canvas, 2, -1);
+
+  if (!renderer.advanceDirectRealtime(4000)) {
+    throw new Error("direct composition continuation did not complete its sequence");
+  }
+  await presentDirectFrame(renderer);
+  const leftFinal = await sampleRenderedColor(canvas, -2, 1);
+  const rightFinal = await sampleRenderedColor(canvas, 2, -1);
+  const finalDirective = JSON.parse(renderer.directWakeDirectiveJson(4000));
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    leftMidpoint,
+    rightMidpoint,
+    leftSequence,
+    rightSequence,
+    leftFinal,
+    rightFinal,
+    finalCadence: finalDirective.cadence,
+  };
+  if (metrics.backend !== expectedBackend || metrics.authoredTime !== 4) {
+    throw new Error(`direct composition continuation selected invalid runtime ${JSON.stringify(metrics)}`);
+  }
+  if (metrics.objectCount !== 2 || metrics.drawCalls <= 0 || metrics.finalCadence !== "idle") {
+    throw new Error(`direct composition continuation lifecycle is invalid ${JSON.stringify(metrics)}`);
+  }
+  if (
+    leftMidpoint.red < 120 || leftMidpoint.green < 120 || leftMidpoint.blue < 120 ||
+    rightMidpoint.red < 120 || rightMidpoint.green < 120 || rightMidpoint.blue < 120 ||
+    leftSequence.red < leftSequence.green + 40 || leftSequence.red < leftSequence.blue + 40 ||
+    rightSequence.red < 120 || rightSequence.green < 120 || rightSequence.blue < 120 ||
+    leftFinal.green < leftFinal.red + 40 || leftFinal.green < leftFinal.blue + 40 ||
+    rightFinal.blue < rightFinal.red + 40 || rightFinal.blue < rightFinal.green + 40
+  ) {
+    throw new Error(`direct composition continuation colors are invalid ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
 async function directOrdinaryStylePlayProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinaryStylePlaySmokeRenderer(canvas);
@@ -854,6 +922,8 @@ async function start() {
   metrics.ordinaryAffineCallbackContinuation =
     await directOrdinaryAffineCallbackContinuationProof(expectedBackend);
   metrics.ordinaryCompositionPlay = await directOrdinaryCompositionPlayProof(expectedBackend);
+  metrics.ordinaryCompositionContinuation =
+    await directOrdinaryCompositionContinuationProof(expectedBackend);
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);
   metrics.valueTracker = await directValueTrackerProof(expectedBackend);

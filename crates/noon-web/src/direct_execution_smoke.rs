@@ -159,6 +159,17 @@ pub async fn create_direct_ordinary_composition_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Browser proof that flat composition segments return to the same direct Rust
+/// continuation program between their exact renderer publication barriers.
+#[wasm_bindgen(js_name = createDirectOrdinaryCompositionContinuationSmokeRenderer)]
+pub async fn create_direct_ordinary_composition_continuation_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::example_scenes::ordinary_composition_continuation_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that ordinary style animation and its following authored edit
 /// execute through the same target-neutral Rust session as the native example.
 #[wasm_bindgen(js_name = createDirectOrdinaryStylePlaySmokeRenderer)]

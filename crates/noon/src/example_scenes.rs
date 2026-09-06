@@ -310,6 +310,121 @@ pub fn ordinary_affine_continuation_program(
         .map_err(|error| error.to_string())
 }
 
+/// One flat Parallel/Sequence continuation over the same shared live session.
+pub struct OrdinaryCompositionContinuation {
+    left: Mobject,
+    right: Mobject,
+    left_position: Mobject,
+    right_position: Mobject,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryCompositionContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        let linear = |duration| {
+            AnimationOptions::new()
+                .run_time(duration)
+                .rate_func(RateFunction::Linear)
+        };
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                let requests = [
+                    TransformToRequest::new(&self.left, &self.left_position, linear(2.0)),
+                    TransformToRequest::new(&self.right, &self.right_position, linear(2.0)),
+                ];
+                live.declare_and_activate_transform_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    &requests,
+                    AnimationOptions::new()
+                        .lag_ratio(0.0)
+                        .rate_func(RateFunction::Linear),
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                let left_fill = live
+                    .target_editor(&self.left)
+                    .map_err(|error| error.to_string())?;
+                live.set_fill(&left_fill, 1.0, 0.0, 0.0, 1.0)
+                    .map_err(|error| error.to_string())?;
+                let right_fill = live
+                    .target_editor(&self.right)
+                    .map_err(|error| error.to_string())?;
+                live.set_fill(&right_fill, 0.0, 0.0, 1.0, 1.0)
+                    .map_err(|error| error.to_string())?;
+                self.stage = 2;
+                let requests = [
+                    TransformToRequest::new(&self.left, &left_fill, linear(1.0)),
+                    TransformToRequest::new(&self.right, &right_fill, linear(1.0)),
+                ];
+                live.declare_and_activate_transform_composition(
+                    SemanticAnimationCompositionKind::Sequence,
+                    &requests,
+                    AnimationOptions::new()
+                        .lag_ratio(1.0)
+                        .rate_func(RateFunction::Linear),
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            2 => {
+                self.stage = 3;
+                live.set_fill(&self.left, 0.0, 1.0, 0.0, 1.0)
+                    .map_err(|error| error.to_string())?;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary composition continuation resumed after it finished".to_owned()),
+        }
+    }
+}
+
+/// Build the paired Python/Rust flat composition continuation without choosing a host.
+pub fn ordinary_composition_continuation_program(
+) -> Result<LiveProgram<OrdinaryCompositionContinuation>, String> {
+    let mut scene = Scene::new();
+    let mut left = scene.circle(0.4).map_err(|error| error.to_string())?;
+    left.set_fill(1.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    left.set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let mut right = scene.circle(0.4).map_err(|error| error.to_string())?;
+    right
+        .set_fill(1.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    right
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    scene.add(&left).map_err(|error| error.to_string())?;
+    scene.add(&right).map_err(|error| error.to_string())?;
+
+    let mut left_position = left.target_editor().map_err(|error| error.to_string())?;
+    left_position
+        .set_translation(-2.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    let mut right_position = right.target_editor().map_err(|error| error.to_string())?;
+    right_position
+        .set_translation(2.0, -1.0)
+        .map_err(|error| error.to_string())?;
+    scene
+        .into_live_program(OrdinaryCompositionContinuation {
+            left,
+            right,
+            left_position,
+            right_position,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// One ordinary transform continuation whose effective frame is completed by
 /// two ordered host callbacks at every required phase.
 pub struct OrdinaryCallbackContinuation {
@@ -946,6 +1061,72 @@ mod continuation_tests {
         assert_eq!(
             program.session().frame().objects[0].transform.translation,
             Vec2::new(5.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn ordinary_composition_continuation_reuses_one_program_across_segments() {
+        let mut program = ordinary_composition_continuation_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[0].transform.translation,
+            Vec2::new(-2.0, 0.5)
+        );
+        assert_eq!(
+            program.session().frame().objects[1].transform.translation,
+            Vec2::new(2.0, -0.5)
+        );
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 2.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let first_publication = program.take_renderer_publication().context();
+        assert!(matches!(
+            program.admit_publication(first_publication).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        ));
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 3.0).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[0].style.fill,
+            Some(Color::rgb(1.0, 0.0, 0.0))
+        );
+        assert_eq!(
+            program.session().frame().objects[1].style.fill,
+            Some(Color::rgb(1.0, 1.0, 1.0))
+        );
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 4.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let second_publication = program.take_renderer_publication().context();
+        program.admit_publication(second_publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert_eq!(
+            program.session().frame().objects[0].style.fill,
+            Some(Color::rgb(0.0, 1.0, 0.0))
+        );
+        assert_eq!(
+            program.session().frame().objects[1].style.fill,
+            Some(Color::rgb(0.0, 0.0, 1.0))
         );
     }
 

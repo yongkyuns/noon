@@ -437,6 +437,31 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM ordinary composition did not render its released Parallel/Sequence endpoint",
   );
   assert.equal(
+    direct.metrics.ordinaryCompositionContinuation?.backend,
+    expectedBackend,
+    "direct Rust/WASM composition continuation did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCompositionContinuation?.authoredTime,
+    4,
+    "direct Rust/WASM composition continuation did not retain its shared authored time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCompositionContinuation?.objectCount,
+    2,
+    "direct Rust/WASM composition continuation did not retain both Rust-authored objects",
+  );
+  assert.ok(
+    direct.metrics.ordinaryCompositionContinuation?.leftSequence.red >= 120 &&
+      direct.metrics.ordinaryCompositionContinuation?.rightSequence.red >= 120 &&
+      direct.metrics.ordinaryCompositionContinuation?.leftFinal.green >=
+        direct.metrics.ordinaryCompositionContinuation?.leftFinal.red + 40 &&
+      direct.metrics.ordinaryCompositionContinuation?.rightFinal.blue >=
+        direct.metrics.ordinaryCompositionContinuation?.rightFinal.red + 40 &&
+      direct.metrics.ordinaryCompositionContinuation?.finalCadence === "idle",
+    "direct Rust/WASM composition continuation did not render its sequence and post-completion edit",
+  );
+  assert.equal(
     direct.metrics.ordinaryStylePlay?.backend,
     expectedBackend,
     "direct Rust/WASM ordinary style play did not use the selected renderer backend",

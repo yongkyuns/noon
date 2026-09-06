@@ -15,6 +15,7 @@ Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `r
 | --- | --- | --- |
 | Sequential ordinary affine play | `noon::example_scenes::ordinary_affine_play()` | None; the typed Rust session owns both plays, the wait, and the authored edit |
 | Flat ordinary composition | `noon::example_scenes::ordinary_composition_play()` | None; the typed Rust session owns Parallel/Sequence scheduling and completion |
+| Flat composition continuation | `noon::example_scenes::ordinary_composition_continuation_program()` | None; the typed Rust program owns both composition segments and their renderer admission barriers |
 | Ordinary FadeIn/FadeOut | `noon::example_scenes::ordinary_fade_continuation_program()` | None; the typed Rust program owns appearance, membership, detached wait, and same-handle re-entry |
 | Ordinary style play | `noon::example_scenes::ordinary_style_play()` | None; the typed Rust session owns fill/object-opacity interpolation, completion, and the following authored style edit |
 | Ordinary paint play | `noon::example_scenes::ordinary_paint_play()` | None; the typed Rust session owns fill/stroke color and paint-opacity interpolation, completion, and the following authored paint edit |

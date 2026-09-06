@@ -684,6 +684,97 @@ try {
     window.sharedAuthoringSmoke.liveContinuationExecution = null;
   });
 
+  // Flat composition uses the same source-stack continuation lease. The Rust
+  // composition owns child timing; this only attaches/presents its one player.
+  const compositionContinuationSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_composition_continuation.py"),
+    "utf8",
+  );
+  const compositionContinuationResult = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-ordinary-composition-continuation";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let execution = null;
+    let registration = null;
+    let settled = false;
+    const authoredPromise = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(next) {
+        if (registration !== null) {
+          throw new Error("composition source registered more than one semantic context");
+        }
+        registration = next;
+        execution = new harness.AuthoringExecutionClient(canvas);
+        await execution.startSemanticExecution(next.semanticExecution, {
+          authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, next.duration),
+          transportMode: "transferable",
+        });
+      },
+    });
+    authoredPromise.then(() => { settled = true; }, () => {});
+
+    let midpoint = null;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (execution !== null && !settled) {
+        try {
+          const state = await execution.state();
+          if (state.time > 0.2 && state.time < 1.8) {
+            midpoint = state;
+            break;
+          }
+        } catch {
+          // The exact player is returned only after a coherent segment endpoint.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (midpoint === null || settled) {
+      throw new Error("composition continuation did not remain pending through its parallel midpoint");
+    }
+    const authored = await authoredPromise;
+    if (execution === null || registration === null) {
+      throw new Error("composition continuation did not register its semantic execution");
+    }
+    if (authored.semanticExecution.contextId !== registration.semanticExecution.contextId ||
+        authored.semanticExecution.continuationGeneration !== registration.generation) {
+      throw new Error("composition continuation did not retain its early canonical context");
+    }
+    let metrics;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      metrics = (await execution.metrics()).metrics;
+      if (metrics.objectCount === 2 && metrics.drawCalls > 0 && metrics.presentedFrames > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    harness.compositionContinuationExecution = execution;
+    return { canvasId: canvas.id, duration: authored.duration, midpoint, metrics };
+  }, compositionContinuationSource);
+  assert.equal(compositionContinuationResult.duration, 4);
+  assert.ok(compositionContinuationResult.midpoint.time > 0.2);
+  assert.ok(compositionContinuationResult.midpoint.time < 1.8);
+  assert.equal(compositionContinuationResult.metrics.objectCount, 2);
+  const compositionContinuationPixels = await page.locator(
+    `#${compositionContinuationResult.canvasId}`,
+  ).screenshot();
+  const compositionLeft = renderedWorldPixel(compositionContinuationPixels, -2, 1);
+  const compositionRight = renderedWorldPixel(compositionContinuationPixels, 2, -1);
+  assert.ok(
+    compositionLeft.green > compositionLeft.red + 80 &&
+      compositionLeft.green > compositionLeft.blue + 80,
+    `composition continuation did not retain its post-segment green edit: ${JSON.stringify(compositionLeft)}`,
+  );
+  assert.ok(
+    compositionRight.blue > compositionRight.red + 80 &&
+      compositionRight.blue > compositionRight.green + 80,
+    `composition continuation did not retain its sequence endpoint: ${JSON.stringify(compositionRight)}`,
+  );
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.compositionContinuationExecution.terminate();
+    window.sharedAuthoringSmoke.compositionContinuationExecution = null;
+  });
+
   // A required callback phase is delivered to the already-suspended async
   // source stack. Rust selects the phase and timing; Python returns one exact
   // batch before the endpoint drives the same segment again. The user source
