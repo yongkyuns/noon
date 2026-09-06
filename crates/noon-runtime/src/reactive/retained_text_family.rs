@@ -395,6 +395,7 @@ mod tests {
 
     fn text_handle() -> TextResourceHandle {
         TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(11),
             version: 0,
         }

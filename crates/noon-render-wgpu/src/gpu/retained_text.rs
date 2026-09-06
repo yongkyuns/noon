@@ -2141,6 +2141,7 @@ mod tests {
     fn outline_key(glyph_id: GlyphId) -> OutlineKey {
         OutlineKey {
             font: FontResourceHandle {
+                arena: 0,
                 id: FontResourceId::new(1),
                 version: 0,
             },

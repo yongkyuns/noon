@@ -68,3 +68,44 @@ impl SemanticStore {
             .expect("text resource preflighted"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{Rect, TextSourceKind, Vec2};
+
+    fn empty_text() -> TextResource {
+        TextResource {
+            source: Arc::from(""),
+            kind: TextSourceKind::Plain,
+            runs: Arc::from([]),
+            vector_items: Arc::from([]),
+            render_items: Arc::from([]),
+            parts: Arc::from([]),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+            baseline: 0.0,
+            layout_artifact: None,
+        }
+    }
+
+    #[test]
+    fn canonical_import_rebinds_text_to_the_target_store_arena() {
+        let mut source_texts = TextResourceArena::new();
+        let source = source_texts.insert(empty_text()).unwrap();
+        let source_resource = source_texts.get(source).unwrap().clone();
+        let mut target = SemanticStore::new();
+        let local = target
+            .import_text_resource(
+                source_resource,
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+
+        assert_ne!(source.arena, local.arena);
+        assert!(target.text_resources().get(source).is_none());
+        assert!(target.text_resources().get(local).is_some());
+    }
+}

@@ -5,7 +5,7 @@ use std::{
 
 use noon_core::{
     Camera2DState, GeometryRef, ObjectContentRef, ObjectId, Rect, Style, TextResourceHandle,
-    TextResourceId, Transform2D,
+    Transform2D,
 };
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use serde::{Deserialize, Serialize};
@@ -26,19 +26,13 @@ pub struct TransportTextResourceHandle {
     pub version: u64,
 }
 
-impl From<TextResourceHandle> for TransportTextResourceHandle {
-    fn from(value: TextResourceHandle) -> Self {
+impl TransportTextResourceHandle {
+    /// Encode a source handle as an opaque key scoped to the paired resource bundle.
+    /// The worker must resolve this key through `InstalledRetainedResources`; it is
+    /// deliberately not a serializable core arena handle.
+    pub(crate) const fn from_source_handle(value: TextResourceHandle) -> Self {
         Self {
             id: value.id.get(),
-            version: value.version,
-        }
-    }
-}
-
-impl From<TransportTextResourceHandle> for TextResourceHandle {
-    fn from(value: TransportTextResourceHandle) -> Self {
-        Self {
-            id: TextResourceId::new(value.id),
             version: value.version,
         }
     }
@@ -58,17 +52,8 @@ impl From<&ObjectContentRef> for TransportObjectContent {
                 geometry: geometry.clone(),
             },
             ObjectContentRef::Text(text) => Self::Text {
-                text: (*text).into(),
+                text: TransportTextResourceHandle::from_source_handle(*text),
             },
-        }
-    }
-}
-
-impl From<TransportObjectContent> for ObjectContentRef {
-    fn from(value: TransportObjectContent) -> Self {
-        match value {
-            TransportObjectContent::Geometry { geometry } => Self::Geometry(geometry),
-            TransportObjectContent::Text { text } => Self::Text(text.into()),
         }
     }
 }
@@ -137,6 +122,7 @@ pub enum RetainedExecutionTransportError {
     AmbiguousRenderGeometry(TransportSlotId),
     MissingCompiledRenderResource(TransportSlotId),
     InvalidRenderTransform(TransportSlotId),
+    UnknownTextResource(TransportTextResourceHandle),
 }
 
 impl std::fmt::Display for RetainedExecutionTransportError {
@@ -224,6 +210,11 @@ impl std::fmt::Display for RetainedExecutionTransportError {
                 formatter,
                 "retained slot {}:{} has an invalid render transform",
                 slot.slot, slot.generation
+            ),
+            Self::UnknownTextResource(handle) => write!(
+                formatter,
+                "unknown retained transport text resource {}@{}",
+                handle.id, handle.version
             ),
         }
     }
@@ -386,19 +377,39 @@ pub struct RetainedExecutionFrameMirror {
     slot_indices: HashMap<TransportSlotId, usize>,
     render_geometries: Arc<[Arc<GeometryRef>]>,
     resource_session: Option<u32>,
+    text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     camera: Camera2DState,
     frame: Option<FrameState>,
 }
 
 impl RetainedExecutionFrameMirror {
-    pub(crate) fn with_render_geometries(
+    pub(crate) fn with_installed_resources(
         session: Option<u32>,
         geometries: Arc<[Arc<GeometryRef>]>,
+        text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     ) -> Self {
         Self {
             resource_session: session,
             render_geometries: geometries,
+            text_handles,
             ..Self::default()
+        }
+    }
+
+    fn resolve_content(
+        &self,
+        content: &TransportObjectContent,
+    ) -> Result<ObjectContentRef, RetainedExecutionTransportError> {
+        match content {
+            TransportObjectContent::Geometry { geometry } => {
+                Ok(ObjectContentRef::Geometry(geometry.clone()))
+            }
+            TransportObjectContent::Text { text } => self
+                .text_handles
+                .get(text)
+                .copied()
+                .map(ObjectContentRef::Text)
+                .ok_or(RetainedExecutionTransportError::UnknownTextResource(*text)),
         }
     }
 
@@ -515,17 +526,25 @@ impl RetainedExecutionFrameMirror {
             .iter()
             .map(|object| self.resolve_render_geometry(object, delta.session))
             .collect::<Result<Vec<_>, _>>()?;
-        self.slots = objects.iter().map(|object| object.slot).collect();
-        self.slot_indices = self
-            .slots
+        let frame_objects = objects
+            .iter()
+            .map(|object| {
+                self.resolve_content(&object.content)
+                    .map(|content| frame_object(object, content))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let slots = objects.iter().map(|object| object.slot).collect::<Vec<_>>();
+        let slot_indices = slots
             .iter()
             .copied()
             .enumerate()
             .map(|(index, slot)| (slot, index))
             .collect();
+        self.slots = slots;
+        self.slot_indices = slot_indices;
         self.frame = Some(FrameState {
             time: delta.time,
-            objects: objects.iter().map(frame_object).collect(),
+            objects: frame_objects,
             presences: objects.iter().map(|object| object.presence).collect(),
             reveals: objects.iter().map(|object| object.reveal).collect(),
             morphs: objects.iter().map(|object| object.morph).collect(),
@@ -569,20 +588,20 @@ impl RetainedExecutionFrameMirror {
                     object.slot,
                 ));
             }
-            let content: ObjectContentRef = object.content.clone().into();
+            let content = self.resolve_content(&object.content)?;
             if !incremental_content_identity_matches(&current.content, &content) {
                 return Err(RetainedExecutionTransportError::ContentIdentityChanged(
                     object.slot,
                 ));
             }
             let geometry = self.resolve_render_geometry(object, delta.session)?;
-            updates.push((index, object, geometry));
+            updates.push((index, object, geometry, content));
         }
         // Validate all rows and resource references before mutating the live mirror.
         let frame = self.frame.as_mut().expect("validated retained frame");
         let mut changed = Vec::with_capacity(updates.len());
-        for (index, object, geometry) in updates {
-            frame.objects[index] = frame_object(object);
+        for (index, object, geometry, content) in updates {
+            frame.objects[index] = frame_object(object, content);
             frame.presences[index] = object.presence;
             frame.reveals[index] = object.reveal;
             frame.morphs[index] = object.morph;
@@ -714,10 +733,13 @@ fn validate_object_state(
     Ok(())
 }
 
-fn frame_object(object: &RetainedTransportObjectState) -> FrameObjectState {
+fn frame_object(
+    object: &RetainedTransportObjectState,
+    content: ObjectContentRef,
+) -> FrameObjectState {
     FrameObjectState {
         id: object.object,
-        content: object.content.clone().into(),
+        content,
         transform: object.transform,
         style: object.style,
         appearance: object.appearance,
@@ -731,8 +753,43 @@ mod tests {
 
     use super::*;
 
+    fn test_mirror() -> RetainedExecutionFrameMirror {
+        let handles = [
+            TextResourceHandle {
+                arena: 0,
+                id: TextResourceId::new(7),
+                version: 3,
+            },
+            TextResourceHandle {
+                arena: 0,
+                id: TextResourceId::new(8),
+                version: 1,
+            },
+        ]
+        .into_iter()
+        .map(|handle| {
+            (
+                TransportTextResourceHandle::from_source_handle(handle),
+                handle,
+            )
+        })
+        .collect();
+        RetainedExecutionFrameMirror::with_installed_resources(None, Arc::from([]), handles)
+    }
+
+    fn test_mirror_with_render_geometries(
+        session: u32,
+        geometries: Arc<[Arc<GeometryRef>]>,
+    ) -> RetainedExecutionFrameMirror {
+        let mut mirror = test_mirror();
+        mirror.resource_session = Some(session);
+        mirror.render_geometries = geometries;
+        mirror
+    }
+
     fn mixed_frame() -> FrameState {
         let text = TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(7),
             version: 3,
         };
@@ -788,11 +845,25 @@ mod tests {
 
         let json = serde_json::to_string(&delta).unwrap();
         let decoded: RetainedExecutionDeltaEnvelope = serde_json::from_str(&json).unwrap();
-        let mut mirror = RetainedExecutionFrameMirror::default();
+        let mut mirror = test_mirror();
         let (outcome, changes) = mirror.apply(decoded).unwrap();
         assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
         assert!(changes.is_all());
         assert_eq!(mirror.frame().unwrap(), &frame);
+    }
+
+    #[test]
+    fn wire_text_requires_an_installed_resource_remap() {
+        let frame = mixed_frame();
+        let delta = RetainedExecutionDeltaEncoder::new(4)
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        assert!(matches!(
+            mirror.apply(delta),
+            Err(RetainedExecutionTransportError::UnknownTextResource(_))
+        ));
+        assert!(mirror.frame().is_none());
     }
 
     #[test]
@@ -802,7 +873,7 @@ mod tests {
         let initial = encoder
             .encode_snapshot(&frame, Camera2DState::default())
             .unwrap();
-        let mut mirror = RetainedExecutionFrameMirror::default();
+        let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
 
         let mut updated = frame.clone();
@@ -829,7 +900,7 @@ mod tests {
         let initial = encoder
             .encode_snapshot(&frame, Camera2DState::default())
             .unwrap();
-        let mut mirror = RetainedExecutionFrameMirror::default();
+        let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
 
         let mut updated = frame.clone();
@@ -861,11 +932,12 @@ mod tests {
         let initial = encoder
             .encode_snapshot(&frame, Camera2DState::default())
             .unwrap();
-        let mut mirror = RetainedExecutionFrameMirror::default();
+        let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
 
         let mut changed = frame.clone();
         changed.objects[1].content = ObjectContentRef::Text(TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(8),
             version: 1,
         });
@@ -890,7 +962,7 @@ mod tests {
         let initial = encoder
             .encode_snapshot(&frame, Camera2DState::default())
             .unwrap();
-        let mut mirror = RetainedExecutionFrameMirror::default();
+        let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
 
         let mut changed = frame.clone();
@@ -933,7 +1005,7 @@ mod tests {
         frame.render_transforms[0] = Some(Transform2D::IDENTITY);
         let mut encoder =
             RetainedExecutionDeltaEncoder::with_render_geometries(4, resources.clone());
-        let mut mirror = RetainedExecutionFrameMirror::with_render_geometries(Some(4), resources);
+        let mut mirror = test_mirror_with_render_geometries(4, resources);
         for (step, time) in [0.0, 0.25, 0.75, 0.0].into_iter().enumerate() {
             frame.time = time;
             frame.morphs[0] = time as f32;
@@ -982,7 +1054,7 @@ mod tests {
     fn invalid_later_resource_row_does_not_publish_earlier_rows_or_consume_sequence() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
-        let mut mirror = RetainedExecutionFrameMirror::default();
+        let mut mirror = test_mirror();
         mirror
             .apply(
                 encoder
@@ -1024,7 +1096,7 @@ mod tests {
         let delta = encoder
             .encode_snapshot(&frame, Camera2DState::default())
             .unwrap();
-        let mut mirror = RetainedExecutionFrameMirror::with_render_geometries(Some(4), resources);
+        let mut mirror = test_mirror_with_render_geometries(4, resources);
         assert!(matches!(
             mirror.apply(delta),
             Err(RetainedExecutionTransportError::InvalidRenderGeometryResource(0))

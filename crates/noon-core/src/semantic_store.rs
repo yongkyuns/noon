@@ -431,22 +431,30 @@ impl Clone for SemanticStore {
         let mut geometry_resources = self.geometry_resources.clone();
         let namespace = geometry_resources.fork_namespace();
         let mut text_resources = self.text_resources.clone();
+        let text_namespace = text_resources.fork_namespace();
         text_resources.remap_geometry_handles(|handle| {
             if self.geometry_resources.get(*handle).is_some() {
                 handle.arena = namespace;
             }
         });
+        let mut font_resources = self.font_resources.clone();
+        font_resources.fork_namespace();
         let mut slots = self.slots.clone();
         for slot in &mut slots {
             if let Some(node) = slot.node.as_mut() {
                 if let Some(state) = node.object_state.as_mut() {
-                    if let crate::SemanticObjectContent::Geometry(
-                        crate::StoredGeometry::Resource(handle),
-                    ) = &mut state.content
-                    {
-                        if self.geometry_resources.get(*handle).is_some() {
+                    match &mut state.content {
+                        crate::SemanticObjectContent::Geometry(
+                            crate::StoredGeometry::Resource(handle),
+                        ) if self.geometry_resources.get(*handle).is_some() => {
                             handle.arena = namespace;
                         }
+                        crate::SemanticObjectContent::Text(handle)
+                            if self.text_resources.get(*handle).is_some() =>
+                        {
+                            handle.arena = text_namespace;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -455,7 +463,7 @@ impl Clone for SemanticStore {
             identity: SemanticStoreIdentity::default(),
             geometry_resources,
             text_resources,
-            font_resources: self.font_resources.clone(),
+            font_resources,
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,
@@ -1233,7 +1241,10 @@ mod tests {
 
     #[test]
     fn resources_are_store_scoped_and_clones_share_only_immutable_payloads() {
-        use crate::{GeometryResource, SemanticObjectContent, StoredGeometry, VectorPath};
+        use crate::{
+            FontFaceIdentity, GeometryResource, Rect, SemanticObjectContent, StoredGeometry,
+            TextResource, TextSourceKind, Vec2, VectorPath,
+        };
         use std::sync::Arc;
         let mut first = SemanticStore::new();
         let mut second = SemanticStore::new();
@@ -1248,6 +1259,31 @@ mod tests {
         // The low-level store fixture can contain invalid state; cloning must not legitimize it.
         let foreign =
             first.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(b)));
+        let text = first
+            .text_resources
+            .insert(TextResource {
+                source: Arc::from(""),
+                kind: TextSourceKind::Plain,
+                runs: Arc::from([]),
+                vector_items: Arc::from([]),
+                render_items: Arc::from([]),
+                parts: Arc::from([]),
+                bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+                baseline: 0.0,
+                layout_artifact: None,
+            })
+            .unwrap();
+        let text_node = first.insert_semantic_object(SemanticObjectState::new(text));
+        let face = FontFaceIdentity {
+            family: Arc::from("Test Sans"),
+            face_key: Arc::from("test-sans"),
+            face_index: 0,
+            variation_key: Arc::from(""),
+        };
+        let font = first
+            .font_resources
+            .intern_face(&face, Arc::<[u8]>::from([1, 2, 3]))
+            .unwrap();
         let cloned = first.clone();
         let SemanticObjectContent::Geometry(StoredGeometry::Resource(c)) =
             cloned.semantic_object_state_checked(node).unwrap().content
@@ -1267,6 +1303,28 @@ mod tests {
             SemanticObjectContent::Geometry(StoredGeometry::Resource(b))
         );
         assert!(cloned.geometry_resources().get(b).is_none());
+        let SemanticObjectContent::Text(cloned_text) = cloned
+            .semantic_object_state_checked(text_node)
+            .unwrap()
+            .content
+        else {
+            panic!("text resource content")
+        };
+        assert_ne!(text.arena, cloned_text.arena);
+        assert!(first.text_resources().get(cloned_text).is_none());
+        assert!(cloned.text_resources().get(text).is_none());
+        assert!(Arc::ptr_eq(
+            &first.text_resources().get_shared(text).unwrap(),
+            &cloned.text_resources().get_shared(cloned_text).unwrap(),
+        ));
+        let cloned_font = cloned.font_resources().handle_for_face(&face).unwrap();
+        assert_ne!(font.arena, cloned_font.arena);
+        assert!(first.font_resources().get(cloned_font).is_none());
+        assert!(cloned.font_resources().get(font).is_none());
+        assert!(Arc::ptr_eq(
+            &first.font_resources().get_shared(font).unwrap(),
+            &cloned.font_resources().get_shared(cloned_font).unwrap(),
+        ));
     }
 
     fn object(id: u64) -> ObjectDefinition {

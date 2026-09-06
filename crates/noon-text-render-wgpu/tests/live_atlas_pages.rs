@@ -15,6 +15,7 @@ use noon_text_render_wgpu::{
 fn raster_key(glyph_id: u16) -> GlyphRasterKey {
     GlyphRasterKey {
         font: FontResourceHandle {
+            arena: 0,
             id: FontResourceId::new(0),
             version: 0,
         },
@@ -26,6 +27,7 @@ fn raster_key(glyph_id: u16) -> GlyphRasterKey {
 
 fn text_handle() -> TextResourceHandle {
     TextResourceHandle {
+        arena: 0,
         id: TextResourceId::new(0),
         version: 0,
     }

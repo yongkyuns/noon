@@ -489,6 +489,7 @@ mod tests {
 
     fn text(id: u64) -> SemanticObjectState {
         SemanticObjectState::new(TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(id),
             version: 0,
         })

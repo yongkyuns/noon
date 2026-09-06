@@ -293,13 +293,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![camera, text_id, circle]
         );
-        assert_eq!(canonical.scene().objects(), split.scene().objects());
         assert_eq!(canonical.tracks(), split.tracks());
         assert_eq!(canonical.camera_object(), split.camera_object());
-        assert_eq!(canonical.compile().unwrap(), split.compile().unwrap());
+        // Independent lowering owns distinct arena namespaces; compare the
+        // executable observations and resolved content, not process-local handles.
+        let mut canonical_runtime = noon_runtime::SceneInstance::new(canonical.compile().unwrap());
+        let mut split_runtime = noon_runtime::SceneInstance::new(split.compile().unwrap());
+        for time in [0.0, 0.5, 1.0] {
+            canonical_runtime.seek(time).unwrap();
+            split_runtime.seek(time).unwrap();
+            assert_eq!(
+                crate::determinism::normalized_frame_value(canonical_runtime.frame()),
+                crate::determinism::normalized_frame_value(split_runtime.frame()),
+            );
+        }
 
         let canonical_handle = canonical.scene().objects()[1].content.text().unwrap();
         let split_handle = split.scene().objects()[1].content.text().unwrap();
+        assert_ne!(canonical_handle.arena, split_handle.arena);
         assert_eq!(
             canonical.scene().texts().get(canonical_handle),
             split.scene().texts().get(split_handle)

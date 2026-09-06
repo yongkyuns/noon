@@ -235,7 +235,10 @@ mod tests {
         let fonts = FontResourceArena::new();
         let bundle =
             RetainedResourceBundle::capture([handle], &texts, &geometries, &fonts).unwrap();
-        (handle.into(), bundle)
+        (
+            TransportTextResourceHandle::from_source_handle(handle),
+            bundle,
+        )
     }
 
     #[test]

@@ -1,9 +1,20 @@
 use std::{
     mem::{size_of, size_of_val},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use crate::{Color, GeometryResourceHandle, Rect, StrokeCap, StrokeJoin, Vec2};
+
+static NEXT_TEXT_RESOURCE_ARENA: AtomicU64 = AtomicU64::new(1);
+
+fn next_text_resource_arena() -> u64 {
+    NEXT_TEXT_RESOURCE_ARENA
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("text resource arena identity exhausted")
+}
 
 const TEXT_RESOURCE_SLOT_BITS: u32 = 32;
 const TEXT_RESOURCE_SLOT_MASK: u64 = u32::MAX as u64;
@@ -25,6 +36,8 @@ impl TextResourceId {
 /// Versioned reference to immutable shaped text/math data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextResourceHandle {
+    /// Owning resource namespace; equal slot/version values from another arena are unrelated.
+    pub arena: u64,
     pub id: TextResourceId,
     pub version: u64,
 }
@@ -524,8 +537,9 @@ pub struct TextResourceStats {
 /// `TextResourceId` encodes a physical slot plus its generation. This lets the arena
 /// reuse storage at the live-working-set high-water mark without allowing a stale
 /// bare ID to alias a later occupant of the same slot.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct TextResourceArena {
+    namespace: u64,
     entries: Vec<TextResourceEntry>,
     free_slots: Vec<u32>,
     live_resources: usize,
@@ -535,7 +549,29 @@ pub struct TextResourceArena {
     parts: usize,
 }
 
+impl Default for TextResourceArena {
+    fn default() -> Self {
+        Self {
+            namespace: next_text_resource_arena(),
+            entries: Vec::new(),
+            free_slots: Vec::new(),
+            live_resources: 0,
+            retained_bytes: 0,
+            glyphs: 0,
+            vectors: 0,
+            parts: 0,
+        }
+    }
+}
+
 impl TextResourceArena {
+    /// Assign a cloned independent store a distinct resource namespace while retaining
+    /// the immutable payload allocations shared by its `Arc` entries.
+    pub(crate) fn fork_namespace(&mut self) -> u64 {
+        self.namespace = next_text_resource_arena();
+        self.namespace
+    }
+
     /// Rebind resource dependencies only while cloning an independent store.
     /// Live resource replacement continues to use versioned publication.
     pub(crate) fn remap_geometry_handles(
@@ -574,6 +610,7 @@ impl TextResourceArena {
             entry.version = 0;
             entry.value = Some(resource.clone());
             TextResourceHandle {
+                arena: self.namespace,
                 id: text_resource_id(index, entry.generation),
                 version: 0,
             }
@@ -585,7 +622,11 @@ impl TextResourceArena {
                 version: 0,
                 value: Some(resource.clone()),
             });
-            TextResourceHandle { id, version: 0 }
+            TextResourceHandle {
+                arena: self.namespace,
+                id,
+                version: 0,
+            }
         };
 
         self.add_stats(resource.as_ref());
@@ -594,6 +635,9 @@ impl TextResourceArena {
     }
 
     pub fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
+        if handle.arena != self.namespace {
+            return None;
+        }
         let index = text_resource_slot(handle.id);
         let entry = self.entries.get(index)?;
         if text_resource_id(index, entry.generation) != handle.id || entry.version != handle.version
@@ -605,6 +649,9 @@ impl TextResourceArena {
 
     /// Share one immutable payload with a derived compiled resource snapshot.
     pub fn get_shared(&self, handle: TextResourceHandle) -> Option<Arc<TextResource>> {
+        if handle.arena != self.namespace {
+            return None;
+        }
         let index = text_resource_slot(handle.id);
         let entry = self.entries.get(index)?;
         if text_resource_id(index, entry.generation) != handle.id || entry.version != handle.version
@@ -622,6 +669,7 @@ impl TextResourceArena {
         }
         entry.value.as_ref()?;
         Some(TextResourceHandle {
+            arena: self.namespace,
             id,
             version: entry.version,
         })
@@ -661,7 +709,11 @@ impl TextResourceArena {
         self.subtract_stats(previous.as_ref());
         self.add_stats(&resource);
         self.entries[index].value = Some(Arc::new(resource));
-        Ok(TextResourceHandle { id, version })
+        Ok(TextResourceHandle {
+            arena: self.namespace,
+            id,
+            version,
+        })
     }
 
     pub fn remove(&mut self, id: TextResourceId) -> Result<Arc<TextResource>, TextResourceError> {
@@ -851,6 +903,36 @@ mod tests {
         assert_eq!(arena.len(), 1);
         assert_eq!(arena.stats().glyphs, 5);
         assert_eq!(arena.get(handle).unwrap().source.as_ref(), "hello");
+    }
+
+    #[test]
+    fn same_slot_handle_from_another_arena_is_rejected() {
+        let mut first = TextResourceArena::new();
+        let mut second = TextResourceArena::new();
+        let a = first.insert(sample_text("first")).unwrap();
+        let b = second.insert(sample_text("second")).unwrap();
+
+        assert_eq!((a.id, a.version), (b.id, b.version));
+        assert_ne!(a.arena, b.arena);
+        assert!(first.get(b).is_none());
+        assert!(second.get(a).is_none());
+    }
+
+    #[test]
+    fn cloned_arena_requires_local_remap_but_shares_immutable_payloads() {
+        let mut source = TextResourceArena::new();
+        let source_handle = source.insert(sample_text("shared")).unwrap();
+        let source_payload = source.get_shared(source_handle).unwrap();
+
+        let mut cloned = source.clone();
+        cloned.fork_namespace();
+        let local_handle = cloned.current_handle(source_handle.id).unwrap();
+        let local_payload = cloned.get_shared(local_handle).unwrap();
+
+        assert_ne!(source_handle.arena, local_handle.arena);
+        assert!(cloned.get(source_handle).is_none());
+        assert!(source.get(local_handle).is_none());
+        assert!(Arc::ptr_eq(&source_payload, &local_payload));
     }
 
     #[test]
@@ -1105,6 +1187,7 @@ mod tests {
     #[test]
     fn glyph_outlines_are_separate_lazy_geometry_resources() {
         let text = TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(3),
             version: 1,
         };

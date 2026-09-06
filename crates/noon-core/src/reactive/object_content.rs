@@ -342,6 +342,7 @@ mod tests {
     #[test]
     fn semantic_text_content_uses_existing_versioned_resource_identity() {
         let handle = TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(11),
             version: 4,
         };
@@ -392,6 +393,7 @@ mod tests {
     #[test]
     fn legacy_text_object_keeps_only_the_versioned_resource_handle() {
         let handle = TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(11),
             version: 4,
         };

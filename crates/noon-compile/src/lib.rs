@@ -1853,6 +1853,7 @@ mod tests {
         let text = CompiledObject::new(
             text_id,
             TextResourceHandle {
+                arena: 0,
                 id: TextResourceId::new(7),
                 version: 3,
             },
@@ -1883,6 +1884,7 @@ mod tests {
         let text = CompiledObject::new(
             text_id,
             TextResourceHandle {
+                arena: 0,
                 id: TextResourceId::new(7),
                 version: 3,
             },
