@@ -69,7 +69,7 @@ try {
     (pythonSource) => window.noonManimCompat.run(pythonSource),
     source,
   );
-  assert.equal(result.kind, "scene_document", "SquareToCircle authoring must succeed");
+  assert.ok(result?.document, "SquareToCircle authoring must return executable geometry");
   assert.equal(result.duration, 3, "SquareToCircle duration drifted");
 
   const [createFrame, circleFrame] = await page.evaluate(
