@@ -103,7 +103,7 @@ impl RustHostCallbackContext<'_> {
         object: SemanticNodeId,
     ) -> Result<EffectiveObjectProperties, ExecutionSessionCallbackError> {
         if let Some(staged) = self.overlay.object(object) {
-            return Ok(staged.clone());
+            return Ok(*staged);
         }
         let value = match self
             .session
@@ -113,7 +113,7 @@ impl RustHostCallbackContext<'_> {
             CallbackReadValue::Object(value) => value,
             CallbackReadValue::Scalar(_) => unreachable!("object request returns object value"),
         };
-        self.overlay.cache_read_object(object, value.clone());
+        self.overlay.cache_read_object(object, value);
         Ok(value)
     }
 

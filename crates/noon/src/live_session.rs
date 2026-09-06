@@ -858,8 +858,10 @@ mod tests {
 
     #[test]
     fn target_style_capture_rejects_resource_paint_without_a_legacy_conversion() {
-        let mut authored = SemanticStyle::default();
-        authored.fill = Some(SemanticPaint::Resource(7));
+        let authored = SemanticStyle {
+            fill: Some(SemanticPaint::Resource(7)),
+            ..SemanticStyle::default()
+        };
         assert!(target_style_from_effective(&authored, Style::default()).is_err());
     }
 
