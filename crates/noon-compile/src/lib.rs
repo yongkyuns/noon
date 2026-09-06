@@ -664,6 +664,7 @@ impl CompiledScene {
                         | Property::Stroke
                         | Property::Opacity
                         | Property::Appearance
+                        | Property::Reveal
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1217,6 +1218,7 @@ impl CompiledScene {
                             | Property::Stroke
                             | Property::Opacity
                             | Property::Appearance
+                            | Property::Reveal
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
