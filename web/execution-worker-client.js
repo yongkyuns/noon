@@ -942,6 +942,17 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  // Advance one canonical session barrier to an exact authored time. The
+  // semantic endpoint owns forward progression and callback ordering; callers
+  // receive only after the matching renderer publication has presented.
+  async advanceTo(timeSeconds) {
+    this.#requireSemanticMode("forward authored-time advancement");
+    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    const result = await this.#requestEngine("advance_to", { time });
+    this.#rememberPlaying(result);
+    return result;
+  }
+
   async restartPlayback() {
     const result = await this.#requestEngine("restart_playback", {});
     this.#rememberPlaying(result);

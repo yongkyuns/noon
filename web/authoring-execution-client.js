@@ -360,6 +360,15 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.seek(timeSeconds));
   }
 
+  async advanceTo(timeSeconds) {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("forward authored-time advancement requires semantic execution mode");
+      }
+      return player.advanceTo(timeSeconds);
+    });
+  }
+
   async setNativeStateInput(source, value) {
     return this.#withStablePlayer((player, mode) => {
       if (mode !== AUTHORING_EXECUTION_SEMANTIC) {

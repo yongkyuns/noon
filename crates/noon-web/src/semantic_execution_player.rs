@@ -1181,6 +1181,36 @@ impl SemanticExecutionPlayer {
         Ok(phase)
     }
 
+    /// Advance the canonical session to one exact forward authored-time barrier.
+    ///
+    /// Unlike browser-frame ticking, this takes the authored time directly. The
+    /// execution session remains responsible for stopping at an intervening
+    /// required callback activation; callers commit that one phase and may then
+    /// request the remaining authored time again. No host playback cursor or
+    /// timestamp conversion participates in this operation.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = advanceForwardToCallbackPhaseJson))]
+    pub fn advance_forward_to_callback_phase_json(
+        &mut self,
+        time: f64,
+    ) -> Result<Option<String>, String> {
+        let current = self.session.frame().time;
+        if !time.is_finite() || time < current {
+            return Err(format!(
+                "forward callback advance requires time at or after {current}, got {time}"
+            ));
+        }
+        // Validate presentation anchoring before any fallible session advance.
+        // Required-callback sessions use the non-looping clock, so this cannot
+        // turn a forward diagnostic control into an implicit replay.
+        let mut clock = self.clock.clone();
+        clock.seek(time).map_err(|error| error.to_string())?;
+        let phase = self.advance_to_callback_phase(time)?;
+        if phase.is_none() {
+            self.clock = clock;
+        }
+        Ok(phase)
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]
     pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), String> {
         let batch = decode_callback_batch(batch_json)?;
@@ -1630,6 +1660,54 @@ mod tests {
             serde_json::from_str(&player.callback_termination_json().unwrap().unwrap()).unwrap();
         assert_eq!(termination["kind"], "interrupted");
         assert!(player.tick_callback_phase_json(16.0).is_err());
+    }
+
+    #[test]
+    fn forward_callback_control_uses_authored_time_without_a_browser_timestamp() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
+        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            2.0,
+            14,
+        )
+        .unwrap();
+
+        let initial: serde_json::Value = serde_json::from_str(
+            &player
+                .initial_callback_phase_json()
+                .unwrap()
+                .expect("time-zero callback phase"),
+        )
+        .unwrap();
+        player
+            .commit_callback_phase_json(
+                &serde_json::json!({ "token": initial["token"].clone(), "writes": [] }).to_string(),
+            )
+            .unwrap();
+
+        let phase: serde_json::Value = serde_json::from_str(
+            &player
+                .advance_forward_to_callback_phase_json(1.0)
+                .unwrap()
+                .expect("active callback requires one authored-time phase"),
+        )
+        .unwrap();
+        assert_eq!(phase["time"], serde_json::json!(1.0));
+        player
+            .commit_callback_phase_json(
+                &serde_json::json!({ "token": phase["token"].clone(), "writes": [] }).to_string(),
+            )
+            .unwrap();
+        assert_eq!(player.time(), 1.0);
+        assert!(player.advance_forward_to_callback_phase_json(0.5).is_err());
     }
 
     #[test]

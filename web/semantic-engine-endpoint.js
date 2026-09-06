@@ -3,7 +3,7 @@
 import {
   EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE,
   SharedExecutionDeltaWriter, TransferableExecutionDeltaSender,
-  createSharedExecutionMailbox,
+  createSharedExecutionMailbox, executionDeltaMetadata,
 } from "./execution-transport.js";
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
@@ -32,14 +32,56 @@ export async function attachSemanticEngine(
   let callbackGeneration = 0;
   let pendingPhaseJson = null;
   let callbackFault = null;
+  let lastPresentedPublication = null;
+  let pendingPresentation = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
   const writable = () => typeof transport.canSend === "function" ? transport.canSend() : transport.inFlight() < 2;
   const send = (json) => {
-    if (json == null) return;
+    if (json == null) return null;
+    const publication = executionDeltaMetadata(json);
     if (!transport.send(json)) throw new Error("semantic transport became backpressured after admission");
     if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
+    return publication;
+  };
+  const samePublication = (left, right) =>
+    left !== null && right !== null &&
+    left.session === right.session && left.sequence === right.sequence;
+  const publicationAlreadyPresented = (publication) =>
+    samePublication(lastPresentedPublication, publication);
+  const rejectPendingPresentation = (error) => {
+    if (pendingPresentation === null) return;
+    const { reject } = pendingPresentation;
+    pendingPresentation = null;
+    reject(error);
+  };
+  const awaitPresentation = (publication) => {
+    // An unchanged coherent frame emits no delta. Its already-presented frame
+    // remains the exact renderer observation; do not manufacture a redraw.
+    if (publication === null || publicationAlreadyPresented(publication)) {
+      return Promise.resolve();
+    }
+    if (pendingPresentation !== null) {
+      throw new Error("semantic endpoint already awaits a renderer publication");
+    }
+    return new Promise((resolve, reject) => {
+      pendingPresentation = { publication, resolve, reject };
+    });
+  };
+  const notePresentedPublication = (publication) => {
+    if (!publication || !Number.isSafeInteger(publication.session) ||
+        !Number.isSafeInteger(publication.sequence)) {
+      fail(new Error("renderer reported an invalid execution publication"));
+      return;
+    }
+    lastPresentedPublication = publication;
+    if (pendingPresentation !== null &&
+        samePublication(pendingPresentation.publication, publication)) {
+      const { resolve } = pendingPresentation;
+      pendingPresentation = null;
+      resolve();
+    }
   };
   const state = (type) => ({ type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" });
   async function publishCallbackPhase(phaseJson, { initial = false } = {}) {
@@ -73,9 +115,8 @@ export async function attachSemanticEngine(
         throw error;
       }
     }
-    if (stopped || player === null) return false;
-    send(initial ? player.initialDeltaJson() : player.drainDeltaJson());
-    return true;
+    if (stopped || player === null) return null;
+    return send(initial ? player.initialDeltaJson() : player.drainDeltaJson());
   }
 
   async function drain() {
@@ -91,6 +132,20 @@ export async function attachSemanticEngine(
           case "set_loop_duration": player.setLoopDuration(message.loopDurationSeconds); break;
           case "seek": latestTick = null; send(player.seekDeltaJson(message.time)); break;
           case "restart_playback": latestTick = null; send(player.seekDeltaJson(0)); break;
+          case "advance_to": {
+            if (callbackFault !== null) throw callbackFault;
+            if (player.isPlaying()) {
+              throw new Error(
+                "pause semantic execution before forward authored-time advancement",
+              );
+            }
+            latestTick = null;
+            const publication = await publishCallbackPhase(
+              player.advanceForwardToCallbackPhaseJson(message.time),
+            );
+            await awaitPresentation(publication);
+            break;
+          }
           case "native_state_input":
             player.setNativeStateInputJson(JSON.stringify({
               source: message.source,
@@ -135,6 +190,7 @@ export async function attachSemanticEngine(
     if (stopped) return;
     stopped = true;
     callbackGeneration += 1;
+    rejectPendingPresentation(new Error("semantic execution stopped before renderer publication"));
     controls.length = 0;
     latestTick = null;
     if (player !== null) {
@@ -183,7 +239,7 @@ export async function attachSemanticEngine(
           return;
         }
         if (![
-          "pause", "resume", "seek", "restart_playback", "set_loop_duration",
+          "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
           "native_state_input", "native_event",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
@@ -202,7 +258,12 @@ export async function attachSemanticEngine(
         latestTick = message.timestamp;
         void drain();
       } else if (message?.type === "transport_writable") void drain();
-      else if (message?.type === "render_error") fail(new Error(message.message));
+      else if (message?.type === "execution_presented") notePresentedPublication(message);
+      else if (message?.type === "render_error") {
+        const error = new Error(message.message);
+        rejectPendingPresentation(error);
+        fail(error);
+      }
     });
     const resources = Uint8Array.from(player.resourceBundleBytes());
     if (resources.byteLength === 0) {
