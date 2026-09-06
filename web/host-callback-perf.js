@@ -24,19 +24,18 @@ try {
   // sample. The endpoint, rather than this harness, remains the execution clock.
   const workloadDurationSeconds =
     (warmupFrames + measuredFrames) * SAMPLE_STEP_SECONDS + 2;
-  const native = await author(nativeSource(objectCount, activeCount, workloadDurationSeconds));
-  const host = await author(hostSource(objectCount, activeCount, workloadDurationSeconds));
-  if (native.semanticExecution.callbackSessionId !== undefined) {
-    throw new Error("native comparison scene unexpectedly registered callbacks");
-  }
-  if (host.semanticExecution.callbackSessionId === undefined) {
-    throw new Error("host comparison scene did not register callbacks");
-  }
-
   status.value = `Native timeline · ${activeCount}/${objectCount} active…`;
-  const nativeResult = await measureWorkload(native, workloadDurationSeconds);
+  const nativeResult = await authorAndMeasure(
+    nativeSource(objectCount, activeCount, workloadDurationSeconds),
+    workloadDurationSeconds,
+    false,
+  );
   status.value = `Python updater · ${activeCount}/${objectCount} active…`;
-  const hostResult = await measureWorkload(host, workloadDurationSeconds);
+  const hostResult = await authorAndMeasure(
+    hostSource(objectCount, activeCount, workloadDurationSeconds),
+    workloadDurationSeconds,
+    true,
+  );
 
   const report = {
     schemaVersion: 2,
@@ -95,6 +94,23 @@ async function author(source) {
     throw new Error("performance source did not return canonical semantic execution");
   }
   return result;
+}
+
+async function authorAndMeasure(source, workloadDurationSeconds, expectsCallbacks) {
+  const authored = await author(source);
+  try {
+    const hasCallbacks = authored.semanticExecution.callbackSessionId !== undefined;
+    if (hasCallbacks !== expectsCallbacks) {
+      throw new Error(
+        expectsCallbacks
+          ? "host comparison scene did not register callbacks"
+          : "native comparison scene unexpectedly registered callbacks",
+      );
+    }
+    return await measureWorkload(authored, workloadDurationSeconds);
+  } finally {
+    await authoring.releaseSemanticExecution(authored.semanticExecution.contextId);
+  }
 }
 
 async function measureWorkload(authored, workloadDurationSeconds) {
