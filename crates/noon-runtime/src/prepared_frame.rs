@@ -289,6 +289,7 @@ impl SceneInstance {
                 };
                 let object = &self.compiled.objects()[object_index];
                 apply_group_to_row(
+                    &self.compiled,
                     row.as_mut(base_content),
                     tracks,
                     &prepared_group,
@@ -326,6 +327,7 @@ impl SceneInstance {
                 .entry(object_index)
                 .or_insert_with(|| FrameRowState::from_frame(&self.frame, object_index));
             apply_group_to_row(
+                &self.compiled,
                 row.as_mut(&self.frame.objects[object_index].content),
                 tracks,
                 &prepared_group,
