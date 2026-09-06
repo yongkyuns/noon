@@ -35,3 +35,10 @@ test("semantic continuation control bypasses the blocked interpreter request que
   );
   assert.doesNotMatch(lane, /runPythonAsync/);
 });
+
+test("synchronous continuation is an explicit JSPI-gated construct mode", () => {
+  assert.match(source, /_synchronous_continuation_requested\(__noon_result\)/);
+  assert.match(source, /_begin_synchronous_continuation_construct\(__noon_result\)/);
+  assert.match(source, /_finish_synchronous_continuation_construct\(__noon_result\)/);
+  assert.match(source, /__noon_result\.construct\(\)/);
+});

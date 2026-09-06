@@ -617,11 +617,18 @@ else:
     __noon_result = __noon_scene_classes[0]()
     __noon_result.setup()
     try:
+        import _manim_canonical_scene
         if inspect.iscoroutinefunction(__noon_result.construct):
-            import _manim_canonical_scene
             _manim_canonical_scene._begin_async_continuation_construct(__noon_result)
             await __noon_result.construct()
             _manim_canonical_scene._finish_async_continuation_construct(__noon_result)
+        elif _manim_canonical_scene._synchronous_continuation_requested(__noon_result):
+            import _manim_canonical_scene
+            _manim_canonical_scene._begin_synchronous_continuation_construct(__noon_result)
+            try:
+                __noon_result.construct()
+            finally:
+                _manim_canonical_scene._finish_synchronous_continuation_construct(__noon_result)
         else:
             __noon_result.construct()
     finally:

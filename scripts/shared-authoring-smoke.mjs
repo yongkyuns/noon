@@ -684,6 +684,97 @@ try {
     window.sharedAuthoringSmoke.liveContinuationExecution = null;
   });
 
+  // A normal def construct opts into experimental Pyodide JSPI stack switching.
+  // Its source promise remains pending while the same continuation endpoint owns
+  // the Rust player and publishes a real intermediate frame.
+  const synchronousContinuationSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_affine_synchronous_continuation.py"),
+    "utf8",
+  );
+  const synchronousContinuationResult = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-ordinary-affine-synchronous-continuation";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let execution = null;
+    let registration = null;
+    let settled = false;
+    const authoredPromise = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(next) {
+        if (registration !== null) {
+          throw new Error("synchronous source registered more than one semantic context");
+        }
+        registration = next;
+        execution = new harness.AuthoringExecutionClient(canvas);
+        await execution.startSemanticExecution(next.semanticExecution, {
+          authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, next.duration),
+          transportMode: "transferable",
+        });
+      },
+    });
+    authoredPromise.then(() => { settled = true; });
+
+    let progressed = null;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      if (execution !== null && !settled) {
+        try {
+          const state = await execution.state();
+          if (state.time > 0.1 && state.time < 3.9) {
+            progressed = state;
+            break;
+          }
+        } catch {
+          // The exact player is temporarily returned between segments.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (progressed === null || settled) {
+      throw new Error("synchronous JSPI source did not remain pending through a live frame");
+    }
+    const authored = await authoredPromise;
+    if (execution === null || registration === null) {
+      throw new Error("synchronous source did not register its semantic continuation");
+    }
+    if (authored.semanticExecution.contextId !== registration.semanticExecution.contextId ||
+        authored.semanticExecution.continuationGeneration !== registration.generation) {
+      throw new Error("synchronous final result did not retain its continuation context");
+    }
+    let metrics;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      metrics = (await execution.metrics()).metrics;
+      if (metrics.objectCount === 1 && metrics.drawCalls > 0 && metrics.presentedFrames > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    harness.liveSynchronousContinuationExecution = execution;
+    return { canvasId: canvas.id, duration: authored.duration, progressed, metrics };
+  }, synchronousContinuationSource);
+  assert.equal(synchronousContinuationResult.duration, 4);
+  assert.ok(synchronousContinuationResult.progressed.time > 0.1);
+  assert.ok(synchronousContinuationResult.progressed.time < 3.9);
+  assert.equal(synchronousContinuationResult.metrics.objectCount, 1);
+  assert.ok(synchronousContinuationResult.metrics.drawCalls > 0);
+  const synchronousContinuationPixels = visiblePixelStats(
+    await page.locator(`#${synchronousContinuationResult.canvasId}`).screenshot(),
+    (red, green, blue) => blue > red + 40 && blue > green,
+  );
+  assert.ok(synchronousContinuationPixels.count > 100, "synchronous continuation circle was not visible");
+  assert.ok(
+    Math.abs(synchronousContinuationPixels.centerX - (320 + 5 * 45)) < 4,
+    `synchronous continuation final x was not 5: ${JSON.stringify(synchronousContinuationPixels)}`,
+  );
+  assert.ok(
+    Math.abs(synchronousContinuationPixels.centerY - (180 + 45)) < 4,
+    `synchronous continuation final y was not -1: ${JSON.stringify(synchronousContinuationPixels)}`,
+  );
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.liveSynchronousContinuationExecution.terminate();
+    window.sharedAuthoringSmoke.liveSynchronousContinuationExecution = null;
+  });
+
   // Native hosts send normalized input occurrences across the genuine worker
   // control port. The Python scene owns no input values or event cursor; the
   // canonical Rust session evaluates the bindings and publishes each frame.

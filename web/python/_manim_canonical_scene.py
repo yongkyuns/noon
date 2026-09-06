@@ -48,6 +48,7 @@ _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
 _ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
 _ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
+_SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
 
 
 def _json(value: object) -> str:
@@ -235,6 +236,41 @@ def _async_continuation_active(scene: _base.Scene) -> bool:
     return bool(getattr(scene, _ASYNC_CONTINUATION_MODE, False))
 
 
+def _synchronous_continuation_requested(scene: _base.Scene) -> bool:
+    """Return the explicit opt-in for JSPI-backed synchronous continuation.
+
+    Ordinary ``def construct`` remains endpoint-only by default. This opt-in is
+    per Scene while JSPI remains experimental; it never selects the legacy
+    scheduler when the runtime cannot suspend.
+    """
+    return getattr(scene, "realtime_continuation", False) is True
+
+
+def _begin_synchronous_continuation_construct(scene: _base.Scene) -> None:
+    if _async_continuation_active(scene) or getattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, False):
+        raise RuntimeError("canonical synchronous construct is already active")
+    from pyodide.ffi import can_run_sync
+
+    if not can_run_sync():
+        raise RuntimeError(
+            "synchronous realtime continuation requires JS Promise Integration; "
+            "use async construct or a JSPI-capable browser"
+        )
+    setattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, True)
+
+
+def _finish_synchronous_continuation_construct(scene: _base.Scene) -> None:
+    setattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, False)
+
+
+def _synchronous_continuation_active(scene: _base.Scene) -> bool:
+    return bool(getattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, False))
+
+
+def _semantic_continuation_active(scene: _base.Scene) -> bool:
+    return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
+
+
 class _SemanticContinuationAwaitable:
     """One consumed Python await over the worker-owned semantic endpoint lease."""
 
@@ -265,24 +301,37 @@ def _continuation_awaitable(scene: _base.Scene) -> _SemanticContinuationAwaitabl
     return _SemanticContinuationAwaitable(scene)
 
 
-def _require_async_continuation_active(scene: _base.Scene) -> None:
-    if not _async_continuation_active(scene):
+def _require_semantic_continuation_active(scene: _base.Scene) -> None:
+    if not _semantic_continuation_active(scene):
         return
     from js import noonRequireSemanticContinuationActive
 
     noonRequireSemanticContinuationActive(_context(scene))
 
 
+def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
+    """Suspend the current JSPI-enabled Python stack on the worker lease."""
+    if not _synchronous_continuation_active(scene):
+        raise RuntimeError("synchronous semantic continuation is not active")
+    from js import noonAwaitSemanticContinuation
+    from pyodide.ffi import run_sync
+
+    run_sync(noonAwaitSemanticContinuation(_context(scene)))
+    return scene
+
+
 def _canonical_wait(
     scene: _base.Scene, duration: float = 1.0
 ) -> _base.Scene | _SemanticContinuationAwaitable:
-    if _async_continuation_active(scene):
+    if _semantic_continuation_active(scene):
         try:
-            _require_async_continuation_active(scene)
+            _require_semantic_continuation_active(scene)
             _context(scene).beginOrdinaryWait(float(duration))
         except Exception as error:
             raise ValueError(str(error)) from None
-        return _continuation_awaitable(scene)
+        if _async_continuation_active(scene):
+            return _continuation_awaitable(scene)
+        return _synchronous_continuation_wait(scene)
     authority, _ = _timing_authority(scene)
     if authority == "canonical":
         context = _context(scene)
@@ -514,10 +563,10 @@ def _play_canonical_affine(
         )
     context = _context(self)
     try:
-        _require_async_continuation_active(self)
+        _require_semantic_continuation_active(self)
         method = (
             context.beginOrdinaryTransformTo
-            if _async_continuation_active(self)
+            if _semantic_continuation_active(self)
             else context.ordinaryPlayTransformTo
         )
         method(
@@ -528,7 +577,11 @@ def _play_canonical_affine(
         )
     except Exception as error:
         raise ValueError(str(error)) from None
-    return _continuation_awaitable(self) if _async_continuation_active(self) else self
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self)
+    if _synchronous_continuation_active(self):
+        return _synchronous_continuation_wait(self)
+    return self
 
 
 def _canonical_composition_shape(args: tuple[object, ...]):
@@ -675,16 +728,16 @@ def _play(self, *args, **kwargs):
     # identity/export purposes, so they must not reclassify a later ordinary
     # compatibility play as a canonical live animation.
     if getattr(self, "_legacy_geometry_materialized", False):
-        if _async_continuation_active(self):
+        if _semantic_continuation_active(self):
             raise NotImplementedError(
-                "async construct supports only canonical affine Scene.play and Scene.wait"
+                "realtime construct supports only canonical affine Scene.play and Scene.wait"
             )
         return _play_legacy_compatibility(self, *args, **kwargs)
 
     if (shape := _canonical_composition_shape(args)) is not None:
-        if _async_continuation_active(self):
+        if _semantic_continuation_active(self):
             raise NotImplementedError(
-                "async construct does not yet support animation composition"
+                "realtime construct does not yet support animation composition"
             )
         kind, animations, group = shape
         try:
@@ -714,18 +767,18 @@ def _play(self, *args, **kwargs):
     ]
     if canonical_affine:
         if len(canonical_affine) != 1 or len(args) != 1:
-            if _async_continuation_active(self):
+            if _semantic_continuation_active(self):
                 raise NotImplementedError(
-                    "async construct supports one canonical affine animation per play"
+                    "realtime construct supports one canonical affine animation per play"
                 )
             return _play_legacy_compatibility(self, *args, **kwargs)
         source, target, animation = canonical_affine[0]
         if not _canonical_affine_payload_is_supported(
             self, source, target, animation, kwargs
         ):
-            if _async_continuation_active(self):
+            if _semantic_continuation_active(self):
                 raise NotImplementedError(
-                    "async construct animation is outside the canonical affine subset"
+                    "realtime construct animation is outside the canonical affine subset"
                 )
             return _play_legacy_compatibility(self, *args, **kwargs)
         return _play_canonical_affine(
@@ -743,9 +796,9 @@ def _play(self, *args, **kwargs):
         )
     canonical_builders = [argument for argument in args if _canonical_tracker_builder(argument)]
     if canonical_builders:
-        if _async_continuation_active(self):
+        if _semantic_continuation_active(self):
             raise NotImplementedError(
-                "async construct does not yet support ValueTracker play"
+                "realtime construct does not yet support ValueTracker play"
             )
         if len(canonical_builders) != 1 or len(args) != 1:
             raise NotImplementedError(
@@ -762,9 +815,9 @@ def _play(self, *args, **kwargs):
             lag_ratio=kwargs.pop("lag_ratio", None),
             kwargs=kwargs,
         )
-    if _async_continuation_active(self):
+    if _semantic_continuation_active(self):
         raise NotImplementedError(
-            "async construct supports only canonical affine Scene.play and Scene.wait"
+            "realtime construct supports only canonical affine Scene.play and Scene.wait"
         )
     return _play_legacy_compatibility(self, *args, **kwargs)
 
