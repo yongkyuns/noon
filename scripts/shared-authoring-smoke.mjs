@@ -1843,6 +1843,7 @@ result = scene
     canvas.height = 360;
     document.body.append(canvas);
     const execution = new harness.AuthoringExecutionClient(canvas);
+    harness.paintExecution = execution;
     try {
       await execution.startSemanticExecution(authored.semanticExecution, {
         authoringClient: harness.authoring,
@@ -1851,8 +1852,9 @@ result = scene
       });
       const advanced = await execution.advanceToWithRendererObservation(0.5);
       return { canvasId: canvas.id, observation: advanced.rendererObservation };
-    } finally {
+    } catch (error) {
       execution.terminate();
+      throw error;
     }
   }, paintSource);
   assert.equal(paintResult.observation.outcome, "presented");
@@ -1865,6 +1867,8 @@ result = scene
   );
   assert.ok(Math.abs(paintPixel.red - 41) < 12 && paintPixel.blue < 25,
     `shared callback paint did not reach retained rendering: ${JSON.stringify(paintPixel)}`);
+
+  await page.evaluate(() => window.sharedAuthoringSmoke.paintExecution.terminate());
 
   const persisted = await page.evaluate(
     async ({ persistedSceneSource, reusePersistedSceneSource }) => {
