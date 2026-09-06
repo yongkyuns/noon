@@ -126,7 +126,7 @@ async function pauseAndSeek(page, seconds) {
     capability === "available" || capability === "unavailable",
     `product E2E did not publish playback capability (${capability})`,
   );
-  const toggle = page.locator(".playback-toggle");
+  const toggle = page.locator(".playback-controls .playback-toggle");
   const hasControls = (await toggle.count()) > 0;
   assert.equal(
     hasControls,
