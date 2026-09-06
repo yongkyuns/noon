@@ -1347,11 +1347,11 @@ impl SemanticMutationTransaction {
                     let existing_last = store
                         .semantic_signal_state(*signal)
                         .ok()
-                        .and_then(|state| state.scalar_timeline().last().cloned());
+                        .and_then(|state| state.scalar_timeline().last());
                     let timeline = staged_signal_timeline.entry(*signal).or_default();
-                    let previous = timeline.last().cloned().or(existing_last);
+                    let previous = timeline.last().or(existing_last);
                     store
-                        .validate_semantic_scalar_signal_track_after(track, previous)
+                        .validate_semantic_scalar_signal_track_after(&track, previous)
                         .map_err(|error| SemanticMutationTransactionError::SignalTrack {
                             index,
                             error,
@@ -1374,12 +1374,12 @@ impl SemanticMutationTransaction {
                     let existing_last = store
                         .semantic_signal_state(*signal)
                         .ok()
-                        .and_then(|state| state.scalar_timeline().last().cloned());
+                        .and_then(|state| state.scalar_timeline().last());
                     let timeline = staged_signal_timeline.entry(*signal).or_default();
-                    let previous = timeline.last().cloned().or(existing_last);
+                    let previous = timeline.last().or(existing_last);
                     store
                         .validate_semantic_scalar_signal_entry_after(
-                            SemanticScalarSignalTimelineEntry::Hold(hold),
+                            &SemanticScalarSignalTimelineEntry::Hold(hold),
                             previous,
                         )
                         .map_err(|error| SemanticMutationTransactionError::SignalTrack {

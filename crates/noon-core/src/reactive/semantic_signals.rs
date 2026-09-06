@@ -56,6 +56,21 @@ pub enum SemanticScalarSignalTimelineEntry {
     Hold(SemanticScalarSignalHold),
 }
 
+#[derive(Clone, Copy)]
+enum SemanticScalarSignalTimelineEntryRef<'a> {
+    Track(&'a SemanticScalarSignalTrack),
+    Hold(&'a SemanticScalarSignalHold),
+}
+
+impl SemanticScalarSignalTimelineEntryRef<'_> {
+    const fn signal(self) -> SemanticNodeId {
+        match self {
+            Self::Track(track) => track.signal,
+            Self::Hold(hold) => hold.signal,
+        }
+    }
+}
+
 impl SemanticScalarSignalTimelineEntry {
     pub const fn signal(&self) -> SemanticNodeId {
         match self {
@@ -627,19 +642,17 @@ impl SemanticStore {
         track: SemanticScalarSignalTrack,
     ) -> Result<(), SemanticScalarSignalTrackError> {
         let state = self.semantic_signal_state(track.signal)?;
-        self.validate_semantic_scalar_signal_entry_after(
-            SemanticScalarSignalTimelineEntry::Track(track),
-            state.scalar_timeline().last().cloned(),
-        )
+        let entry = SemanticScalarSignalTimelineEntry::Track(track);
+        self.validate_semantic_scalar_signal_entry_after(&entry, state.scalar_timeline().last())
     }
 
     pub(crate) fn validate_semantic_scalar_signal_track_after(
         &self,
-        track: SemanticScalarSignalTrack,
-        previous: Option<SemanticScalarSignalTimelineEntry>,
+        track: &SemanticScalarSignalTrack,
+        previous: Option<&SemanticScalarSignalTimelineEntry>,
     ) -> Result<(), SemanticScalarSignalTrackError> {
-        self.validate_semantic_scalar_signal_entry_after(
-            SemanticScalarSignalTimelineEntry::Track(track),
+        self.validate_semantic_scalar_signal_entry_ref_after(
+            SemanticScalarSignalTimelineEntryRef::Track(track),
             previous,
         )
     }
@@ -649,16 +662,30 @@ impl SemanticStore {
         hold: SemanticScalarSignalHold,
     ) -> Result<(), SemanticScalarSignalTrackError> {
         let state = self.semantic_signal_state(hold.signal)?;
-        self.validate_semantic_scalar_signal_entry_after(
-            SemanticScalarSignalTimelineEntry::Hold(hold),
-            state.scalar_timeline().last().cloned(),
-        )
+        let entry = SemanticScalarSignalTimelineEntry::Hold(hold);
+        self.validate_semantic_scalar_signal_entry_after(&entry, state.scalar_timeline().last())
     }
 
     pub(crate) fn validate_semantic_scalar_signal_entry_after(
         &self,
-        entry: SemanticScalarSignalTimelineEntry,
-        previous: Option<SemanticScalarSignalTimelineEntry>,
+        entry: &SemanticScalarSignalTimelineEntry,
+        previous: Option<&SemanticScalarSignalTimelineEntry>,
+    ) -> Result<(), SemanticScalarSignalTrackError> {
+        let entry = match entry {
+            SemanticScalarSignalTimelineEntry::Track(track) => {
+                SemanticScalarSignalTimelineEntryRef::Track(track)
+            }
+            SemanticScalarSignalTimelineEntry::Hold(hold) => {
+                SemanticScalarSignalTimelineEntryRef::Hold(hold)
+            }
+        };
+        self.validate_semantic_scalar_signal_entry_ref_after(entry, previous)
+    }
+
+    fn validate_semantic_scalar_signal_entry_ref_after(
+        &self,
+        entry: SemanticScalarSignalTimelineEntryRef<'_>,
+        previous: Option<&SemanticScalarSignalTimelineEntry>,
     ) -> Result<(), SemanticScalarSignalTrackError> {
         let signal = entry.signal();
         let state = self.semantic_signal_state(signal)?;
@@ -676,7 +703,7 @@ impl SemanticStore {
             return Err(SemanticScalarSignalTrackError::NativeOwnedSignal(signal));
         }
         match entry {
-            SemanticScalarSignalTimelineEntry::Track(track) => {
+            SemanticScalarSignalTimelineEntryRef::Track(track) => {
                 validate_continuous_track_timing(track.timing)?;
                 track
                     .time_map
@@ -699,18 +726,18 @@ impl SemanticStore {
                         });
                     }
                 }
-                let (previous_end, expected) =
-                    previous.map_or((f64::NEG_INFINITY, *initial), |previous| match previous {
-                        SemanticScalarSignalTimelineEntry::Track(previous) => (
-                            continuous_time_map_interval(previous.timing, &previous.time_map)
-                                .map_err(TimelineError::InvalidCompositionTimeMap)?
-                                .1,
-                            previous.to,
-                        ),
-                        SemanticScalarSignalTimelineEntry::Hold(previous) => {
-                            (previous.start_time, previous.value)
-                        }
-                    });
+                let (previous_end, expected) = match previous {
+                    Some(SemanticScalarSignalTimelineEntry::Track(previous)) => (
+                        continuous_time_map_interval(previous.timing, &previous.time_map)
+                            .map_err(TimelineError::InvalidCompositionTimeMap)?
+                            .1,
+                        previous.to,
+                    ),
+                    Some(SemanticScalarSignalTimelineEntry::Hold(previous)) => {
+                        (previous.start_time, previous.value)
+                    }
+                    None => (f64::NEG_INFINITY, *initial),
+                };
                 if start_time < previous_end {
                     return Err(SemanticScalarSignalTrackError::OverlappingTracks {
                         signal,
@@ -726,7 +753,7 @@ impl SemanticStore {
                     });
                 }
             }
-            SemanticScalarSignalTimelineEntry::Hold(hold) => {
+            SemanticScalarSignalTimelineEntryRef::Hold(hold) => {
                 if !hold.value.is_finite() {
                     return Err(SemanticScalarSignalTrackError::NonFiniteValue {
                         signal,
@@ -736,14 +763,15 @@ impl SemanticStore {
                 if !hold.start_time.is_finite() {
                     return Err(SemanticScalarSignalTrackError::NonFiniteHoldTime(signal));
                 }
-                let previous_end = previous.map_or(f64::NEG_INFINITY, |previous| match previous {
-                    SemanticScalarSignalTimelineEntry::Track(previous) => {
+                let previous_end = match previous {
+                    Some(SemanticScalarSignalTimelineEntry::Track(previous)) => {
                         continuous_time_map_interval(previous.timing, &previous.time_map)
                             .map_err(TimelineError::InvalidCompositionTimeMap)?
                             .1
                     }
-                    SemanticScalarSignalTimelineEntry::Hold(previous) => previous.start_time,
-                });
+                    Some(SemanticScalarSignalTimelineEntry::Hold(previous)) => previous.start_time,
+                    None => f64::NEG_INFINITY,
+                };
                 if hold.start_time < previous_end {
                     return Err(SemanticScalarSignalTrackError::OverlappingTracks {
                         signal,
