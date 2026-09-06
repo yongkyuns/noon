@@ -104,6 +104,7 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
     let mut source = scene.circle(1.0)?;
     source.set_fill(0.1, 0.2, 0.8, 0.25)?;
     source.set_stroke_color(0.9, 0.9, 0.9, 0.75)?;
+    source.set_stroke_opacity(0.75)?;
     source.set_stroke_width(0.12)?;
     scene.add(&source)?;
 
@@ -128,7 +129,8 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
     })?;
     callbacks.insert(FILL_AND_COMPOSITE_OPACITY, |context| {
         let before = context.target_state().style;
-        if before.fill.map(|color| color.alpha) != Some(0.25)
+        let expected_fill_alpha = if context.time() == 0.0 { 0.25 } else { 0.4 };
+        if before.fill.map(|color| color.alpha) != Some(expected_fill_alpha)
             || before.stroke.map(|color| color.alpha) != Some(0.75)
         {
             return Err(std::io::Error::other(

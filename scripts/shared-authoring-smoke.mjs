@@ -1831,6 +1831,41 @@ result = scene
     window.sharedAuthoringSmoke.liveExampleExecution = null;
   });
 
+  const paintSource = await readFile(
+    path.join(repoRoot, "web/python/examples/live_callback_paint.py"), "utf8",
+  );
+  const paintResult = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const authored = await harness.authoring.run(source, {});
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-live-callback-paint";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    try {
+      await execution.startSemanticExecution(authored.semanticExecution, {
+        authoringClient: harness.authoring,
+        transportMode: "transferable",
+        initiallyPaused: true,
+      });
+      const advanced = await execution.advanceToWithRendererObservation(0.5);
+      return { canvasId: canvas.id, observation: advanced.rendererObservation };
+    } finally {
+      execution.terminate();
+    }
+  }, paintSource);
+  assert.equal(paintResult.observation.outcome, "presented");
+  const paintStyle = paintResult.observation.committed.style;
+  assert.ok(Math.abs(paintStyle.fill.alpha - 0.4) < 1e-6);
+  assert.ok(Math.abs(paintStyle.stroke.alpha - 0.75) < 1e-6);
+  assert.equal(paintStyle.opacity, 0.5);
+  const paintPixel = renderedWorldPixel(
+    await page.locator(`#${paintResult.canvasId}`).screenshot(), 1, 0,
+  );
+  assert.ok(Math.abs(paintPixel.red - 41) < 12 && paintPixel.blue < 25,
+    `shared callback paint did not reach retained rendering: ${JSON.stringify(paintPixel)}`);
+
   const persisted = await page.evaluate(
     async ({ persistedSceneSource, reusePersistedSceneSource }) => {
       const harness = window.sharedAuthoringSmoke;

@@ -442,6 +442,9 @@ try {
     );
   } else {
     const runButton = page.locator("#replace-scene");
+    // Gallery metadata can appear before the asynchronously selected source loads.
+    // Observe readiness before asserting or clicking the Run control.
+    await page.waitForFunction(() => !document.querySelector("#replace-scene")?.disabled);
     assert.equal(await runButton.isDisabled(), false, `${browserName}/${profileName}: Run stayed disabled`);
     await runButton.click();
     finalRuntime = await waitForAppliedScene(page, "parity-square-and-circle");

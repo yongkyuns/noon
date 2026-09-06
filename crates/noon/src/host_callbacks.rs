@@ -584,6 +584,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::{AnimationOptions, RateFunction, Scene, Vec2};
+    use noon_core::Color;
 
     use super::*;
 

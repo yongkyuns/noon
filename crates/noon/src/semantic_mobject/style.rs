@@ -1,5 +1,6 @@
 //! Shared semantic paint and stroke edits.
 use super::*;
+use noon_core::Style;
 
 pub(crate) trait PaintStyleEdit {
     fn has_fill(&self) -> bool;
@@ -154,8 +155,8 @@ pub(crate) fn edit_disable_stroke(style: &mut SemanticStyle) {
     style.stroke = None;
 }
 
-pub(crate) fn edit_stroke_color(
-    style: &mut SemanticStyle,
+pub(crate) fn edit_stroke_color<S: PaintStyleEdit>(
+    style: &mut S,
     red: f64,
     green: f64,
     blue: f64,
@@ -163,10 +164,7 @@ pub(crate) fn edit_stroke_color(
 ) -> Result<(), String> {
     let color = opaque_color("stroke", red, green, blue)?;
     let requested_opacity = unit_opacity("stroke.alpha", alpha)?;
-    if style.stroke.is_none() {
-        style.stroke_opacity = requested_opacity;
-    }
-    style.stroke = Some(SemanticPaint::Solid(color));
+    style.set_stroke_color(color, requested_opacity);
     Ok(())
 }
 
