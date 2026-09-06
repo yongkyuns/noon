@@ -2151,10 +2151,12 @@ const fn lerp(from: f32, to: f32, progress: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use noon_compile::{CompiledObject, CompiledScene};
+    use noon_compile::CompiledObject;
+    use noon_compile::CompiledScene;
+    use noon_core::TrackId;
     use noon_core::{
         Color, CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, Property,
-        RateFunction, SceneDefinition, Style, TrackDefinition, TrackId, TrackTiming,
+        RateFunction, SceneDefinition, Style, TrackDefinition, TrackTiming,
     };
 
     use super::*;
