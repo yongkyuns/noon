@@ -663,7 +663,8 @@ pub(super) fn lower_affine_channels(
     )?;
     let fill_changed = source.style.fill != target.style.fill
         || source.style.fill_opacity != target.style.fill_opacity
-        || from.style.fill != target_style.fill;
+        || (from.style.fill != target_style.fill
+            && !has_binding(source, SemanticObjectProperty::FillOpacity));
     push_affine_channel(
         source,
         SemanticObjectProperty::FillOpacity,
@@ -677,7 +678,8 @@ pub(super) fn lower_affine_channels(
         &mut channels,
     )?;
     let opacity_changed = source.style.object_opacity != target.style.object_opacity
-        || from.style.opacity != target_style.opacity;
+        || (from.style.opacity != target_style.opacity
+            && !has_binding(source, SemanticObjectProperty::ObjectOpacity));
     let completion = if fill_changed {
         SemanticAnimationCompletion::None
     } else {
@@ -714,11 +716,7 @@ fn push_affine_channel(
     if !changed {
         return Ok(());
     }
-    if source
-        .signal_bindings()
-        .iter()
-        .any(|binding| binding.property() == semantic_property)
-    {
+    if has_binding(source, semantic_property) {
         return Err(AffinePayloadIssue::ReactiveDriverConflict(
             semantic_property,
         ));
@@ -730,6 +728,15 @@ fn push_affine_channel(
         values,
     });
     Ok(())
+}
+
+// An unchanged authored domain with a native binding remains owned by that
+// binding. Capturing its current effective value does not request a new driver.
+fn has_binding(source: &noon_core::SemanticObjectState, property: SemanticObjectProperty) -> bool {
+    source
+        .signal_bindings()
+        .iter()
+        .any(|binding| binding.property() == property)
 }
 
 fn existing_payload_error(
@@ -1041,6 +1048,56 @@ mod tests {
                 property: SemanticObjectProperty::FillOpacity,
             })
         );
+    }
+
+    #[test]
+    fn unchanged_bound_style_domains_remain_reactive_during_transform() {
+        for property in [
+            SemanticObjectProperty::FillOpacity,
+            SemanticObjectProperty::ObjectOpacity,
+        ] {
+            let mut store = SemanticStore::new();
+            let object = visible_object(&mut store);
+            let signal = store.insert_semantic_input_signal(0.65_f64).unwrap();
+            store
+                .bind_semantic_signal(signal, object, property)
+                .unwrap();
+            let mut target = store.semantic_object_state_checked(object).unwrap().clone();
+            target.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
+            let target = store.insert_semantic_object(target);
+            let animation = store
+                .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+                .unwrap();
+            let index = index(&store);
+            let mut current = effective(Transform2D::default());
+            match property {
+                SemanticObjectProperty::FillOpacity => {
+                    current.style.fill.as_mut().unwrap().alpha = 0.65
+                }
+                SemanticObjectProperty::ObjectOpacity => current.style.opacity = 0.65,
+                _ => unreachable!(),
+            }
+            let existing = lower_semantic_affine_animation_tracks(
+                &store,
+                &schedule(&store, &index, animation),
+                |_| Some(current),
+            )
+            .unwrap();
+            assert_eq!(existing.len(), 1);
+            assert_eq!(existing.tracks()[0].property, Property::Position);
+            let prepared = crate::lower_prepared_semantic_transform_to(
+                &store,
+                &index,
+                object,
+                target,
+                AnimationOptions::new(),
+                0.0,
+                |_| Some(current),
+            )
+            .unwrap();
+            assert_eq!(prepared.tracks().len(), 1);
+            assert_eq!(prepared.tracks()[0].property, Property::Position);
+        }
     }
 
     #[test]
