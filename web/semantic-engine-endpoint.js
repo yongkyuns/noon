@@ -33,6 +33,7 @@ export async function attachSemanticEngine(
   let callbackGeneration = 0;
   let pendingPhaseJson = null;
   let callbackFault = null;
+  let lastSentPublication = null;
   let lastPresentedPublication = null;
   let pendingPresentation = null;
   const controls = [];
@@ -43,6 +44,7 @@ export async function attachSemanticEngine(
     if (json == null) return null;
     const publication = executionDeltaMetadata(json);
     if (!transport.send(json)) throw new Error("semantic transport became backpressured after admission");
+    lastSentPublication = publication;
     if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
     return publication;
   };
@@ -58,22 +60,33 @@ export async function attachSemanticEngine(
     reject(error);
   };
   const awaitPresentation = (publication) => {
-    // An unchanged coherent frame emits no delta. Its already-presented frame
-    // remains the exact renderer observation; do not manufacture a redraw.
-    if (publication === null || publicationAlreadyPresented(publication)) {
+    // An unchanged coherent frame emits no delta, but the most recently sent
+    // publication may still be waiting for the surface. Reuse its transport
+    // metadata as the barrier without retaining a scene or frame mirror.
+    const requiredPublication = publication ?? lastSentPublication;
+    if (requiredPublication === null || publicationAlreadyPresented(requiredPublication)) {
       return Promise.resolve();
     }
     if (pendingPresentation !== null) {
       throw new Error("semantic endpoint already awaits a renderer publication");
     }
     return new Promise((resolve, reject) => {
-      pendingPresentation = { publication, resolve, reject };
+      pendingPresentation = { publication: requiredPublication, resolve, reject };
     });
   };
   const notePresentedPublication = (publication) => {
     if (!publication || !Number.isSafeInteger(publication.session) ||
-        !Number.isSafeInteger(publication.sequence)) {
+        publication.session < 0 || !Number.isSafeInteger(publication.sequence) ||
+        publication.sequence < 0 || publication.session !== session ||
+        lastSentPublication === null ||
+        publication.session !== lastSentPublication.session ||
+        publication.sequence > lastSentPublication.sequence) {
       fail(new Error("renderer reported an invalid execution publication"));
+      return;
+    }
+    if (lastPresentedPublication !== null &&
+        publication.session === lastPresentedPublication.session &&
+        publication.sequence < lastPresentedPublication.sequence) {
       return;
     }
     lastPresentedPublication = publication;
