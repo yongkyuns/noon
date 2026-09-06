@@ -34,6 +34,7 @@ function fixture(
   const callbackReads = [];
   const nativeInputs = [];
   const continuationDriveTimes = [];
+  const executionWakeTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
@@ -57,6 +58,14 @@ function fixture(
     failCallbackPhaseJson: () => {},
     callbackTerminationJson: () => null,
     tickDeltaJson: () => null,
+    executionWake: (wallTime) => {
+      executionWakeTimes.push(wallTime);
+      return {
+        presentNow: false,
+        cadence: playing ? "animation_frame" : "idle",
+        timerAfterMilliseconds: undefined,
+      };
+    },
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setNativeStateInputJson: (value) => { nativeInputs.push({ type: "state", value: JSON.parse(value) }); },
     emitNativeEventJson: (value) => { nativeInputs.push({ type: "event", value: JSON.parse(value) }); },
@@ -83,7 +92,8 @@ function fixture(
   };
   return { control, render, player, stats: () => ({
     returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
-    initialSnapshots, resourceBundles, continuationDriveTimes, drained, committedPhases,
+    initialSnapshots, resourceBundles, continuationDriveTimes, executionWakeTimes,
+    drained, committedPhases,
     callbackReads,
   }),
     attach: () => attachSemanticEngine(context, {
@@ -243,6 +253,53 @@ test("initially paused semantic execution presents time zero without automatic a
     );
     assert.equal((await request(f.control.port2, "pause", 81)).playing, false);
     assert.equal((await pausedWake).cadence, "idle");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("playing static execution obeys Rust idle cadence instead of polling isPlaying", async () => {
+  const f = fixture();
+  let endpoint;
+  let tickCalls = 0;
+  try {
+    f.player.executionWake = () => ({
+      presentNow: false,
+      cadence: "idle",
+      timerAfterMilliseconds: undefined,
+    });
+    f.player.tickCallbackPhaseJson = () => { tickCalls += 1; return null; };
+    const ready = next(f.control.port2);
+    const wake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
+    endpoint = await f.attach();
+    await ready;
+    assert.equal(f.player.isPlaying(), true);
+    assert.deepEqual(await wake, {
+      type: "execution_wake",
+      cadence: "idle",
+      timerAfterMilliseconds: null,
+    });
+    await turn();
+    assert.equal(tickCalls, 0, "a clean static player receives no synthetic engine tick");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("renderer timestamps admit generic ticks without becoming the playback clock", async () => {
+  const f = fixture();
+  let endpoint;
+  const driven = [];
+  try {
+    f.player.tickCallbackPhaseJson = (wallTime) => { driven.push(wallTime); return null; };
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const foreignRendererTime = 9_000_000_000;
+    f.render.port2.postMessage({ type: "tick", timestamp: foreignRendererTime });
+    await turn();
+    await turn();
+    assert.equal(driven.length, 1);
+    assert.notEqual(driven[0], foreignRendererTime);
+    const wakeTimes = f.stats().executionWakeTimes;
+    assert.ok(wakeTimes.length >= 2);
+    assert.ok(Math.abs(wakeTimes.at(-1) - driven[0]) < 1_000);
   } finally { endpoint?.stop(); f.close(); }
 });
 
@@ -636,16 +693,19 @@ test("native state and event controls reach the leased player in accepted order"
     const ready = next(f.control.port2);
     endpoint = await f.attach();
     await ready;
+    const initialWakeObservations = f.stats().executionWakeTimes.length;
 
     const state = await request(f.control.port2, "native_state_input", 20, {
       source: { kind: "control", name: "opacity" },
       value: { kind: "scalar", value: 0.75 },
     });
     assert.equal(state.type, "native_state_input");
+    assert.equal(f.stats().executionWakeTimes.length, initialWakeObservations + 1);
     const event = await request(f.control.port2, "native_event", 21, {
       source: { kind: "pointer_down", button: 0 },
     });
     assert.equal(event.type, "native_event");
+    assert.equal(f.stats().executionWakeTimes.length, initialWakeObservations + 2);
     assert.deepEqual(f.stats().nativeInputs, [
       {
         type: "state",
@@ -665,6 +725,11 @@ test("native state and event controls reach the leased player in accepted order"
     assert.equal(rejected.type, "error");
     assert.match(rejected.message, /native value rejected/);
     assert.equal(f.stats().nativeInputs.length, 2);
+    assert.equal(
+      f.stats().executionWakeTimes.length,
+      initialWakeObservations + 2,
+      "failed input does not publish or replace the current Rust wake",
+    );
   } finally { endpoint?.stop(); f.close(); }
 });
 

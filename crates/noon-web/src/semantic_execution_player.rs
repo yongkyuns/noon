@@ -1,4 +1,6 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::TimelineWakeState;
 use noon::{
     CallbackAdvance, CallbackPhaseToken, CallbackReadRequest, CallbackReadValue,
     EffectivePropertyBatch, EffectiveSemanticPropertyWrite, ExecutionSession, RuntimeIdentity,
@@ -23,14 +25,14 @@ use crate::{
     RetainedExecutionDeltaEnvelope, RetainedResourceBundle,
 };
 
-/// A browser-host wake observation for the player-owned current continuation segment.
+/// A browser-host wake observation derived from one player-owned execution session.
 ///
-/// The browser receives only this derived scheduling directive. Segment identity, authored
-/// time, and interpolation remain in the shared session.
+/// The browser receives only this derived scheduling directive. Runtime/segment identity,
+/// authored time, event cursors, and interpolation remain in the shared session.
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 #[derive(Debug)]
-pub struct WasmLiveSegmentWake {
+pub struct WasmExecutionWake {
     present_now: bool,
     cadence: BrowserExecutionCadence,
     timer_after_milliseconds: Option<f64>,
@@ -66,7 +68,15 @@ impl WasmLiveSegmentDrive {
 
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
-impl WasmLiveSegmentWake {
+impl WasmExecutionWake {
+    fn from_plan(plan: BrowserExecutionWakePlan, timer_after_milliseconds: Option<f64>) -> Self {
+        Self {
+            present_now: plan.present_now(),
+            cadence: plan.cadence(),
+            timer_after_milliseconds,
+        }
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = presentNow))]
     pub fn present_now(&self) -> bool {
         self.present_now
@@ -965,7 +975,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentWake, String> {
+    ) -> Result<WasmExecutionWake, String> {
         self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
@@ -977,11 +987,51 @@ impl SemanticExecutionPlayer {
             BrowserHostWake::TimerAfterMilliseconds(delay) => Some(delay),
             BrowserHostWake::AnimationFrame | BrowserHostWake::Idle => None,
         };
-        Ok(WasmLiveSegmentWake {
-            present_now: directive.present_now(),
-            cadence: plan.cadence(),
-            timer_after_milliseconds,
-        })
+        Ok(WasmExecutionWake::from_plan(plan, timer_after_milliseconds))
+    }
+
+    /// Project the generic player's runtime-owned wake state through its one
+    /// browser playback clock.
+    ///
+    /// `wall_time_ms` comes from this authoring/engine context. Renderer-worker
+    /// timestamps are admission signals only and may use a different time origin.
+    /// Required callbacks pin the clock until their exact batch commits. A looping
+    /// player adds the loop boundary only when the execution session retains actual
+    /// timeline history, allowing a clean static scene to settle at O(0).
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn execution_wake(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<WasmExecutionWake, String> {
+        let callback_blocked =
+            self.pending_callback_phase.is_some() || self.session.callback_termination().is_some();
+        let mut wake = self.session.wake_state();
+        if callback_blocked || !self.clock.is_playing() {
+            wake = wake.without_timeline_wake();
+        } else if let Some(loop_duration) = self.clock.loop_duration() {
+            if self.session.has_replay_timeline_work() {
+                wake = wake.with_additional_timeline(TimelineWakeState::Deadline(loop_duration));
+            }
+        }
+        let plan = BrowserExecutionWakePlan::from_runtime(wake);
+        let timer_after_milliseconds = if callback_blocked {
+            None
+        } else {
+            match plan.cadence() {
+                BrowserExecutionCadence::TimerAtSceneTime(deadline) => Some(
+                    self.clock
+                        .timer_delay_milliseconds(deadline, wall_time_ms, self.session.frame().time)
+                        .map_err(|error| error.to_string())?,
+                ),
+                BrowserExecutionCadence::AnimationFrame | BrowserExecutionCadence::Idle => {
+                    self.clock
+                        .observe_wake_time(wall_time_ms)
+                        .map_err(|error| error.to_string())?;
+                    None
+                }
+            }
+        };
+        Ok(WasmExecutionWake::from_plan(plan, timer_after_milliseconds))
     }
 
     /// Begin the next browser wall-time interval after required host work.
@@ -993,7 +1043,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn reanchor_live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentWake, String> {
+    ) -> Result<WasmExecutionWake, String> {
         self.require_callback_progression_available()?;
         self.live_segment()?;
         self.live_wake_clock
@@ -1599,8 +1649,15 @@ impl SemanticExecutionPlayer {
     pub fn live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentWake, String> {
+    ) -> Result<WasmExecutionWake, String> {
         self.live_segment_wake(wall_time_ms)
+    }
+
+    /// Derive the next generic browser wake from the canonical runtime/session.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = executionWake))]
+    pub fn execution_wake_wasm(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
+        self.execution_wake(wall_time_ms)
     }
 
     /// Reanchor the next browser interval after a required callback completes.
@@ -1609,7 +1666,7 @@ impl SemanticExecutionPlayer {
     pub fn reanchor_live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentWake, String> {
+    ) -> Result<WasmExecutionWake, String> {
         self.reanchor_live_segment_wake(wall_time_ms)
     }
 
@@ -2326,6 +2383,9 @@ mod tests {
         for field in ["scene_revision", "execution_revision", "frame_epoch"] {
             assert!(phase["token"]["publication"][field].is_string());
         }
+        let pending_wake = player.execution_wake(1_000.0).unwrap();
+        assert_eq!(pending_wake.cadence(), "idle");
+        assert_eq!(pending_wake.timer_after_milliseconds(), None);
 
         let source_row = phase["objects"]
             .as_array()
@@ -2357,6 +2417,8 @@ mod tests {
         player
             .commit_callback_phase_json(&batch.to_string())
             .unwrap();
+        let committed_wake = player.execution_wake(9_000.0).unwrap();
+        assert_eq!(committed_wake.cadence(), "animation_frame");
         assert_eq!(
             player.session.frame().objects[0].transform.translation.y,
             1.0
@@ -2534,6 +2596,60 @@ mod tests {
         assert!(player.tick_delta_json(0.0).unwrap().is_none());
         assert!(player.tick_delta_json(500.0).unwrap().is_none());
         assert_eq!(player.time(), 0.5);
+    }
+
+    #[test]
+    fn generic_wake_settles_a_playing_static_session() {
+        let mut scene = noon::Scene::new();
+        scene.add(&scene.circle(1.0).unwrap()).unwrap();
+        let mut player =
+            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 1)
+                .unwrap();
+        player.initial_delta_json().unwrap();
+
+        let wake = player.execution_wake(8_000.0).unwrap();
+        assert!(player.is_playing());
+        assert_eq!(wake.cadence(), "idle");
+        assert_eq!(wake.timer_after_milliseconds(), None);
+        assert!(!wake.present_now());
+        assert!(!player.session.has_replay_timeline_work());
+    }
+
+    #[test]
+    fn generic_wake_uses_runtime_activity_then_the_real_loop_boundary() {
+        let mut player = animated_player();
+        player.initial_delta_json().unwrap();
+        assert!(player.session.has_replay_timeline_work());
+
+        let active = player.execution_wake(10_000.0).unwrap();
+        assert_eq!(active.cadence(), "animation_frame");
+        assert!(player.tick_callback_phase_json(11_000.0).unwrap().is_none());
+        player.drain_delta_json().unwrap();
+
+        let settled = player.execution_wake(11_250.0).unwrap();
+        assert_eq!(settled.cadence(), "timer");
+        assert_eq!(settled.timer_after_milliseconds(), Some(750.0));
+
+        let overdue = player.execution_wake(12_100.0).unwrap();
+        assert_eq!(overdue.cadence(), "timer");
+        assert_eq!(overdue.timer_after_milliseconds(), Some(0.0));
+        assert!(player.tick_callback_phase_json(12_100.0).unwrap().is_none());
+        let replaying = player.execution_wake(12_100.0).unwrap();
+        assert_eq!(replaying.cadence(), "animation_frame");
+    }
+
+    #[test]
+    fn generic_wake_suppresses_timeline_cadence_while_paused() {
+        let mut player = animated_player();
+        player.pause();
+        let paused = player.execution_wake(1_000.0).unwrap();
+        assert_eq!(paused.cadence(), "idle");
+
+        player.resume();
+        let resumed = player.execution_wake(9_000.0).unwrap();
+        assert_eq!(resumed.cadence(), "animation_frame");
+        assert!(player.tick_callback_phase_json(9_250.0).unwrap().is_none());
+        assert_eq!(player.time(), 0.25);
     }
 
     #[test]

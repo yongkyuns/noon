@@ -81,6 +81,62 @@ impl PlaybackClock {
         Ok(self.running_time(elapsed))
     }
 
+    /// Anchor browser wake conversion without advancing the published scene sample.
+    ///
+    /// The semantic endpoint and this clock share one `performance.now()` origin. A
+    /// renderer-worker timestamp is only admission for a wake and must never become
+    /// the authored clock. Keeping `previous_ms` unchanged here also preserves normal
+    /// engine/render processing latency in the next actual scene-time sample.
+    pub(crate) fn observe_wake_time(&mut self, timestamp_ms: f64) -> Result<(), ClockError> {
+        self.validate_timestamp(timestamp_ms)?;
+        if self.playing && self.anchor_ms.is_none() {
+            self.anchor_ms = Some(timestamp_ms);
+        }
+        Ok(())
+    }
+
+    /// Convert one runtime-owned scene-time boundary to a relative browser timer.
+    ///
+    /// Timeline event selection remains in the runtime. This method only projects its
+    /// selected deadline through the existing playback anchor. `current_scene_time`
+    /// is the last coherently published runtime sample and disambiguates an explicit
+    /// seek to the exact loop endpoint from the first sample of the next loop.
+    pub(crate) fn timer_delay_milliseconds(
+        &mut self,
+        scene_deadline: f64,
+        timestamp_ms: f64,
+        current_scene_time: f64,
+    ) -> Result<f64, ClockError> {
+        self.validate_scene_time(scene_deadline)?;
+        if !current_scene_time.is_finite() || current_scene_time < 0.0 {
+            return Err(ClockError::InvalidSceneTime(current_scene_time));
+        }
+        self.observe_wake_time(timestamp_ms)?;
+        let Some(anchor_ms) = self.anchor_ms else {
+            return Ok(0.0);
+        };
+        let reference_ms = self
+            .previous_ms
+            .filter(|previous| *previous >= anchor_ms)
+            .unwrap_or(anchor_ms);
+        let reference_scene_time = self.anchor_scene_time + (reference_ms - anchor_ms) / 1_000.0;
+        let absolute_deadline = match self.loop_duration {
+            Some(duration) if current_scene_time == duration && scene_deadline == duration => {
+                reference_scene_time
+            }
+            Some(duration) => {
+                let cycle = (reference_scene_time / duration).floor();
+                cycle * duration + scene_deadline
+            }
+            None => scene_deadline,
+        };
+        let wall_deadline_ms = anchor_ms + (absolute_deadline - self.anchor_scene_time) * 1_000.0;
+        if !wall_deadline_ms.is_finite() {
+            return Err(ClockError::NonFiniteTimestamp(wall_deadline_ms));
+        }
+        Ok((wall_deadline_ms - timestamp_ms).max(0.0))
+    }
+
     pub fn pause(&mut self) {
         if !self.playing {
             return;
@@ -261,6 +317,32 @@ mod tests {
         assert!(clock.is_playing());
         assert_eq!(clock.scene_time(7_000.0).unwrap(), 0.5);
         assert_eq!(clock.scene_time(7_250.0).unwrap(), 0.75);
+    }
+
+    #[test]
+    fn wake_observation_uses_engine_origin_without_consuming_processing_latency() {
+        let mut clock = PlaybackClock::looping(5.0).unwrap();
+        clock.observe_wake_time(10_000.0).unwrap();
+        assert_eq!(
+            clock.timer_delay_milliseconds(1.0, 10_250.0, 0.0).unwrap(),
+            750.0
+        );
+        assert_eq!(clock.scene_time(10_500.0).unwrap(), 0.5);
+    }
+
+    #[test]
+    fn loop_deadline_stays_due_until_the_runtime_consumes_the_wrap() {
+        let mut clock = PlaybackClock::looping(5.0).unwrap();
+        clock.observe_wake_time(100.0).unwrap();
+        assert_eq!(
+            clock.timer_delay_milliseconds(5.0, 5_200.0, 0.0).unwrap(),
+            0.0
+        );
+        assert!((clock.scene_time(5_200.0).unwrap() - 0.1).abs() <= 1.0e-12);
+        assert_eq!(
+            clock.timer_delay_milliseconds(5.0, 5_200.0, 0.1).unwrap(),
+            4_900.0
+        );
     }
 
     #[test]

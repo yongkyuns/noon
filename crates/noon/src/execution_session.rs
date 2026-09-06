@@ -765,6 +765,15 @@ impl ExecutionSession {
             .with_additional_timeline(self.signal_timeline.wake_state())
     }
 
+    /// Whether looping playback must revisit authored timeline history after the
+    /// current runtime wake state settles.
+    ///
+    /// This is an O(1) query over the runtime and scalar-signal timeline indices.
+    /// It does not scan tracks or create a host-side schedule.
+    pub fn has_replay_timeline_work(&self) -> bool {
+        self.runtime.has_timeline_channels() || !self.signal_timeline.is_empty()
+    }
+
     /// Consume renderer-facing invalidation state accumulated by the runtime.
     pub fn take_frame_changes(&mut self) -> FrameChanges {
         self.runtime.take_frame_changes()
@@ -1975,6 +1984,7 @@ mod tests {
             session.wake_state().timeline(),
             TimelineWakeState::Continuous
         );
+        assert!(session.has_replay_timeline_work());
 
         session.seek(1.0).unwrap();
         assert_eq!(
