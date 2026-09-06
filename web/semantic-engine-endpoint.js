@@ -311,6 +311,9 @@ export async function attachSemanticEngine(
         if (result.interrupted) return;
         continue;
       }
+      // Ready means the entire ordered phase is coherent. Publish intermediate
+      // frames as well as endpoints so realtime continuation remains visible.
+      const readyPublication = send(player.drainDeltaJson());
       if (!reachedEndpoint) {
         // A required callback stalls simulation; exclude its wall latency from
         // the next Rust wake anchor after all same-timestamp retries finish.
@@ -320,10 +323,8 @@ export async function attachSemanticEngine(
         return;
       }
 
-      const endpointPublication = send(player.drainDeltaJson());
-
       emitContinuationWake("idle", null, true);
-      if (!await settleContinuationPublication(endpointPublication)) return;
+      if (!await settleContinuationPublication(readyPublication)) return;
       player.completeLiveSegment();
       const completionPublication = send(player.drainDeltaJson());
       if (!await settleContinuationPublication(completionPublication)) return;
