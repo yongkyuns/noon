@@ -160,7 +160,7 @@ async function recoverAndPresentWebGlContext() {
       flushBootstrapQueue();
       drainTransport();
     }
-    if (needsPresent) scheduleFrame();
+    scheduleFrame();
   } catch (error) {
     fail(error, null);
   } finally {

@@ -70,6 +70,7 @@ function metrics() {
     uploadBytes: renderer?.lastBytesUploaded() ?? 0,
     geometryCacheMisses: renderer?.lastGeometryCacheMisses() ?? 0,
     rendererBackend: renderer?.rendererBackend() ?? null,
+    gpuGeneration: renderer?.gpuGeneration() ?? null,
     backingWidth,
     backingHeight,
     cssWidth: canvas.clientWidth,

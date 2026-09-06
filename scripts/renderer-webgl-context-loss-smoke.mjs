@@ -201,6 +201,7 @@ try {
   assert.ok(recovered, `WebGL context did not recover: ${lastRecoveryError ?? "no frame presented"}`);
   assert.equal(recovered.error, null, "recovered renderer reported an error");
   assert.equal(recovered.rendererBackend, "WebGL2", "recovered renderer changed backend");
+  assert.equal(recovered.gpuGeneration, baseline.metrics.gpuGeneration + 1, "recovery must replace the GPU generation once");
   assert.equal(recovered.revision, baseline.metrics.revision, "recovery reset scene revision");
   assert.equal(recovered.objectCount, baseline.metrics.objectCount, "recovery reset object count");
   assert.ok(Math.abs(recovered.time - sampleTime) < 1e-6, "recovery changed semantic playhead time");
