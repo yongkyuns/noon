@@ -2421,7 +2421,15 @@ mod tests {
     #[test]
     fn first_positive_time_hold_preserves_initial_history_and_same_time_track_order() {
         let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
         let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         session.advance_to(1.0).unwrap();
         session
