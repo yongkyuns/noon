@@ -655,6 +655,98 @@ pub fn ordinary_affine_continuation_program(
         .map_err(|error| error.to_string())
 }
 
+/// Ordinary continuation that creates fully configured detached primitives after
+/// a shared wait, then admits them through the same live session.
+pub struct OrdinaryLivePrimitiveConstructionContinuation {
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.wait_segment(1.0)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            1 => {
+                let mut circle_options =
+                    crate::ManimPrimitiveOptions::circle(0.3).map_err(|error| error.to_string())?;
+                circle_options
+                    .set_translation(2.0, -1.0)
+                    .map_err(|error| error.to_string())?;
+                circle_options
+                    .set_scale(1.5, 1.5)
+                    .map_err(|error| error.to_string())?;
+                circle_options
+                    .set_fill(0.0, 0.4, 1.0, 0.6)
+                    .map_err(|error| error.to_string())?;
+                circle_options
+                    .set_stroke_width(0.08)
+                    .map_err(|error| error.to_string())?;
+                circle_options
+                    .set_stroke_opacity(0.9)
+                    .map_err(|error| error.to_string())?;
+                let circle = live
+                    .create_manim_primitive(circle_options)
+                    .map_err(|error| error.to_string())?;
+                if live.contains(&circle).map_err(|error| error.to_string())? {
+                    return Err("new live Circle must be detached before admission".into());
+                }
+                live.add(&circle).map_err(|error| error.to_string())?;
+
+                let mut square_options =
+                    crate::ManimPrimitiveOptions::square(0.5).map_err(|error| error.to_string())?;
+                square_options
+                    .set_translation(-2.0, 1.0)
+                    .map_err(|error| error.to_string())?;
+                square_options
+                    .set_rotation(0.25)
+                    .map_err(|error| error.to_string())?;
+                square_options
+                    .set_color(0.2, 0.9, 0.3, 1.0)
+                    .map_err(|error| error.to_string())?;
+                square_options
+                    .set_object_opacity(0.75)
+                    .map_err(|error| error.to_string())?;
+                let square = live
+                    .create_manim_primitive(square_options)
+                    .map_err(|error| error.to_string())?;
+                if live.contains(&square).map_err(|error| error.to_string())? {
+                    return Err("new live Square must be detached before admission".into());
+                }
+                live.add(&square).map_err(|error| error.to_string())?;
+
+                self.stage = 2;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary live primitive construction resumed after it finished".into()),
+        }
+    }
+}
+
+/// Build the paired Python/Rust live primitive construction example without a
+/// platform host. Circle and Square options are validated before either
+/// detached identity is published; admission remains a separate live action.
+pub fn ordinary_live_primitive_construction_program(
+) -> Result<LiveProgram<OrdinaryLivePrimitiveConstructionContinuation>, String> {
+    let mut scene = Scene::new();
+    let mut anchor = scene.circle(0.2).map_err(|error| error.to_string())?;
+    anchor
+        .set_fill(1.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    scene.add(&anchor).map_err(|error| error.to_string())?;
+    scene
+        .into_live_program(OrdinaryLivePrimitiveConstructionContinuation { stage: 0 })
+        .map_err(|error| error.to_string())
+}
+
 /// Scalar continuation that keeps the signal timeline and persistent setter in Rust.
 pub struct OrdinaryValueTrackerContinuation {
     tracker: ValueTracker,
@@ -2213,6 +2305,34 @@ mod continuation_tests {
         let publication = program.take_renderer_publication().context();
         program.admit_publication(publication).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[test]
+    fn ordinary_live_primitive_construction_publishes_detached_options_then_admits_locally() {
+        let mut program = ordinary_live_primitive_construction_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::ReadyToResume
+        ));
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert!(
+            program.session().wake_state().frame_pending(),
+            "final live admissions must retain one renderer publication"
+        );
+        program.take_renderer_publication();
+
+        let live = program.session();
+        assert_eq!(live.frame().time, 1.0);
+        assert_eq!(live.frame().objects.len(), 3);
+        assert_eq!(live.frame().objects[1].transform.translation.x, 2.0);
+        assert_eq!(live.frame().objects[1].transform.translation.y, -1.0);
+        assert_eq!(live.frame().objects[2].transform.translation.x, -2.0);
+        assert_eq!(live.frame().objects[2].transform.translation.y, 1.0);
     }
 
     #[test]

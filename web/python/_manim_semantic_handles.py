@@ -410,7 +410,13 @@ def _constructor_color(name: str, value: object) -> _base.Color:
     return value
 
 
-def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]) -> None:
+def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) -> None:
+    """Apply Python constructor coercions to one shared typed target.
+
+    The target is either an already-published opaque handle during initial
+    authoring or an inert Rust primitive candidate. Both routes perform the
+    semantic validation in Rust; Python only applies public argument coercions.
+    """
     options = dict(kwargs)
     allowed = {
         "position", "rotation", "scale", "fill", "stroke",
@@ -422,7 +428,6 @@ def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]
     if unknown:
         raise TypeError(f"unsupported Mobject constructor option(s): {', '.join(unknown)}")
 
-    handle = self._semantic_handle
     if "position" in options:
         value = _ir._vec2("position", options["position"])
         handle.setTranslation(value["x"], value["y"])
@@ -471,6 +476,56 @@ def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]
         handle.setStrokeOpacity(_phase_b._opacity("stroke_opacity", options["stroke_opacity"]))
 
 
+def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]) -> None:
+    _apply_shared_constructor_options(self._semantic_handle, kwargs)
+
+
+def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
+    if color is not None:
+        parsed = _constructor_color("color", color)
+        handle.setColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+
+
+def _live_primitive_context():
+    """Return the one retained context that may publish a new primitive.
+
+    Before an ordinary segment starts there is no live session to protect, so
+    the normal constructor keeps the initial authoring route. Once a session
+    exists, direct authoring-store insertion would advance the revision outside
+    its published mutation transaction.
+    """
+    from _manim_reactive import _current_authoring_scene
+
+    scene = _current_authoring_scene()
+    context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None:
+        return None
+    ownership = str(context.liveExecutionOwnership())
+    if ownership in {"active", "returned"}:
+        return context
+    if ownership == "transferred":
+        raise RuntimeError("live primitive construction is unavailable while execution is transferred")
+    return None
+
+
+def _live_primitive_handle(
+    context: object,
+    shape: str,
+    size: float,
+    color: _base.Color | None,
+    kwargs: dict[str, Any],
+):
+    begin = (
+        context.beginLiveManimCircle
+        if shape == "circle"
+        else context.beginLiveManimSquare
+    )
+    candidate = begin(size)
+    _apply_shared_constructor_options(candidate, kwargs)
+    _apply_constructor_color(candidate, color)
+    return context.liveCreateManimPrimitive(candidate)
+
+
 def _circle_init(
     self: _compat.Circle,
     radius: float = 1.0,
@@ -482,11 +537,16 @@ def _circle_init(
         _ORIGINAL_CIRCLE_INIT(self, radius, color=color, **kwargs)
         return
     value = _ir._positive_number("radius", radius)
-    _attach_shared_handle(self, _create_circle_handle(value))
+    context = _live_primitive_context()
+    if context is not None:
+        handle = _live_primitive_handle(context, "circle", value, color, kwargs)
+        _attach_shared_handle(self, handle)
+        self._canonical_live_target_context = context
+    else:
+        _attach_shared_handle(self, _create_circle_handle(value))
+        _apply_shared_constructor_kwargs(self, kwargs)
+        _apply_constructor_color(self._semantic_handle, color)
     self.radius = value
-    _apply_shared_constructor_kwargs(self, kwargs)
-    if color is not None:
-        self.set_color(color)
 
 
 def _rectangle_init(
@@ -521,13 +581,18 @@ def _square_init(
         _ORIGINAL_SQUARE_INIT(self, side_length, color=color, **kwargs)
         return
     value = _ir._positive_number("side_length", side_length)
-    _attach_shared_handle(self, _create_square_handle(value))
+    context = _live_primitive_context()
+    if context is not None:
+        handle = _live_primitive_handle(context, "square", value, color, kwargs)
+        _attach_shared_handle(self, handle)
+        self._canonical_live_target_context = context
+    else:
+        _attach_shared_handle(self, _create_square_handle(value))
+        _apply_shared_constructor_kwargs(self, kwargs)
+        _apply_constructor_color(self._semantic_handle, color)
     self.side_length = value
     self.width_value = value
     self.height_value = value
-    _apply_shared_constructor_kwargs(self, kwargs)
-    if color is not None:
-        self.set_color(color)
 
 
 def _line_init(
