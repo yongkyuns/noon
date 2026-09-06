@@ -216,3 +216,68 @@ test("a stale no-op cannot acknowledge ahead of a pending present", async () => 
     "the exact already-presented publication may acknowledge without a redraw",
   );
 });
+
+async function createManagedWakeHarness(renderResults = [true]) {
+  const harness = createWorkerHarness(renderResults);
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
+  for (const callback of harness.animationFrames.splice(0)) callback(0);
+  let clock = 0;
+  let timerId = 0;
+  const timers = new Map();
+  harness.context.performance = { now: () => clock };
+  harness.context.setTimeout = (callback, delay) => {
+    const id = ++timerId;
+    timers.set(id, { callback, delay });
+    return id;
+  };
+  harness.context.clearTimeout = (id) => timers.delete(id);
+  return { ...harness, timers, setClock(value) { clock = value; } };
+}
+
+test("Rust wake directives admit one animation drive and one deadline without idle polling", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  assert.equal(harness.animationFrames.length, 1);
+  harness.animationFrames.shift()(10);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.animationFrames.length, 0, "next engine response owns the next wake");
+
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:1000});', harness.context);
+  assert.equal(harness.animationFrames.length, 0);
+  assert.equal(harness.timers.size, 1);
+  const [timerId, timer] = [...harness.timers][0];
+  assert.equal(timer.delay, 1000);
+  harness.setClock(1000);
+  harness.timers.delete(timerId);
+  timer.callback();
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 2);
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.animationFrames.length, 0);
+
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.animationFrames.length, 0);
+});
+
+test("idle continuation retries a pending surface publication without advancing the engine", async () => {
+  const harness = await createManagedWakeHarness([true, false, true]);
+  vm.runInContext('consumeDelta("endpoint", {session:12, sequence:4});', harness.context);
+  assert.equal(harness.animationFrames.length, 1, "transient surface failure requests a draw retry");
+  harness.animationFrames.shift()(10);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "execution_presented").length, 1);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
+  assert.equal(harness.animationFrames.length, 0);
+});
+
+test("replacement cancels an obsolete continuation deadline before it can tick the next engine", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:1000});', harness.context);
+  const timer = [...harness.timers.values()][0];
+  vm.runInContext('detachRenderPort();', harness.context);
+  assert.equal(harness.timers.size, 0);
+  harness.setClock(1000);
+  timer.callback();
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
+});

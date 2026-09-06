@@ -114,7 +114,7 @@ test("retained readiness publishes preload telemetry before playback ticks begin
 
 test("stale frame callbacks cannot tick or spawn a second loop after transition", () => {
   const schedule = functionSlice("scheduleFrame", "frame");
-  assert.match(schedule, /frame\(timestamp, generation\)/);
+  assert.match(schedule, /frame\(timestamp, generation, ticket\)/);
   const frame = functionSlice("frame", "drainGpuDiagnostics");
   const staleGuard = frame.indexOf("generation !== frameLoopGeneration");
   const tick = frame.indexOf('renderPort?.postMessage({ type: "tick", timestamp });');

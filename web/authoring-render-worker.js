@@ -46,6 +46,11 @@ let running = false;
 let stopped = false;
 let frameLoopGeneration = 0;
 let lastFrameTimestamp = null;
+// Optional cross-worker projection of Rust's wake decision. This owns browser
+// timer handles only; scene time and segment completion remain in the engine.
+let engineWake = null;
+let scheduledFrame = null;
+let scheduleTicket = 0;
 let presentedFrames = 0;
 let modeSwitches = 0;
 let rendererRebuilds = 0;
@@ -242,6 +247,7 @@ function resize(message) {
   if (mode === MODE_RETAINED && dimensionsChanged) {
     needsPresent = true;
     tryPresent();
+    if (engineWake !== null) scheduleFrame();
   }
 }
 
@@ -276,6 +282,8 @@ function attachRenderPort(port) {
 }
 
 function detachRenderPort() {
+  cancelScheduledFrame();
+  engineWake = null;
   renderPort?.close?.();
   renderPort = null;
 }
@@ -291,6 +299,24 @@ function resetTransportState() {
 
 function handleEngineMessage(message) {
   if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.type === "execution_wake") {
+    try {
+      const { cadence, timerAfterMilliseconds } = message;
+      if (!["animation_frame", "timer", "idle"].includes(cadence) ||
+          (cadence === "timer" &&
+           (!Number.isFinite(timerAfterMilliseconds) || timerAfterMilliseconds < 0))) {
+        throw new Error("invalid semantic execution wake directive");
+      }
+      engineWake = {
+        cadence,
+        deadline: cadence === "timer" ? performance.now() + timerAfterMilliseconds : null,
+      };
+      scheduleFrame();
+    } catch (error) {
+      fail(error, null);
+    }
     return;
   }
   if (message.type === "retained_resources") {
@@ -398,6 +424,7 @@ function consumeDelta(json, publication = null) {
   pendingPresentationPublication = publication;
   needsPresent = true;
   tryPresent();
+  if (engineWake !== null) scheduleFrame();
   return true;
 }
 
@@ -588,21 +615,43 @@ function nextRenderOpportunity() {
   });
 }
 
-function scheduleFrame(generation = frameLoopGeneration) {
-  if (!running) {
-    return;
-  }
-  if (typeof self.requestAnimationFrame === "function") {
-    self.requestAnimationFrame((timestamp) => frame(timestamp, generation));
-  } else {
-    setTimeout(() => frame(performance.now(), generation), 16);
+function cancelScheduledFrame() {
+  scheduleTicket += 1;
+  if (scheduledFrame !== null) {
+    if (scheduledFrame.kind === "animation") {
+      self.cancelAnimationFrame?.(scheduledFrame.handle);
+    } else {
+      clearTimeout(scheduledFrame.handle);
+    }
+    scheduledFrame = null;
   }
 }
 
-function frame(timestamp, generation) {
-  if (generation !== frameLoopGeneration || !running || !drainGpuDiagnostics()) {
-    return;
+function scheduleFrame(generation = frameLoopGeneration) {
+  cancelScheduledFrame();
+  if (!running) return;
+  const needsAnimationFrame = needsPresent || engineWake === null ||
+    engineWake.cadence === "animation_frame";
+  if (!needsAnimationFrame && engineWake.cadence === "idle") return;
+  const ticket = scheduleTicket;
+  if (needsAnimationFrame && typeof self.requestAnimationFrame === "function") {
+    scheduledFrame = {
+      kind: "animation",
+      handle: self.requestAnimationFrame((timestamp) => frame(timestamp, generation, ticket)),
+    };
+  } else {
+    const delay = needsAnimationFrame ? 16 : Math.max(0, engineWake.deadline - performance.now());
+    scheduledFrame = {
+      kind: "timer",
+      handle: setTimeout(() => frame(performance.now(), generation, ticket), delay),
+    };
   }
+}
+
+function frame(timestamp, generation, ticket) {
+  if (ticket !== scheduleTicket || generation !== frameLoopGeneration ||
+      !running || !drainGpuDiagnostics()) return;
+  scheduledFrame = null;
   lastFrameTimestamp = timestamp;
   if (needsPresent && tryPresent()) {
     flushBootstrapQueue();
@@ -612,10 +661,15 @@ function frame(timestamp, generation) {
     flushBootstrapQueue();
     drainTransport();
   }
-  if (!running || !drainGpuDiagnostics()) {
-    return;
+  if (!running || !drainGpuDiagnostics()) return;
+  const tickDue = engineWake === null || engineWake.cadence === "animation_frame" ||
+    (engineWake.cadence === "timer" && performance.now() >= engineWake.deadline);
+  if (tickDue) {
+    // One directive admits one engine drive. The response supplies the next
+    // Rust-derived directive, so an idle/waiting continuation never RAF-polls.
+    if (engineWake !== null) engineWake = { cadence: "idle", deadline: null };
+    renderPort?.postMessage({ type: "tick", timestamp });
   }
-  renderPort?.postMessage({ type: "tick", timestamp });
   scheduleFrame(generation);
 }
 
