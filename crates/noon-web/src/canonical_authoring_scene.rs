@@ -3239,6 +3239,21 @@ mod tests {
         resumed.live_complete_segment().unwrap();
         context.return_execution_player(resumed).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
+
+        context.begin_ordinary_wait(0.0).unwrap();
+        let mut zero_wait = context.resume_execution_player().unwrap();
+        assert!(zero_wait.live_wait(1.0).is_err());
+        let wake = zero_wait.live_segment_wake(1_000.0).unwrap();
+        assert_eq!(wake.cadence(), "timer");
+        assert_eq!(wake.timer_after_milliseconds(), Some(0.0));
+        assert!(zero_wait
+            .live_drive_segment_from_wall_time(1_000.0)
+            .unwrap());
+        zero_wait.live_complete_segment().unwrap();
+        assert!(!zero_wait.has_pending_live_segment());
+        assert!(zero_wait.live_segment_wake(1_000.0).is_err());
+        context.return_execution_player(zero_wait).unwrap();
+        assert!(context.resume_execution_player().is_err());
     }
 
     #[test]

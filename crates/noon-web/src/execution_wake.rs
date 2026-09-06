@@ -61,12 +61,11 @@ impl BrowserExecutionWakePlan {
         segment: ExecutionSegment,
     ) -> Self {
         let state = session.segment_state(segment);
-        let timeline =
-            if !state.is_complete() && matches!(state.timeline(), TimelineWakeState::Quiescent) {
-                TimelineWakeState::Deadline(session.frame().time)
-            } else {
-                state.timeline()
-            };
+        let timeline = if matches!(state.timeline(), TimelineWakeState::Quiescent) {
+            TimelineWakeState::Deadline(session.frame().time)
+        } else {
+            state.timeline()
+        };
         Self::from_parts(session.wake_state().frame_pending(), timeline)
     }
 
@@ -340,7 +339,7 @@ mod tests {
 
         session.advance_segment_to(segment, 0.0).unwrap();
         session.complete_segment(&mut store, segment).unwrap();
-        assert!(BrowserExecutionWakePlan::from_pending_segment(&session, segment).is_idle());
+        assert!(BrowserExecutionWakePlan::from_segment(&session, segment).is_idle());
     }
 
     #[test]

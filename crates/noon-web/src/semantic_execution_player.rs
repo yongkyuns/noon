@@ -620,12 +620,8 @@ impl SemanticExecutionPlayer {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn require_completed_live_segment(&self) -> Result<(), String> {
-        if let Some(segment) = self.live_segment {
-            if !self.session.segment_state(segment).is_complete() {
-                return Err(
-                    "advance the current live segment to its endpoint before continuing".into(),
-                );
-            }
+        if self.live_segment.is_some() {
+            return Err("complete the current live segment before continuing".into());
         }
         Ok(())
     }
@@ -786,8 +782,7 @@ impl SemanticExecutionPlayer {
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn has_pending_live_segment(&self) -> bool {
-        self.live_segment
-            .is_some_and(|segment| !self.session.segment_state(segment).is_complete())
+        self.live_segment.is_some()
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -904,6 +899,7 @@ impl SemanticExecutionPlayer {
         .complete_segment(segment)
         .map_err(|error| error.to_string())?;
         self.clock = clock;
+        self.live_segment = None;
         self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
