@@ -283,6 +283,45 @@ where
                 super::affine::lower_rotation_channel(source, from, angle)
                     .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?
             }
+            PreparedSemanticScheduledAnimationPayload::Indicate {
+                scale_factor,
+                color,
+                scale_center,
+            } => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.remover
+                    || leaf.options.introducer
+                    || leaf.options.reverse_rate_function
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                            animation: leaf.animation,
+                            remover: leaf.options.remover,
+                            introducer: leaf.options.introducer,
+                        },
+                    );
+                }
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    index,
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                let channels = super::affine::lower_indicate_channels(
+                    source,
+                    from,
+                    scale_factor,
+                    color,
+                    scale_center,
+                )
+                .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
+                for channel in channels {
+                    push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+                continue;
+            }
             PreparedSemanticScheduledAnimationPayload::Fade { direction } => {
                 if leaf.options.lag_ratio != 0.0
                     || leaf.options.path_arc != 0.0

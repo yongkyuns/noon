@@ -67,6 +67,11 @@ pub enum SemanticScheduledAnimationPayload {
         target_state: SemanticNodeId,
         interpolation: SemanticTransformInterpolation,
     },
+    Indicate {
+        scale_factor: f64,
+        color: noon_core::Color,
+        scale_center: noon_core::SemanticVec3,
+    },
     Rotate {
         angle: f64,
     },
@@ -157,6 +162,11 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     TransformTo {
         target_state: SemanticTransactionNodeRef,
         interpolation: SemanticTransformInterpolation,
+    },
+    Indicate {
+        scale_factor: f64,
+        color: noon_core::Color,
+        scale_center: noon_core::SemanticVec3,
     },
     Rotate {
         angle: f64,
@@ -536,6 +546,15 @@ fn published_payload(
         ScheduledAnimationPayload::Rotate { angle } => {
             SemanticScheduledAnimationPayload::Rotate { angle }
         }
+        ScheduledAnimationPayload::Indicate {
+            scale_factor,
+            color,
+            scale_center,
+        } => SemanticScheduledAnimationPayload::Indicate {
+            scale_factor,
+            color,
+            scale_center,
+        },
         ScheduledAnimationPayload::Fade { direction } => {
             SemanticScheduledAnimationPayload::Fade { direction }
         }
@@ -565,6 +584,15 @@ fn prepared_payload(
         ScheduledAnimationPayload::Rotate { angle } => {
             PreparedSemanticScheduledAnimationPayload::Rotate { angle }
         }
+        ScheduledAnimationPayload::Indicate {
+            scale_factor,
+            color,
+            scale_center,
+        } => PreparedSemanticScheduledAnimationPayload::Indicate {
+            scale_factor,
+            color,
+            scale_center,
+        },
         ScheduledAnimationPayload::Fade { direction } => {
             PreparedSemanticScheduledAnimationPayload::Fade { direction }
         }
@@ -592,6 +620,12 @@ enum AnimationDeclarationIntent<R> {
         target: R,
         target_state: R,
         interpolation: SemanticTransformInterpolation,
+    },
+    Indicate {
+        target: R,
+        scale_factor: f64,
+        color: noon_core::Color,
+        scale_center: noon_core::SemanticVec3,
     },
     Rotate {
         target: R,
@@ -669,6 +703,22 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     target: *target,
                     target_state: *target_state,
                     interpolation: *interpolation,
+                }
+            }
+            SemanticAnimationIntent::Indicate {
+                target,
+                scale_factor,
+                color,
+                scale_center,
+            } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::Indicate {
+                    target: *target,
+                    scale_factor: *scale_factor,
+                    color: *color,
+                    scale_center: *scale_center,
                 }
             }
             SemanticAnimationIntent::Rotate { target, angle } => {
@@ -782,6 +832,17 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         target_state: (*target_state).into(),
                         interpolation: *interpolation,
                     },
+                    SemanticAnimationIntent::Indicate {
+                        target,
+                        scale_factor,
+                        color,
+                        scale_center,
+                    } => AnimationDeclarationIntent::Indicate {
+                        target: (*target).into(),
+                        scale_factor: *scale_factor,
+                        color: *color,
+                        scale_center: *scale_center,
+                    },
                     SemanticAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: (*target).into(),
@@ -842,6 +903,17 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         target_state: *target_state,
                         interpolation: *interpolation,
                     },
+                    SemanticTransactionAnimationIntent::Indicate {
+                        target,
+                        scale_factor,
+                        color,
+                        scale_center,
+                    } => AnimationDeclarationIntent::Indicate {
+                        target: *target,
+                        scale_factor: *scale_factor,
+                        color: *color,
+                        scale_center: *scale_center,
+                    },
                     SemanticTransactionAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: *target,
@@ -899,7 +971,8 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .object_state(*target_state)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
-            AnimationDeclarationIntent::Rotate { target, .. } => {
+            AnimationDeclarationIntent::Rotate { target, .. }
+            | AnimationDeclarationIntent::Indicate { target, .. } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
@@ -970,6 +1043,11 @@ enum ScheduledAnimationPayload<R> {
     TransformTo {
         target_state: R,
         interpolation: SemanticTransformInterpolation,
+    },
+    Indicate {
+        scale_factor: f64,
+        color: noon_core::Color,
+        scale_center: noon_core::SemanticVec3,
     },
     Rotate {
         angle: f64,
@@ -1119,6 +1197,34 @@ where
                     payload: ScheduledAnimationPayload::TransformTo {
                         target_state,
                         interpolation,
+                    },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::Indicate {
+            target,
+            scale_factor,
+            color,
+            scale_center,
+        } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options =
+                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
+                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::Indicate {
+                        scale_factor,
+                        color,
+                        scale_center,
                     },
                     options,
                 },

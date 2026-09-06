@@ -16,7 +16,7 @@ use crate::{
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
-    MobjectFamily, ValueTracker,
+    MobjectFamily, MobjectFamilyMember, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -472,6 +472,34 @@ impl<'a> LiveSession<'a> {
         Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
     }
 
+    /// Publish one detached ordered family through this session's semantic owner.
+    pub fn family(
+        &mut self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<MobjectFamily, LiveSessionError> {
+        if members.is_empty() {
+            return Err(LiveSessionError::Mobject(
+                "semantic family requires at least one member".into(),
+            ));
+        }
+        for member in members {
+            if !Rc::ptr_eq(self.store, member.store()) {
+                return Err(LiveSessionError::ForeignMobjectStore);
+            }
+            member.validate().map_err(LiveSessionError::Mobject)?;
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
+        for member in members {
+            transaction.add_member(family, member.node_id());
+        }
+        let result = self.apply(transaction)?;
+        let node = result
+            .resolve(family)
+            .expect("committed family token resolves to one semantic identity");
+        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::Mobject)
+    }
+
     /// Publish one fully validated detached Manim primitive through this session.
     ///
     /// The new identity has no root membership, execution slot, or frame work
@@ -923,6 +951,10 @@ impl<'a> LiveSession<'a> {
                 Request::Indicate {
                     target: target.node_id(),
                     indication: *indication,
+                    scale_center: {
+                        let center = self.effective_layout(target)?.center;
+                        SemanticVec3::new(center.0, center.1, 0.0)
+                    },
                     options: *options,
                 }
             }
@@ -935,6 +967,7 @@ impl<'a> LiveSession<'a> {
                 Request::FamilyIndicate {
                     target: target.node_id(),
                     indication: *indication,
+                    scale_center: self.family_effective_center(target)?,
                     options: *options,
                 }
             }
@@ -1021,6 +1054,47 @@ impl<'a> LiveSession<'a> {
                 options: *options,
             },
         })
+    }
+
+    fn family_effective_center(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<SemanticVec3, LiveSessionError> {
+        let leaves = self
+            .store
+            .borrow()
+            .ordered_family_leaf_pairs(family.node_id(), family.node_id())
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?
+            .into_iter()
+            .map(|(leaf, _)| leaf)
+            .collect::<Vec<_>>();
+        let mut bounds: Option<Bounds2D64> = None;
+        for leaf in leaves {
+            let leaf = Mobject::from_node(Rc::clone(self.store), leaf)
+                .map_err(LiveSessionError::Mobject)?;
+            let layout = self.effective_layout(&leaf)?;
+            let leaf_bounds = Bounds2D64 {
+                min_x: layout.center.0 - layout.width * 0.5,
+                min_y: layout.center.1 - layout.height * 0.5,
+                max_x: layout.center.0 + layout.width * 0.5,
+                max_y: layout.center.1 + layout.height * 0.5,
+            };
+            bounds = Some(match bounds {
+                Some(current) => Bounds2D64 {
+                    min_x: current.min_x.min(leaf_bounds.min_x),
+                    min_y: current.min_y.min(leaf_bounds.min_y),
+                    max_x: current.max_x.max(leaf_bounds.max_x),
+                    max_y: current.max_y.max(leaf_bounds.max_y),
+                },
+                None => leaf_bounds,
+            });
+        }
+        let bounds = bounds.expect("validated semantic family has at least one ordered leaf");
+        Ok(SemanticVec3::new(
+            (bounds.min_x + bounds.max_x) * 0.5,
+            (bounds.min_y + bounds.max_y) * 0.5,
+            0.0,
+        ))
     }
 
     /// Start a continuation wait without allocating a scheduler track.
@@ -3328,7 +3402,7 @@ mod recursive_composition_tests {
     }
 
     #[test]
-    fn sequenced_family_indicate_restores_the_preceding_transform_endpoint() {
+    fn same_family_transform_then_indicate_is_rejected_atomically() {
         let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
@@ -3360,17 +3434,46 @@ mod recursive_composition_tests {
             ],
         };
         let mut live = scene.live(&mut session);
-        let segment = live
+        let before = live.session.publication_context();
+        assert!(live
             .declare_and_activate_composition(&request, AnimationOptions::new())
+            .is_err());
+        assert_eq!(live.session.publication_context(), before);
+        assert_eq!(live.effective(&first).unwrap().transform.translation.x, 0.0);
+        assert_eq!(
+            live.effective(&second).unwrap().transform.translation.x,
+            0.0
+        );
+    }
+
+    #[test]
+    fn family_indicate_scales_members_about_the_shared_family_center() {
+        let mut scene = Scene::new();
+        let mut left = scene.square(1.0).unwrap();
+        let mut right = scene.square(1.0).unwrap();
+        left.set_translation(-2.0, 0.0).unwrap();
+        right.set_translation(2.0, 0.0).unwrap();
+        scene.add(&left).unwrap();
+        scene.add(&right).unwrap();
+        let family = scene.family(&[&left, &right]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_family_indicate(
+                &family,
+                IndicateOptions::new(2.0, noon_core::YELLOW),
+                AnimationOptions::new().run_time(2.0),
+            )
             .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 1.0)
+            .unwrap();
+        assert_eq!(live.effective(&left).unwrap().transform.translation.x, -4.0);
+        assert_eq!(live.effective(&right).unwrap().transform.translation.x, 4.0);
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
         live.complete_segment(segment).unwrap();
-
-        assert_eq!(live.effective(&first).unwrap().transform.translation.x, 2.0);
-        assert_eq!(
-            live.effective(&second).unwrap().transform.translation.x,
-            4.0
-        );
+        assert_eq!(live.effective(&left).unwrap().transform.translation.x, -2.0);
+        assert_eq!(live.effective(&right).unwrap().transform.translation.x, 2.0);
     }
 }

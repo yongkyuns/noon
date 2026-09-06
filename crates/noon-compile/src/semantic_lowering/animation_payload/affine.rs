@@ -461,6 +461,33 @@ where
 
     for leaf in schedule.leaves() {
         validate_leaf_matches_declaration(store, leaf)?;
+        if let SemanticScheduledAnimationPayload::Indicate {
+            scale_factor,
+            color,
+            scale_center,
+        } = leaf.payload
+        {
+            let source = object_state(store, leaf, leaf.target)?;
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+                captured
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or(
+                    SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+                captures.insert(leaf.execution_object_id, captured);
+                captured
+            };
+            let channels = lower_indicate_channels(source, from, scale_factor, color, scale_center)
+                .map_err(|issue| existing_payload_error(leaf, leaf.target, issue))?;
+            for channel in channels {
+                push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+            }
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::Rotate { angle } = leaf.payload {
             let source = object_state(store, leaf, leaf.target)?;
             let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
@@ -487,6 +514,7 @@ where
                 interpolation,
             } => (target_state, interpolation),
             SemanticScheduledAnimationPayload::Fade { .. }
+            | SemanticScheduledAnimationPayload::Indicate { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
             | SemanticScheduledAnimationPayload::Add
@@ -501,7 +529,7 @@ where
         let source = object_state(store, leaf, leaf.target)?;
         let target = object_state(store, leaf, target_state)?;
         validate_affine_payload(source, target, leaf.options)
-            .map_err(|issue| existing_payload_error(leaf, issue))?;
+            .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
         let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
             captured
         } else {
@@ -516,7 +544,7 @@ where
             captured
         };
         let channels = lower_transform_channels(source, target, from, interpolation)
-            .map_err(|issue| existing_payload_error(leaf, issue))?;
+            .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
         }
@@ -549,6 +577,21 @@ fn validate_leaf_matches_declaration(
         SemanticAnimationIntent::Rotate { target, angle }
             if *target == leaf.target
                 && leaf.payload == SemanticScheduledAnimationPayload::Rotate { angle: *angle } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::Indicate {
+            target,
+            scale_factor,
+            color,
+            scale_center,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::Indicate {
+                    scale_factor: *scale_factor,
+                    color: *color,
+                    scale_center: *scale_center,
+                } =>
         {
             Ok(())
         }
@@ -588,19 +631,6 @@ fn validate_leaf_matches_declaration(
         _ => Err(SemanticAffineAnimationTrackError::ScheduleMismatch {
             animation: leaf.animation,
         }),
-    }
-}
-
-fn scheduled_target_state(leaf: &SemanticScheduledAnimationLeaf) -> SemanticNodeId {
-    match leaf.payload {
-        SemanticScheduledAnimationPayload::TransformTo { target_state, .. } => target_state,
-        SemanticScheduledAnimationPayload::Fade { .. }
-        | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
-        | SemanticScheduledAnimationPayload::Create
-        | SemanticScheduledAnimationPayload::Add
-        | SemanticScheduledAnimationPayload::Rotate { .. } => {
-            unreachable!("affine payload errors are only produced for TransformTo leaves")
-        }
     }
 }
 
@@ -1013,6 +1043,99 @@ pub(super) fn lower_affine_lifecycle_channels(
     Ok(channels)
 }
 
+pub(super) fn lower_indicate_channels(
+    source: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+    scale_factor: f64,
+    color: noon_core::Color,
+    scale_center: noon_core::SemanticVec3,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if !transform_is_finite(from.transform) {
+        return Err(AffinePayloadIssue::InvalidEffectiveTransform);
+    }
+    if !style_is_finite(from.style) {
+        return Err(AffinePayloadIssue::InvalidEffectiveStyle);
+    }
+    let factor = scale_factor as f32;
+    let center =
+        scale_center
+            .lower_xy_f32()
+            .map_err(|error| AffinePayloadIssue::InvalidTargetValue {
+                field: SemanticAffineAnimationField::Translation,
+                error,
+            })?;
+    let to_translation = center + (from.transform.translation - center) * factor;
+    let to_scale = from.transform.scale * factor;
+    if !to_translation.x.is_finite() || !to_translation.y.is_finite() {
+        return Err(AffinePayloadIssue::TargetValueOutOfRange(
+            SemanticAffineAnimationField::Translation,
+        ));
+    }
+    if !to_scale.x.is_finite() || !to_scale.y.is_finite() {
+        return Err(AffinePayloadIssue::TargetValueOutOfRange(
+            SemanticAffineAnimationField::Scale,
+        ));
+    }
+    let recolor = |current: Option<noon_core::Color>| {
+        current.map(|current| noon_core::Color {
+            alpha: current.alpha,
+            ..color
+        })
+    };
+    let to_fill = recolor(from.style.fill);
+    let to_stroke = recolor(from.style.stroke);
+    let mut channels = Vec::with_capacity(4);
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::Translation,
+        Property::Position,
+        TrackValues::Vec2 {
+            from: from.transform.translation,
+            to: to_translation,
+        },
+        SemanticAnimationCompletion::Release,
+        from.transform.translation != to_translation,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::Scale,
+        Property::Scale,
+        TrackValues::Vec2 {
+            from: from.transform.scale,
+            to: to_scale,
+        },
+        SemanticAnimationCompletion::Release,
+        from.transform.scale != to_scale,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::FillOpacity,
+        Property::Fill,
+        TrackValues::Color {
+            from: from.style.fill,
+            to: to_fill,
+        },
+        SemanticAnimationCompletion::Release,
+        from.style.fill != to_fill,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::StrokeOpacity,
+        Property::Stroke,
+        TrackValues::Color {
+            from: from.style.stroke,
+            to: to_stroke,
+        },
+        SemanticAnimationCompletion::Release,
+        from.style.stroke != to_stroke,
+        &mut channels,
+    )?;
+    Ok(channels)
+}
+
 pub(super) fn lower_transform_channels(
     source: &noon_core::SemanticObjectState,
     target: &noon_core::SemanticObjectState,
@@ -1167,6 +1290,7 @@ fn has_binding(source: &noon_core::SemanticObjectState, property: SemanticObject
 
 fn existing_payload_error(
     leaf: &SemanticScheduledAnimationLeaf,
+    target_state: SemanticNodeId,
     issue: AffinePayloadIssue,
 ) -> SemanticAffineAnimationTrackError {
     match issue {
@@ -1186,42 +1310,42 @@ fn existing_payload_error(
             SemanticAffineAnimationTrackError::UnsupportedContentChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: scheduled_target_state(leaf),
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedPointCorrespondence => {
             SemanticAffineAnimationTrackError::UnsupportedPointCorrespondence {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: scheduled_target_state(leaf),
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedStyleChange => {
             SemanticAffineAnimationTrackError::UnsupportedStyleChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: scheduled_target_state(leaf),
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedPainterOrderChange => {
             SemanticAffineAnimationTrackError::UnsupportedPainterOrderChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: scheduled_target_state(leaf),
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedBindingChange => {
             SemanticAffineAnimationTrackError::UnsupportedBindingChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: scheduled_target_state(leaf),
+                target_state,
             }
         }
         AffinePayloadIssue::UnsupportedDepthChange(field) => {
             SemanticAffineAnimationTrackError::UnsupportedDepthChange {
                 animation: leaf.animation,
                 target: leaf.target,
-                target_state: scheduled_target_state(leaf),
+                target_state,
                 field,
             }
         }
@@ -1243,7 +1367,7 @@ fn existing_payload_error(
         AffinePayloadIssue::InvalidTargetValue { field, error } => {
             SemanticAffineAnimationTrackError::InvalidTargetValue {
                 animation: leaf.animation,
-                target_state: scheduled_target_state(leaf),
+                target_state,
                 field,
                 error,
             }
@@ -1251,15 +1375,15 @@ fn existing_payload_error(
         AffinePayloadIssue::TargetValueOutOfRange(field) => {
             SemanticAffineAnimationTrackError::TargetValueOutOfRange {
                 animation: leaf.animation,
-                target_state: scheduled_target_state(leaf),
+                target_state,
                 field,
             }
         }
         AffinePayloadIssue::InvalidTargetStyle(error) => {
             SemanticAffineAnimationTrackError::InvalidTargetStyle {
                 animation: leaf.animation,
-                target_state: scheduled_target_state(leaf),
-                error: error.with_node(scheduled_target_state(leaf)),
+                target_state,
+                error: error.with_node(target_state),
             }
         }
     }
@@ -1401,6 +1525,57 @@ mod tests {
     ) -> SemanticAnimationScheduleProjection {
         lower_semantic_animation_schedule(store, index, animation, 4.0, AnimationOptions::new())
             .unwrap()
+    }
+
+    #[test]
+    fn indicate_scales_translation_about_shared_center_and_restores() {
+        let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
+        let from = EffectiveAnimationProperties {
+            transform: Transform2D {
+                translation: Vec2::new(-2.0, 1.0),
+                rotation: 0.0,
+                scale: Vec2::ONE,
+            },
+            style: Style {
+                fill: Some(Color::rgba(0.2, 0.3, 0.4, 0.5)),
+                ..Style::default()
+            },
+            appearance: 1.0,
+        };
+        let channels = lower_indicate_channels(
+            &source,
+            from,
+            2.0,
+            Color::rgba(1.0, 1.0, 0.0, 1.0),
+            SemanticVec3::new(0.0, 0.0, 0.0),
+        )
+        .unwrap();
+
+        let position = channels
+            .iter()
+            .find(|channel| channel.property == Property::Position)
+            .unwrap();
+        assert_eq!(
+            position.values,
+            TrackValues::Vec2 {
+                from: Vec2::new(-2.0, 1.0),
+                to: Vec2::new(-4.0, 2.0),
+            }
+        );
+        assert_eq!(position.completion, SemanticAnimationCompletion::Release);
+        let fill = channels
+            .iter()
+            .find(|channel| channel.property == Property::Fill)
+            .unwrap();
+        assert_eq!(
+            fill.values,
+            TrackValues::Color {
+                from: Some(Color::rgba(0.2, 0.3, 0.4, 0.5)),
+                to: Some(Color::rgba(1.0, 1.0, 0.0, 0.5)),
+            }
+        );
+        assert_eq!(fill.completion, SemanticAnimationCompletion::Release);
     }
 
     #[test]

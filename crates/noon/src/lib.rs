@@ -34,7 +34,7 @@ mod text_authoring;
 pub use animation_authoring::DeclaredAnimation;
 pub use execution_segment::*;
 pub use execution_session::*;
-pub use family_authoring::MobjectFamily;
+pub use family_authoring::{MobjectFamily, MobjectFamilyMember};
 pub use host_callbacks::*;
 pub use live_program::*;
 pub use live_session::{
@@ -59,8 +59,8 @@ pub use text_authoring::*;
 pub mod prelude {
     pub use crate::{
         ContinuationStep, DeclaredAnimation, EffectiveMobjectState, ExecutionSession,
-        LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily, NativeBoolSignal,
-        NativeVectorSignal, Scene, TrackerPosition, ValueTracker,
+        LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily, MobjectFamilyMember,
+        NativeBoolSignal, NativeVectorSignal, Scene, TrackerPosition, ValueTracker,
     };
     pub use noon_core::{
         Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,

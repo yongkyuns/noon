@@ -13,6 +13,36 @@ pub struct MobjectFamily {
     node: SemanticNodeId,
 }
 
+/// One borrowed direct member of a family published through a live session.
+#[derive(Clone, Copy)]
+pub enum MobjectFamilyMember<'a> {
+    Mobject(&'a crate::Mobject),
+    Family(&'a MobjectFamily),
+}
+
+impl MobjectFamilyMember<'_> {
+    pub(crate) fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+        match self {
+            Self::Mobject(member) => member.store(),
+            Self::Family(member) => member.store(),
+        }
+    }
+
+    pub(crate) const fn node_id(&self) -> SemanticNodeId {
+        match self {
+            Self::Mobject(member) => member.node_id(),
+            Self::Family(member) => member.node_id(),
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Mobject(member) => member.validate(),
+            Self::Family(member) => member.validate(),
+        }
+    }
+}
+
 impl MobjectFamily {
     pub fn from_node(
         store: Rc<RefCell<SemanticStore>>,

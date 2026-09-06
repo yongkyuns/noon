@@ -17,7 +17,7 @@ use crate::execution_segment::{
     PendingSegmentCompletion, PendingSegmentCompletionKind, ScalarSegmentCompletionEntry,
     SegmentCompletionEntry,
 };
-use crate::live_session::{target_style_from_effective, IndicateOptions};
+use crate::live_session::IndicateOptions;
 use noon_compile::{
     derive_prepared_scalar_animation_tracks,
     lower_prepared_scalar_signal_timeline_entries_with_resolver,
@@ -112,11 +112,13 @@ pub(crate) enum SemanticCompositionRequest {
     Indicate {
         target: SemanticNodeId,
         indication: IndicateOptions,
+        scale_center: noon_core::SemanticVec3,
         options: AnimationOptions,
     },
     FamilyIndicate {
         target: SemanticNodeId,
         indication: IndicateOptions,
+        scale_center: noon_core::SemanticVec3,
         options: AnimationOptions,
     },
     Rotate {
@@ -1486,7 +1488,6 @@ impl ExecutionSession {
         let mut declaration = SemanticMutationTransaction::new();
         let mut admitted = HashSet::new();
         let mut removals = Vec::new();
-        let mut prospective_states = HashMap::new();
         let animation = self.stage_composition_request(
             store,
             root,
@@ -1494,7 +1495,6 @@ impl ExecutionSession {
             &mut declaration,
             &mut admitted,
             &mut removals,
-            &mut prospective_states,
         )?;
         self.declare_and_activate_prepared_animation(
             store,
@@ -1568,7 +1568,6 @@ impl ExecutionSession {
         declaration: &mut SemanticMutationTransaction,
         admitted: &mut HashSet<SemanticNodeId>,
         removals: &mut Vec<(SemanticNodeId, SemanticNodeId)>,
-        prospective_states: &mut HashMap<SemanticNodeId, noon_core::SemanticObjectState>,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         let admit = |target: SemanticNodeId,
                      declaration: &mut SemanticMutationTransaction,
@@ -1617,13 +1616,6 @@ impl ExecutionSession {
                 options,
             } => {
                 admit(*source, declaration, admitted)?;
-                let endpoint = store
-                    .semantic_object_state_checked(*target_state)
-                    .map_err(|error| ExecutionSessionAnimationError::TargetState {
-                        target: *target_state,
-                        error,
-                    })?
-                    .clone();
                 let target_state =
                     self.stage_animation_target_state(store, declaration, *target_state)?;
                 let animation = declaration.create_transform_animation_with_interpolation(
@@ -1632,7 +1624,6 @@ impl ExecutionSession {
                     *interpolation,
                     *options,
                 );
-                prospective_states.insert(*source, endpoint);
                 Ok(animation)
             }
             SemanticCompositionRequest::FamilyTransformTo {
@@ -1667,24 +1658,20 @@ impl ExecutionSession {
                     declaration,
                     admitted,
                     removals,
-                    prospective_states,
                 )
             }
             SemanticCompositionRequest::Indicate {
                 target,
                 indication,
+                scale_center,
                 options,
-            } => self.stage_indicate_composition(
-                store,
-                &[*target],
-                *indication,
-                *options,
-                declaration,
-                prospective_states,
-            ),
+            } => {
+                self.stage_indicate_leaf(*target, *indication, *scale_center, *options, declaration)
+            }
             SemanticCompositionRequest::FamilyIndicate {
                 target,
                 indication,
+                scale_center,
                 options,
             } => {
                 let leaves = store
@@ -1695,14 +1682,26 @@ impl ExecutionSession {
                     .into_iter()
                     .map(|(leaf, _)| leaf)
                     .collect::<Vec<_>>();
-                self.stage_indicate_composition(
-                    store,
-                    &leaves,
-                    *indication,
-                    *options,
-                    declaration,
-                    prospective_states,
-                )
+                self.validate_indicate_options(*indication, *options)?;
+                let children = leaves
+                    .into_iter()
+                    .map(|leaf| {
+                        self.stage_indicate_leaf(
+                            leaf,
+                            *indication,
+                            *scale_center,
+                            AnimationOptions::new().rate_func(RateFunction::ThereAndBack),
+                            declaration,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut composition_options = *options;
+                composition_options.rate_func = Some(RateFunction::Linear);
+                Ok(declaration.create_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    children,
+                    composition_options,
+                ))
             }
             SemanticCompositionRequest::Rotate {
                 target,
@@ -1788,7 +1787,6 @@ impl ExecutionSession {
                             declaration,
                             admitted,
                             removals,
-                            prospective_states,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -2249,125 +2247,61 @@ impl ExecutionSession {
         Ok(declaration.create_node(SemanticNodeCreation::object(state)))
     }
 
-    fn stage_indicate_composition(
+    fn validate_indicate_options(
         &self,
-        store: &SemanticStore,
-        targets: &[SemanticNodeId],
         indication: IndicateOptions,
         options: AnimationOptions,
-        declaration: &mut SemanticMutationTransaction,
-        prospective_states: &mut HashMap<SemanticNodeId, noon_core::SemanticObjectState>,
-    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        let color = indication.color;
         if !indication.scale_factor.is_finite()
-            || !indication.color.red.is_finite()
-            || !indication.color.green.is_finite()
-            || !indication.color.blue.is_finite()
-            || !indication.color.alpha.is_finite()
+            || indication.scale_factor < 0.0
+            || indication.scale_factor > f32::MAX as f64
+            || !color.red.is_finite()
+            || !color.green.is_finite()
+            || !color.blue.is_finite()
+            || !color.alpha.is_finite()
         {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "Indicate scale and color must be finite".into(),
+                "Indicate scale and color must be finite and representable".into(),
             ));
         }
-        if !matches!(options.rate_func, None | Some(RateFunction::ThereAndBack)) {
+        if !matches!(options.rate_func, None | Some(RateFunction::ThereAndBack))
+            || options.path_arc.is_some()
+            || options.reverse_rate_function == Some(true)
+            || options.remover == Some(true)
+            || options.introducer == Some(true)
+        {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "restoring Indicate supports only the default there-and-back rate function".into(),
+                "restoring Indicate supports there-and-back timing without path or lifecycle overrides"
+                    .into(),
             ));
         }
-
-        let mut states = Vec::with_capacity(targets.len());
-        for &target in targets {
-            let mut source = match prospective_states.get(&target) {
-                Some(state) => state.clone(),
-                None => self.effective_indicate_source(store, target)?,
-            };
-            let restore = source.clone();
-            source.transform.scale.x *= indication.scale_factor;
-            source.transform.scale.y *= indication.scale_factor;
-            recolor_indicate_style(&mut source.style, indication.color);
-            states.push((target, source, restore));
-        }
-
-        let mut outward = Vec::with_capacity(states.len());
-        let mut restore = Vec::with_capacity(states.len());
-        let mut leaf_options = AnimationOptions::new().rate_func(RateFunction::Smooth);
-        leaf_options.path_arc = options.path_arc;
-        for (target, outward_state, restore_state) in states {
-            prospective_states.insert(target, restore_state.clone());
-            let outward_target =
-                declaration.create_node(SemanticNodeCreation::object(outward_state));
-            let restore_target =
-                declaration.create_node(SemanticNodeCreation::object(restore_state));
-            outward.push(declaration.create_transform_animation(
-                target,
-                outward_target,
-                leaf_options,
-            ));
-            restore.push(declaration.create_transform_animation(
-                target,
-                restore_target,
-                leaf_options,
-            ));
-        }
-        let stage_options = AnimationOptions {
-            lag_ratio: options.lag_ratio,
-            ..AnimationOptions::new()
-        };
-        let outward = declaration.create_animation_composition(
-            SemanticAnimationCompositionKind::Parallel,
-            outward,
-            stage_options,
-        );
-        let restore = declaration.create_animation_composition(
-            SemanticAnimationCompositionKind::Parallel,
-            restore,
-            stage_options,
-        );
-        let sequence_options = AnimationOptions {
-            run_time: options.run_time,
-            reverse_rate_function: options.reverse_rate_function,
-            remover: options.remover,
-            introducer: options.introducer,
-            ..AnimationOptions::new()
-        };
-        Ok(declaration.create_animation_composition(
-            SemanticAnimationCompositionKind::Sequence,
-            [outward, restore],
-            sequence_options,
-        ))
+        Ok(())
     }
 
-    fn effective_indicate_source(
+    fn stage_indicate_leaf(
         &self,
-        store: &SemanticStore,
         target: SemanticNodeId,
-    ) -> Result<noon_core::SemanticObjectState, ExecutionSessionAnimationError> {
-        let mut state = store
-            .semantic_object_state_checked(target)
-            .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?
-            .clone();
-        if !state.signal_bindings().is_empty() {
+        indication: IndicateOptions,
+        scale_center: noon_core::SemanticVec3,
+        options: AnimationOptions,
+        declaration: &mut SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        self.validate_indicate_options(indication, options)?;
+        if self.execution_index.execution_object_id(target).is_none() {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "Indicate cannot capture reactive object bindings".into(),
+                "Indicate requires an object already present in the execution domain".into(),
             ));
         }
-        let observed = self
-            .effective_semantic_object(store, target)
-            .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
-        if !observed.authored_content_layout_applicable() || observed.object.appearance != 1.0 {
-            return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "Indicate requires effective authored content with unit appearance".into(),
-            ));
-        }
-        state.transform.translation.x = f64::from(observed.object.transform.translation.x);
-        state.transform.translation.y = f64::from(observed.object.transform.translation.y);
-        state.transform.scale.x = f64::from(observed.object.transform.scale.x);
-        state.transform.scale.y = f64::from(observed.object.transform.scale.y);
-        state.transform.rotation_z = f64::from(observed.object.transform.rotation);
-        state.style =
-            target_style_from_effective(&state.style, observed.object.style).map_err(|error| {
-                ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-            })?;
-        Ok(state)
+        let mut leaf_options = options;
+        leaf_options.rate_func = Some(RateFunction::ThereAndBack);
+        Ok(declaration.create_indicate_animation(
+            target,
+            indication.scale_factor,
+            indication.color,
+            scale_center,
+            leaf_options,
+        ))
     }
 
     fn declare_and_activate_prepared_animation(

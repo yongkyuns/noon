@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    AnimationOptions, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    AnimationOptions, Color, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticAnimationState,
     SemanticFadeDirection, SemanticObjectState, SemanticTransformInterpolation,
 };
@@ -23,6 +23,12 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
         interpolation: SemanticTransformInterpolation,
+    },
+    Indicate {
+        target: SemanticTransactionNodeRef,
+        scale_factor: f64,
+        color: Color,
+        scale_center: crate::SemanticVec3,
     },
     Rotate {
         target: SemanticTransactionNodeRef,
@@ -63,6 +69,7 @@ impl SemanticTransactionAnimationIntent {
                 ..
             } => Some([Some(*target), Some(*target_state)]),
             Self::Rotate { target, .. }
+            | Self::Indicate { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
@@ -73,6 +80,7 @@ impl SemanticTransactionAnimationIntent {
         let children = match self {
             Self::Composition { children, .. } => children.as_slice(),
             Self::TransformTo { .. }
+            | Self::Indicate { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -129,6 +137,17 @@ impl SemanticTransactionAnimation {
                     angle: *angle,
                 }
             }
+            SemanticAnimationIntent::Indicate {
+                target,
+                scale_factor,
+                color,
+                scale_center,
+            } => SemanticTransactionAnimationIntent::Indicate {
+                target: (*target).into(),
+                scale_factor: *scale_factor,
+                color: *color,
+                scale_center: *scale_center,
+            },
             SemanticAnimationIntent::Fade { target, direction } => {
                 SemanticTransactionAnimationIntent::Fade {
                     target: (*target).into(),
@@ -189,6 +208,17 @@ impl SemanticTransactionAnimation {
                     angle: *angle,
                 }
             }
+            SemanticTransactionAnimationIntent::Indicate {
+                target,
+                scale_factor,
+                color,
+                scale_center,
+            } => SemanticAnimationIntent::Indicate {
+                target: resolve_node_ref(*target, committed),
+                scale_factor: *scale_factor,
+                color: *color,
+                scale_center: *scale_center,
+            },
             SemanticTransactionAnimationIntent::Fade { target, direction } => {
                 SemanticAnimationIntent::Fade {
                     target: resolve_node_ref(*target, committed),
@@ -297,6 +327,28 @@ pub(super) fn preflight_transaction_animation(
             catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
             if !angle.is_finite() {
                 return Err(SemanticMutationTransactionError::InvalidAnimationAngle { index });
+            }
+        }
+        SemanticTransactionAnimationIntent::Indicate {
+            target,
+            scale_factor,
+            color,
+            scale_center,
+        } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            let color_is_finite = color.red.is_finite()
+                && color.green.is_finite()
+                && color.blue.is_finite()
+                && color.alpha.is_finite();
+            if !scale_factor.is_finite()
+                || *scale_factor < 0.0
+                || *scale_factor > f32::MAX as f64
+                || scale_center.lower_xy_f32().is_err()
+                || scale_center.z != 0.0
+                || !color_is_finite
+            {
+                return Err(SemanticMutationTransactionError::InvalidIndicateEndpoint { index });
             }
         }
         SemanticTransactionAnimationIntent::Fade { target, .. } => {
@@ -415,6 +467,20 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::Rotate { target, angle } => store
             .insert_semantic_rotate_animation(*target, *angle, options)
             .expect("preflighted semantic Rotate insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::Indicate {
+            target,
+            scale_factor,
+            color,
+            scale_center,
+        } => store
+            .insert_semantic_indicate_animation(
+                *target,
+                *scale_factor,
+                *color,
+                *scale_center,
+                options,
+            )
+            .expect("preflighted semantic Indicate insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Fade { target, direction } => store
             .insert_semantic_fade_animation(*target, *direction, options)
             .expect("preflighted semantic fade insertion must remain valid while transaction owns the store"),
