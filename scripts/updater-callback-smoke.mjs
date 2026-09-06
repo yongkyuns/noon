@@ -46,7 +46,14 @@ try {
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: ["--disable-dev-shm-usage"],
+    args: [
+      "--disable-features=WebGPU",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage",
+    ],
   });
   const page = await browser.newPage();
   const errors = [];
@@ -66,6 +73,7 @@ try {
   assert.equal(errors.length, 0, errors.join("\n"));
   assert.equal(output.result.kind, "scene_document");
   assert.ok(output.result.semanticExecution);
+  assert.equal(output.ready.render.backend, "WebGL2");
   assert.equal(output.paused.playing, false);
   assert.ok(output.paused.time <= 0.25);
   assert.equal(output.phases.length, 2);
