@@ -9,20 +9,20 @@ use crate::{Mobject, Scene};
 impl Scene {
     /// Create and attach the one ordinary semantic object that defines this scene's 2D camera.
     ///
-    /// Allocation and root membership commit in one semantic transaction. The frame remains an
-    /// ordinary transformable Mobject; its role only tells lowering which effective transform
-    /// supplies the renderer viewport.
+    /// Camera creation is scene initialization: the root must still be empty. Allocation and root
+    /// membership then commit in one semantic transaction. The frame remains an ordinary
+    /// transformable Mobject; its role only tells lowering which effective transform supplies the
+    /// renderer viewport.
     pub fn camera_frame(&mut self) -> Result<Mobject, String> {
         let store = self.store().borrow();
-        let has_camera = store
-            .ordered_leaf_nodes(self.root())
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .filter_map(|node| store.node(node)?.semantic_object_state())
-            .any(|state| state.role() == SemanticObjectRole::Camera2D);
+        let root_is_empty = store
+            .node(self.root())
+            .ok_or("scene root is unavailable")?
+            .members()
+            .is_empty();
         drop(store);
-        if has_camera {
-            return Err("scene already has a 2D camera frame".into());
+        if !root_is_empty {
+            return Err("2D camera frame must be created before scene content".into());
         }
 
         let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
@@ -80,9 +80,27 @@ mod tests {
         let before = scene.store().borrow().scene_revision();
         assert_eq!(
             scene.camera_frame().unwrap_err(),
-            "scene already has a 2D camera frame"
+            "2D camera frame must be created before scene content"
         );
         assert_eq!(scene.store().borrow().scene_revision(), before);
+    }
+
+    #[test]
+    fn camera_creation_rejects_existing_scene_content_without_mutation() {
+        let mut scene = Scene::new();
+        let square = scene.square(2.0).unwrap();
+        scene.add(&square).unwrap();
+        let before = scene.store().borrow().scene_revision();
+
+        assert_eq!(
+            scene.camera_frame().unwrap_err(),
+            "2D camera frame must be created before scene content"
+        );
+        assert_eq!(scene.store().borrow().scene_revision(), before);
+        assert_eq!(
+            scene.store().borrow().node(scene.root()).unwrap().members(),
+            [square.node_id()]
+        );
     }
 
     #[test]

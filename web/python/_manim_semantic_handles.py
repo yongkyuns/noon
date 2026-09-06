@@ -389,10 +389,17 @@ def _bound_layout_observation(value: _base.Mobject):
 _CONSTRUCTOR_MISSING = object()
 
 
-def _attach_shared_handle(self: _base.Mobject, handle: object) -> None:
+def _initialize_shared_wrapper(self: _base.Mobject) -> None:
+    """Initialize one opaque semantic wrapper without constructing legacy geometry."""
     self._raw = None
     self._scene = None
     self._object = None
+    self._semantic_handle = None
+    self._semantic_handle_fresh = False
+
+
+def _attach_shared_handle(self: _base.Mobject, handle: object) -> None:
+    _initialize_shared_wrapper(self)
     self._semantic_handle = handle
     self._semantic_handle_fresh = True
 

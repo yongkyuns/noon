@@ -8,12 +8,14 @@ import noon as _base
 import _manim_compat as _compat
 import _manim_family_creation as _family_creation
 import _manim_retained_family_fade_batch as _retained_family_fade_batch
+import _manim_semantic_handles as _semantic_handles
 
 
 class _CameraFrame(_compat.Rectangle):
     """Invisible semantic frame object consumed by the Rust execution pipeline."""
 
     def __init__(self, scene: _compat.Scene) -> None:
+        _semantic_handles._initialize_shared_wrapper(self)
         self.width_value = float(_base.DEFAULT_FRAME_WIDTH)
         self.height_value = float(_base.DEFAULT_FRAME_HEIGHT)
         scene._bind_camera_frame(self)

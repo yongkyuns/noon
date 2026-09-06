@@ -19,6 +19,7 @@ import _manim_animation_options as _options
 import _manim_compat as _compat
 import _manim_composition as _composition
 import _manim_reactive as _reactive
+import _manim_semantic_handles as _semantic_handles
 import _noon_ir as _ir
 import noon as _base
 
@@ -174,7 +175,7 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
 
 def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object:
     """Bind one context-created semantic camera without constructing Python geometry state."""
-    if mobject._scene is not None:
+    if getattr(mobject, "_scene", None) is not None:
         raise ValueError("camera frame is already bound")
     if getattr(scene, "_legacy_geometry_materialized", False):
         raise NotImplementedError(
@@ -188,11 +189,7 @@ def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object
         _ir.Object(object_id, scene._owner), authoring_key, None
     )
     handle = _context(scene).createCameraFrame(str(object_id))
-    mobject._raw = None
-    mobject._scene = None
-    mobject._object = None
-    mobject._semantic_handle = handle
-    mobject._semantic_handle_fresh = True
+    _semantic_handles._attach_shared_handle(mobject, handle)
     return _commit_typed_binding(mobject, scene, reservation, handle)
 
 
