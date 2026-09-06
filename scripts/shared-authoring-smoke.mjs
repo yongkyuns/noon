@@ -767,8 +767,12 @@ try {
       );
     }
     if (expectedCamera) {
-      async function seekCamera(time, expectedObjectCount) {
-        const metrics = await page.evaluate(async ({ time, expectedObjectCount }) => {
+      // Live Scene.add is an authoritative host mutation, not a replayable timeline
+      // effect. The completed session therefore retains its three objects when seeking
+      // its authored camera tracks. Forward admission across the initial wait is covered
+      // by the paired direct continuation proof.
+      async function seekCamera(time) {
+        const metrics = await page.evaluate(async (time) => {
           const execution = window.sharedAuthoringSmoke.liveExampleExecution;
           const before = (await execution.metrics()).metrics.presentedFrames;
           await execution.pause();
@@ -776,28 +780,22 @@ try {
           let latest;
           for (let attempt = 0; attempt < 150; attempt += 1) {
             latest = (await execution.metrics()).metrics;
-            if (latest.presentedFrames > before && latest.objectCount === expectedObjectCount) {
+            if (latest.presentedFrames > before && latest.objectCount === 3) {
               return { sought: sought.time, metrics: latest };
             }
             await new Promise((resolve) => setTimeout(resolve, 20));
           }
           throw new Error(`moving-camera seek did not render: ${JSON.stringify(latest)}`);
-        }, { time, expectedObjectCount });
+        }, time);
         assert.ok(Math.abs(metrics.sought - time) < 1e-6, `${filename}: camera seek ${time}`);
         return page.locator(`#${result.canvasId}`).screenshot();
       }
 
-      const beforeAdmission = await seekCamera(0, 1);
-      assert.equal(
-        visiblePixelStats(beforeAdmission, (red, green, blue) => Math.max(red, green, blue) > 80).count,
-        0,
-        `${filename}: geometry appeared before the initial wait`,
-      );
-      const admitted = await seekCamera(0.3, 3);
-      const firstMidpoint = await seekCamera(0.8, 3);
-      const firstEndpoint = await seekCamera(1.3, 3);
-      const secondMidpoint = await seekCamera(2.1, 3);
-      const secondEndpoint = await seekCamera(2.6, 3);
+      const admitted = await seekCamera(0.3);
+      const firstMidpoint = await seekCamera(0.8);
+      const firstEndpoint = await seekCamera(1.3);
+      const secondMidpoint = await seekCamera(2.1);
+      const secondEndpoint = await seekCamera(2.6);
       const samples = {
         admittedSquare: renderedWorldPixel(admitted, -2, 0),
         admittedTriangle: renderedWorldPixel(admitted, 2, 0),
