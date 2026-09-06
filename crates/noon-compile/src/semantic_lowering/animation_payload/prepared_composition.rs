@@ -12,9 +12,10 @@ use super::super::{
     PreparedSemanticScheduledAnimationPayload, SemanticExecutionIndex, SemanticExecutionValueError,
 };
 use super::affine::{
-    driver_key, indicate_center_dependency_conflict, lower_affine_lifecycle_channels,
-    lower_transform_channels, reserve_indicate_center_dependencies, validate_affine_payload,
-    AffinePayloadIssue, EffectiveAnimationProperties, SemanticAnimationCompletion,
+    affine_center_dependency_conflict, driver_key, lower_affine_lifecycle_channels,
+    lower_fade_channels, lower_transform_channels, reserve_affine_center_dependencies,
+    validate_affine_payload, AffinePayloadIssue, EffectiveAnimationProperties,
+    SemanticAnimationCompletion,
 };
 
 use super::transform_payload::SemanticAffineAnimationField;
@@ -303,7 +304,7 @@ where
                         },
                     );
                 }
-                if let Some(first_animation) = indicate_center_dependency_conflict(
+                if let Some(first_animation) = affine_center_dependency_conflict(
                     &driven,
                     leaf.execution_object_id,
                     leaf.animation,
@@ -333,14 +334,17 @@ where
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }
-                reserve_indicate_center_dependencies(
+                reserve_affine_center_dependencies(
                     &mut driven,
                     leaf.execution_object_id,
                     leaf.animation,
                 );
                 continue;
             }
-            PreparedSemanticScheduledAnimationPayload::Fade { direction } => {
+            PreparedSemanticScheduledAnimationPayload::Fade {
+                direction,
+                endpoint,
+            } => {
                 if leaf.options.lag_ratio != 0.0
                     || leaf.options.path_arc != 0.0
                     || leaf.options.reverse_rate_function
@@ -351,47 +355,54 @@ where
                         },
                     );
                 }
-                if !source.signal_bindings().is_empty() {
-                    return Err(
-                        PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
-                            animation: leaf.animation,
-                            target: leaf.target,
-                            property: SemanticObjectProperty::Presence,
-                        },
+                let center_dependent = endpoint.scale_factor != 1.0
+                    || matches!(
+                        endpoint.translation,
+                        noon_core::SemanticFadeTranslation::PointOffset(_)
                     );
-                }
-                let from = match direction {
-                    SemanticFadeDirection::In => 0.0,
-                    SemanticFadeDirection::Out => {
-                        capture_effective(
-                            leaf,
-                            source,
-                            index,
-                            &mut captures,
-                            &mut effective_properties,
-                        )?
-                        .appearance
+                if center_dependent {
+                    if let Some(first_animation) = affine_center_dependency_conflict(
+                        &driven,
+                        leaf.execution_object_id,
+                        leaf.animation,
+                    ) {
+                        return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
+                            first_animation,
+                            next_animation: leaf.animation,
+                            target: leaf.target,
+                            property: SemanticObjectProperty::Translation,
+                        });
                     }
-                };
-                if !from.is_finite() || !(0.0..=1.0).contains(&from) {
+                }
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    index,
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                if !from.appearance.is_finite() || !(0.0..=1.0).contains(&from.appearance) {
                     return Err(
                         PreparedSemanticAnimationLoweringError::InvalidEffectiveAppearance {
                             animation: leaf.animation,
                             target: leaf.target,
-                            appearance: from,
+                            appearance: from.appearance,
                         },
                     );
                 }
-                let to = match direction {
-                    SemanticFadeDirection::In => 1.0,
-                    SemanticFadeDirection::Out => 0.0,
-                };
-                super::affine::LoweredAffineChannel {
-                    property: Property::Appearance,
-                    conflict_property: SemanticObjectProperty::Presence,
-                    completion: SemanticAnimationCompletion::Fade { direction },
-                    values: TrackValues::Scalar { from, to },
+                let channels = lower_fade_channels(source, from, direction, endpoint)
+                    .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
+                for channel in channels {
+                    push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }
+                if center_dependent {
+                    reserve_affine_center_dependencies(
+                        &mut driven,
+                        leaf.execution_object_id,
+                        leaf.animation,
+                    );
+                }
+                continue;
             }
             PreparedSemanticScheduledAnimationPayload::AffineLifecycle {
                 direction,

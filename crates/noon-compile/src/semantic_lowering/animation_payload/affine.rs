@@ -467,11 +467,9 @@ where
             scale_center,
         } = leaf.payload
         {
-            if let Some(first_animation) = indicate_center_dependency_conflict(
-                &driven,
-                leaf.execution_object_id,
-                leaf.animation,
-            ) {
+            if let Some(first_animation) =
+                affine_center_dependency_conflict(&driven, leaf.execution_object_id, leaf.animation)
+            {
                 return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
                     first_animation,
                     next_animation: leaf.animation,
@@ -498,7 +496,7 @@ where
             for channel in channels {
                 push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
             }
-            reserve_indicate_center_dependencies(
+            reserve_affine_center_dependencies(
                 &mut driven,
                 leaf.execution_object_id,
                 leaf.animation,
@@ -612,12 +610,16 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
-        SemanticAnimationIntent::Fade { target, direction }
-            if *target == leaf.target
-                && leaf.payload
-                    == SemanticScheduledAnimationPayload::Fade {
-                        direction: *direction,
-                    } =>
+        SemanticAnimationIntent::Fade {
+            target,
+            direction,
+            endpoint,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::Fade {
+                    direction: *direction,
+                    endpoint: *endpoint,
+                } =>
         {
             Ok(())
         }
@@ -1060,6 +1062,121 @@ pub(super) fn lower_affine_lifecycle_channels(
     Ok(channels)
 }
 
+pub(super) fn lower_fade_channels(
+    source: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+    direction: SemanticFadeDirection,
+    endpoint: noon_core::SemanticFadeEndpoint,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if !transform_is_finite(from.transform) {
+        return Err(AffinePayloadIssue::InvalidEffectiveTransform);
+    }
+    let factor = endpoint.scale_factor as f32;
+    let scale_center = endpoint.scale_center.lower_xy_f32().map_err(|error| {
+        AffinePayloadIssue::InvalidTargetValue {
+            field: SemanticAffineAnimationField::Translation,
+            error,
+        }
+    })?;
+    let translation =
+        match endpoint.translation {
+            noon_core::SemanticFadeTranslation::Shift(shift) => {
+                let shift = shift.lower_xy_f32().map_err(|error| {
+                    AffinePayloadIssue::InvalidTargetValue {
+                        field: SemanticAffineAnimationField::Translation,
+                        error,
+                    }
+                })?;
+                match direction {
+                    SemanticFadeDirection::In => -shift,
+                    SemanticFadeDirection::Out => shift,
+                }
+            }
+            noon_core::SemanticFadeTranslation::PointOffset(offset) => offset
+                .lower_xy_f32()
+                .map_err(|error| AffinePayloadIssue::InvalidTargetValue {
+                    field: SemanticAffineAnimationField::Translation,
+                    error,
+                })?,
+        };
+    let faded_translation =
+        scale_center + (from.transform.translation - scale_center) * factor + translation;
+    let faded_scale = from.transform.scale * factor;
+    if !faded_translation.x.is_finite() || !faded_translation.y.is_finite() {
+        return Err(AffinePayloadIssue::TargetValueOutOfRange(
+            SemanticAffineAnimationField::Translation,
+        ));
+    }
+    if !faded_scale.x.is_finite() || !faded_scale.y.is_finite() {
+        return Err(AffinePayloadIssue::TargetValueOutOfRange(
+            SemanticAffineAnimationField::Scale,
+        ));
+    }
+    let (
+        start_translation,
+        end_translation,
+        start_scale,
+        end_scale,
+        start_appearance,
+        end_appearance,
+    ) = match direction {
+        SemanticFadeDirection::In => (
+            faded_translation,
+            from.transform.translation,
+            faded_scale,
+            from.transform.scale,
+            0.0,
+            1.0,
+        ),
+        SemanticFadeDirection::Out => (
+            from.transform.translation,
+            faded_translation,
+            from.transform.scale,
+            faded_scale,
+            from.appearance,
+            0.0,
+        ),
+    };
+    let mut channels = Vec::with_capacity(3);
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::Translation,
+        Property::Position,
+        TrackValues::Vec2 {
+            from: start_translation,
+            to: end_translation,
+        },
+        SemanticAnimationCompletion::Release,
+        start_translation != end_translation,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::Scale,
+        Property::Scale,
+        TrackValues::Vec2 {
+            from: start_scale,
+            to: end_scale,
+        },
+        SemanticAnimationCompletion::Release,
+        start_scale != end_scale,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::Presence,
+        Property::Appearance,
+        TrackValues::Scalar {
+            from: start_appearance,
+            to: end_appearance,
+        },
+        SemanticAnimationCompletion::Fade { direction },
+        true,
+        &mut channels,
+    )?;
+    Ok(channels)
+}
+
 pub(super) fn lower_indicate_channels(
     source: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
@@ -1463,19 +1580,19 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     }
 }
 
-const INDICATE_CENTER_DEPENDENCIES: [Property; 4] = [
+const AFFINE_CENTER_DEPENDENCIES: [Property; 4] = [
     Property::Position,
     Property::Rotation,
     Property::Scale,
     Property::Morph,
 ];
 
-pub(super) fn indicate_center_dependency_conflict<T: Copy + PartialEq>(
+pub(super) fn affine_center_dependency_conflict<T: Copy + PartialEq>(
     driven: &HashMap<(u64, u8), T>,
     object: ObjectId,
     animation: T,
 ) -> Option<T> {
-    INDICATE_CENTER_DEPENDENCIES.iter().find_map(|property| {
+    AFFINE_CENTER_DEPENDENCIES.iter().find_map(|property| {
         driven
             .get(&driver_key(object, *property))
             .copied()
@@ -1483,12 +1600,12 @@ pub(super) fn indicate_center_dependency_conflict<T: Copy + PartialEq>(
     })
 }
 
-pub(super) fn reserve_indicate_center_dependencies<T: Copy>(
+pub(super) fn reserve_affine_center_dependencies<T: Copy>(
     driven: &mut HashMap<(u64, u8), T>,
     object: ObjectId,
     animation: T,
 ) {
-    for property in INDICATE_CENTER_DEPENDENCIES {
+    for property in AFFINE_CENTER_DEPENDENCIES {
         driven
             .entry(driver_key(object, property))
             .or_insert(animation);
@@ -1625,6 +1742,68 @@ mod tests {
             }
         );
         assert_eq!(fill.completion, SemanticAnimationCompletion::Release);
+    }
+
+    #[test]
+    fn fade_affine_endpoint_uses_directional_shift_and_release_completion() {
+        let source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        let from = effective(Transform2D {
+            translation: Vec2::new(2.0, 0.0),
+            rotation: 0.0,
+            scale: Vec2::ONE,
+        });
+        let endpoint = noon_core::SemanticFadeEndpoint {
+            scale_factor: 0.5,
+            translation: noon_core::SemanticFadeTranslation::Shift(SemanticVec3::new(
+                0.0, 1.0, 0.0,
+            )),
+            scale_center: SemanticVec3::new(2.0, 0.0, 0.0),
+        };
+
+        let fade_in =
+            lower_fade_channels(&source, from, SemanticFadeDirection::In, endpoint).unwrap();
+        assert_eq!(
+            fade_in[0].values,
+            TrackValues::Vec2 {
+                from: Vec2::new(2.0, -1.0),
+                to: Vec2::new(2.0, 0.0),
+            }
+        );
+        assert_eq!(fade_in[0].completion, SemanticAnimationCompletion::Release);
+        assert_eq!(
+            fade_in.last().unwrap().completion,
+            SemanticAnimationCompletion::Fade {
+                direction: SemanticFadeDirection::In,
+            }
+        );
+
+        let fade_out =
+            lower_fade_channels(&source, from, SemanticFadeDirection::Out, endpoint).unwrap();
+        assert_eq!(
+            fade_out[0].values,
+            TrackValues::Vec2 {
+                from: Vec2::new(2.0, 0.0),
+                to: Vec2::new(2.0, 1.0),
+            }
+        );
+        assert_eq!(fade_out[0].completion, SemanticAnimationCompletion::Release);
+
+        let point_endpoint = noon_core::SemanticFadeEndpoint {
+            scale_factor: 1.0,
+            translation: noon_core::SemanticFadeTranslation::PointOffset(SemanticVec3::new(
+                3.0, 0.0, 0.0,
+            )),
+            scale_center: SemanticVec3::new(2.0, 0.0, 0.0),
+        };
+        let point_in =
+            lower_fade_channels(&source, from, SemanticFadeDirection::In, point_endpoint).unwrap();
+        assert_eq!(
+            point_in[0].values,
+            TrackValues::Vec2 {
+                from: Vec2::new(5.0, 0.0),
+                to: Vec2::new(2.0, 0.0),
+            }
+        );
     }
 
     #[test]

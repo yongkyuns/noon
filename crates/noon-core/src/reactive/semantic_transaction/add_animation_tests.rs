@@ -85,10 +85,36 @@ fn prepared_fade_retains_one_semantic_target_and_direction() {
         &SemanticAnimationIntent::Fade {
             target,
             direction: SemanticFadeDirection::Out,
+            endpoint: crate::SemanticFadeEndpoint::default(),
         }
     );
     assert_eq!(store.len(), before_len + 1);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
+}
+
+#[test]
+fn invalid_affine_fade_endpoint_rolls_back_before_identity_allocation() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let before_len = store.len();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.create_fade_animation_with_endpoint(
+        target,
+        SemanticFadeDirection::Out,
+        crate::SemanticFadeEndpoint {
+            scale_factor: f64::NAN,
+            translation: crate::SemanticFadeTranslation::Shift(SemanticVec3::ZERO),
+            scale_center: SemanticVec3::ZERO,
+        },
+        AnimationOptions::new(),
+    );
+
+    assert!(matches!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidFadeEndpoint { index: 0 })
+    ));
+    assert_eq!(store.len(), before_len);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
 }
 
 #[test]

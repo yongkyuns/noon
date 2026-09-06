@@ -8,8 +8,8 @@ use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticFadeDirection, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
-    SemanticObjectProperty, SemanticObjectState, SemanticScalarSignalHold,
+    SemanticFadeDirection, SemanticFadeEndpoint, SemanticNodeId, SemanticNodeKind,
+    SemanticObjectContent, SemanticObjectProperty, SemanticObjectState, SemanticScalarSignalHold,
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
     SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
@@ -743,6 +743,22 @@ impl SemanticMutationTransaction {
         direction: SemanticFadeDirection,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
+        self.create_fade_animation_with_endpoint(
+            target,
+            direction,
+            SemanticFadeEndpoint::default(),
+            options,
+        )
+    }
+
+    /// Stage a Fade declaration with an activation-relative affine endpoint.
+    pub fn create_fade_animation_with_endpoint(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        direction: SemanticFadeDirection,
+        endpoint: SemanticFadeEndpoint,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
         let token = self.allocate_local_node_token();
         self.mutations.push(SemanticMutation::AddAnimation {
             token,
@@ -750,6 +766,7 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::Fade {
                     target: target.into(),
                     direction,
+                    endpoint,
                 },
                 options,
             ),
@@ -2010,6 +2027,9 @@ pub enum SemanticMutationTransactionError {
     InvalidIndicateEndpoint {
         index: usize,
     },
+    InvalidFadeEndpoint {
+        index: usize,
+    },
     InvalidAffineLifecycleEndpoint {
         index: usize,
     },
@@ -2383,6 +2403,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidIndicateEndpoint { index } => write!(
                 formatter,
                 "semantic mutation {index} has invalid Indicate scale, color, or center"
+            ),
+            Self::InvalidFadeEndpoint { index } => write!(
+                formatter,
+                "semantic mutation {index} has an invalid Fade affine endpoint"
             ),
             Self::InvalidAffineLifecycleEndpoint { index } => write!(
                 formatter,

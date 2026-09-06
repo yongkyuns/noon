@@ -125,6 +125,7 @@ pub(crate) enum SemanticCompositionRequest {
     Fade {
         target: SemanticNodeId,
         direction: SemanticFadeDirection,
+        endpoint: noon_core::SemanticFadeEndpoint,
         options: AnimationOptions,
     },
     Create {
@@ -1721,13 +1722,15 @@ impl ExecutionSession {
             SemanticCompositionRequest::Fade {
                 target,
                 direction,
+                endpoint,
                 options,
             } => {
                 self.require_fade_target(store, root, *target, *direction)?;
                 if *direction == SemanticFadeDirection::In {
                     admit(*target, declaration, admitted)?;
                 }
-                Ok(declaration.create_fade_animation(*target, *direction, *options))
+                Ok(declaration
+                    .create_fade_animation_with_endpoint(*target, *direction, *endpoint, *options))
             }
             SemanticCompositionRequest::Create { target, options } => {
                 self.require_create_target(store, *target)?;
@@ -1827,13 +1830,34 @@ impl ExecutionSession {
         direction: SemanticFadeDirection,
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.declare_and_activate_fade_with_endpoint(
+            store,
+            root,
+            target,
+            direction,
+            noon_core::SemanticFadeEndpoint::default(),
+            options,
+        )
+    }
+
+    /// Atomically declare and activate a Fade with an activation-relative affine endpoint.
+    pub fn declare_and_activate_fade_with_endpoint(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        endpoint: noon_core::SemanticFadeEndpoint,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
         self.require_fade_target(store, root, target, direction)?;
         let mut declaration = SemanticMutationTransaction::new();
         if direction == SemanticFadeDirection::In {
             declaration.add_member(root, target);
         }
-        let animation = declaration.create_fade_animation(target, direction, options);
+        let animation =
+            declaration.create_fade_animation_with_endpoint(target, direction, endpoint, options);
         self.declare_and_activate_prepared_animation(
             store,
             declaration,
