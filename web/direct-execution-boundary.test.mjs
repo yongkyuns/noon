@@ -83,7 +83,7 @@ for (const required of [
   "advanceDirectRealtime",
 ]) {
   assert.ok(
-    directCanvasHost.includes(required),
+    directCanvasHost.replace(/\s*\.\s*/g, ".").includes(required),
     `direct canvas host must consume canonical session authority through ${required}`,
   );
 }
