@@ -283,12 +283,14 @@ try {
   assert.match(page.url(), /example=parity-different-rotations/);
   assert.match(await sceneSource(page), /Rotate\(right_square/);
 
+  const selectedSource = await sceneSource(page);
   await page.locator("#python-scene-source").focus();
   await page.waitForSelector("#scene-editor-panel .python-code-editor[data-editor-ready='true']");
-  await page.locator("#scene-editor-panel .cm-content").fill("# local draft\n");
+  // Keep the draft executable if live authoring runs before Reset on a slower host.
+  await page.locator("#scene-editor-panel .cm-content").fill(`${selectedSource}\n# local draft\n`);
   assert.equal(await page.locator(".reset-example").isDisabled(), false);
   await page.locator(".reset-example").click();
-  assert.match(await sceneSource(page), /from noon import \*/);
+  assert.equal(await sceneSource(page), selectedSource);
 
   await page.setViewportSize({ width: 900, height: 800 });
   const stacked = await layout(page);
