@@ -1126,31 +1126,22 @@ impl RetainedFramePreparer {
         } else {
             self.geometry_only_classification = Some(false);
         }
-        if self.can_update_mixed_geometry_locally(frame, changes, metrics) {
-            return self.prepare_mixed_geometry_locally(
+        if self.can_update_mixed_properties_locally(frame, changes, texts, metrics)? {
+            return self.prepare_mixed_properties_locally(
+                device,
+                queue,
                 frame,
                 changes,
+                texts,
+                fonts,
                 geometries,
                 metrics,
                 visible_object_indices,
             );
         }
 
-        let text_can_update_locally = if changes.is_empty() {
-            false
-        } else {
-            self.text
-                .can_update_objects_locally(frame, changes, texts, metrics)?
-                && self.changes_are_fast_text_only(frame, changes)
-        };
-        let scratch_reused = self.prepare_scratch_with_changes(
-            frame,
-            changes,
-            text_can_update_locally,
-            texts,
-            fonts,
-            geometries,
-        )?;
+        let scratch_reused =
+            self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
 
         if scratch_reused
             && changes.is_empty()
@@ -1186,63 +1177,6 @@ impl RetainedFramePreparer {
                 stats: self.snapshot_text_stats,
                 atlas: self.text.atlas(),
                 partial_upload_base_generation: None,
-                dirty_mask_ranges: &self.dirty_mask_ranges,
-                dirty_color_ranges: &self.dirty_color_ranges,
-            };
-            return Ok(PreparedRetainedGpuFrame {
-                applied_publication: &mut self.last_applied_publication,
-                geometry,
-                geometry_only: false,
-                text_generation: self.text_generation,
-                text,
-                render_items: if visible_object_indices.is_some() {
-                    &self.visible_render_items
-                } else {
-                    &self.render_items
-                },
-                stats: self.snapshot_prepare_stats,
-                source_geometry_slots: Some(&self.scratch_slots),
-                render_item_ranges: visible_object_indices
-                    .is_none()
-                    .then_some(&self.render_item_ranges),
-            });
-        }
-
-        if text_can_update_locally {
-            self.prepared_generation_ready = false;
-            let partial_upload_base_generation = self.text_generation;
-            let prepared = self
-                .text
-                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
-            copy_local_text_snapshot_updates(
-                &mut self.snapshot_mask_quads,
-                &mut self.snapshot_color_quads,
-                &self.text_item_ranges,
-                prepared.items,
-                prepared.mask_quads,
-                prepared.color_quads,
-                changes,
-                &mut self.dirty_mask_ranges,
-                &mut self.dirty_color_ranges,
-            );
-            self.text_generation = self
-                .text_generation
-                .checked_add(1)
-                .expect("retained text generation counter exhausted");
-            self.project_mixed_visibility(frame, visible_object_indices);
-            let no_changes = FrameChanges::default();
-            let geometry = self
-                .geometry
-                .prepare_incremental(&self.scratch, &no_changes);
-            self.prepared_generation_ready = true;
-            let text = PreparedRetainedTextSnapshot {
-                time: frame.time,
-                mask_quads: &self.snapshot_mask_quads,
-                color_quads: &self.snapshot_color_quads,
-                items: &self.snapshot_text_items,
-                stats: self.snapshot_text_stats,
-                atlas: self.text.atlas(),
-                partial_upload_base_generation: Some(partial_upload_base_generation),
                 dirty_mask_ranges: &self.dirty_mask_ranges,
                 dirty_color_ranges: &self.dirty_color_ranges,
             };
@@ -1413,13 +1347,12 @@ impl RetainedFramePreparer {
         &mut self,
         frame: &FrameState,
         changes: &FrameChanges,
-        text_only_local: bool,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
     ) -> Result<bool, RetainedPrepareError> {
         if self.scratch_ready
-            && (changes.is_empty() || text_only_local)
+            && changes.is_empty()
             && frame.objects.len() == self.scratch_object_count
         {
             self.scratch.time = frame.time;
@@ -1518,12 +1451,13 @@ impl RetainedFramePreparer {
         })
     }
 
-    fn can_update_mixed_geometry_locally(
+    fn can_update_mixed_properties_locally(
         &self,
         frame: &FrameState,
         changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
-    ) -> bool {
+    ) -> Result<bool, RetainedPrepareError> {
         if self.geometry_only_classification != Some(false)
             || !self.scratch_ready
             || !self.prepared_generation_ready
@@ -1532,12 +1466,24 @@ impl RetainedFramePreparer {
             || changes.is_structural()
             || changes.is_empty()
         {
-            return false;
+            return Ok(false);
         }
-        changes.object_indices().iter().all(|&index| {
+        let includes_text = changes_include_text(frame, changes);
+        if includes_text
+            && !self
+                .text
+                .can_update_objects_locally(frame, changes, texts, metrics)?
+        {
+            return Ok(false);
+        }
+        Ok(changes.object_indices().iter().all(|&index| {
             let Some(object) = frame.objects.get(index) else {
                 return false;
             };
+            if object.text().is_some() {
+                return frame.is_present(index)
+                    && self.fast_text_only.get(index).copied().unwrap_or(false);
+            }
             let Some(scratch_slot) = self.scratch_slots.get(index).and_then(|slot| *slot) else {
                 return false;
             };
@@ -1552,22 +1498,59 @@ impl RetainedFramePreparer {
                             && frame.reveal(index) == self.scratch.reveal(scratch_slot)
                             && frame.morph(index) == self.scratch.morph(scratch_slot)
                     })
-        })
+        }))
     }
 
-    fn prepare_mixed_geometry_locally<'a>(
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_mixed_properties_locally<'a>(
         &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
         visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepared_generation_ready = false;
+        let partial_upload_base_generation = self.text_generation;
+        let includes_text = changes_include_text(frame, changes);
+        if includes_text {
+            let prepared_text = self
+                .text
+                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+            copy_local_text_snapshot_updates(
+                &mut self.snapshot_mask_quads,
+                &mut self.snapshot_color_quads,
+                &self.text_item_ranges,
+                prepared_text.items,
+                prepared_text.mask_quads,
+                prepared_text.color_quads,
+                changes,
+                &mut self.dirty_mask_ranges,
+                &mut self.dirty_color_ranges,
+            );
+        } else {
+            self.dirty_mask_ranges.clear();
+            self.dirty_color_ranges.clear();
+        }
+        let text_instances_dirty =
+            !self.dirty_mask_ranges.is_empty() || !self.dirty_color_ranges.is_empty();
+        if text_instances_dirty {
+            self.text_generation = self
+                .text_generation
+                .checked_add(1)
+                .expect("retained text generation counter exhausted");
+        }
+
         let mut scratch_changes = Vec::with_capacity(changes.object_indices().len());
         for &index in changes.object_indices() {
+            let Some(scratch_slot) = self.scratch_slots[index] else {
+                continue;
+            };
             let object = &frame.objects[index];
-            let scratch_slot = self.scratch_slots[index].expect("validated mixed geometry slot");
             let source_geometry = frame
                 .render_geometry(index)
                 .unwrap_or_else(|| object.geometry().expect("validated mixed geometry object"));
@@ -1585,10 +1568,13 @@ impl RetainedFramePreparer {
         self.scratch.time = frame.time;
         self.incremental_stats.scratch_reuses =
             self.incremental_stats.scratch_reuses.saturating_add(1);
-        let scratch_changes = FrameChanges::objects(scratch_changes);
-        let geometry = self
-            .geometry
-            .prepare_incremental(&self.scratch, &scratch_changes);
+        let geometry = if scratch_changes.is_empty() {
+            self.geometry
+                .prepare_incremental(&self.scratch, &FrameChanges::default())
+        } else {
+            self.geometry
+                .prepare_incremental(&self.scratch, &FrameChanges::objects(scratch_changes))
+        };
         if geometry.stats.full_rebuilds > 0 {
             self.render_items.clear();
             rebuild_mixed_order(
@@ -1625,7 +1611,8 @@ impl RetainedFramePreparer {
             items: &self.snapshot_text_items,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
-            partial_upload_base_generation: None,
+            partial_upload_base_generation: text_instances_dirty
+                .then_some(partial_upload_base_generation),
             dirty_mask_ranges: &self.dirty_mask_ranges,
             dirty_color_ranges: &self.dirty_color_ranges,
         };
@@ -1765,22 +1752,6 @@ fn validate_visible_object_indices(
 }
 
 impl RetainedFramePreparer {
-    fn changes_are_fast_text_only(&self, frame: &FrameState, changes: &FrameChanges) -> bool {
-        if !self.scratch_ready || changes.is_all() || changes.is_structural() || changes.is_empty()
-        {
-            return false;
-        }
-        changes.object_indices().iter().all(|&index| {
-            let Some(object) = frame.objects.get(index) else {
-                return false;
-            };
-            if !frame.is_present(index) || !matches!(&object.content, ObjectContentRef::Text(_)) {
-                return false;
-            }
-            self.fast_text_only.get(index).copied().unwrap_or(false)
-        })
-    }
-
     fn build_scratch_frame(
         &mut self,
         frame: &FrameState,
@@ -2126,6 +2097,15 @@ fn push_coalesced_range(ranges: &mut Vec<std::ops::Range<u32>>, range: std::ops:
         }
     }
     ranges.push(range);
+}
+
+fn changes_include_text(frame: &FrameState, changes: &FrameChanges) -> bool {
+    changes.object_indices().iter().any(|&index| {
+        frame
+            .objects
+            .get(index)
+            .is_some_and(|object| object.text().is_some())
+    })
 }
 
 fn same_analytic_geometry_kind(left: Option<&GeometryRef>, right: Option<&GeometryRef>) -> bool {
@@ -2867,6 +2847,50 @@ mod tests {
         )
     }
 
+    fn geometry_and_fast_text_frame() -> (
+        FrameState,
+        TextResourceArena,
+        FontResourceArena,
+        GeometryResourceArena,
+    ) {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let bounds = artifact.resource.bounds;
+        let fonts = artifact.fonts;
+        let mut texts = TextResourceArena::new();
+        let text = texts.insert(artifact.resource).unwrap();
+        (
+            FrameState {
+                time: 0.0,
+                objects: vec![
+                    FrameObjectState {
+                        id: ObjectId::new(1),
+                        content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                        text_bounds: None,
+                        transform: Transform2D::default(),
+                        style: Style::default(),
+                        appearance: 1.0,
+                    },
+                    FrameObjectState {
+                        id: ObjectId::new(2),
+                        content: ObjectContentRef::Text(text),
+                        text_bounds: Some(bounds),
+                        transform: Transform2D::default(),
+                        style: Style::default(),
+                        appearance: 1.0,
+                    },
+                ],
+                presences: vec![true, true],
+                reveals: vec![1.0, 1.0],
+                morphs: vec![0.0, 0.0],
+                render_geometries: vec![None, None],
+                render_transforms: vec![None, None],
+            },
+            texts,
+            fonts,
+            GeometryResourceArena::new(),
+        )
+    }
+
     fn geometry_only_mega_path_frame() -> FrameState {
         let path = |id, y| {
             let style = Style {
@@ -3167,6 +3191,102 @@ mod tests {
                         && instance_range == &range.instance_range
                 }));
         }
+    }
+
+    #[test]
+    fn simultaneous_geometry_and_text_properties_update_local_instance_ranges() {
+        let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
+        let initial_text_generation;
+
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            let observed = prepared.observe_object(1, ObjectId::new(2)).unwrap();
+            assert_eq!(observed.kind, RetainedPreparedObjectKind::Text);
+            assert!(!observed.glyph_ranges.is_empty());
+            initial_text_generation = prepared.text_generation;
+            let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+            assert!(upload.geometry.bytes_uploaded > 0);
+            assert!(upload.text.bytes_uploaded > 0);
+        }
+        let baseline = preparer.incremental_stats();
+
+        frame.time = 0.5;
+        frame.objects[0].transform.translation = Vec2::new(-1.0, 0.0);
+        frame.objects[1].transform.translation = Vec2::new(1.0, 1.0);
+        frame.objects[1].style.opacity = 0.5;
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::objects(vec![0, 1]),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+            assert_eq!(prepared.geometry_stats().instances_repacked, 1);
+            assert_eq!(prepared.geometry_stats().dirty_instance_count, 1);
+            assert_eq!(prepared.text_generation, initial_text_generation + 1);
+
+            let observed = prepared.observe_object(1, ObjectId::new(2)).unwrap();
+            assert_eq!(observed.kind, RetainedPreparedObjectKind::Text);
+            assert_eq!(observed.full_rebuilds, 0);
+            assert!(observed.geometry.is_none());
+            assert!(observed
+                .glyph_ranges
+                .iter()
+                .all(|range| range.instance_dirty));
+
+            let mut writes = Vec::new();
+            let upload = renderer.upload_retained_with_trace(
+                &device,
+                &queue,
+                &prepared,
+                &mut text_state,
+                &observed,
+                &mut writes,
+            );
+            assert!(upload.geometry.bytes_uploaded > 0);
+            assert!(upload.text.bytes_uploaded > 0);
+            assert!(!writes.is_empty());
+            assert!(writes
+                .iter()
+                .all(|write| matches!(write.buffer, "text_mask" | "text_color")));
+            assert!(writes
+                .iter()
+                .all(|write| observed
+                    .glyph_ranges
+                    .iter()
+                    .any(|range| (range.instance_range.start as usize)
+                        < write.instance_range.end
+                        && write.instance_range.start < range.instance_range.end as usize)));
+        }
+
+        let after = preparer.incremental_stats();
+        assert_eq!(after.scratch_rebuilds, baseline.scratch_rebuilds);
+        assert_eq!(after.scratch_reuses, baseline.scratch_reuses + 1);
+        assert_eq!(after.text_snapshot_copies, baseline.text_snapshot_copies);
+        assert_eq!(after.mixed_order_rebuilds, baseline.mixed_order_rebuilds);
     }
 
     #[test]
