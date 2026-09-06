@@ -7,7 +7,7 @@ restarted to fill either row.
 """
 
 import _manim_updaters
-from noon import Circle, Color, Scene, ValueTracker, linear
+from noon import Circle, Color, Scene, linear
 
 
 class OrdinaryCallbackSparseReads(Scene):
@@ -18,7 +18,7 @@ class OrdinaryCallbackSparseReads(Scene):
             .shift((-1.0, 1.0, 0.0))
         )
         circle = Circle(radius=0.4).set_fill(Color(0.0, 0.4, 1.0), opacity=1.0)
-        tracker = ValueTracker(0.0)
+        tracker = self.value_tracker(0.0)
         phase_counts: dict[float, int] = {}
 
         def follow_sparse_values(mobject, _dt):
