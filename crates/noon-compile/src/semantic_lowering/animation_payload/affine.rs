@@ -967,8 +967,8 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     property: Property,
     animation: T,
 ) -> Option<T> {
-    let (object, transform_slot) = driver_key(object, Property::Transform);
     let (_, morph_slot) = driver_key(object, Property::Morph);
+    let (object, transform_slot) = driver_key(object, Property::Transform);
     if property == Property::Morph {
         (0..morph_slot).find_map(|slot| {
             driven
@@ -977,7 +977,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
                 .filter(|owner| *owner != animation)
         })
     } else if property == Property::Transform {
-        (0..=transform_slot).find_map(|slot| driven.get(&(object, slot)).copied())
+        (0..=morph_slot).find_map(|slot| driven.get(&(object, slot)).copied())
     } else {
         driven
             .get(&(object, transform_slot))

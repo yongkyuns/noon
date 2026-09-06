@@ -1343,7 +1343,7 @@ mod tests {
 
     #[test]
     fn parallel_create_rejects_duplicate_detached_target_before_publication() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();

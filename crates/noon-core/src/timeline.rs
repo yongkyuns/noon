@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     patch::{validate_geometry, validate_style, validate_transform},
-    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
-    PatchError, SceneDefinition, TrackId, Vec2,
+    CompositionTimeMap, CompositionTimeMapError, GeometryRef, ObjectId, ObjectSnapshot,
+    ObjectStateField, PatchError, SceneDefinition, TrackId, Transform2D, Vec2,
 };
 
 /// Language-neutral animation rate functions shared by every authoring frontend.
