@@ -230,7 +230,7 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
         mobject: &noon::Mobject,
@@ -243,7 +243,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill_color(
         &mut self,
         mobject: &noon::Mobject,
@@ -256,13 +256,13 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_disable_fill(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
         self.with_live_session(|live| live.disable_fill(mobject))
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill_opacity(
         &mut self,
         mobject: &noon::Mobject,
@@ -272,7 +272,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_opacity(
         &mut self,
         mobject: &noon::Mobject,
@@ -282,7 +282,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_object_opacity(
         &mut self,
         mobject: &noon::Mobject,
@@ -292,7 +292,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn with_live_session<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,
