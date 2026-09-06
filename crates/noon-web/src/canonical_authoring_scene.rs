@@ -1622,11 +1622,20 @@ impl CanonicalAuthoringScene {
                 );
             }
             target.validate()?;
-            noon_core::resolve_animation_options(
-                noon_core::AnimationDefaults::MANIM,
-                options,
-                noon_core::AnimationOptions::new(),
-            )
+            let resolved = if matches!(child, OrdinaryCompositionChild::Add { .. }) {
+                noon_core::resolve_add_animation_options(
+                    noon_core::AnimationDefaults::MANIM,
+                    options,
+                    noon_core::AnimationOptions::new(),
+                )
+            } else {
+                noon_core::resolve_animation_options(
+                    noon_core::AnimationDefaults::MANIM,
+                    options,
+                    noon_core::AnimationOptions::new(),
+                )
+            };
+            resolved
             .map_err(|error| error.to_string())?;
             match entering_id {
                 Some(id) => {
@@ -5494,6 +5503,91 @@ mod tests {
             player.live_effective(&right).unwrap().transform.translation,
             Vec2::new(2.0, -1.0)
         );
+    }
+
+    #[test]
+    fn ordinary_composition_converts_nested_typed_children_before_atomic_admission() {
+        let mut context = CanonicalAuthoringScene::default();
+        let bound = context.scene.circle(0.4).unwrap();
+        let add_target = context.scene.square(0.5).unwrap();
+        let create_target = context.scene.circle(0.3).unwrap();
+        let fade_target = context.scene.square(0.6).unwrap();
+        let lifecycle_target = context.scene.circle(0.2).unwrap();
+        context.bind_mobject(ObjectId::new(0), &bound).unwrap();
+
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = vec![
+            OrdinaryCompositionChild::Wait { duration: 0.25 },
+            OrdinaryCompositionChild::Add {
+                entering_id: ObjectId::new(1),
+                target: add_target.clone(),
+                options: AnimationOptions::new().run_time(0.0),
+            },
+            OrdinaryCompositionChild::Create {
+                entering_id: Some(ObjectId::new(2)),
+                target: create_target.clone(),
+                options,
+            },
+            OrdinaryCompositionChild::Fade {
+                entering_id: Some(ObjectId::new(3)),
+                target: fade_target.clone(),
+                direction: SemanticFadeDirection::In,
+                options,
+            },
+            OrdinaryCompositionChild::AffineLifecycle {
+                entering_id: Some(ObjectId::new(4)),
+                target: lifecycle_target.clone(),
+                direction: noon::AffineLifecycleDirection::IntroduceFrom,
+                endpoint: noon::AffineLifecycleEndpoint::Point {
+                    x: -1.0,
+                    y: 1.0,
+                    rotation_offset: 0.0,
+                    point_color: None,
+                },
+                options,
+            },
+            OrdinaryCompositionChild::Composition {
+                kind: noon_core::SemanticAnimationCompositionKind::Sequence,
+                children: vec![OrdinaryCompositionChild::Wait { duration: 0.1 }],
+                options,
+            },
+        ];
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        let end = context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &children,
+                composition,
+                play,
+            )
+            .unwrap();
+        assert!(end > 0.0);
+        assert!(context.live_contains_mobject(&add_target).unwrap());
+        assert!(context.live_contains_mobject(&create_target).unwrap());
+        assert!(context.live_contains_mobject(&fade_target).unwrap());
+        assert!(context.live_contains_mobject(&lifecycle_target).unwrap());
+
+        let revision = context.scene.store().borrow().scene_revision();
+        let foreign = CanonicalAuthoringScene::default();
+        let foreign_target = foreign.scene.circle(0.2).unwrap();
+        let invalid = [OrdinaryCompositionChild::Add {
+            entering_id: ObjectId::new(9),
+            target: foreign_target,
+            options: AnimationOptions::new().run_time(0.0),
+        }];
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &invalid,
+                composition,
+                play,
+            )
+            .is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
     }
 
     #[test]
