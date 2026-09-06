@@ -11,6 +11,7 @@ on:
       - "crates/**"
       - "!crates/**/tests/**"
       - "scripts/build-web-demo.sh"
+      - "scripts/build-web-authoring-package.sh"
       - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
@@ -23,6 +24,7 @@ on:
       - "crates/**"
       - "!crates/**/tests/**"
       - "scripts/build-web-demo.sh"
+      - "scripts/build-web-authoring-package.sh"
       - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
@@ -81,6 +83,7 @@ jobs:
           name: playground-cross-browser-web-runtime
           path: |
             web/pkg
+            web/pkg-authoring
             web/python-worker.js
             web/python/compat-bundle.*.json
           if-no-files-found: error

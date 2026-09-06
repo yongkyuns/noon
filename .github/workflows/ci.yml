@@ -119,6 +119,7 @@ jobs:
           name: web-pkg
           path: |
             web/pkg
+            web/pkg-authoring
             web/python-worker.js
             web/python/compat-bundle.*.json
           if-no-files-found: error

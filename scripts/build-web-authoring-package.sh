@@ -41,7 +41,25 @@ js_file="${out_dir}/noon_web.js"
   exit 1
 }
 
-for symbol in WasmAuthoringStore RetainedNativeTextAuthoringHandle RetainedTypstAuthoringHandle; do
+for symbol in \
+  WasmAuthoringStore \
+  RetainedNativeTextAuthoringHandle \
+  RetainedTypstAuthoringHandle \
+  canonicalRetainedSceneSpecJson \
+  manimAnnularSectorSnapshotJson \
+  manimAnnulusSnapshotJson \
+  manimDashedLineSnapshotJson \
+  manimDotSnapshotJson \
+  manimElbowSnapshotJson \
+  manimRoundedRectangleSnapshotJson \
+  manimSectorSnapshotJson \
+  manimTriangleSnapshotJson \
+  manimUnderlineSnapshotJson \
+  resolveAnimationOptions \
+  resolveCompositionSchedule \
+  resolveLifecyclePlan \
+  resolveUniformCompositionSchedule \
+  validatePresenceTransition; do
   if ! grep -q "$symbol" "$js_file"; then
     echo "authoring-only package is missing required export: $symbol" >&2
     exit 1

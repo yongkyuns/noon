@@ -148,4 +148,13 @@ if (( worker_status != 0 )); then
   exit "$worker_status"
 fi
 
+# Python authoring has no renderer ownership. Build the measured renderer-free
+# package separately and keep the full package for engine/render workers.
+bash scripts/build-web-authoring-package.sh
+
+if ! grep -q 'pkg-authoring/noon_web.js' web/python-worker.js; then
+  echo "generated Python worker is not wired to the authoring-only Noon package" >&2
+  exit 1
+fi
+
 node scripts/check-web-package.mjs
