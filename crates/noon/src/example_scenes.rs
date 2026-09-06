@@ -713,6 +713,9 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                     .set_color(0.2, 0.9, 0.3, 1.0)
                     .map_err(|error| error.to_string())?;
                 square_options
+                    .set_fill_opacity(0.7)
+                    .map_err(|error| error.to_string())?;
+                square_options
                     .set_object_opacity(0.75)
                     .map_err(|error| error.to_string())?;
                 let square = live

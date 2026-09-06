@@ -31,6 +31,7 @@ class OrdinaryLivePrimitiveConstruction(Scene):
             position=(-2.0, 1.0, 0.0),
             rotation=0.25,
             color=Color(0.2, 0.9, 0.3),
+            fill_opacity=0.7,
             opacity=0.75,
         )
         self.add(circle, square)
