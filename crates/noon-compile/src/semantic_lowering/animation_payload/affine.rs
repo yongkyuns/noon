@@ -1334,7 +1334,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Reveal => 7,
         Property::Transform => 8,
         Property::Morph => 9,
-        _ => unreachable!("shared animation payload lowering only registers supported drivers"),
+        Property::Presence => 10,
     };
     (object.get(), slot)
 }

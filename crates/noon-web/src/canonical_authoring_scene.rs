@@ -1635,8 +1635,7 @@ impl CanonicalAuthoringScene {
                     noon_core::AnimationOptions::new(),
                 )
             };
-            resolved
-            .map_err(|error| error.to_string())?;
+            resolved.map_err(|error| error.to_string())?;
             match entering_id {
                 Some(id) => {
                     if self.bindings.contains_key(&id)
