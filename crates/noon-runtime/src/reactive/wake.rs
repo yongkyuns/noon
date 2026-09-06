@@ -145,4 +145,23 @@ mod tests {
         scheduler.seek(0.0);
         assert_eq!(scheduler.wake_state(), TimelineWakeState::Quiescent);
     }
+
+    #[test]
+    fn settled_lifecycle_history_remains_indexed_for_loop_replay() {
+        let mut lifecycle = position_track(1.0, 0.0);
+        lifecycle.property = Property::Presence;
+        lifecycle.values = TrackValues::Bool {
+            from: true,
+            to: false,
+        };
+        let mut scheduler = TimelineEventScheduler::new(&[lifecycle]);
+        assert_eq!(scheduler.live_group_count(), 1);
+        scheduler.seek(2.0);
+        assert_eq!(scheduler.wake_state(), TimelineWakeState::Quiescent);
+        assert_eq!(
+            scheduler.live_group_count(),
+            1,
+            "settling a presence event must not erase deterministic loop history"
+        );
+    }
 }

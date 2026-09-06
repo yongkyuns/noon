@@ -2653,6 +2653,25 @@ mod tests {
     }
 
     #[test]
+    fn opaque_callback_history_is_explicitly_non_looping() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, Some(0.5));
+        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let mut player =
+            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7)
+                .unwrap();
+
+        assert_eq!(player.clock.loop_duration(), None);
+        assert!(!player.session.has_replay_timeline_work());
+        let before = player.clock.clone();
+        assert!(player.set_loop_duration(2.0).is_err());
+        assert_eq!(player.clock, before);
+    }
+
+    #[test]
     fn shared_session_text_uses_the_mixed_resource_boundary() {
         let mut scene = noon::Scene::new();
         let label = scene

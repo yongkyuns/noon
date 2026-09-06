@@ -769,7 +769,9 @@ impl ExecutionSession {
     /// current runtime wake state settles.
     ///
     /// This is an O(1) query over the runtime and scalar-signal timeline indices.
-    /// It does not scan tracks or create a host-side schedule.
+    /// It does not scan tracks or create a host-side schedule. Opaque host callback
+    /// history is deliberately excluded: callback sessions use non-looping playback
+    /// and reject attempts to enable looping rather than replaying external effects.
     pub fn has_replay_timeline_work(&self) -> bool {
         self.runtime.has_timeline_channels() || !self.signal_timeline.is_empty()
     }
