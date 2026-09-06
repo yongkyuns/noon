@@ -49,6 +49,15 @@ impl SemanticNodeCreation {
         })
     }
 
+    pub fn native_input_signal(
+        value: impl Into<SemanticSignalValue>,
+        source: crate::SemanticNativeInputSource,
+    ) -> Result<Self, SemanticSignalError> {
+        Ok(Self::Signal {
+            state: SemanticSignalState::input_with_native_source(value.into(), source)?,
+        })
+    }
+
     pub fn with_source_identity(mut self, source_identity: SourceIdentity) -> Self {
         match &mut self {
             Self::Object {

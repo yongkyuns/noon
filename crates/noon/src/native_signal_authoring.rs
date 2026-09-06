@@ -196,19 +196,17 @@ impl Scene {
         source: SemanticNativeInputSource,
     ) -> Result<(Rc<RefCell<SemanticStore>>, SemanticNodeId), String> {
         let store = Rc::clone(self.store());
-        let mut semantic = store.borrow_mut();
-        let node = semantic
-            .insert_semantic_input_signal(initial)
+        let creation = noon_core::SemanticNodeCreation::native_input_signal(initial, source)
             .map_err(|error| error.to_string())?;
-        semantic
-            .set_semantic_native_input(node, Some(source))
-            .expect("fresh type-matched input accepts one native owner");
-        let mut scope = SemanticMutationTransaction::new();
-        scope.scope_signal(self.root(), node);
-        scope
-            .apply(&mut semantic)
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(creation);
+        transaction.scope_signal(self.root(), pending);
+        let result = transaction
+            .apply(&mut store.borrow_mut())
             .map_err(|error| error.to_string())?;
-        drop(semantic);
+        let node = result
+            .resolve(pending)
+            .expect("committed native input resolves its transaction-local identity");
         Ok((store, node))
     }
 
