@@ -12,7 +12,8 @@ use super::super::{
     PreparedSemanticScheduledAnimationPayload, SemanticExecutionIndex, SemanticExecutionValueError,
 };
 use super::affine::{
-    driver_key, lower_affine_lifecycle_channels, lower_transform_channels, validate_affine_payload,
+    driver_key, indicate_center_dependency_conflict, lower_affine_lifecycle_channels,
+    lower_transform_channels, reserve_indicate_center_dependencies, validate_affine_payload,
     AffinePayloadIssue, EffectiveAnimationProperties, SemanticAnimationCompletion,
 };
 
@@ -302,6 +303,18 @@ where
                         },
                     );
                 }
+                if let Some(first_animation) = indicate_center_dependency_conflict(
+                    &driven,
+                    leaf.execution_object_id,
+                    leaf.animation,
+                ) {
+                    return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
+                        first_animation,
+                        next_animation: leaf.animation,
+                        target: leaf.target,
+                        property: SemanticObjectProperty::Translation,
+                    });
+                }
                 let from = capture_effective(
                     leaf,
                     source,
@@ -320,6 +333,11 @@ where
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }
+                reserve_indicate_center_dependencies(
+                    &mut driven,
+                    leaf.execution_object_id,
+                    leaf.animation,
+                );
                 continue;
             }
             PreparedSemanticScheduledAnimationPayload::Fade { direction } => {

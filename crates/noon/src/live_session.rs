@@ -3447,6 +3447,40 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn family_indicate_rejects_an_earlier_center_affecting_rotation() {
+        let mut scene = Scene::new();
+        let first = scene.rectangle(2.0, 1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        scene.add(&first).unwrap();
+        scene.add(&second).unwrap();
+        let family = scene.family(&[&first, &second]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Sequence,
+            options: AnimationOptions::new(),
+            children: vec![
+                AnimationCompositionRequest::Rotate {
+                    target: &first,
+                    angle: std::f64::consts::FRAC_PI_2,
+                    options: linear(1.0),
+                },
+                AnimationCompositionRequest::FamilyIndicate {
+                    target: &family,
+                    indication: IndicateOptions::default(),
+                    options: AnimationOptions::new().run_time(2.0),
+                },
+            ],
+        };
+
+        assert!(scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .is_err());
+        assert_eq!(session.publication_context(), before);
+    }
+
+    #[test]
     fn family_indicate_scales_members_about_the_shared_family_center() {
         let mut scene = Scene::new();
         let mut left = scene.square(1.0).unwrap();

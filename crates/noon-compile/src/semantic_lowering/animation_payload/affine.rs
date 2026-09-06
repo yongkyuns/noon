@@ -467,6 +467,18 @@ where
             scale_center,
         } = leaf.payload
         {
+            if let Some(first_animation) = indicate_center_dependency_conflict(
+                &driven,
+                leaf.execution_object_id,
+                leaf.animation,
+            ) {
+                return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
+                    first_animation,
+                    next_animation: leaf.animation,
+                    target: leaf.target,
+                    property: SemanticObjectProperty::Translation,
+                });
+            }
             let source = object_state(store, leaf, leaf.target)?;
             let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
                 captured
@@ -486,6 +498,11 @@ where
             for channel in channels {
                 push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
             }
+            reserve_indicate_center_dependencies(
+                &mut driven,
+                leaf.execution_object_id,
+                leaf.animation,
+            );
             continue;
         }
         if let SemanticScheduledAnimationPayload::Rotate { angle } = leaf.payload {
@@ -1443,6 +1460,38 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
             .or_else(|| driven.get(&(object, morph_slot)))
             .copied()
             .filter(|owner| *owner != animation)
+    }
+}
+
+const INDICATE_CENTER_DEPENDENCIES: [Property; 4] = [
+    Property::Position,
+    Property::Rotation,
+    Property::Scale,
+    Property::Morph,
+];
+
+pub(super) fn indicate_center_dependency_conflict<T: Copy + PartialEq>(
+    driven: &HashMap<(u64, u8), T>,
+    object: ObjectId,
+    animation: T,
+) -> Option<T> {
+    INDICATE_CENTER_DEPENDENCIES.iter().find_map(|property| {
+        driven
+            .get(&driver_key(object, *property))
+            .copied()
+            .filter(|owner| *owner != animation)
+    })
+}
+
+pub(super) fn reserve_indicate_center_dependencies<T: Copy>(
+    driven: &mut HashMap<(u64, u8), T>,
+    object: ObjectId,
+    animation: T,
+) {
+    for property in INDICATE_CENTER_DEPENDENCIES {
+        driven
+            .entry(driver_key(object, property))
+            .or_insert(animation);
     }
 }
 
