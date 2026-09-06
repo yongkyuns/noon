@@ -3283,7 +3283,7 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "returned");
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (2.0, -1.0, 0.8, 0.8)
+            (2.0, -1.0, f64::from(0.8_f32), f64::from(0.8_f32))
         );
     }
 
