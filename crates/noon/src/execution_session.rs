@@ -29,9 +29,10 @@ use noon_compile::{
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
     NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, RateFunction, ReactiveError,
-    ReactiveValue, Rect, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
-    SemanticNodeId, SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
+    ReactiveValue, Rect, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
+    SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
     SemanticTransactionNodeRef, TimelineError, TrackId, TrackTiming,
 };
 use noon_runtime::{
@@ -57,6 +58,10 @@ fn resolve_committed_node(
 enum PreparedAnimationLifecycle {
     Introduce(SemanticNodeId),
     FadeOut(SemanticNodeId),
+    AffineRemove {
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -77,7 +82,14 @@ pub(crate) enum SemanticCompositionRequest {
 impl PreparedAnimationLifecycle {
     const fn root(self) -> SemanticNodeId {
         match self {
-            Self::Introduce(root) | Self::FadeOut(root) => root,
+            Self::Introduce(root) | Self::FadeOut(root) | Self::AffineRemove { root, .. } => root,
+        }
+    }
+
+    const fn removal(self) -> Option<(SemanticNodeId, SemanticNodeId)> {
+        match self {
+            Self::AffineRemove { root, target } => Some((root, target)),
+            Self::Introduce(_) | Self::FadeOut(_) => None,
         }
     }
 }
@@ -1008,6 +1020,7 @@ impl ExecutionSession {
             activation_scene_revision: store.scene_revision(),
             kind: PendingSegmentCompletionKind::ObjectTracks {
                 lifecycle_root: None,
+                lifecycle_removal: None,
                 entries: completions,
             },
         });
@@ -1462,6 +1475,47 @@ impl ExecutionSession {
         )
     }
 
+    /// Atomically activate one single-leaf affine appearance lifecycle.
+    ///
+    /// Introduction admits a detached object in the declaration transaction. Removal keeps the
+    /// live object present through the endpoint and removes membership during segment completion.
+    pub fn declare_and_activate_affine_lifecycle(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let membership_direction = match direction {
+            SemanticAffineLifecycleDirection::IntroduceFrom => SemanticFadeDirection::In,
+            SemanticAffineLifecycleDirection::RemoveTo => SemanticFadeDirection::Out,
+        };
+        self.require_fade_target(store, root, target, membership_direction)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        if direction == SemanticAffineLifecycleDirection::IntroduceFrom {
+            declaration.add_member(root, target);
+        }
+        let animation =
+            declaration.create_affine_lifecycle_animation(target, direction, endpoint, options);
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            animation,
+            AnimationOptions::new(),
+            Some(match direction {
+                SemanticAffineLifecycleDirection::IntroduceFrom => {
+                    PreparedAnimationLifecycle::Introduce(root)
+                }
+                SemanticAffineLifecycleDirection::RemoveTo => {
+                    PreparedAnimationLifecycle::AffineRemove { root, target }
+                }
+            }),
+        )
+    }
+
     /// Atomically introduce one detached leaf and activate its geometry reveal.
     pub fn declare_and_activate_create(
         &mut self,
@@ -1830,6 +1884,7 @@ impl ExecutionSession {
                 activation_scene_revision,
                 kind: PendingSegmentCompletionKind::ObjectTracks {
                     lifecycle_root: lifecycle.map(PreparedAnimationLifecycle::root),
+                    lifecycle_removal: lifecycle.and_then(PreparedAnimationLifecycle::removal),
                     entries,
                 },
             });

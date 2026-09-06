@@ -1,7 +1,8 @@
 use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
-    validate_track_definition, ObjectId, Property, SemanticAnimationError, SemanticAnimationIntent,
+    validate_track_definition, ObjectId, Property, SemanticAffineLifecycleDirection,
+    SemanticAffineLifecycleEndpoint, SemanticAnimationError, SemanticAnimationIntent,
     SemanticFadeDirection, SemanticLoweringError, SemanticNodeId, SemanticObjectContent,
     SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue, SemanticStore,
     StoredGeometry, Style, TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
@@ -49,6 +50,8 @@ pub enum SemanticAnimationCompletion {
     RevealLifecycle { remove: bool },
     /// Exact authored endpoint for the bounded shared analytic content morph.
     ContentMorph { content: SemanticObjectContent },
+    /// Execution-only affine lifecycle channel. Authored object properties remain unchanged.
+    Release,
 }
 
 /// One existing execution-timeline channel lowered from an activated semantic animation.
@@ -484,6 +487,7 @@ where
                 interpolation,
             } => (target_state, interpolation),
             SemanticScheduledAnimationPayload::Fade { .. }
+            | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
             | SemanticScheduledAnimationPayload::Rotate { .. } => {
                 return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
@@ -562,6 +566,19 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
+        SemanticAnimationIntent::AffineLifecycle {
+            target,
+            direction,
+            endpoint,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::AffineLifecycle {
+                    direction: *direction,
+                    endpoint: *endpoint,
+                } =>
+        {
+            Ok(())
+        }
         _ => Err(SemanticAffineAnimationTrackError::ScheduleMismatch {
             animation: leaf.animation,
         }),
@@ -572,6 +589,7 @@ fn scheduled_target_state(leaf: &SemanticScheduledAnimationLeaf) -> SemanticNode
     match leaf.payload {
         SemanticScheduledAnimationPayload::TransformTo { target_state, .. } => target_state,
         SemanticScheduledAnimationPayload::Fade { .. }
+        | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
         | SemanticScheduledAnimationPayload::Create
         | SemanticScheduledAnimationPayload::Rotate { .. } => {
             unreachable!("affine payload errors are only produced for TransformTo leaves")
@@ -840,6 +858,151 @@ pub(super) fn lower_affine_channels(
         opacity_changed,
         &mut channels,
     )?;
+    Ok(channels)
+}
+
+pub(super) fn lower_affine_lifecycle_channels(
+    source: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+    direction: SemanticAffineLifecycleDirection,
+    endpoint: SemanticAffineLifecycleEndpoint,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if endpoint.point_color.is_some()
+        && (matches!(
+            source.style.fill.as_ref(),
+            Some(noon_core::SemanticPaint::Resource(_))
+        ) || matches!(
+            source.style.stroke.as_ref(),
+            Some(noon_core::SemanticPaint::Resource(_))
+        ))
+    {
+        return Err(AffinePayloadIssue::UnsupportedStyleChange);
+    }
+    if !transform_is_finite(from.transform) {
+        return Err(AffinePayloadIssue::InvalidEffectiveTransform);
+    }
+    if !style_is_finite(from.style) {
+        return Err(AffinePayloadIssue::InvalidEffectiveStyle);
+    }
+    let point =
+        endpoint
+            .point
+            .lower_xy_f32()
+            .map_err(|error| AffinePayloadIssue::InvalidTargetValue {
+                field: SemanticAffineAnimationField::Translation,
+                error,
+            })?;
+    let collapsed_rotation = f64::from(from.transform.rotation) + endpoint.rotation_offset;
+    if !collapsed_rotation.is_finite() || collapsed_rotation.abs() > f32::MAX as f64 {
+        return Err(AffinePayloadIssue::TargetValueOutOfRange(
+            SemanticAffineAnimationField::RotationZ,
+        ));
+    }
+    let collapsed = Transform2D {
+        translation: point,
+        rotation: collapsed_rotation as f32,
+        scale: noon_core::Vec2::ZERO,
+    };
+    let (start, end) = match direction {
+        SemanticAffineLifecycleDirection::IntroduceFrom => (collapsed, from.transform),
+        SemanticAffineLifecycleDirection::RemoveTo => (from.transform, collapsed),
+    };
+    let recolor = |color: Option<noon_core::Color>| {
+        color.map(|color| match endpoint.point_color {
+            Some(point_color) => noon_core::Color {
+                alpha: color.alpha,
+                ..point_color
+            },
+            None => color,
+        })
+    };
+    let collapsed_style = Style {
+        fill: recolor(from.style.fill),
+        stroke: recolor(from.style.stroke),
+        ..from.style
+    };
+    let (start_style, end_style) = match direction {
+        SemanticAffineLifecycleDirection::IntroduceFrom => (collapsed_style, from.style),
+        SemanticAffineLifecycleDirection::RemoveTo => (from.style, collapsed_style),
+    };
+    let mut channels = Vec::with_capacity(5);
+    for (semantic_property, property, values, changed) in [
+        (
+            SemanticObjectProperty::Translation,
+            Property::Position,
+            TrackValues::Vec2 {
+                from: start.translation,
+                to: end.translation,
+            },
+            start.translation != end.translation,
+        ),
+        (
+            SemanticObjectProperty::RotationZ,
+            Property::Rotation,
+            TrackValues::Scalar {
+                from: start.rotation,
+                to: end.rotation,
+            },
+            start.rotation != end.rotation,
+        ),
+        (
+            SemanticObjectProperty::Scale,
+            Property::Scale,
+            TrackValues::Vec2 {
+                from: start.scale,
+                to: end.scale,
+            },
+            start.scale != end.scale,
+        ),
+    ] {
+        push_affine_channel(
+            source,
+            semantic_property,
+            property,
+            values,
+            SemanticAnimationCompletion::Release,
+            changed,
+            &mut channels,
+        )?;
+    }
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::FillOpacity,
+        Property::Fill,
+        TrackValues::Color {
+            from: start_style.fill,
+            to: end_style.fill,
+        },
+        SemanticAnimationCompletion::Release,
+        start_style.fill != end_style.fill,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::StrokeOpacity,
+        Property::Stroke,
+        TrackValues::Color {
+            from: start_style.stroke,
+            to: end_style.stroke,
+        },
+        SemanticAnimationCompletion::Release,
+        start_style.stroke != end_style.stroke,
+        &mut channels,
+    )?;
+    if channels.is_empty() {
+        push_affine_channel(
+            source,
+            SemanticObjectProperty::Scale,
+            Property::Scale,
+            TrackValues::Vec2 {
+                from: start.scale,
+                to: end.scale,
+            },
+            SemanticAnimationCompletion::Release,
+            true,
+            &mut channels,
+        )?;
+    }
     Ok(channels)
 }
 

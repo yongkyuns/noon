@@ -3,12 +3,12 @@
 use std::{error::Error, rc::Rc};
 
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, Color, ExecutionSession, HostCallbackId,
-    LiveContinuation, LiveProgram, LiveSession, MathTypst, Mobject, RateFunction,
-    RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticMutationTransaction, SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3,
-    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, TransformToRequest, Typst,
-    ValueTracker, Vec2, VectorPath,
+    AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
+    AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
+    LiveSession, MathTypst, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
+    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
+    StrokeJoin, StrokeWidthMode, TransformToRequest, Typst, ValueTracker, Vec2, VectorPath,
 };
 
 /// Direct counterpart of Manim's DifferentRotations example.
@@ -1461,6 +1461,99 @@ pub fn ordinary_create_continuation_program(
     scene
         .into_live_program(OrdinaryCreateContinuation {
             circle,
+            semantic_id,
+            authored_style,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Target-neutral shared Grow/Spin/Shrink lifecycle proof.
+pub struct OrdinaryAffineLifecycleContinuation {
+    square: Mobject,
+    semantic_id: SemanticNodeId,
+    authored_style: SemanticStyle,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
+    type Error = String;
+
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Smooth);
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.declare_and_activate_affine_lifecycle(
+                    &self.square,
+                    AffineLifecycleDirection::IntroduceFrom,
+                    AffineLifecycleEndpoint::Point {
+                        x: -2.0,
+                        y: 0.0,
+                        rotation_offset: -std::f64::consts::PI / 2.0,
+                        point_color: Some(Color::RED),
+                    },
+                    options,
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                if self.square.node_id() != self.semantic_id
+                    || !live
+                        .contains(&self.square)
+                        .map_err(|error| error.to_string())?
+                    || live
+                        .authored(&self.square)
+                        .map_err(|error| error.to_string())?
+                        .style
+                        != self.authored_style
+                {
+                    return Err("affine introduction changed authored identity or style".into());
+                }
+                self.stage = 2;
+                live.declare_and_activate_affine_lifecycle(
+                    &self.square,
+                    AffineLifecycleDirection::RemoveTo,
+                    AffineLifecycleEndpoint::EffectiveCenter,
+                    options,
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            2 => {
+                if live
+                    .contains(&self.square)
+                    .map_err(|error| error.to_string())?
+                    || self.square.node_id() != self.semantic_id
+                {
+                    return Err("affine removal did not detach the original object".into());
+                }
+                self.stage = 3;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("affine lifecycle continuation resumed after completion".into()),
+        }
+    }
+}
+
+pub fn ordinary_affine_lifecycle_program(
+) -> Result<LiveProgram<OrdinaryAffineLifecycleContinuation>, String> {
+    let scene = Scene::new();
+    let mut square = scene.square(1.0)?;
+    square.set_fill(
+        f64::from(Color::BLUE.red),
+        f64::from(Color::BLUE.green),
+        f64::from(Color::BLUE.blue),
+        0.7,
+    )?;
+    let semantic_id = square.node_id();
+    let authored_style = square.state()?.style;
+    scene
+        .into_live_program(OrdinaryAffineLifecycleContinuation {
+            square,
             semantic_id,
             authored_style,
             stage: 0,

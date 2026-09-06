@@ -1,6 +1,6 @@
 use super::{
-    AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
-    SemanticSceneOperationError, SemanticStore,
+    AnimationOptions, AnimationOptionsError, Color, SemanticNodeId, SemanticNodeKind,
+    SemanticSceneOperationError, SemanticStore, SemanticVec3,
 };
 
 /// Ordered composition semantics authored before execution scheduling/lowering.
@@ -17,6 +17,37 @@ pub enum SemanticAnimationCompositionKind {
 pub enum SemanticFadeDirection {
     In,
     Out,
+}
+
+/// Membership direction for one content-preserving affine lifecycle animation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticAffineLifecycleDirection {
+    IntroduceFrom,
+    RemoveTo,
+}
+
+/// Collapsed affine endpoint resolved at the activation barrier.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticAffineLifecycleEndpoint {
+    pub point: SemanticVec3,
+    pub rotation_offset: f64,
+    pub point_color: Option<Color>,
+}
+
+impl SemanticAffineLifecycleEndpoint {
+    pub(crate) fn is_valid(self) -> bool {
+        let color_is_finite = self.point_color.is_none_or(|color| {
+            color.red.is_finite()
+                && color.green.is_finite()
+                && color.blue.is_finite()
+                && color.alpha.is_finite()
+        });
+        self.point.lower_xy_f32().is_ok()
+            && self.point.z == 0.0
+            && self.rotation_offset.is_finite()
+            && self.rotation_offset.abs() <= f32::MAX as f64
+            && color_is_finite
+    }
 }
 
 /// Geometry interpolation chosen explicitly by an authored TransformTo operation.
@@ -53,6 +84,12 @@ pub enum SemanticAnimationIntent {
         target: SemanticNodeId,
         direction: SemanticFadeDirection,
     },
+    /// Introduce or remove one leaf through activation-relative affine/style channels.
+    AffineLifecycle {
+        target: SemanticNodeId,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+    },
     /// Introduce one detached semantic leaf through the shared geometry reveal channel.
     Create { target: SemanticNodeId },
     /// Compose existing semantic animation declarations in stable authored order.
@@ -72,6 +109,7 @@ impl SemanticAnimationIntent {
             Self::TransformTo { target, .. }
             | Self::Rotate { target, .. }
             | Self::Fade { target, .. }
+            | Self::AffineLifecycle { target, .. }
             | Self::Create { target } => Some(*target),
             Self::Composition { .. } => None,
         }
@@ -82,6 +120,7 @@ impl SemanticAnimationIntent {
             Self::TransformTo { target_state, .. } => Some(*target_state),
             Self::Rotate { .. }
             | Self::Fade { .. }
+            | Self::AffineLifecycle { .. }
             | Self::Create { .. }
             | Self::Composition { .. } => None,
         }
@@ -92,6 +131,7 @@ impl SemanticAnimationIntent {
             Self::TransformTo { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
+            | Self::AffineLifecycle { .. }
             | Self::Create { .. } => None,
             Self::Composition { kind, .. } => Some(*kind),
         }
@@ -102,6 +142,7 @@ impl SemanticAnimationIntent {
             Self::TransformTo { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
+            | Self::AffineLifecycle { .. }
             | Self::Create { .. } => &[],
             Self::Composition { children, .. } => children,
         }
@@ -142,6 +183,7 @@ pub enum SemanticAnimationError {
     Options(AnimationOptionsError),
     SameTargetAndTargetState(SemanticNodeId),
     InvalidRotationAngle(f64),
+    InvalidAffineLifecycleEndpoint,
 }
 
 impl std::fmt::Display for SemanticAnimationError {
@@ -173,6 +215,9 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidRotationAngle(angle) => {
                 write!(formatter, "rotation angle must be finite, got {angle}")
             }
+            Self::InvalidAffineLifecycleEndpoint => formatter.write_str(
+                "affine lifecycle endpoint point and rotation offset must be finite 2D values",
+            ),
         }
     }
 }
@@ -274,6 +319,32 @@ impl SemanticStore {
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::Fade { target, direction },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one content-preserving affine lifecycle declaration.
+    pub fn insert_semantic_affine_lifecycle_animation(
+        &mut self,
+        target: SemanticNodeId,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if !endpoint.is_valid() {
+            return Err(SemanticAnimationError::InvalidAffineLifecycleEndpoint);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::AffineLifecycle {
+                    target,
+                    direction,
+                    endpoint,
+                },
                 options,
             )),
         )

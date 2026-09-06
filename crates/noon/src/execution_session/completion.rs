@@ -272,6 +272,7 @@ impl ExecutionSession {
 
         let crate::execution_segment::PendingSegmentCompletionKind::ObjectTracks {
             lifecycle_root,
+            lifecycle_removal,
             entries,
         } = &pending.kind
         else {
@@ -279,6 +280,9 @@ impl ExecutionSession {
         };
 
         let mut semantic = SemanticMutationTransaction::new();
+        if let Some((root, target)) = lifecycle_removal {
+            semantic.remove_member(*root, *target);
+        }
         let mut release = Vec::with_capacity(entries.len());
         for entry in entries {
             if matches!(
@@ -354,7 +358,8 @@ impl ExecutionSession {
                 SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::Fade { .. }
-                | SemanticAnimationCompletion::RevealLifecycle { .. } => {}
+                | SemanticAnimationCompletion::RevealLifecycle { .. }
+                | SemanticAnimationCompletion::Release => {}
             }
             release.push(ExecutionPatch::ReconcileTrack {
                 track: entry.track,

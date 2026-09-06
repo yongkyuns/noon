@@ -2,10 +2,11 @@ use noon_core::{
     resolve_animation_options, resolve_composition_schedule, AnimationDefaults, AnimationOptions,
     AnimationOptionsError, CompositionError, CompositionInterval, CompositionTimeMap,
     CompositionTimeMapStep, ObjectId, PreparedSemanticMutationTransaction, RateFunction,
-    ResolvedAnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationError,
-    SemanticAnimationIntent, SemanticFadeDirection, SemanticNodeId, SemanticStore,
-    SemanticTransactionAnimationIntent, SemanticTransactionNodeRef, SemanticTransactionReadError,
-    SemanticTransformInterpolation, TrackTiming,
+    ResolvedAnimationOptions, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticAnimationError, SemanticAnimationIntent,
+    SemanticFadeDirection, SemanticNodeId, SemanticStore, SemanticTransactionAnimationIntent,
+    SemanticTransactionNodeRef, SemanticTransactionReadError, SemanticTransformInterpolation,
+    TrackTiming,
 };
 
 use super::SemanticExecutionIndex;
@@ -62,6 +63,10 @@ pub enum SemanticScheduledAnimationPayload {
     },
     Fade {
         direction: SemanticFadeDirection,
+    },
+    AffineLifecycle {
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
     },
     Create,
 }
@@ -133,6 +138,10 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     },
     Fade {
         direction: SemanticFadeDirection,
+    },
+    AffineLifecycle {
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
     },
     Create,
 }
@@ -318,6 +327,13 @@ pub fn lower_semantic_animation_schedule(
                     ScheduledAnimationPayload::Fade { direction } => {
                         SemanticScheduledAnimationPayload::Fade { direction }
                     }
+                    ScheduledAnimationPayload::AffineLifecycle {
+                        direction,
+                        endpoint,
+                    } => SemanticScheduledAnimationPayload::AffineLifecycle {
+                        direction,
+                        endpoint,
+                    },
                     ScheduledAnimationPayload::Create => SemanticScheduledAnimationPayload::Create,
                 },
                 timing: leaf.timing,
@@ -368,6 +384,13 @@ pub fn lower_prepared_semantic_animation_schedule(
                     ScheduledAnimationPayload::Fade { direction } => {
                         PreparedSemanticScheduledAnimationPayload::Fade { direction }
                     }
+                    ScheduledAnimationPayload::AffineLifecycle {
+                        direction,
+                        endpoint,
+                    } => PreparedSemanticScheduledAnimationPayload::AffineLifecycle {
+                        direction,
+                        endpoint,
+                    },
                     ScheduledAnimationPayload::Create => {
                         PreparedSemanticScheduledAnimationPayload::Create
                     }
@@ -400,6 +423,11 @@ enum AnimationDeclarationIntent<R> {
     Fade {
         target: R,
         direction: SemanticFadeDirection,
+    },
+    AffineLifecycle {
+        target: R,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
     },
     Create {
         target: R,
@@ -474,6 +502,20 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::Fade {
                     target: *target,
                     direction: *direction,
+                }
+            }
+            SemanticAnimationIntent::AffineLifecycle {
+                target,
+                direction,
+                endpoint,
+            } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::AffineLifecycle {
+                    target: *target,
+                    direction: *direction,
+                    endpoint: *endpoint,
                 }
             }
             SemanticAnimationIntent::Create { target } => {
@@ -554,6 +596,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             direction: *direction,
                         }
                     }
+                    SemanticAnimationIntent::AffineLifecycle {
+                        target,
+                        direction,
+                        endpoint,
+                    } => AnimationDeclarationIntent::AffineLifecycle {
+                        target: (*target).into(),
+                        direction: *direction,
+                        endpoint: *endpoint,
+                    },
                     SemanticAnimationIntent::Create { target } => {
                         AnimationDeclarationIntent::Create {
                             target: (*target).into(),
@@ -595,6 +646,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             direction: *direction,
                         }
                     }
+                    SemanticTransactionAnimationIntent::AffineLifecycle {
+                        target,
+                        direction,
+                        endpoint,
+                    } => AnimationDeclarationIntent::AffineLifecycle {
+                        target: *target,
+                        direction: *direction,
+                        endpoint: *endpoint,
+                    },
                     SemanticTransactionAnimationIntent::Create { target } => {
                         AnimationDeclarationIntent::Create { target: *target }
                     }
@@ -627,6 +687,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
             AnimationDeclarationIntent::Fade { target, .. } => {
+                self.prepared
+                    .object_state(*target)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
+            AnimationDeclarationIntent::AffineLifecycle { target, .. } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
@@ -681,6 +746,10 @@ enum ScheduledAnimationPayload<R> {
     },
     Fade {
         direction: SemanticFadeDirection,
+    },
+    AffineLifecycle {
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
     },
     Create,
 }
@@ -872,6 +941,59 @@ where
                     target,
                     execution_object_id,
                     payload: ScheduledAnimationPayload::Fade { direction },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::AffineLifecycle {
+            target,
+            direction,
+            endpoint,
+        } => {
+            let options = resolve_animation_options(
+                AnimationDefaults {
+                    introducer: matches!(
+                        direction,
+                        SemanticAffineLifecycleDirection::IntroduceFrom
+                    ),
+                    remover: matches!(direction, SemanticAffineLifecycleDirection::RemoveTo),
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            let lifecycle_matches = match direction {
+                SemanticAffineLifecycleDirection::IntroduceFrom => {
+                    options.introducer && !options.remover
+                }
+                SemanticAffineLifecycleDirection::RemoveTo => {
+                    options.remover && !options.introducer
+                }
+            };
+            if !lifecycle_matches {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::AffineLifecycle {
+                        direction,
+                        endpoint,
+                    },
                     options,
                 },
             })

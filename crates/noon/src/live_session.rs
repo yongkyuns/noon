@@ -19,10 +19,11 @@ use crate::{
     ValueTracker,
 };
 use noon_core::{
-    AnimationOptions, Bounds2D64, PublicationContext, SemanticAnimationCompositionKind,
-    SemanticFadeDirection, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSignalValue,
-    SemanticStore, SemanticStyle, Style, Transform2D,
+    AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
+    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeId,
+    SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
+    SemanticVec3, Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -49,6 +50,21 @@ pub struct EffectiveMobjectLayout {
     pub height: f64,
     pub publication: PublicationContext,
 }
+
+/// Activation-relative endpoint for one shared affine appearance lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AffineLifecycleEndpoint {
+    Point {
+        x: f64,
+        y: f64,
+        rotation_offset: f64,
+        point_color: Option<Color>,
+    },
+    /// Resolve the target's effective layout center at the activation publication.
+    EffectiveCenter,
+}
+
+pub type AffineLifecycleDirection = SemanticAffineLifecycleDirection;
 
 /// Reconstruct the supported authored target style directly from one effective
 /// runtime row. Runtime colors already contain the evaluated paint opacity, so
@@ -615,6 +631,53 @@ impl<'a> LiveSession<'a> {
         let mut store = self.store.borrow_mut();
         self.session
             .declare_and_activate_create(&mut store, self.root, target.node_id(), options)
+            .map_err(Into::into)
+    }
+
+    /// Atomically author and activate one Grow/Spin/Shrink affine lifecycle.
+    pub fn declare_and_activate_affine_lifecycle(
+        &mut self,
+        target: &Mobject,
+        direction: AffineLifecycleDirection,
+        endpoint: AffineLifecycleEndpoint,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(target)?;
+        let endpoint = match endpoint {
+            AffineLifecycleEndpoint::Point {
+                x,
+                y,
+                rotation_offset,
+                point_color,
+            } => SemanticAffineLifecycleEndpoint {
+                point: SemanticVec3::new(x, y, 0.0),
+                rotation_offset,
+                point_color,
+            },
+            AffineLifecycleEndpoint::EffectiveCenter => {
+                if direction != AffineLifecycleDirection::RemoveTo {
+                    return Err(LiveSessionError::Mobject(
+                        "effective-center lifecycle endpoints require a live removal target".into(),
+                    ));
+                }
+                let center = self.effective_layout(target)?.center;
+                SemanticAffineLifecycleEndpoint {
+                    point: SemanticVec3::new(center.0, center.1, 0.0),
+                    rotation_offset: 0.0,
+                    point_color: None,
+                }
+            }
+        };
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_affine_lifecycle(
+                &mut store,
+                self.root,
+                target.node_id(),
+                direction,
+                endpoint,
+                options,
+            )
             .map_err(Into::into)
     }
 
@@ -1699,6 +1762,54 @@ mod tests {
         assert_eq!(circle.store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn affine_lifecycle_admits_from_effective_channels_then_removes_at_completion() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let authored = square.state().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+
+        let grow = live
+            .declare_and_activate_affine_lifecycle(
+                &square,
+                AffineLifecycleDirection::IntroduceFrom,
+                AffineLifecycleEndpoint::Point {
+                    x: -2.0,
+                    y: 1.0,
+                    rotation_offset: -std::f64::consts::FRAC_PI_2,
+                    point_color: Some(Color::RED),
+                },
+                options,
+            )
+            .unwrap();
+        assert!(live.contains(&square).unwrap());
+        let start = live.effective(&square).unwrap();
+        assert_eq!(start.transform.translation, noon_core::Vec2::new(-2.0, 1.0));
+        assert_eq!(start.transform.scale, noon_core::Vec2::ZERO);
+        live.advance_segment_to(grow, grow.end_time()).unwrap();
+        live.complete_segment(grow).unwrap();
+        assert_eq!(live.authored(&square).unwrap(), authored);
+
+        let shrink = live
+            .declare_and_activate_affine_lifecycle(
+                &square,
+                AffineLifecycleDirection::RemoveTo,
+                AffineLifecycleEndpoint::EffectiveCenter,
+                options,
+            )
+            .unwrap();
+        live.advance_segment_to(shrink, shrink.end_time()).unwrap();
+        assert!(live.contains(&square).unwrap());
+        live.complete_segment(shrink).unwrap();
+        assert!(!live.contains(&square).unwrap());
+        assert_eq!(square.state().unwrap(), authored);
     }
 
     #[test]
