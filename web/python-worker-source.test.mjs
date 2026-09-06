@@ -24,8 +24,7 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.match(source, /if\s*\(isContinuationControl\(event\.data\)\)/);
   assert.match(source, /void\s+handleContinuationControl\(event\.data\)/);
   assert.match(source, /requestQueue\s*=\s*requestQueue\.then\(\(\)\s*=>\s*handleRequest/);
-  assert.match(source, /inspect\.iscoroutinefunction\(__noon_result\.construct\)/);
-  assert.match(source, /await\s+__noon_result\.construct\(\)/);
+  assert.match(source, /await\s+execute_construct\(__noon_result\)/);
   assert.match(source, /continuation\.endpoint\.startContinuation\(continuation\.generation\)/);
   assert.match(source, /continuation\.runRequestId\s*!==\s*request\.continuationRunRequestId/);
   assert.match(source, /noonRequireSemanticContinuationActive/);
@@ -36,9 +35,12 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.doesNotMatch(lane, /runPythonAsync/);
 });
 
-test("synchronous continuation is an explicit JSPI-gated construct mode", () => {
-  assert.match(source, /_synchronous_continuation_requested\(__noon_result\)/);
-  assert.match(source, /_begin_synchronous_continuation_construct\(__noon_result\)/);
-  assert.match(source, /_finish_synchronous_continuation_construct\(__noon_result\)/);
-  assert.match(source, /__noon_result\.construct\(\)/);
+test("worker delegates every Scene construct lifecycle to the canonical adapter", () => {
+  const authoring = source.slice(
+    source.indexOf("async function runAuthoringSource"),
+    source.indexOf("async function runCallbackPhase"),
+  );
+  assert.match(authoring, /await\s+execute_construct\(__noon_result\)/);
+  assert.doesNotMatch(authoring, /__noon_result\.(?:setup|construct|tear_down)\(/);
+  assert.doesNotMatch(authoring, /_(?:begin|finish)_(?:async|synchronous)_continuation_construct/);
 });

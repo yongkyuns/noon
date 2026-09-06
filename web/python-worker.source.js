@@ -583,8 +583,12 @@ async function runAuthoringSource(pyodide, source, context, exportDocument = fal
     const resultJson = await pyodide.runPythonAsync(
       `
 import json
-import inspect
 import _manim_updaters
+from _manim_canonical_scene import (
+    execute_construct,
+    execution_context,
+    materialize_legacy_geometry,
+)
 from noon import PatchBatch, Scene
 
 __noon_namespace = {
@@ -615,31 +619,13 @@ else:
             f"select one explicitly via result = SceneClass(): {__noon_names}"
         )
     __noon_result = __noon_scene_classes[0]()
-    __noon_result.setup()
-    try:
-        import _manim_canonical_scene
-        if inspect.iscoroutinefunction(__noon_result.construct):
-            _manim_canonical_scene._begin_async_continuation_construct(__noon_result)
-            await __noon_result.construct()
-            _manim_canonical_scene._finish_async_continuation_construct(__noon_result)
-        elif _manim_canonical_scene._synchronous_continuation_requested(__noon_result):
-            import _manim_canonical_scene
-            _manim_canonical_scene._begin_synchronous_continuation_construct(__noon_result)
-            try:
-                __noon_result.construct()
-            finally:
-                _manim_canonical_scene._finish_synchronous_continuation_construct(__noon_result)
-        else:
-            __noon_result.construct()
-    finally:
-        __noon_result.tear_down()
+    await execute_construct(__noon_result)
 
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
-    import _manim_canonical_scene
     from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
     __noon_context = (None if __noon_export_document else
-        _manim_canonical_scene.execution_context(__noon_result))
+        execution_context(__noon_result))
     __noon_semantic = None
     __noon_live_duration = None
     __noon_authored_duration = None
@@ -670,7 +656,7 @@ if isinstance(__noon_result, Scene):
         # temporary #959 codec is derived from the Rust store at finalization.
         # Geometry-only fallback retains the existing legacy materialization.
         if not getattr(__noon_result, "_semantic_text_handles", {}):
-            _manim_canonical_scene.materialize_legacy_geometry(__noon_result)
+            materialize_legacy_geometry(__noon_result)
         __noon_scene_spec = __noon_result.to_scene_spec()
         __noon_document = __noon_result.to_document()
         # The canonical document already includes every text object. The old

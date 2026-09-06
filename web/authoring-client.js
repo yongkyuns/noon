@@ -274,9 +274,22 @@ export class PythonAuthoringClient {
       }
 
       if (message.type === "result") {
-        this.#settle(message.requestId, ({ resolve }) => {
-          resolve(parseAuthoringResult(message.resultJson));
-        });
+        const pending = this.#pendingFor(message.requestId);
+        if (pending === null) return;
+        const result = parseAuthoringResult(message.resultJson);
+        const registrationCompletion = pending.continuationRegistrationCompletion;
+        if (registrationCompletion === undefined) {
+          this.#settle(message.requestId, ({ resolve }) => resolve(result));
+        } else {
+          void registrationCompletion.then(
+            () => {
+              if (this.#pending.get(message.requestId) === pending) {
+                this.#settle(message.requestId, ({ resolve }) => resolve(result));
+              }
+            },
+            () => {},
+          );
+        }
         return;
       }
 
@@ -346,19 +359,23 @@ export class PythonAuthoringClient {
       generation: message.generation,
       runRequestId: message.requestId,
     });
-    Promise.resolve()
-      .then(() => pending.onSemanticContinuation(registration))
-      .catch(async (error) => {
-        try {
-          await this.cancelSemanticContinuation(
-            semanticExecution.contextId,
-            message.generation,
-            error instanceof Error ? error.message : String(error),
-          );
-        } catch (cancelError) {
+    const registrationCompletion = Promise.resolve()
+      .then(() => pending.onSemanticContinuation(registration));
+    pending.continuationRegistrationCompletion = registrationCompletion;
+    void registrationCompletion.catch((error) => {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (this.#pending.get(message.requestId) === pending) {
+        this.#settle(message.requestId, ({ reject }) => reject(failure));
+      }
+      void this.cancelSemanticContinuation(
+        semanticExecution.contextId,
+        message.generation,
+        failure.message,
+      )
+        .catch((cancelError) => {
           this.#fail(cancelError instanceof Error ? cancelError : new Error(String(cancelError)));
-        }
-      });
+        });
+    });
   }
 
   #matchingContinuation(contextId, generation) {
@@ -370,6 +387,14 @@ export class PythonAuthoringClient {
   }
 
   #settle(requestId, settle) {
+    const pending = this.#pendingFor(requestId);
+    if (pending === null) return false;
+    settle(pending);
+    this.#pending.delete(requestId);
+    return true;
+  }
+
+  #pendingFor(requestId) {
     if (!Number.isSafeInteger(requestId) || requestId < 0) {
       throw new Error("Python authoring response has an invalid request ID");
     }
@@ -377,13 +402,11 @@ export class PythonAuthoringClient {
     if (!pending) {
       if (requestId < this.#nextRequestId) {
         this.#staleResponses += 1;
-        return false;
+        return null;
       }
       throw new Error(`Python authoring response has unissued request ID ${requestId}`);
     }
-    settle(pending);
-    this.#pending.delete(requestId);
-    return true;
+    return pending;
   }
 
   #fail(error) {

@@ -8,6 +8,7 @@ or the legacy animation/retained-text adapter still owned for deletion by #959.
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -269,6 +270,28 @@ def _synchronous_continuation_active(scene: _base.Scene) -> bool:
 
 def _semantic_continuation_active(scene: _base.Scene) -> bool:
     return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
+
+
+async def execute_construct(scene: _base.Scene) -> None:
+    """Run one Scene construct lifecycle with its canonical continuation mode."""
+    scene.setup()
+    try:
+        if inspect.iscoroutinefunction(scene.construct):
+            _begin_async_continuation_construct(scene)
+            try:
+                await scene.construct()
+            finally:
+                _finish_async_continuation_construct(scene)
+        elif _synchronous_continuation_requested(scene):
+            _begin_synchronous_continuation_construct(scene)
+            try:
+                scene.construct()
+            finally:
+                _finish_synchronous_continuation_construct(scene)
+        else:
+            scene.construct()
+    finally:
+        scene.tear_down()
 
 
 class _SemanticContinuationAwaitable:
