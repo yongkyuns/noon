@@ -45,10 +45,26 @@ pub(crate) fn compile_transform_geometry_plan(
                 geometry,
                 render_transform,
                 ..
-            } => Ok(Some(TransformGeometryPlan::PathPair {
-                geometry: Arc::new(geometry.clone()),
-                render_transform: *render_transform,
-            })),
+            } => {
+                let GeometryRef::VectorPath(source) = geometry else {
+                    return Err(TransformCompileFailure::UnsupportedGeometry);
+                };
+                let Some(target) = source.morph_target() else {
+                    return Err(TransformCompileFailure::UnsupportedGeometry);
+                };
+                noon_geometry::plan_morph(source, target, noon_geometry::MorphOptions::DEFAULT)
+                    .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
+                noon_geometry::plan_filled_morph(
+                    source,
+                    target,
+                    noon_geometry::MorphOptions::DEFAULT,
+                )
+                .map_err(|_| TransformCompileFailure::UnsafeFilledPath)?;
+                Ok(Some(TransformGeometryPlan::PathPair {
+                    geometry: Arc::new(geometry.clone()),
+                    render_transform: *render_transform,
+                }))
+            }
             _ => Ok(None),
         };
     }
