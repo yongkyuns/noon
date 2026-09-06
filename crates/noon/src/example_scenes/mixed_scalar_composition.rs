@@ -147,12 +147,15 @@ mod tests {
             assert!((frame.render_transform(1).rotation - angle).abs() < 1e-5);
         }
         for end in [2.5, 2.75, 3.0] {
-            assert!(matches!(
-                program.drive_to(&mut callbacks, end).unwrap(),
-                LiveProgramStatus::PublicationPending(_)
-            ));
-            let context = program.take_renderer_publication().context();
-            program.admit_publication(context).unwrap();
+            match program.drive_to(&mut callbacks, end).unwrap() {
+                LiveProgramStatus::PublicationPending(expected) => {
+                    let context = program.take_renderer_publication().context();
+                    assert_eq!(context, expected);
+                    program.admit_publication(context).unwrap();
+                }
+                LiveProgramStatus::ReadyToResume if end > 2.5 => {}
+                status => panic!("expected completion barrier at {end}, got {status:?}"),
+            }
             let status = program.resume().unwrap();
             assert_eq!(status == LiveProgramStatus::Finished, end == 3.0);
         }

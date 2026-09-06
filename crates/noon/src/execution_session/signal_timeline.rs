@@ -227,7 +227,10 @@ impl SignalTimelineSchedule {
             if entry.start_time() < tail.end {
                 return Err(SignalTimelineAppendError::OverlappingEntries { signal });
             }
-            if tail.end.is_finite() && entry_start_value(entry) != tail.value {
+            if matches!(entry, CompiledScalarSignalTimelineEntry::Track(_))
+                && tail.end.is_finite()
+                && entry_start_value(entry) != tail.value
+            {
                 return Err(SignalTimelineAppendError::DiscontinuousEntries { signal });
             }
             tails.insert(
