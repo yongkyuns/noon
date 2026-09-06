@@ -267,6 +267,11 @@ for (const fragment of expectedTypeSurface) {
     throw new Error(`Generated declarations are missing: ${fragment}`);
   }
 }
+for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer"]) {
+  if (javascript.includes(`export class ${retired}`) || declarations.includes(`export class ${retired}`)) {
+    throw new Error(`Deleted reactive player returned to the browser package: ${retired}`);
+  }
+}
 if (wasmStats.size === 0) {
   throw new Error("Generated WebAssembly module is empty");
 }
