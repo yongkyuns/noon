@@ -756,7 +756,7 @@ def _canonical_affine_lifecycle_animation(
         return target, animation
     if getattr(animation, "_canonical_affine_lifecycle", None) == "shrink":
         target = animation.mobject
-        if target._scene is not scene or getattr(target, "_semantic_handle", None) is None:
+        if target._scene not in (None, scene) or getattr(target, "_semantic_handle", None) is None:
             return None
         return target, animation
     return None
@@ -802,7 +802,7 @@ def _play_canonical_affine_lifecycle(
     context = _context(self)
     is_intro = direction == "introduce-from"
     reservation = None
-    if is_intro:
+    if target._scene is None:
         reservation = _reserve_typed_binding(target, self, getattr(target, "_semantic_handle"), None)
     object_id = str(reservation.object.id) if reservation is not None else str(target._object.id)
     try:

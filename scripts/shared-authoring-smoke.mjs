@@ -572,6 +572,36 @@ try {
       expectedFinalCenter: [0, 0],
     },
     {
+      filename: "manim_example_grow_from_point.py",
+      objectCount: 5,
+      expectedDuration: 4,
+      endpointTime: null,
+    },
+    {
+      filename: "manim_example_grow_from_center.py",
+      objectCount: 2,
+      expectedDuration: 2,
+      endpointTime: null,
+    },
+    {
+      filename: "manim_example_grow_from_edge.py",
+      objectCount: 4,
+      expectedDuration: 4,
+      endpointTime: null,
+    },
+    {
+      filename: "manim_example_spin_in_from_nothing.py",
+      objectCount: 3,
+      expectedDuration: 3,
+      endpointTime: null,
+    },
+    {
+      filename: "manim_parity_affine_lifecycle.py",
+      objectCount: 0,
+      expectedDuration: 2,
+      endpointTime: null,
+    },
+    {
       filename: "manim_parity_different_rotations.py",
       objectCount: 2,
       expectedDuration: 3,
@@ -1055,6 +1085,67 @@ try {
     window.sharedAuthoringSmoke.primitiveConstructionExecution.terminate();
     window.sharedAuthoringSmoke.primitiveConstructionExecution = null;
   });
+
+  // The literal Manim Text remover starts detached. Shared Rust must admit it,
+  // shrink about its visual center, and remove it at the source barrier.
+  const shrinkSource = await readFile(
+    path.join(repoRoot, "web/python/examples/manim_parity_shrink_to_center.py"), "utf8",
+  );
+  await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-shared-text-shrink";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    let resolveAttached;
+    let rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
+    });
+    const authored = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(registration) {
+        await execution.startSemanticExecution(registration.semanticExecution, {
+          authoringClient: harness.authoring,
+          transportMode: "transferable",
+          pacing: "external_samples",
+        });
+        resolveAttached();
+      },
+    });
+    authored.then(() => rejectAttached(new Error("Shrink did not register a continuation")), rejectAttached);
+    harness.shrinkProof = { execution, authored };
+    await attached;
+    await execution.sampleToAuthoredTime(0);
+  }, shrinkSource);
+  try {
+    const canvas = page.locator("#scene-shared-text-shrink");
+    const initial = visiblePixelStats(await canvas.screenshot());
+    assert.ok(initial.count > 100, "detached Text was not admitted for Shrink");
+    await page.evaluate(() => window.sharedAuthoringSmoke.shrinkProof.execution.sampleToAuthoredTime(0.5));
+    const midpoint = visiblePixelStats(await canvas.screenshot());
+    assert.ok(midpoint.count > 20 && midpoint.count < initial.count * 0.6,
+      "Text did not shrink at the midpoint");
+    assert.ok(Math.abs(midpoint.centerX - initial.centerX) < 4 &&
+      Math.abs(midpoint.centerY - initial.centerY) < 4,
+      "Text shrink moved its effective visual center");
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.shrinkProof;
+      const [, result] = await Promise.all([execution.sampleToAuthoredTime(1), authored]);
+      return { duration: result.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 1);
+    assert.equal(result.metrics.objectCount, 0);
+    assert.equal(visiblePixelStats(await canvas.screenshot()).count, 0,
+      "Text remained visible after shared Shrink completion");
+  } finally {
+    await page.evaluate(() => {
+      window.sharedAuthoringSmoke.shrinkProof.execution.terminate();
+      window.sharedAuthoringSmoke.shrinkProof = null;
+    });
+  }
 
   // Scalar tracker continuation keeps both values and timing in the returned
   // Rust player. Python remains suspended through both tracks and the wait.

@@ -1490,7 +1490,7 @@ impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
                     &self.square,
                     AffineLifecycleDirection::IntroduceFrom,
                     AffineLifecycleEndpoint::Point {
-                        x: -2.0,
+                        x: 0.0,
                         y: 0.0,
                         rotation_offset: -std::f64::consts::PI / 2.0,
                         point_color: Some(Color::RED),
@@ -1542,7 +1542,7 @@ impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
 pub fn ordinary_affine_lifecycle_program(
 ) -> Result<LiveProgram<OrdinaryAffineLifecycleContinuation>, String> {
     let scene = Scene::new();
-    let mut square = scene.square(1.0)?;
+    let mut square = Mobject::manim_square(Rc::clone(scene.store()), 1.0)?;
     square.set_fill(
         f64::from(Color::BLUE.red),
         f64::from(Color::BLUE.green),

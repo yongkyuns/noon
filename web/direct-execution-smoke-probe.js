@@ -848,14 +848,14 @@ async function directAffineLifecycleProof(expectedBackend) {
     await settleDirectPublication(renderer, 0);
     // A zero-scale screen-space stroke may leave one rasterized pixel at its exact anchor.
     // Sample inside the eventual footprint but away from that singular point.
-    const collapsedNearAnchor = await sampleRenderedColor(canvas, -1.75, 0);
-    const collapsedCenter = await sampleRenderedColor(canvas, 0, 0);
+    const collapsedNearAnchor = await sampleRenderedColor(canvas, 0.25, 0);
+    const collapsedCenter = await sampleRenderedColor(canvas, 0, 0.25);
 
     if (!renderer.advanceDirectRealtime(500)) {
       throw new Error("direct affine lifecycle did not publish its grow midpoint");
     }
     await settleDirectPublication(renderer, 500);
-    const growMidpoint = await sampleRenderedColor(canvas, -1, 0);
+    const growMidpoint = await sampleRenderedColor(canvas, 0, 0);
 
     if (!renderer.advanceDirectRealtime(1000)) {
       throw new Error("direct affine lifecycle did not publish its restored grow endpoint");
@@ -893,7 +893,7 @@ async function directAffineLifecycleProof(expectedBackend) {
     if (renderer.rendererBackend() !== expectedBackend || metrics.time !== 2 ||
         metrics.objectCount !== 0 || metrics.restoredCount !== 1 ||
         metrics.cadence !== "idle" || !dark(collapsedNearAnchor) || !dark(collapsedCenter) ||
-        !blue(growMidpoint) || !blue(restoredEndpoint) || !blue(shrinkMidpoint) ||
+        !(growMidpoint.red > 80 && growMidpoint.blue > 80) || !blue(restoredEndpoint) || !blue(shrinkMidpoint) ||
         !dark(removed)) {
       throw new Error(`direct affine lifecycle pixels or completion are invalid: ${JSON.stringify(metrics)}`);
     }

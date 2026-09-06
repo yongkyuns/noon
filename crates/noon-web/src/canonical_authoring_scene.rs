@@ -1190,23 +1190,18 @@ impl CanonicalAuthoringScene {
         }
         target.validate()?;
         let node = target.node_id();
-        match direction {
-            noon::AffineLifecycleDirection::IntroduceFrom => {
-                if self.bindings.contains_key(&id) || self.identities.contains_key(&node) {
-                    return Err(format!("canonical object {} is already bound", id.get()));
-                }
-            }
-            noon::AffineLifecycleDirection::RemoveTo => {
-                if self.bindings.get(&id) != Some(&node) || self.identities.get(&node) != Some(&id)
-                {
-                    return Err("ordinary affine lifecycle removal target is not bound to this canonical Scene".into());
-                }
-            }
+        let is_bound = match (self.bindings.get(&id), self.identities.get(&node)) {
+            (None, None) => false,
+            (Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => true,
+            _ => return Err("ordinary affine lifecycle target has a conflicting binding".into()),
+        };
+        if direction == noon::AffineLifecycleDirection::IntroduceFrom && is_bound {
+            return Err(format!("canonical object {} is already bound", id.get()));
         }
         let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
         let end = player
             .live_declare_and_activate_affine_lifecycle(target, direction, endpoint, options)?;
-        if direction == noon::AffineLifecycleDirection::IntroduceFrom {
+        if !is_bound {
             self.bindings.insert(id, node);
             self.identities.insert(node, id);
         }
@@ -6048,6 +6043,32 @@ mod tests {
         assert!(context.live_player.is_none());
         assert_eq!(context.authored_duration(), 2.0);
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+    }
+
+    #[test]
+    fn ordinary_affine_lifecycle_preserves_authored_state_and_removes_detached_leaf() {
+        let mut context = CanonicalAuthoringScene::default();
+        let square = context.scene.square(1.0).unwrap();
+        let before = square.state().unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let end = context
+            .ordinary_play_affine_lifecycle(
+                ObjectId::new(0),
+                &square,
+                noon::AffineLifecycleDirection::RemoveTo,
+                noon::AffineLifecycleEndpoint::EffectiveCenter,
+                options,
+            )
+            .unwrap();
+        assert_eq!(end, 1.0);
+        assert!(!context.live_contains_mobject(&square).unwrap());
+        assert_eq!(square.state().unwrap(), before);
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(0)),
+            Some(&square.node_id())
+        );
     }
 
     #[test]

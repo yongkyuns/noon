@@ -25,7 +25,6 @@ on:
       - "scripts/retained-text-family-identity-smoke.mjs"
       - "scripts/retained-text-family-layout-smoke.mjs"
       - "scripts/retained-text-family-fade-smoke.mjs"
-      - "scripts/retained-text-playback-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
       - ".github/workflows/retained-text-animation.yml"
   workflow_dispatch:
@@ -94,7 +93,5 @@ jobs:
         run: node scripts/retained-text-family-layout-smoke.mjs
       - name: Test retained Text family fades
         run: node scripts/retained-text-family-fade-smoke.mjs
-      - name: Test retained Text animation playback
-        run: node scripts/retained-text-playback-smoke.mjs
       - name: Test retained Text Scene lifecycle
         run: node scripts/retained-text-scene-lifecycle-smoke.mjs

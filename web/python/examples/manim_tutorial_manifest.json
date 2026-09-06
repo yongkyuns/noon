@@ -522,7 +522,7 @@
     {
       "id": "manim-shrink-to-center-text",
       "title": "ShrinkToCenterExample",
-      "summary": "ManimCE v0.21 ShrinkToCenter reference example, unchanged except for the import module, animated through Noon's retained native Text Scale track.",
+      "summary": "ManimCE v0.21 ShrinkToCenter reference example, unchanged except for the import module, animated through Noon's shared affine lifecycle.",
       "status": "ready",
       "path": "python/examples/manim_parity_shrink_to_center.py",
       "category": "transform",
