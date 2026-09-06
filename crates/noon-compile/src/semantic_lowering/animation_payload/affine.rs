@@ -489,6 +489,7 @@ where
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
+            | SemanticScheduledAnimationPayload::Add
             | SemanticScheduledAnimationPayload::Rotate { .. } => {
                 return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation: leaf.animation,
