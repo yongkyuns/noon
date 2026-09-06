@@ -361,12 +361,17 @@ impl ExecutionSession {
                 | SemanticAnimationCompletion::RevealLifecycle { .. }
                 | SemanticAnimationCompletion::Release => {}
             }
-            release.push(ExecutionPatch::ReconcileTrack {
-                track: entry.track,
-                object: entry.execution_object,
-                property: entry.property,
-                end_time: entry.end_time,
-            });
+            // Discrete channels have no active driver to release or endpoint to
+            // bake into authored state. Retain their event history so seeking an
+            // already completed composition still reproduces membership timing.
+            if !entry.property.is_instant() {
+                release.push(ExecutionPatch::ReconcileTrack {
+                    track: entry.track,
+                    object: entry.execution_object,
+                    property: entry.property,
+                    end_time: entry.end_time,
+                });
+            }
         }
 
         let mut effective = Vec::new();

@@ -33,7 +33,7 @@ use noon_core::{
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
     SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
-    SemanticTransactionNodeRef, TimelineError, TrackId, TrackTiming,
+    SemanticTransactionNodeRef, TimelineError, TrackDefinition, TrackId, TrackTiming,
 };
 use noon_runtime::{
     EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, RendererPublication,
@@ -1035,7 +1035,8 @@ impl ExecutionSession {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let track_id = TrackId::new(raw_id);
             let definition = track.with_track_id(track_id)?;
-            let end_time = track.timing.start_time + track.timing.duration;
+            let end_time = execution_track_end_time(&definition)
+                .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
             completions.push(SegmentCompletionEntry {
                 semantic_object: track.target,
                 completion: track.completion.clone(),
@@ -2090,13 +2091,15 @@ impl ExecutionSession {
             let definition = track
                 .with_track_id(track_id)
                 .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
+            let end_time = execution_track_end_time(&definition)
+                .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
             completions.push((
                 track.target,
                 track.completion.clone(),
                 track.execution_object_id,
                 track.property,
                 track_id,
-                track.timing.start_time + track.timing.duration,
+                end_time,
             ));
             definitions.push(definition);
             next_track_id = raw_id.checked_add(1);
@@ -2371,6 +2374,14 @@ fn lower_live_scalar_value(value: f64) -> Result<f32, ExecutionSessionAnimationE
         ));
     }
     Ok(value as f32)
+}
+
+/// Match completion reconciliation to the timing installed in the compiled plan.
+/// Continuous tracks retain their root interval; mapped discrete tracks collapse
+/// to the one compiler-derived instant event before entering the runtime.
+fn execution_track_end_time(definition: &TrackDefinition) -> Result<f64, TimelineError> {
+    let timing = noon_core::resolve_track_timing(definition)?;
+    Ok(timing.start_time + timing.duration)
 }
 
 fn semantic_painter_order(

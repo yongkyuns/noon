@@ -2757,6 +2757,23 @@ mod recursive_composition_tests {
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
         live.complete_segment(segment).unwrap();
+
+        let second_execution = live
+            .session
+            .execution_object_id(second.node_id())
+            .expect("admitted leaf keeps one execution identity");
+        let early = live.session.seek(segment.start_time() + 0.1).unwrap();
+        let second_index = early
+            .objects
+            .iter()
+            .position(|object| object.id == second_execution)
+            .expect("admitted leaf keeps one runtime slot");
+        assert!(!early.is_present(second_index));
+        assert!(live
+            .session
+            .seek(segment.end_time())
+            .unwrap()
+            .is_present(second_index));
     }
 
     #[test]
