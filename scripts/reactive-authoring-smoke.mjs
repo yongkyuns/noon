@@ -57,12 +57,21 @@ class NativeTrackers(Scene):
         progress.set_value(1.0)
         assert abs(progress.get_value() - 1.0) < 1e-9
         await self.wait(1.0)
-        # The mixed transform uses an independently authored leaf. Capturing
-        # a reactive-bound target into a detached transform remains deferred.
-        await self.play(
-            progress.animate(run_time=5.0, rate_func=linear).set_value(2.0),
-            mover.animate.shift(UP), run_time=1.0, rate_func=smooth,
-        )
+        # Scalar tracker leaves are not yet part of the recursive composition
+        # request. Verify the mixed request rejects before either leaf mutates;
+        # #61/#959 owns adding that shared request variant.
+        try:
+            await self.play(
+                progress.animate(run_time=5.0, rate_func=linear).set_value(2.0),
+                mover.animate.shift(UP), run_time=1.0, rate_func=smooth,
+            )
+        except NotImplementedError:
+            assert abs(progress.get_value() - 1.0) < 1e-9
+            assert abs(mover.get_center().y) < 1e-9
+        else:
+            raise AssertionError("mixed scalar/object composition unexpectedly succeeded")
+        await self.play(progress.animate(run_time=1.0, rate_func=linear).set_value(2.0))
+        await self.play(mover.animate.shift(UP), run_time=1.0, rate_func=smooth)
         assert abs(progress.get_value() - 2.0) < 1e-9
         center = mover.get_center()
         assert abs(center.y - 1.0) < 1e-9
@@ -106,7 +115,7 @@ try {
     const authored = await authoredPromise; const metrics = (await execution.metrics()).metrics;
     execution.terminate(); return { authored, metrics };
   }, source);
-  assert.equal(result.authored.duration, 4);
+  assert.equal(result.authored.duration, 5);
   assert.ok(result.authored.semanticExecution, "tracker source should publish shared execution");
   assert.equal(result.metrics.objectCount, 3);
   assert.ok(result.metrics.drawCalls > 0, "mixed tracker/object scene did not render");
