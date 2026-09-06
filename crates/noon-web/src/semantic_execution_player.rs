@@ -19,6 +19,12 @@ pub struct SemanticExecutionPlayer {
     /// semantic store that produced `session`, not an execution mirror.
     #[cfg(any(target_arch = "wasm32", test))]
     semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
+    #[cfg(any(target_arch = "wasm32", test))]
+    semantic_root: Option<noon_core::SemanticNodeId>,
+    /// Continuation metadata for this one session-owned runtime, never a
+    /// frontend scheduler or animation state mirror.
+    #[cfg(any(target_arch = "wasm32", test))]
+    live_segment: Option<noon::ExecutionSegment>,
 }
 
 impl SemanticExecutionPlayer {
@@ -36,6 +42,10 @@ impl SemanticExecutionPlayer {
             snapshot_sent: false,
             #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            semantic_root: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            live_segment: None,
         })
     }
 
@@ -43,6 +53,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn from_live_session(
         session: ExecutionSession,
         semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        semantic_root: noon_core::SemanticNodeId,
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
@@ -54,6 +65,8 @@ impl SemanticExecutionPlayer {
             resource_bundle,
             snapshot_sent: false,
             semantics: Some(semantics),
+            semantic_root: Some(semantic_root),
+            live_segment: None,
         })
     }
 
@@ -67,9 +80,28 @@ impl SemanticExecutionPlayer {
         self.clock
             .set_loop_duration(duration)
             .map_err(|error| error.to_string())?;
+        // Live publication may have installed sparse text/font dependencies after
+        // this player was bootstrapped. Refresh only at the explicit cross-worker
+        // handoff boundary so ordinary typed in-process property edits stay local.
+        self.resource_bundle = Self::resource_bundle_for(&self.session)?;
         self.encoder = RetainedExecutionDeltaEncoder::new(transport_session);
         self.snapshot_sent = false;
         Ok(())
+    }
+
+    /// The authored duration needed to hand this live session to presentation.
+    ///
+    /// The current frame is authoritative once a segment completes. An active
+    /// continuation must also keep its endpoint addressable before it completes.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_handoff_duration(&self) -> Option<f64> {
+        self.semantics.as_ref()?;
+        Some(
+            self.live_segment
+                .map_or(self.session.frame().time, |segment| {
+                    self.session.frame().time.max(segment.end_time())
+                }),
+        )
     }
 
     /// The authored scene revision represented by this runtime.
@@ -89,10 +121,36 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .set_translation(mobject, x, y)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .set_translation(mobject, x, y)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_replace_content(
+        &mut self,
+        target: &noon::Mobject,
+        source: &noon::Mobject,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .replace_content(target, source)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -106,10 +164,15 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .shift(mobject, x, y)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .shift(mobject, x, y)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -123,10 +186,15 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .set_scale(mobject, x, y)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .set_scale(mobject, x, y)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -139,10 +207,15 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .set_rotation(mobject, angle)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .set_rotation(mobject, angle)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -154,9 +227,123 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .effective(mobject)
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .effective(mobject)
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_add(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .add(mobject)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_remove(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .remove(mobject)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn require_completed_live_segment(&self) -> Result<(), String> {
+        if let Some(segment) = self.live_segment {
+            if !self.session.segment_state(segment).is_complete() {
+                return Err(
+                    "advance the current live segment to its endpoint before continuing".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_play_animation(
+        &mut self,
+        animation: &noon::DeclaredAnimation,
+    ) -> Result<f64, String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let segment = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .play_animation(animation)
+        .map_err(|error| error.to_string())?;
+        let end_time = segment.end_time();
+        self.live_segment = Some(segment);
+        Ok(end_time)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let segment = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .wait_segment(duration)
+        .map_err(|error| error.to_string())?;
+        let end_time = segment.end_time();
+        self.live_segment = Some(segment);
+        Ok(end_time)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_advance_segment_to(&mut self, requested_time: f64) -> Result<bool, String> {
+        let segment = self
+            .live_segment
+            .ok_or("play an animation or wait before advancing a live segment")?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let mut live = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        );
+        live.advance_segment_to(segment, requested_time)
+            .map_err(|error| error.to_string())?;
+        Ok(live.segment_state(segment).is_complete())
     }
 
     #[cfg(test)]
@@ -182,10 +369,18 @@ impl SemanticExecutionPlayer {
     fn delta(&mut self, snapshot: bool) -> Result<Option<RetainedExecutionDeltaEnvelope>, String> {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
-        if snapshot || changes.is_all() || !self.snapshot_sent {
+        if snapshot || changes.is_all() || changes.is_structural() || !self.snapshot_sent {
             let delta = self
                 .encoder
-                .encode_snapshot(self.session.frame(), camera)
+                .encode_snapshot_indices(
+                    self.session.frame(),
+                    camera,
+                    (0..self.session.frame().objects.len()).filter(|index| {
+                        self.session
+                            .execution_slot_for_frame_index(*index)
+                            .is_some()
+                    }),
+                )
                 .map_err(|e| e.to_string())?;
             self.snapshot_sent = true;
             Ok(Some(delta))
@@ -260,6 +455,45 @@ mod tests {
     use super::*;
     use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
     use noon_core::{AnimationOptions, RateFunction};
+
+    #[test]
+    fn membership_snapshot_omits_retired_rows_and_preserves_incremental_order() {
+        let mut scene = noon::Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let toggled = scene.circle(1.0).unwrap();
+        scene.add(&anchor).unwrap();
+        scene.add(&toggled).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            1.0,
+            1,
+        )
+        .unwrap();
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        mirror.apply(player.delta(true).unwrap().unwrap()).unwrap();
+        player.live_remove(&toggled).unwrap();
+        player.live_add(&toggled).unwrap();
+        assert!(player.session.execution_slot_for_frame_index(1).is_none());
+        let snapshot = player.delta(false).unwrap().unwrap();
+        assert!(snapshot.snapshot);
+        assert_eq!(snapshot.objects.len(), 2);
+        assert_eq!(snapshot.objects[1].slot.slot, 2);
+        assert_eq!(snapshot.objects[1].order, 1);
+        mirror.apply(snapshot).unwrap();
+        player.live_set_translation(&toggled, 2.0, -1.0).unwrap();
+        let delta = player.delta(false).unwrap().unwrap();
+        assert!(!delta.snapshot);
+        assert_eq!(delta.objects.len(), 1);
+        assert_eq!(delta.objects[0].order, 1);
+        mirror.apply(delta).unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[1].transform.translation,
+            noon_core::Vec2::new(2.0, -1.0)
+        );
+    }
 
     fn animated_player() -> SemanticExecutionPlayer {
         let mut scene = noon::Scene::new();

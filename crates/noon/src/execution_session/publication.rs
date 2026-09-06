@@ -1,12 +1,16 @@
 use noon_compile::{
-    lower_semantic_publication, validate_semantic_publication, SemanticPublicationLoweringError,
+    prepare_semantic_publication, validate_semantic_publication, ExecutionMutationTransaction,
+    ExecutionPatch, SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
 };
 use noon_core::{
     PublicationContext, SceneRevision, SemanticMutationTransaction,
     SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeId,
     SemanticStore,
 };
-use noon_runtime::{AuthoredPublicationError, FrameObjectState};
+use noon_runtime::{
+    apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
+    AuthoredPublicationError, ExecutionSlotError, FrameObjectState,
+};
 
 use super::ExecutionSession;
 
@@ -21,6 +25,7 @@ pub enum ExecutionSessionPublicationError {
     Semantic(SemanticMutationTransactionError),
     Lowering(SemanticPublicationLoweringError),
     Runtime(AuthoredPublicationError),
+    ExecutionSlot(ExecutionSlotError),
 }
 
 impl std::fmt::Display for ExecutionSessionPublicationError {
@@ -44,10 +49,18 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::Semantic(error) => error.fmt(f),
             Self::Lowering(error) => error.fmt(f),
             Self::Runtime(error) => error.fmt(f),
+            Self::ExecutionSlot(error) => error.fmt(f),
         }
     }
 }
 impl std::error::Error for ExecutionSessionPublicationError {}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StructuralPublicationStats {
+    pub preparation: SemanticPublicationPreparationStats,
+    pub entered_objects: usize,
+    pub exited_objects: usize,
+}
 
 /// A borrowed effective runtime value and the exact context that published it.
 /// Active drivers can make this value differ from authored/base state.
@@ -83,12 +96,11 @@ impl ExecutionSession {
     /// exclusively; all semantic/compiler/runtime failures precede publication.
     /// The final semantic commit is infallible and synchronous with runtime commit.
     ///
-    /// Supported work is transform/style edits and detached node/animation
-    /// declarations. Edits to detached objects are authored-only. Changed authored
-    /// state publishes one scene revision and frame epoch even when no execution
-    /// value changes; execution revision and renderer dirtiness remain unchanged
-    /// in that case. Membership/content/reactive topology require their own
-    /// incremental lowering and are rejected before either authority changes.
+    /// Structural publication admits append-compatible geometry entries, local
+    /// family exits, and content already owned by this store before session bootstrap.
+    /// Aliases are reduced to exact net membership after semantic commit. Resource
+    /// allocation, reactive membership, and painter-order interleaving remain explicit
+    /// unsupported cases.
     pub fn apply_semantic_transaction(
         &mut self,
         store: &mut SemanticStore,
@@ -100,16 +112,84 @@ impl ExecutionSession {
         let prepared = transaction
             .prepare(store)
             .map_err(ExecutionSessionPublicationError::Semantic)?;
-        let execution = lower_semantic_publication(&prepared, &self.execution_index)
-            .map_err(ExecutionSessionPublicationError::Lowering)?;
+        let publication = prepare_semantic_publication(
+            &prepared,
+            &self.execution_index,
+            &self.reachability,
+            self.painter_order.tail(),
+        )
+        .map_err(ExecutionSessionPublicationError::Lowering)?;
+        let preparation_stats = publication.stats();
+        let mut conservative_patches = publication.value_transaction().mutations().to_vec();
+        conservative_patches.extend(
+            publication
+                .possible_exits()
+                .iter()
+                .copied()
+                .map(ExecutionPatch::RemoveObject),
+        );
+        let conservative = ExecutionMutationTransaction::from_mutations(conservative_patches);
+        let structural_change_possible =
+            publication.possible_entry_count() != 0 || !publication.possible_exits().is_empty();
         self.runtime
-            .apply_authored_transaction(
-                &execution,
+            .preflight_authored_transaction_shape_with_resources(
+                &conservative,
+                publication.resource_additions(),
                 self.publication_context(),
                 prepared.proposed_scene_revision(),
+                publication.possible_entry_count(),
+                structural_change_possible,
             )
             .map_err(ExecutionSessionPublicationError::Runtime)?;
-        Ok(prepared.commit())
+        preflight_execution_slot_membership_shape(
+            &self.slots,
+            publication.possible_exits(),
+            publication.possible_entry_count(),
+        )
+        .map_err(ExecutionSessionPublicationError::ExecutionSlot)?;
+
+        let result = prepared.commit();
+        let membership = self
+            .reachability
+            .apply_transaction_result(store, &result)
+            .expect("prepared publication validated every possible reachable object");
+        let entered = membership.entered_execution_objects().collect::<Vec<_>>();
+        let exited = membership.exited_execution_objects().collect::<Vec<_>>();
+        let execution = publication.bind(&result, &membership);
+        let (execution, resource_additions) = execution.into_parts();
+        self.runtime
+            .apply_authored_execution_transaction(
+                &execution,
+                resource_additions,
+                self.publication_context(),
+                store.scene_revision(),
+            )
+            .expect("runtime publication was fully preflighted before semantic commit");
+        apply_execution_slot_membership_changes(&mut self.slots, &exited, &entered)
+            .expect("exact membership is a subset of the preflighted structural shape");
+        self.execution_index
+            .apply_transaction_result(store, &result);
+        self.execution_index.apply_reachability_update(&membership);
+        for node in membership.exited_objects() {
+            self.painter_order.remove(*node);
+        }
+        for node in membership.entered_objects() {
+            let state = store
+                .semantic_object_state_checked(*node)
+                .expect("entered semantic object remains live after commit");
+            self.painter_order
+                .insert(*node, state.presentation().order_key());
+        }
+        self.last_structural_publication = StructuralPublicationStats {
+            preparation: preparation_stats,
+            entered_objects: entered.len(),
+            exited_objects: exited.len(),
+        };
+        Ok(result)
+    }
+
+    pub const fn last_structural_publication_stats(&self) -> StructuralPublicationStats {
+        self.last_structural_publication
     }
 
     /// Query a live semantic object through its originating store in indexed time.

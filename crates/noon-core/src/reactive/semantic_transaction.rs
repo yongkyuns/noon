@@ -592,6 +592,22 @@ impl SemanticMutationTransaction {
         }
         let removed_nodes = store.semantic_removal_closure(&removed_nodes);
         let pending_creations = catalog.cloned_creations();
+        let surviving_object_creations = pending_creations
+            .iter()
+            .filter(|(token, creation)| {
+                !removed_pending.contains(token)
+                    && matches!(creation, SemanticNodeCreation::Object { .. })
+            })
+            .count();
+        let surviving_object_creations = u64::try_from(surviving_object_creations)
+            .map_err(|_| SemanticMutationTransactionError::InsertionOrderExhausted)?;
+        if store
+            .next_insertion_order()
+            .checked_add(surviving_object_creations)
+            .is_none()
+        {
+            return Err(SemanticMutationTransactionError::InsertionOrderExhausted);
+        }
 
         let mut targets = HashSet::with_capacity(self.mutations.len());
         let mut style_replacements = HashSet::new();
@@ -1080,16 +1096,28 @@ pub(super) fn validate_object_content_resource(
     content: SemanticObjectContent,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
-    if let SemanticObjectContent::Geometry(geometry) = content {
-        if !geometry.is_finite() {
-            return Err(SemanticMutationTransactionError::InvalidObjectContent { index });
+    match content {
+        SemanticObjectContent::Geometry(geometry) => {
+            if !geometry.is_finite() {
+                return Err(SemanticMutationTransactionError::InvalidObjectContent { index });
+            }
+            if let StoredGeometry::Resource(resource) = geometry {
+                if store.geometry_resources().get(resource).is_none() {
+                    return Err(SemanticMutationTransactionError::InvalidGeometryResource {
+                        index,
+                        resource,
+                    });
+                }
+            }
         }
-    }
-    let SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) = content else {
-        return Ok(());
-    };
-    if store.geometry_resources().get(resource).is_none() {
-        return Err(SemanticMutationTransactionError::InvalidGeometryResource { index, resource });
+        SemanticObjectContent::Text(resource) => {
+            if store.text_resources().get(resource).is_none() {
+                return Err(SemanticMutationTransactionError::InvalidTextResource {
+                    index,
+                    resource,
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -1164,6 +1192,7 @@ impl SemanticMutationTransactionResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticMutationTransactionError {
     SceneRevisionExhausted,
+    InsertionOrderExhausted,
     PendingNodeFromDifferentTransaction {
         index: usize,
         token: SemanticLocalNodeToken,
@@ -1385,6 +1414,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         resource: crate::GeometryResourceHandle,
     },
+    InvalidTextResource {
+        index: usize,
+        resource: crate::TextResourceHandle,
+    },
     PropertyTypeMismatch {
         index: usize,
         object: SemanticNodeId,
@@ -1410,6 +1443,9 @@ impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SceneRevisionExhausted => write!(formatter, "Noon scene revision space exhausted"),
+            Self::InsertionOrderExhausted => {
+                write!(formatter, "Noon semantic insertion-order space exhausted")
+            }
             Self::PendingNodeFromDifferentTransaction { index, token } => write!(
                 formatter,
                 "semantic transaction mutation {index} uses pending node {token:?} from another transaction"
@@ -1703,6 +1739,11 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidGeometryResource { index, resource } => write!(
                 formatter,
                 "semantic transaction mutation {index} references unavailable geometry resource {:?}",
+                resource
+            ),
+            Self::InvalidTextResource { index, resource } => write!(
+                formatter,
+                "semantic transaction mutation {index} references unavailable text resource {:?}",
                 resource
             ),
             Self::PropertyTypeMismatch {

@@ -463,7 +463,9 @@ if isinstance(__noon_result, Scene):
     __noon_context = (None if __noon_export_document else
         _manim_canonical_scene.execution_context(__noon_result, __noon_callbacks))
     __noon_semantic = None
+    __noon_live_duration = None
     if __noon_context is not None:
+        __noon_live_duration = __noon_context.liveHandoffDuration()
         __noon_semantic = {"context_id": str(noonRegisterSemanticExecution(__noon_context))}
         __noon_scene_spec = None
         __noon_document = None
@@ -487,7 +489,11 @@ if isinstance(__noon_result, Scene):
         # semantic Text handle for a source mirror.
         __noon_retained = None
         __noon_identities = __noon_result.identity_document()
-    __noon_duration = float(__noon_result.time)
+    __noon_duration = (
+        float(__noon_live_duration)
+        if __noon_live_duration is not None
+        else float(__noon_result.time)
+    )
 elif isinstance(__noon_result, PatchBatch):
     __noon_semantic = None
     __noon_kind = "patch_batch"

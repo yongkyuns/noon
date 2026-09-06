@@ -169,6 +169,46 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         }
     }
 
+    /// Clone the final staged object state with the insertion order it will receive
+    /// if this transaction commits. Existing identities preserve their authored
+    /// order; pending objects are numbered in allocation order without reserving a
+    /// semantic identity or mutating the store.
+    pub fn proposed_object_state(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<SemanticObjectState, SemanticTransactionReadError> {
+        let object = object.into();
+        let mut state = self.object_state(object)?.clone();
+        let SemanticTransactionNodeRef::Pending(token) = object else {
+            return Ok(state);
+        };
+        let mut insertion_order = self.store.next_insertion_order();
+        for mutation in self.transaction.mutations() {
+            let SemanticMutation::AddNode {
+                token: candidate,
+                creation: SemanticNodeCreation::Object { .. },
+            } = mutation
+            else {
+                continue;
+            };
+            if self.preflight.removed_pending.contains(candidate) {
+                continue;
+            }
+            if *candidate == token {
+                state.assign_insertion_order(insertion_order);
+                return Ok(state);
+            }
+            insertion_order = insertion_order
+                .checked_add(1)
+                .expect("preflighted semantic insertion order must remain available");
+        }
+        Err(SemanticTransactionReadError::UnknownPendingNode(token))
+    }
+
+    pub fn node_is_removed(&self, node: impl Into<SemanticTransactionNodeRef>) -> bool {
+        self.is_removed_ref(node.into())
+    }
+
     /// Read final direct family order through the transaction-local overlay.
     pub fn family_members(
         &self,

@@ -230,3 +230,71 @@ fn detached_additions_allocate_only_on_commit() {
     assert_eq!(store.last_mutation_stats().slots_written, 2);
     assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
 }
+
+#[test]
+fn proposed_pending_state_matches_commit_after_canceled_creation() {
+    let mut store = SemanticStore::new();
+    let existing = object(&mut store);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(existing)
+            .unwrap()
+            .insertion_order(),
+        0
+    );
+    let mut transaction = SemanticMutationTransaction::new();
+    let canceled = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    let kept = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
+    transaction
+        .set_property(kept, SemanticObjectProperty::RotationZ, 0.5_f64)
+        .remove_node(canceled);
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let proposed = prepared.proposed_object_state(kept).unwrap();
+    assert_eq!(proposed.insertion_order(), 1);
+    assert_eq!(proposed.transform.rotation_z, 0.5);
+    let result = prepared.commit();
+    assert_eq!(result.resolve(canceled), None);
+    let kept = result.resolve(kept).unwrap();
+    assert_eq!(
+        store.semantic_object_state_checked(kept).unwrap(),
+        &proposed
+    );
+}
+
+#[test]
+fn surviving_pending_objects_reserve_insertion_order_before_commit() {
+    let mut store = SemanticStore::new();
+    store.set_next_insertion_order_for_test(u64::MAX);
+    let revision = store.scene_revision();
+    let capacity = store.slot_capacity();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+
+    assert!(matches!(
+        transaction.prepare(&mut store),
+        Err(SemanticMutationTransactionError::InsertionOrderExhausted)
+    ));
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.slot_capacity(), capacity);
+}
+
+#[test]
+fn canceled_pending_object_consumes_no_insertion_order_capacity() {
+    let mut store = SemanticStore::new();
+    store.set_next_insertion_order_for_test(u64::MAX);
+    let mut transaction = SemanticMutationTransaction::new();
+    let canceled = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    transaction.remove_node(canceled);
+
+    let result = transaction.prepare(&mut store).unwrap().commit();
+    assert_eq!(result.resolve(canceled), None);
+    assert_eq!(store.next_insertion_order(), u64::MAX);
+}

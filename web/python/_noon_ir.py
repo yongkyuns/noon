@@ -370,6 +370,7 @@ class Scene:
         self._objects: list[dict[str, Any]] = []
         self._tracks: list[dict[str, Any]] = []
         self._object_keys: dict[int, str] = {}
+        self._object_key_ids: dict[str, int] = {}
         self._object_positions: dict[int, int] = {}
         self._track_keys: dict[int, str] = {}
         self._next_object_id = 0
@@ -387,10 +388,11 @@ class Scene:
         object_id = self._next_object_id
         painter_order = self._next_painter_order
         authoring_key = _authoring_key("key", key, f"@object:{object_id}")
-        if authoring_key in self._object_keys.values():
+        if authoring_key in self._object_key_ids:
             raise ValueError(f"duplicate object key: {authoring_key}")
         self._object_keys[object_id] = authoring_key
-        self._next_object_id += 1
+        self._object_key_ids[authoring_key] = object_id
+        self._next_object_id = object_id + 1
         self._next_painter_order += 1
         return Object(object_id, self._owner), painter_order
 
@@ -605,6 +607,7 @@ class Scene:
             self._next_object_id,
             self._next_painter_order,
             dict(self._object_keys),
+            dict(self._object_key_ids),
             dict(self._object_positions),
             dict(self._track_keys),
             dict(self._scheduled_transform_targets),
@@ -619,6 +622,7 @@ class Scene:
             next_object_id,
             next_painter_order,
             object_keys,
+            object_key_ids,
             object_positions,
             track_keys,
             scheduled_transform_targets,
@@ -630,6 +634,7 @@ class Scene:
         self._next_object_id = next_object_id
         self._next_painter_order = next_painter_order
         self._object_keys = object_keys
+        self._object_key_ids = object_key_ids
         self._object_positions = object_positions
         self._track_keys = track_keys
         self._scheduled_transform_targets = scheduled_transform_targets

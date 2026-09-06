@@ -1,6 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use noon_compile::{CompilePatchError, CompiledScene, CompiledTransactionPreflightStats};
+use noon_compile::{
+    CompilePatchError, CompiledScene, CompiledTransactionPreflightStats, ExecutionPatch,
+};
 use noon_core::{MutationTransaction, ObjectId, Property, Rect, ScenePatch, TrackId, Vec2};
 
 use crate::{
@@ -159,6 +161,7 @@ pub enum ExecutionSlotError {
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
     GenerationExhausted(ExecutionSlotId),
+    CapacityExhausted,
 }
 
 impl std::fmt::Display for ExecutionSlotError {
@@ -174,6 +177,7 @@ impl std::fmt::Display for ExecutionSlotError {
                 id.slot(),
                 id.generation()
             ),
+            Self::CapacityExhausted => formatter.write_str("execution slot capacity exhausted"),
         }
     }
 }
@@ -778,8 +782,12 @@ impl SlottedSceneInstance {
         self.preflight_transaction(transaction)?;
         let mut aggregate = ExecutionDelta::default();
         let mut changed = false;
-        for patch in super::runtime_transaction::final_value_writes(transaction) {
-            if !self.inner.compiled.patch_changes_execution(patch) {
+        for patch in final_legacy_value_writes(transaction) {
+            if !self
+                .inner
+                .compiled
+                .patch_changes_execution(&ExecutionPatch::decode(patch))
+            {
                 continue;
             }
             self.apply_patch_unpublished(patch)
@@ -795,7 +803,11 @@ impl SlottedSceneInstance {
     }
 
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
-        if !self.inner.compiled.patch_changes_execution(patch) {
+        if !self
+            .inner
+            .compiled
+            .patch_changes_execution(&ExecutionPatch::decode(patch))
+        {
             self.last_delta = ExecutionDelta::default();
             return Ok(self.inner.frame());
         }
@@ -809,7 +821,8 @@ impl SlottedSceneInstance {
         patch: &ScenePatch,
     ) -> Result<&FrameState, CompilePatchError> {
         let context = self.capture_context(patch);
-        self.inner.apply_patch_unpublished(patch)?;
+        self.inner
+            .apply_patch_unpublished(&ExecutionPatch::decode(patch))?;
         let mut delta = ExecutionDelta::default();
 
         match patch {
@@ -983,6 +996,26 @@ impl SlottedSceneInstance {
             push_context_channel(channels, slot, channel.property);
         }
     }
+}
+
+fn final_legacy_value_writes(transaction: &MutationTransaction) -> Vec<&ScenePatch> {
+    let mut final_writes = HashSet::new();
+    let mut retained = Vec::with_capacity(transaction.mutations().len());
+    for patch in transaction.mutations().iter().rev() {
+        match patch {
+            ScenePatch::SetGeometry { object, .. }
+            | ScenePatch::SetTransform { object, .. }
+            | ScenePatch::SetStyle { object, .. } => {
+                if !final_writes.insert((*object, std::mem::discriminant(patch))) {
+                    continue;
+                }
+            }
+            _ => final_writes.clear(),
+        }
+        retained.push(patch);
+    }
+    retained.reverse();
+    retained
 }
 
 fn compiled_scene_matches_live_projection(

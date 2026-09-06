@@ -2,15 +2,19 @@
 //!
 //! This facade owns neither semantic nor runtime state.  It only coordinates a
 //! transaction with the session that already lowered the same semantic store.
-//! Structural/content publication and animation continuation deliberately stay
-//! outside this bounded property-edit slice until their incremental lowering
-//! contracts are available.
+//! Membership and property publication use the same prepared semantic transaction.
+//! Existing affine declarations use session-local segments; persistent completion
+//! reconciliation remains a separate contract.
 
-use crate::{EffectiveSemanticObject, ExecutionSession, ExecutionSessionPublicationError, Mobject};
+use crate::{
+    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentError,
+    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    ExecutionSessionPublicationError, Mobject,
+};
 use noon_core::{
     PublicationContext, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
-    Style, Transform2D,
+    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSignalValue,
+    SemanticStore, SemanticStyle, Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -31,6 +35,9 @@ pub struct EffectiveMobjectState {
 pub enum LiveSessionError {
     ForeignMobjectStore,
     Mobject(String),
+    Animation(String),
+    Activation(ExecutionSessionAnimationError),
+    Segment(ExecutionSegmentError),
     Publication(ExecutionSessionPublicationError),
 }
 
@@ -41,6 +48,9 @@ impl std::fmt::Display for LiveSessionError {
                 formatter.write_str("mobject belongs to another semantic store")
             }
             Self::Mobject(error) => error.fmt(formatter),
+            Self::Animation(error) => error.fmt(formatter),
+            Self::Activation(error) => error.fmt(formatter),
+            Self::Segment(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
         }
     }
@@ -54,27 +64,48 @@ impl From<ExecutionSessionPublicationError> for LiveSessionError {
     }
 }
 
+impl From<ExecutionSessionAnimationError> for LiveSessionError {
+    fn from(value: ExecutionSessionAnimationError) -> Self {
+        Self::Activation(value)
+    }
+}
+
+impl From<ExecutionSegmentError> for LiveSessionError {
+    fn from(value: ExecutionSegmentError) -> Self {
+        Self::Segment(value)
+    }
+}
+
 /// A temporary, typed view over one semantic store and its published runtime.
 ///
 /// `LiveSession` has no scheduler, scene copy, or runtime mirror.  Persistent
 /// property edits use the shared semantic transaction vocabulary and publish
 /// through [`ExecutionSession`] atomically.  The supported transaction subset is
-/// exactly the session publication subset (currently transform/style values).
+/// exactly the session publication subset.
 pub struct LiveSession<'a> {
     store: &'a Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
     session: &'a mut ExecutionSession,
 }
 
 impl<'a> LiveSession<'a> {
     /// Bind a facade to the supplied store and existing execution session.
     /// Provenance and revision are checked by every publish/query operation.
-    pub fn new(store: &'a Rc<RefCell<SemanticStore>>, session: &'a mut ExecutionSession) -> Self {
-        Self { store, session }
+    pub fn new(
+        store: &'a Rc<RefCell<SemanticStore>>,
+        root: SemanticNodeId,
+        session: &'a mut ExecutionSession,
+    ) -> Self {
+        Self {
+            store,
+            root,
+            session,
+        }
     }
 
     /// Apply one supported semantic transaction and publish it into the same
-    /// runtime. Unsupported structural/content work fails before either layer
-    /// commits; callers must use the future incremental-publication contract.
+    /// runtime. Unsupported content, ordering, and structural work fails before
+    /// either layer commits.
     pub fn apply(
         &mut self,
         transaction: SemanticMutationTransaction,
@@ -83,6 +114,43 @@ impl<'a> LiveSession<'a> {
         self.session
             .apply_semantic_transaction(&mut store, transaction)
             .map_err(Into::into)
+    }
+
+    /// Add an existing detached object to this live scene root.
+    pub fn add(
+        &mut self,
+        mobject: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_member(self.root, mobject.node_id());
+        self.apply(transaction)
+    }
+
+    /// Remove an existing object from this live scene root without deleting identity.
+    pub fn remove(
+        &mut self,
+        mobject: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.remove_member(self.root, mobject.node_id());
+        self.apply(transaction)
+    }
+
+    /// Replace one live object's content with content already authored in this store.
+    /// Transform, style, semantic identity, and family membership stay unchanged.
+    pub fn replace_content(
+        &mut self,
+        target: &Mobject,
+        source: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(target)?;
+        self.require_mobject(source)?;
+        let content = source.state().map_err(LiveSessionError::Mobject)?.content;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_content(target.node_id(), content);
+        self.apply(transaction)
     }
 
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
@@ -107,6 +175,53 @@ impl<'a> LiveSession<'a> {
             appearance: object.appearance,
             publication,
         })
+    }
+
+    /// Activate one predeclared animation in this session.
+    ///
+    /// This performs no semantic declaration or target creation: the supplied
+    /// handle is replayable authored state, while activation atomically adds
+    /// execution-local tracks and captures the current effective affine source.
+    /// The returned segment can be driven with [`Self::advance_segment_to`] and
+    /// observed with [`Self::segment_state`]. Completion exposes its effective
+    /// endpoint but does not yet reconcile it into persistent authored state.
+    pub fn play_animation(
+        &mut self,
+        animation: &DeclaredAnimation,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        animation
+            .require_store(self.store)
+            .map_err(LiveSessionError::Animation)?;
+        let store = self.store.borrow();
+        let options = store
+            .semantic_animation_state(animation.node_id())
+            .map_err(|error| LiveSessionError::Animation(error.to_string()))?
+            .options();
+        self.session
+            .activate_animation_segment(&store, animation.node_id(), options)
+            .map_err(Into::into)
+    }
+
+    /// Start a continuation wait without allocating a scheduler track.
+    pub fn wait_segment(&self, duration: f64) -> Result<ExecutionSegment, LiveSessionError> {
+        self.session.wait_segment(duration).map_err(Into::into)
+    }
+
+    /// Observe a logical continuation segment against the shared runtime.
+    pub fn segment_state(&self, segment: ExecutionSegment) -> ExecutionSegmentState {
+        self.session.segment_state(segment)
+    }
+
+    /// Drive one segment toward its exact endpoint through the session runtime.
+    pub fn advance_segment_to(
+        &mut self,
+        segment: ExecutionSegment,
+        requested_time: f64,
+    ) -> Result<(), LiveSessionError> {
+        self.session
+            .advance_segment_to(segment, requested_time)
+            .map(|_| ())
+            .map_err(|error| LiveSessionError::Animation(error.to_string()))
     }
 
     /// Set any already-supported semantic property through one atomic publish.
@@ -189,10 +304,7 @@ impl<'a> LiveSession<'a> {
 mod tests {
     use super::*;
     use crate::Scene;
-    use noon_core::{
-        AnimationOptions, RateFunction, SemanticAnimationIntent, SemanticAnimationState,
-        SemanticMutationImpact, SemanticObjectContent, SemanticVec3, StoredGeometry,
-    };
+    use noon_core::{AnimationOptions, RateFunction, SemanticVec3};
 
     #[test]
     fn live_property_edits_publish_once_and_queries_are_effective_not_authored_aliases() {
@@ -223,29 +335,17 @@ mod tests {
     }
 
     #[test]
-    fn live_facade_rejects_foreign_handles_and_unsupported_publication_without_fallback() {
+    fn live_facade_rejects_foreign_handles_without_fallback() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
         let foreign = Scene::new().circle(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
-        let before = scene.store().borrow().scene_revision();
-
-        let mut live = scene.live(&mut session);
+        let live = scene.live(&mut session);
         assert!(matches!(
             live.effective(&foreign),
             Err(LiveSessionError::ForeignMobjectStore)
         ));
-        let mut unsupported = SemanticMutationTransaction::new();
-        unsupported.replace_content(
-            circle.node_id(),
-            SemanticObjectContent::Geometry(StoredGeometry::Circle { radius: 2.0 }),
-        );
-        assert!(matches!(
-            live.apply(unsupported),
-            Err(LiveSessionError::Publication(_))
-        ));
-        assert_eq!(scene.store().borrow().scene_revision(), before);
     }
 
     #[test]
@@ -255,30 +355,20 @@ mod tests {
         let mut target = circle.target_editor().unwrap();
         target.set_translation(4.0, 0.0).unwrap();
         scene.add(&circle).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
-        let options = AnimationOptions::new()
-            .run_time(2.0)
-            .rate_func(RateFunction::Linear);
-        let mut declaration = SemanticMutationTransaction::new();
-        declaration.add_animation(SemanticAnimationState::new(
-            SemanticAnimationIntent::TransformTo {
-                target: circle.node_id(),
-                target_state: target.node_id(),
-            },
-            options,
-        ));
-        let result = session
-            .apply_semantic_transaction(&mut scene.store().borrow_mut(), declaration)
-            .unwrap();
-        let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
-            panic!("one animation declaration must allocate one identity")
-        };
-        session
-            .activate_animation(&scene.store().borrow(), *animation, options)
-            .unwrap();
-        session.seek(1.0).unwrap();
 
         let mut live = scene.live(&mut session);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.0).unwrap();
         live.set_translation(&circle, 100.0, 0.0).unwrap();
         assert_eq!(
             live.authored(&circle).unwrap().transform.translation,
@@ -288,5 +378,40 @@ mod tests {
             live.effective(&circle).unwrap().transform.translation.x,
             2.0
         );
+    }
+
+    #[test]
+    fn live_membership_detaches_readds_and_appends_without_changing_unrelated_slots() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(1.0).unwrap();
+        let toggled = scene.circle(2.0).unwrap();
+        let detached = scene.circle(3.0).unwrap();
+        scene.add(&anchor).unwrap();
+        scene.add(&toggled).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let anchor_slot = session.execution_slot_for_frame_index(0).unwrap();
+
+        {
+            let mut live = scene.live(&mut session);
+            live.remove(&toggled).unwrap();
+            assert!(live.effective(&toggled).is_err());
+            live.add(&toggled).unwrap();
+            assert!(live.effective(&toggled).is_ok());
+            live.add(&detached).unwrap();
+            assert_eq!(
+                live.session
+                    .last_structural_publication_stats()
+                    .entered_objects,
+                1
+            );
+            live.set_translation(&detached, 4.0, -2.0).unwrap();
+            assert_eq!(
+                live.effective(&detached).unwrap().transform.translation,
+                noon_core::Vec2::new(4.0, -2.0)
+            );
+        }
+
+        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
+        assert_eq!(session.frame().objects.len(), 4);
     }
 }

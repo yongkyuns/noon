@@ -481,6 +481,15 @@ impl Clone for SemanticStore {
 }
 
 impl SemanticStore {
+    pub(crate) const fn next_insertion_order(&self) -> u64 {
+        self.next_insertion_order
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_next_insertion_order_for_test(&mut self, next: u64) {
+        self.next_insertion_order = next;
+    }
+
     /// A cloneable provenance token; cloning a store itself creates a new owner.
     pub fn identity(&self) -> SemanticStoreIdentity {
         self.identity.clone()

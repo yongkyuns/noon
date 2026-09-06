@@ -1,14 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon_core::{
-    validate_object_definition, validate_property_patch, validate_track_definition,
-    MutationTransaction, ObjectId, Property, ScenePatch, TrackDefinition, TrackId, TrackValues,
+    validate_style, validate_track_definition, validate_transform, ObjectContentRef, ObjectId,
+    Property, TrackDefinition, TrackId, TrackValues,
 };
 
 use crate::{
     compile_patch_error, compile_transform_geometry_plan, map_object_state_error,
+    validate_compiled_object, validate_execution_content, validate_execution_content_resource,
     CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack,
-    CompiledTransactionPreflightStats,
+    CompiledTransactionPreflightStats, ExecutionMutationTransaction, ExecutionPatch,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -162,8 +163,13 @@ impl PreflightOverlay {
         }
     }
 
-    fn presence_channel(&mut self, scene: &CompiledScene, object_index: u32) -> Vec<TrackShadow> {
-        let channel = CompiledChannelKey::new(object_index, Property::Presence);
+    fn channel(
+        &mut self,
+        scene: &CompiledScene,
+        object_index: u32,
+        property: Property,
+    ) -> Vec<TrackShadow> {
+        let channel = CompiledChannelKey::new(object_index, property);
         let mut tracks = Vec::new();
         let mut base_ids = BTreeSet::new();
         for track in scene.channel_tracks(channel) {
@@ -172,8 +178,7 @@ impl PreflightOverlay {
             base_ids.insert(track.id);
             match self.tracks.get(&track.id).copied() {
                 Some(Some(shadow))
-                    if shadow.object_index == object_index
-                        && shadow.property == Property::Presence =>
+                    if shadow.object_index == object_index && shadow.property == property =>
                 {
                     tracks.push(shadow)
                 }
@@ -195,55 +200,96 @@ impl PreflightOverlay {
 
 pub(super) fn preflight_transaction(
     scene: &CompiledScene,
-    transaction: &MutationTransaction,
+    transaction: &ExecutionMutationTransaction,
+) -> Result<CompiledTransactionPreflightStats, CompilePatchError> {
+    preflight_transaction_with_resources(scene, transaction, &crate::CompiledResources::default())
+}
+
+pub(super) fn preflight_transaction_with_resources(
+    scene: &CompiledScene,
+    transaction: &ExecutionMutationTransaction,
+    additions: &crate::CompiledResources,
 ) -> Result<CompiledTransactionPreflightStats, CompilePatchError> {
     let mut overlay = PreflightOverlay::new(scene);
 
     for patch in transaction.mutations() {
         match patch {
-            ScenePatch::CreateObject(object) => {
+            ExecutionPatch::CreateObject(object) => {
                 if overlay.object_index(scene, object.id).is_some() {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
                 let index = u32::try_from(overlay.next_object_index)
                     .map_err(|_| CompilePatchError::TooManyObjects(overlay.next_object_index))?;
-                validate_object_definition(object).map_err(map_object_state_error)?;
+                validate_compiled_object(object)?;
+                validate_execution_content_resource(
+                    &scene.resources,
+                    Some(additions),
+                    object.id,
+                    &object.content,
+                    object.text_bounds,
+                )?;
                 overlay.next_object_index += 1;
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
                         index,
-                        is_text: false,
+                        is_text: object.text().is_some(),
                     },
                 );
             }
-            ScenePatch::RemoveObject(id) => {
+            ExecutionPatch::RemoveObject(id) => {
                 let index = overlay
                     .object_index(scene, *id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
                 overlay.objects.insert(*id, ObjectOverlay::Removed);
                 overlay.remove_object_tracks(scene, index);
             }
-            ScenePatch::SetGeometry { object, .. } => {
+            ExecutionPatch::SetContent {
+                object,
+                content,
+                text_bounds,
+            } => {
                 let index = overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                validate_property_patch(patch).map_err(map_object_state_error)?;
+                validate_execution_content(*object, content, *text_bounds)?;
+                validate_execution_content_resource(
+                    &scene.resources,
+                    Some(additions),
+                    *object,
+                    content,
+                    *text_bounds,
+                )?;
+                for property in [Property::Transform, Property::Morph] {
+                    if let Some(track) = overlay.channel(scene, index, property).first() {
+                        return Err(CompilePatchError::ContentReplacementHasGeometryDriver {
+                            object: *object,
+                            track: track.id,
+                            property,
+                        });
+                    }
+                }
                 overlay.objects.insert(
                     *object,
                     ObjectOverlay::Present {
                         index,
-                        is_text: false,
+                        is_text: matches!(content, ObjectContentRef::Text(_)),
                     },
                 );
             }
-            ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => {
+            ExecutionPatch::SetTransform { object, transform } => {
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
-                validate_property_patch(patch).map_err(map_object_state_error)?;
+                validate_transform(*object, *transform).map_err(map_object_state_error)?;
             }
-            ScenePatch::AddTrack(track) => {
+            ExecutionPatch::SetStyle { object, style } => {
+                if overlay.object_index(scene, *object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+                validate_style(*object, *style).map_err(map_object_state_error)?;
+            }
+            ExecutionPatch::AddTrack(track) => {
                 if overlay.track(scene, track.id).is_some() {
                     return Err(CompilePatchError::DuplicateTrack(track.id));
                 }
@@ -258,7 +304,7 @@ pub(super) fn preflight_transaction(
                     validate_presence_channel(scene, &mut overlay, object_index)?;
                 }
             }
-            ScenePatch::ReplaceTrack(track) => {
+            ExecutionPatch::ReplaceTrack(track) => {
                 let old = overlay
                     .track(scene, track.id)
                     .ok_or(CompilePatchError::UnknownTrack(track.id))?;
@@ -279,7 +325,7 @@ pub(super) fn preflight_transaction(
                     validate_presence_channel(scene, &mut overlay, replacement.object_index)?;
                 }
             }
-            ScenePatch::RemoveTrack(id) => {
+            ExecutionPatch::RemoveTrack(id) => {
                 let removed = overlay
                     .track(scene, *id)
                     .ok_or(CompilePatchError::UnknownTrack(*id))?;
@@ -337,7 +383,7 @@ fn validate_presence_channel(
     overlay: &mut PreflightOverlay,
     object_index: u32,
 ) -> Result<(), CompilePatchError> {
-    let mut tracks = overlay.presence_channel(scene, object_index);
+    let mut tracks = overlay.channel(scene, object_index, Property::Presence);
     tracks.sort_by(|left, right| {
         left.start_time
             .total_cmp(&right.start_time)

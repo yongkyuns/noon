@@ -1,4 +1,6 @@
-use noon_compile::CompilePatchError;
+use noon_compile::{
+    CompilePatchError, CompiledResources, ExecutionMutationTransaction, ExecutionPatch,
+};
 use noon_core::{
     ExecutionRevision, FrameEpoch, MutationTransaction, ObjectId, PublicationContext,
     SceneRevision, Transform2D,
@@ -9,14 +11,16 @@ use crate::{FrameObjectState, FrameState, SceneInstance};
 
 /// Retain the final value write in each region bounded by structural/timeline
 /// edits. The caller must preflight all writes, including superseded ones.
-pub(super) fn final_value_writes(transaction: &MutationTransaction) -> Vec<&noon_core::ScenePatch> {
+pub(super) fn final_value_writes(
+    transaction: &ExecutionMutationTransaction,
+) -> Vec<&ExecutionPatch> {
     let mut final_writes = HashSet::new();
     let mut retained = Vec::with_capacity(transaction.mutations().len());
     for patch in transaction.mutations().iter().rev() {
         match patch {
-            noon_core::ScenePatch::SetGeometry { object, .. }
-            | noon_core::ScenePatch::SetTransform { object, .. }
-            | noon_core::ScenePatch::SetStyle { object, .. } => {
+            ExecutionPatch::SetContent { object, .. }
+            | ExecutionPatch::SetTransform { object, .. }
+            | ExecutionPatch::SetStyle { object, .. } => {
                 if !final_writes.insert((*object, std::mem::discriminant(patch))) {
                     continue;
                 }
@@ -90,6 +94,72 @@ impl SceneInstance {
         self.effective_object(id).map(|object| object.transform)
     }
 
+    /// Finish every fallible runtime check available before transaction-local
+    /// semantic identities are assigned. `transaction` contains value edits and
+    /// conservative removals; `additional_objects` reserves append-only rows.
+    pub fn preflight_authored_transaction_shape(
+        &self,
+        transaction: &ExecutionMutationTransaction,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+        additional_objects: usize,
+        structural_change_possible: bool,
+    ) -> Result<(), AuthoredPublicationError> {
+        self.preflight_authored_transaction_shape_with_resources(
+            transaction,
+            &CompiledResources::default(),
+            expected,
+            scene_revision,
+            additional_objects,
+            structural_change_possible,
+        )
+    }
+
+    pub fn preflight_authored_transaction_shape_with_resources(
+        &self,
+        transaction: &ExecutionMutationTransaction,
+        resource_additions: &CompiledResources,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+        additional_objects: usize,
+        structural_change_possible: bool,
+    ) -> Result<(), AuthoredPublicationError> {
+        let current = self.publication_context();
+        if expected != current {
+            return Err(AuthoredPublicationError::StalePublication {
+                expected,
+                actual: current,
+            });
+        }
+        let scene_changed = scene_revision != current.scene_revision();
+        if scene_changed && current.scene_revision().checked_next() != Some(scene_revision) {
+            return Err(AuthoredPublicationError::InvalidSceneRevision {
+                current: current.scene_revision(),
+                proposed: scene_revision,
+            });
+        }
+        self.compiled
+            .preflight_execution_transaction_with_resources(transaction, resource_additions)?;
+        self.compiled.preflight_object_appends(additional_objects)?;
+        let execution_change_possible = structural_change_possible
+            || final_value_writes(transaction)
+                .into_iter()
+                .any(|patch| self.compiled.patch_changes_execution(patch));
+        if execution_change_possible && current.execution_revision().checked_next().is_none() {
+            return Err(AuthoredPublicationError::ExecutionRevisionExhausted(
+                current.execution_revision(),
+            ));
+        }
+        if (scene_changed || execution_change_possible)
+            && current.frame_epoch().checked_next().is_none()
+        {
+            return Err(AuthoredPublicationError::FrameEpochExhausted(
+                current.frame_epoch(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Publish one already-authored mutation transaction atomically into the runtime.
     ///
     /// The compiled scene preflights the complete transaction against staged
@@ -100,7 +170,15 @@ impl SceneInstance {
         &mut self,
         transaction: &MutationTransaction,
     ) -> Result<&FrameState, CompilePatchError> {
-        self.compiled.preflight_transaction(transaction)?;
+        let transaction = ExecutionMutationTransaction::decode(transaction);
+        self.apply_execution_transaction(&transaction)
+    }
+
+    pub fn apply_execution_transaction(
+        &mut self,
+        transaction: &ExecutionMutationTransaction,
+    ) -> Result<&FrameState, CompilePatchError> {
+        self.compiled.preflight_execution_transaction(transaction)?;
         let changed = self.apply_preflighted_transaction(transaction);
         if changed {
             self.publish_execution_change();
@@ -120,6 +198,22 @@ impl SceneInstance {
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<&FrameState, AuthoredPublicationError> {
+        let transaction = ExecutionMutationTransaction::decode(transaction);
+        self.apply_authored_execution_transaction(
+            &transaction,
+            CompiledResources::default(),
+            expected,
+            scene_revision,
+        )
+    }
+
+    pub fn apply_authored_execution_transaction(
+        &mut self,
+        transaction: &ExecutionMutationTransaction,
+        resource_additions: CompiledResources,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+    ) -> Result<&FrameState, AuthoredPublicationError> {
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -136,7 +230,8 @@ impl SceneInstance {
             });
         }
 
-        self.compiled.preflight_transaction(transaction)?;
+        self.compiled
+            .preflight_execution_transaction_with_resources(transaction, &resource_additions)?;
         let execution_changed = final_value_writes(transaction)
             .into_iter()
             .any(|patch| self.compiled.patch_changes_execution(patch));
@@ -156,6 +251,7 @@ impl SceneInstance {
             None
         };
 
+        self.compiled.merge_prepared_resources(resource_additions);
         let applied_execution_change = self.apply_preflighted_transaction(transaction);
         debug_assert_eq!(applied_execution_change, execution_changed);
         if frame_changed {
@@ -168,7 +264,10 @@ impl SceneInstance {
         Ok(&self.frame)
     }
 
-    fn apply_preflighted_transaction(&mut self, transaction: &MutationTransaction) -> bool {
+    fn apply_preflighted_transaction(
+        &mut self,
+        transaction: &ExecutionMutationTransaction,
+    ) -> bool {
         self.last_patch_stats = crate::RuntimePatchStats::default();
         // Intermediate value writes in an atomic batch are not observable. Keep
         // the last write per property, bounded by structural/timeline operations

@@ -285,6 +285,14 @@ struct StructuralAppendStats {
     path_indices_repacked: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VisibleProjectionKey {
+    object_index: usize,
+    slot: PreparedSlot,
+    mega_path_segment: Option<Range<u32>>,
+    mega_path_detached: bool,
+}
+
 #[derive(Debug)]
 struct PathGroup {
     cache_index: usize,
@@ -319,6 +327,14 @@ pub struct FramePreparer {
     mega_path_segments: Vec<Option<Range<u32>>>,
     mega_path_detached: Vec<bool>,
     render_batches: Vec<OrderedRenderBatch>,
+    // Candidate-sized submission projection. Canonical packed state and painter
+    // order stay resident in the fields above when the camera changes.
+    visible_raw_render_batches: Vec<OrderedRenderBatch>,
+    visible_render_batches: Vec<OrderedRenderBatch>,
+    visible_mega_path_batches: Vec<MegaPathBatch>,
+    visible_projection_ready: bool,
+    visible_projection_key: Vec<VisibleProjectionKey>,
+    visible_projection_stats: VisibleRenderProjectionStats,
     render_order_keys: Vec<RenderOrderKey>,
     path_batch_cache_indices: Vec<usize>,
     path_mesh_cache: Vec<CachedPathMesh>,

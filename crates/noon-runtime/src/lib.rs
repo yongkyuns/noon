@@ -4,16 +4,19 @@
 
 mod execution_slots;
 mod reactive;
+mod renderer_publication;
 mod spatial_index;
 
 pub use execution_slots::*;
 pub use reactive::*;
+pub use renderer_publication::*;
 pub use spatial_index::*;
 
 use std::{collections::BTreeMap, sync::Arc};
 
 use noon_compile::{
-    CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, TransformGeometryPlan,
+    CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, ExecutionPatch,
+    TransformGeometryPlan,
 };
 use noon_core::PublicationContext;
 use noon_core::{
@@ -314,7 +317,21 @@ impl SceneInstance {
         std::mem::take(&mut self.changes)
     }
 
-    pub(crate) fn take_spatial_changes(&mut self) -> FrameChanges {
+    /// Consume one renderer publication atomically with its accumulated changes.
+    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        let changes = self.take_frame_changes();
+        RendererPublication::new(
+            self.publication,
+            &self.frame,
+            changes,
+            self.compiled.text_resources(),
+            self.compiled.font_resources(),
+            self.compiled.geometry_resources(),
+        )
+    }
+
+    /// Consume derived spatial invalidation for the execution-session index owner.
+    pub fn take_spatial_changes(&mut self) -> FrameChanges {
         std::mem::take(&mut self.spatial_changes)
     }
 
@@ -340,6 +357,10 @@ impl SceneInstance {
 
     pub fn contains_object(&self, id: ObjectId) -> bool {
         self.compiled.object_index(id).is_some()
+    }
+
+    pub fn frame_index_for_object(&self, id: ObjectId) -> Option<usize> {
+        self.compiled.object_index(id).map(|index| index as usize)
     }
 
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {
@@ -406,6 +427,14 @@ impl SceneInstance {
     }
 
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
+        let patch = ExecutionPatch::decode(patch);
+        self.apply_execution_patch(&patch)
+    }
+
+    pub fn apply_execution_patch(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<&FrameState, CompilePatchError> {
         if !self.compiled.patch_changes_execution(patch) {
             self.last_patch_stats = RuntimePatchStats::default();
             return Ok(&self.frame);
@@ -417,21 +446,23 @@ impl SceneInstance {
 
     fn apply_patch_unpublished(
         &mut self,
-        patch: &ScenePatch,
+        patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
         self.last_patch_stats = RuntimePatchStats::default();
         if matches!(
             patch,
-            ScenePatch::SetGeometry { .. }
-                | ScenePatch::SetTransform { .. }
-                | ScenePatch::SetStyle { .. }
+            ExecutionPatch::SetContent { .. }
+                | ExecutionPatch::SetTransform { .. }
+                | ExecutionPatch::SetStyle { .. }
         ) {
             self.apply_value_patch(patch)?;
             return Ok(&self.frame);
         }
         if matches!(
             patch,
-            ScenePatch::AddTrack(_) | ScenePatch::ReplaceTrack(_) | ScenePatch::RemoveTrack(_)
+            ExecutionPatch::AddTrack(_)
+                | ExecutionPatch::ReplaceTrack(_)
+                | ExecutionPatch::RemoveTrack(_)
         ) {
             self.apply_timeline_patch(patch)?;
             return Ok(&self.frame);
@@ -439,29 +470,29 @@ impl SceneInstance {
 
         if matches!(
             patch,
-            ScenePatch::CreateObject(_) | ScenePatch::RemoveObject(_)
+            ExecutionPatch::CreateObject(_) | ExecutionPatch::RemoveObject(_)
         ) {
             self.apply_structural_patch(patch)?;
             return Ok(&self.frame);
         }
 
-        unreachable!("all ScenePatch variants are handled above")
+        unreachable!("all ExecutionPatch variants are handled above")
     }
 
-    fn apply_structural_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
+    fn apply_structural_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
         let removed = match patch {
-            ScenePatch::RemoveObject(object) => {
+            ExecutionPatch::RemoveObject(object) => {
                 let object_index = self
                     .compiled
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 Some((object_index, self.compiled.object_channels(*object)))
             }
-            ScenePatch::CreateObject(_) => None,
+            ExecutionPatch::CreateObject(_) => None,
             _ => unreachable!("structural patch helper accepts only create/remove"),
         };
 
-        let compiled_stats = self.compiled.apply_patch_with_stats(patch)?;
+        let compiled_stats = self.compiled.apply_execution_patch_with_stats(patch)?;
         let mut patch_stats = RuntimePatchStats {
             object_slots_appended: compiled_stats.object_slots_appended,
             object_slots_retired: compiled_stats.object_slots_retired,
@@ -470,7 +501,7 @@ impl SceneInstance {
         };
 
         match patch {
-            ScenePatch::CreateObject(object) => {
+            ExecutionPatch::CreateObject(object) => {
                 let object_index = self
                     .compiled
                     .object_index(object.id)
@@ -482,7 +513,7 @@ impl SceneInstance {
                 self.reapply_reactive_for_object(object_index);
                 self.mark_added(object_index);
             }
-            ScenePatch::RemoveObject(_) => {
+            ExecutionPatch::RemoveObject(_) => {
                 let (object_index, old_channels) = removed.expect("remove context captured above");
                 for channel in old_channels {
                     let scheduler_stats = self.timeline_scheduler.relower_channel(channel, &[]);
@@ -505,19 +536,19 @@ impl SceneInstance {
         Ok(())
     }
 
-    fn apply_timeline_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
+    fn apply_timeline_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
         let old_channel = match patch {
-            ScenePatch::ReplaceTrack(track) => self.compiled.channel_for_track(track.id),
-            ScenePatch::RemoveTrack(id) => self.compiled.channel_for_track(*id),
-            ScenePatch::AddTrack(_) => None,
+            ExecutionPatch::ReplaceTrack(track) => self.compiled.channel_for_track(track.id),
+            ExecutionPatch::RemoveTrack(id) => self.compiled.channel_for_track(*id),
+            ExecutionPatch::AddTrack(_) => None,
             _ => unreachable!("timeline patch helper accepts only track mutations"),
         };
-        self.compiled.apply_patch(patch)?;
+        self.compiled.apply_execution_patch(patch)?;
         let new_channel = match patch {
-            ScenePatch::AddTrack(track) | ScenePatch::ReplaceTrack(track) => {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {
                 self.compiled.channel_for_track(track.id)
             }
-            ScenePatch::RemoveTrack(_) => None,
+            ExecutionPatch::RemoveTrack(_) => None,
             _ => unreachable!("timeline patch helper accepts only track mutations"),
         };
 
@@ -568,11 +599,11 @@ impl SceneInstance {
         Ok(())
     }
 
-    fn apply_value_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
+    fn apply_value_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
         let object = match patch {
-            ScenePatch::SetGeometry { object, .. }
-            | ScenePatch::SetTransform { object, .. }
-            | ScenePatch::SetStyle { object, .. } => *object,
+            ExecutionPatch::SetContent { object, .. }
+            | ExecutionPatch::SetTransform { object, .. }
+            | ExecutionPatch::SetStyle { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
         let index = self
@@ -580,18 +611,23 @@ impl SceneInstance {
             .object_index(object)
             .ok_or(CompilePatchError::UnknownObject(object))? as usize;
         let before = self.frame.objects[index].clone();
-        self.compiled.apply_patch(patch)?;
+        self.compiled.apply_execution_patch(patch)?;
 
         match patch {
-            ScenePatch::SetGeometry { geometry, .. } => {
-                self.frame.objects[index].content = ObjectContentRef::Geometry(geometry.clone());
+            ExecutionPatch::SetContent {
+                content,
+                text_bounds,
+                ..
+            } => {
+                self.frame.objects[index].content = content.clone();
+                self.frame.objects[index].text_bounds = *text_bounds;
                 // Host callbacks run after ordinary timeline/reactive evaluation for the frame.
-                // Clearing a transient render override makes the callback geometry authoritative
-                // for this phase without rebuilding unrelated runtime slots.
+                // Clearing a transient render override makes authored content authoritative for
+                // this phase without rebuilding unrelated runtime slots.
                 self.frame.render_geometries[index] = None;
                 self.frame.render_transforms[index] = None;
             }
-            ScenePatch::SetTransform { transform, .. } => {
+            ExecutionPatch::SetTransform { transform, .. } => {
                 self.frame.release_render_transform(index);
                 self.frame.objects[index].transform = *transform;
                 self.reapply_properties(
@@ -604,7 +640,7 @@ impl SceneInstance {
                     ],
                 );
             }
-            ScenePatch::SetStyle { style, .. } => {
+            ExecutionPatch::SetStyle { style, .. } => {
                 self.frame.objects[index].style = *style;
                 self.reapply_properties(index, &[Property::Transform, Property::Opacity]);
             }
@@ -1868,6 +1904,31 @@ mod tests {
         assert_eq!(
             sought.frame_epoch(),
             advanced.frame_epoch().checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn renderer_publication_binds_one_frame_context_and_consumes_its_changes() {
+        let mut instance = SceneInstance::new(compile_linear_scene());
+        let initial_context = instance.publication_context();
+        {
+            let publication = instance.take_renderer_publication();
+            assert_eq!(publication.context(), initial_context);
+            assert!(publication.changes().is_all());
+            assert_eq!(publication.frame().time, 0.0);
+            assert_eq!(publication.frame().objects.len(), 1);
+        }
+        assert!(instance.take_frame_changes().is_empty());
+
+        instance.advance_to(2.0).expect("valid time");
+        let advanced_context = instance.publication_context();
+        let publication = instance.take_renderer_publication();
+        assert_eq!(publication.context(), advanced_context);
+        assert_eq!(publication.frame().time, 2.0);
+        assert!(!publication.changes().is_empty());
+        assert_ne!(
+            publication.context().frame_epoch(),
+            initial_context.frame_epoch()
         );
     }
 

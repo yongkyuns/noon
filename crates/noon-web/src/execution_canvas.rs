@@ -15,7 +15,8 @@ mod wasm {
 
     use noon::ExecutionSession;
     use noon_core::{
-        Camera2DState, GeometryRef, ObjectId, ReactiveValue, SemanticNodeId, Transform2D, Vec2,
+        Camera2DState, GeometryRef, ObjectId, ReactiveValue, Rect, SemanticNodeId, Transform2D,
+        Vec2,
     };
     use noon_render_wgpu::{
         Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
@@ -1066,17 +1067,20 @@ mod wasm {
             let session = self.source.direct_mut().ok_or_else(|| {
                 js_message("direct retained rendering requires a direct ExecutionSession source")
             })?;
-            let changes = session.take_frame_changes();
+            let camera = self.renderer.camera();
+            let half_extent = camera.world_size * 0.5;
+            let visibility = session.query_viewport(Rect::new(
+                camera.center - half_extent,
+                camera.center + half_extent,
+            ));
+            let publication = session.take_renderer_publication();
             let prepared = self
                 .direct_preparer
-                .prepare_with_changes(
+                .prepare_publication_visible(
                     &self.device,
                     &self.queue,
-                    session.frame(),
-                    &changes,
-                    session.text_resources(),
-                    session.font_resources(),
-                    session.geometry_resources(),
+                    &publication,
+                    visibility.object_indices(),
                     metrics,
                 )
                 .map_err(js_error)?;

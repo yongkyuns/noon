@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,14 +56,39 @@ const pythonSource = `from noon import *
 
 class SharedAuthoringSmoke(Scene):
     def construct(self):
+        earlier = Square(0.25)
         circle = Circle(radius=1.0)
         label = Text("Noon", font_size=48).shift(LEFT * 2)
+        appended = Square(0.25)
         self.add(circle, label)
 
         # Static style authoring completes before the live session. The live
         # facade then owns property publication and effective-value queries.
         circle.set_fill(BLUE, opacity=0.4)
         live = self.live_execution()
+
+        # Real Rust rejection must not consume an export identity or force a
+        # whole-Python-scene checkpoint. Successful append uses the same path.
+        class LocalKeys(dict):
+            def values(self):
+                raise AssertionError("typed binding scanned every object key")
+        def reject_checkpoint(*_args, **_kwargs):
+            raise AssertionError("typed binding checkpointed the whole scene")
+        self._object_keys = LocalKeys(self._object_keys)
+        self._authoring_checkpoint = reject_checkpoint
+        next_id = self._next_object_id
+        try:
+            live.add(earlier)
+        except Exception:
+            pass
+        else:
+            raise AssertionError("interleaved live membership unexpectedly succeeded")
+        assert self._next_object_id == next_id
+        assert earlier._scene is None
+        live.add(appended)
+        assert appended.id == next_id
+        live.remove(appended)
+
         live.set_translation(circle, 2.0, -1.0)
         live.set_scale(circle, 1.5, 0.5)
         center = live.effective_center(circle)
@@ -122,7 +147,10 @@ const browserArgs = [
   "--disable-dev-shm-usage",
 ];
 
-function visiblePixelStats(buffer) {
+function visiblePixelStats(
+  buffer,
+  isVisible = (red, green, blue) => blue >= 40 && blue > red + 15 && blue > green + 3,
+) {
   const png = PNG.sync.read(buffer);
   let count = 0;
   let minX = png.width;
@@ -135,7 +163,7 @@ function visiblePixelStats(buffer) {
     const pixelRed = png.data[offset];
     const pixelGreen = png.data[offset + 1];
     const pixelBlue = png.data[offset + 2];
-    if (pixelBlue < 40 || pixelBlue <= pixelRed + 15 || pixelBlue <= pixelGreen + 3) continue;
+    if (!isVisible(pixelRed, pixelGreen, pixelBlue)) continue;
     const pixel = offset / 4;
     const x = pixel % png.width;
     const y = Math.floor(pixel / png.width);
@@ -366,6 +394,110 @@ try {
   const transferable = await runMode("transferable", 0);
   const shared = await runMode("shared", 1);
 
+  // Run the published examples through the same authoring and rendering harness.
+  for (const { filename, objectCount, expectedDuration, endpointTime, expectText = false } of [
+    {
+      filename: "live_semantic_scene.py",
+      objectCount: 3,
+      expectedDuration: null,
+      endpointTime: null,
+    },
+    {
+      filename: "live_affine_animation.py",
+      objectCount: 1,
+      expectedDuration: 2.25,
+      endpointTime: 2,
+    },
+    {
+      filename: "live_content_switch.py",
+      objectCount: 2,
+      expectedDuration: null,
+      endpointTime: null,
+      expectText: true,
+    },
+  ]) {
+    const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
+    const result = await page.evaluate(async ({ source, objectCount, expectedDuration, endpointTime, expectText, filename }) => {
+      const harness = window.sharedAuthoringSmoke;
+      const authored = await harness.authoring.run(source, {});
+      const canvas = document.createElement("canvas");
+      canvas.id = `scene-${filename.replaceAll(".", "-")}`;
+      canvas.width = 640;
+      canvas.height = 360;
+      document.body.append(canvas);
+      const execution = new harness.AuthoringExecutionClient(canvas);
+      let retainForInspection = false;
+      try {
+        const options = {
+          authoringClient: harness.authoring,
+          transportMode: "transferable",
+        };
+        if (expectedDuration !== null) options.loopDurationSeconds = authored.duration;
+        await execution.startSemanticExecution(authored.semanticExecution, options);
+
+        async function waitForFrame(afterPresentedFrames = 0) {
+          let latest;
+          for (let attempt = 0; attempt < 150; attempt += 1) {
+            latest = (await execution.metrics()).metrics;
+            if (
+              latest.objectCount === objectCount &&
+              latest.drawCalls > 0 &&
+              latest.presentedFrames > afterPresentedFrames
+            ) return latest;
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          throw new Error(`live example did not render: ${JSON.stringify(latest)}`);
+        }
+
+        const initial = await waitForFrame();
+        let endpoint = null;
+        if (endpointTime !== null) {
+          const paused = await execution.pause();
+          if (paused.playing) throw new Error("live affine endpoint seek did not pause playback");
+          const sought = await execution.seek(endpointTime);
+          const rendered = await waitForFrame(initial.presentedFrames);
+          endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
+        }
+        retainForInspection = endpointTime !== null || expectText;
+        if (retainForInspection) harness.liveExampleExecution = execution;
+        return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
+      } finally {
+        if (!retainForInspection) execution.terminate();
+      }
+    }, { source, objectCount, expectedDuration, endpointTime, expectText, filename });
+    assert.equal(result.metrics.objectCount, objectCount, filename);
+    assert.ok(result.metrics.drawCalls > 0, `${filename}: no draw calls`);
+    if (expectedDuration !== null) {
+      assert.equal(result.duration, expectedDuration, `${filename}: canonical live duration`);
+      assert.ok(
+        Math.abs(result.endpoint.time - endpointTime) < 1e-6,
+        `${filename}: endpoint seek`,
+      );
+      assert.ok(result.endpoint.drawCalls > 0, `${filename}: endpoint produced no draw calls`);
+      const endpointPixels = visiblePixelStats(
+        await page.locator(`#${result.canvasId}`).screenshot(),
+        (red, green, blue) => Math.max(red, green, blue) > 80,
+      );
+      assert.ok(endpointPixels.count > 100, `${filename}: endpoint circle was not visible`);
+      assert.ok(endpointPixels.width > 125, `${filename}: endpoint did not retain scale 2`);
+      assert.ok(endpointPixels.height > 125, `${filename}: endpoint did not retain scale 2`);
+      assert.ok(endpointPixels.centerX > 420, `${filename}: endpoint did not retain x=4`);
+      assert.ok(endpointPixels.centerY > 220, `${filename}: endpoint did not retain y=-2`);
+    }
+    if (expectText) {
+      const pixels = textPixelStats(await page.locator(`#${result.canvasId}`).screenshot());
+      assert.ok(pixels.count > 100, `${filename}: replacement glyphs were not rendered`);
+      assert.ok(pixels.width > 50, `${filename}: replacement text has no glyph extent`);
+      assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
+    }
+    if (endpointTime !== null || expectText) {
+      await page.evaluate(() => {
+        window.sharedAuthoringSmoke.liveExampleExecution.terminate();
+        window.sharedAuthoringSmoke.liveExampleExecution = null;
+      });
+    }
+  }
+
   const persisted = await page.evaluate(
     async ({ persistedSceneSource, reusePersistedSceneSource }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -458,7 +590,7 @@ try {
   });
   console.log(
     `✓ shared authoring semantic execution rendered transferable/${transferable.backend} ` +
-      `and shared/${shared.backend}; persisted Scene reuse rendered ${persisted.backend}`,
+      `and shared/${shared.backend}; paired live membership and persisted Scene reuse rendered`,
   );
 } finally {
   await browser?.close();

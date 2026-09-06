@@ -7,8 +7,8 @@ use noon_core::{
 use std::{cell::RefCell, rc::Rc};
 
 /// A scene owns only its shared semantic store, root identity, and authoring cursor.
-/// Membership edits prepare a subsequent execution session; an existing session
-/// is an execution snapshot and is not implicitly relowered by these edits.
+/// Direct membership edits prepare a subsequent execution session. Use
+/// [`LiveSession`] to publish supported membership changes into an existing session.
 #[derive(Debug)]
 pub struct Scene {
     store: Rc<RefCell<SemanticStore>>,
@@ -95,7 +95,7 @@ impl Scene {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    fn require_object(&self, object: &Mobject) -> Result<(), String> {
+    pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), String> {
         if !Rc::ptr_eq(&self.store, object.store()) {
             return Err("mobject belongs to another scene store".into());
         }
@@ -107,10 +107,10 @@ impl Scene {
         ExecutionSession::from_semantic_root(&self.store.borrow(), self.root)
     }
 
-    /// Borrow the already-published execution session for live property edits
-    /// and effective-value queries. This facade retains no scene/runtime state.
+    /// Borrow the already-published execution session for supported live membership,
+    /// property edits, and effective-value queries. This facade retains no scene/runtime state.
     pub fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {
-        LiveSession::new(&self.store, session)
+        LiveSession::new(&self.store, self.root, session)
     }
 }
 #[cfg(test)]

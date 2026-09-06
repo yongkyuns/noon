@@ -510,6 +510,20 @@ for canonical in crates/noon/src/semantic_mobject.rs crates/noon/src/scene.rs cr
   git rm -q "$canonical"
   git commit -qm "remove canonical poison"
 done
+# Lowering and live publication must stay typed even when an old patch-codec
+# dependency already exists at the comparison base.
+for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs; do
+  mkdir -p "$(dirname "$canonical")"
+  printf 'use noon_core::{ScenePatch, MutationTransaction};\n' > "$canonical"
+  git add "$canonical"
+  git commit -qm 'poison canonical execution boundary'
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted external patch codec in $canonical" >&2
+    exit 1
+  fi
+  git rm -q "$canonical"
+  git commit -qm 'remove execution boundary poison'
+done
 mkdir -p crates/noon/src
 for export in 'pub use legacy::*;' 'pub use crate::legacy::{Scene as Mobject};' 'pub use legacy::{*};' 'pub use crate::legacy as old;' 'pub use crate::{legacy};' 'pub use self::legacy::*;' 'pub type Scene = crate::legacy::Scene;' 'use crate::legacy as old; pub type Mobject = old::Mobject;'; do
   printf '%s\n' "$export" > crates/noon/src/lib.rs

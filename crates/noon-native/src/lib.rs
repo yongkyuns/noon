@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use noon::{
     EvaluationError, ExecutionSession, ExecutionSessionCameraError, ExecutionSessionInputError,
-    FrameChanges, TimelineWakeState,
+    RendererPublication, TimelineWakeState,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
@@ -347,8 +347,27 @@ impl NativeApp {
             gpu.set_camera(camera)?;
             gpu.acquire(window.clone())?
         };
-        let Some(((surface_texture, reconfigure_after_present), changes)) =
-            self.take_frame_changes_after_acquire(acquired)
+        let Some(acquired) = acquired else {
+            return Ok(());
+        };
+        let viewport_aspect = {
+            let gpu = self
+                .gpu
+                .as_ref()
+                .expect("drawable native host must own GPU state");
+            gpu_viewport_aspect(gpu.config.width, gpu.config.height)?
+        };
+        let viewport_bounds = camera
+            .viewport_bounds(viewport_aspect)
+            .ok_or_else(|| NativeHostError::Gpu("camera viewport is invalid".to_owned()))?;
+        let visibility = self.session.query_viewport(viewport_bounds);
+        let force_full_redraw = self.force_full_redraw;
+        let Some(((surface_texture, reconfigure_after_present), publication)) =
+            Self::take_renderer_publication_after_acquire(
+                &mut self.session,
+                force_full_redraw,
+                Some(acquired),
+            )
         else {
             return Ok(());
         };
@@ -357,18 +376,14 @@ impl NativeApp {
             .gpu
             .as_mut()
             .expect("drawable native host must own GPU state");
-        let frame = self.session.frame();
         let metrics = gpu.text_metrics(camera)?;
         let prepared = gpu
             .preparer
-            .prepare_with_changes(
+            .prepare_publication_visible(
                 &gpu.device,
                 &gpu.queue,
-                frame,
-                &changes,
-                self.session.text_resources(),
-                self.session.font_resources(),
-                self.session.geometry_resources(),
+                &publication,
+                visibility.object_indices(),
                 metrics,
             )
             .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
@@ -413,18 +428,17 @@ impl NativeApp {
     ///
     /// A timeout, occlusion, or surface recovery leaves the session's pending
     /// publication intact so the next acquired surface receives the same changes.
-    fn take_frame_changes_after_acquire<T>(
-        &mut self,
+    fn take_renderer_publication_after_acquire<T>(
+        session: &mut ExecutionSession,
+        force_full_redraw: bool,
         acquired: Option<T>,
-    ) -> Option<(T, FrameChanges)> {
+    ) -> Option<(T, RendererPublication<'_>)> {
         let acquired = acquired?;
-        let session_changes = self.session.take_frame_changes();
-        let changes = if self.force_full_redraw {
-            FrameChanges::all()
-        } else {
-            session_changes
-        };
-        (!changes.is_empty()).then_some((acquired, changes))
+        let mut publication = session.take_renderer_publication();
+        if force_full_redraw {
+            publication.invalidate_all();
+        }
+        (!publication.changes().is_empty()).then_some((acquired, publication))
     }
 }
 
@@ -745,6 +759,15 @@ fn camera_for_viewport(
         .map_err(|error| NativeHostError::Gpu(error.to_string()))
 }
 
+fn gpu_viewport_aspect(width: u32, height: u32) -> Result<f32, NativeHostError> {
+    if width == 0 || height == 0 {
+        return Err(NativeHostError::Gpu(
+            "camera viewport dimensions must be positive".to_owned(),
+        ));
+    }
+    Ok(width as f32 / height as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -964,7 +987,13 @@ mod tests {
         .unwrap();
         assert!(!app.force_full_redraw);
         assert!(app.publication_pending());
-        assert!(app.take_frame_changes_after_acquire::<()>(None).is_none());
+        let force_full_redraw = app.force_full_redraw;
+        assert!(NativeApp::take_renderer_publication_after_acquire::<()>(
+            &mut app.session,
+            force_full_redraw,
+            None,
+        )
+        .is_none());
         assert!(
             app.session.wake_state().frame_pending(),
             "a failed surface acquisition must not consume the runtime publication"
@@ -974,11 +1003,16 @@ mod tests {
             "a failed surface acquisition must not promote an incremental publication to a full redraw"
         );
 
-        let Some(((), changes)) = app.take_frame_changes_after_acquire(Some(())) else {
+        let force_full_redraw = app.force_full_redraw;
+        let Some(((), publication)) = NativeApp::take_renderer_publication_after_acquire(
+            &mut app.session,
+            force_full_redraw,
+            Some(()),
+        ) else {
             panic!("the retry must receive the pending runtime publication");
         };
-        assert!(!changes.is_all());
-        assert_eq!(changes.object_indices(), &[0]);
+        assert!(!publication.changes().is_all());
+        assert_eq!(publication.changes().object_indices(), &[0]);
         assert!(!app.session.wake_state().frame_pending());
     }
 

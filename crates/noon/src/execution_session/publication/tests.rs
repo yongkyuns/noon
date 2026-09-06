@@ -32,6 +32,15 @@ fn translation(node: SemanticNodeId, x: f64) -> SemanticMutationTransaction {
     tx
 }
 
+fn rooted_family_fixture() -> (SemanticStore, ExecutionSession, SemanticNodeId) {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    store.attach_to_scene(root).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+    (store, session, root)
+}
+
 #[test]
 fn one_local_batch_publishes_one_coherent_context_and_only_affected_row() {
     let (mut store, mut session, nodes) = fixture(100_000);
@@ -157,24 +166,8 @@ fn independent_and_cloned_stores_cannot_alias_publication_queries_or_animation()
 }
 
 #[test]
-fn out_of_band_edits_and_unsupported_mutations_fail_closed() {
+fn out_of_band_edits_fail_closed() {
     let (mut store, mut session, nodes) = fixture(1);
-    let context = session.publication_context();
-    let mut unsupported = SemanticMutationTransaction::new();
-    unsupported.replace_content(
-        nodes[0],
-        store
-            .semantic_object_state_checked(nodes[0])
-            .unwrap()
-            .content,
-    );
-    assert!(matches!(
-        session.apply_semantic_transaction(&mut store, unsupported),
-        Err(ExecutionSessionPublicationError::Lowering(
-            SemanticPublicationLoweringError::UnsupportedMutation { .. }
-        ))
-    ));
-    assert_eq!(session.publication_context(), context);
     translation(nodes[0], 2.0).apply(&mut store).unwrap();
     assert!(matches!(
         session.apply_semantic_transaction(&mut store, translation(nodes[0], 3.0)),
@@ -276,6 +269,185 @@ fn completed_effective_query_can_author_and_activate_the_next_segment() {
         );
         session.take_frame_changes();
     }
+}
+
+#[test]
+fn pending_object_is_mutated_attached_and_published_once() {
+    let (mut store, mut session, root) = rooted_family_fixture();
+    let before = session.publication_context();
+    let mut transaction = SemanticMutationTransaction::new();
+    let pending = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
+    transaction
+        .set_property(
+            pending,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(3.0, 4.0, 0.0),
+        )
+        .add_member(root, pending);
+
+    let result = session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+    let node = result.resolve(pending).unwrap();
+    let effective = session.effective_semantic_object(&store, node).unwrap();
+    assert_eq!(effective.object.transform.translation.x, 3.0);
+    assert_eq!(effective.object.transform.translation.y, 4.0);
+    assert_eq!(session.frame().objects.len(), 1);
+    assert_eq!(
+        session.last_structural_publication_stats().entered_objects,
+        1
+    );
+    assert_eq!(
+        effective.publication.execution_revision(),
+        before.execution_revision().checked_next().unwrap()
+    );
+}
+
+#[test]
+fn detached_pending_object_publishes_no_execution_work() {
+    let (mut store, mut session, _) = rooted_family_fixture();
+    let before = session.publication_context();
+    let mut transaction = SemanticMutationTransaction::new();
+    let pending = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
+    transaction.set_property(
+        pending,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(8.0, 0.0, 0.0),
+    );
+
+    let result = session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+    let node = result.resolve(pending).unwrap();
+    assert!(session.effective_semantic_object(&store, node).is_err());
+    let after = session.publication_context();
+    assert_eq!(after.execution_revision(), before.execution_revision());
+    assert_eq!(
+        session.last_structural_publication_stats(),
+        StructuralPublicationStats::default()
+    );
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
+fn aliases_publish_only_net_membership_and_last_parent_retires_the_object() {
+    let mut store = SemanticStore::new();
+    let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let left = store.insert_family();
+    let right = store.insert_family();
+    let root = store.insert_family();
+    store.add_member(left, object).unwrap();
+    store.add_member(right, object).unwrap();
+    store.add_member(root, left).unwrap();
+    store.add_member(root, right).unwrap();
+    store.attach_to_scene(root).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+
+    let execution_before = session.publication_context().execution_revision();
+    let mut remove_alias = SemanticMutationTransaction::new();
+    remove_alias.remove_member(left, object);
+    session
+        .apply_semantic_transaction(&mut store, remove_alias)
+        .unwrap();
+    assert!(session.effective_semantic_object(&store, object).is_ok());
+    assert_eq!(
+        session.publication_context().execution_revision(),
+        execution_before
+    );
+    assert_eq!(
+        session.last_structural_publication_stats().exited_objects,
+        0
+    );
+
+    let mut remove_last = SemanticMutationTransaction::new();
+    remove_last.remove_member(right, object);
+    session
+        .apply_semantic_transaction(&mut store, remove_last)
+        .unwrap();
+    assert!(matches!(
+        session.effective_semantic_object(&store, object),
+        Err(ExecutionSessionPublicationError::UnknownObject(node)) if node == object
+    ));
+    assert_eq!(
+        session.last_structural_publication_stats().exited_objects,
+        1
+    );
+}
+
+#[test]
+fn removing_reachable_family_cascades_only_its_execution_leaves() {
+    let mut store = SemanticStore::new();
+    let keep = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let removed = [2.0, 3.0].map(|radius| {
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
+    });
+    let subtree = store.insert_family();
+    let root = store.insert_family();
+    for node in removed {
+        store.add_member(subtree, node).unwrap();
+    }
+    store.add_member(root, keep).unwrap();
+    store.add_member(root, subtree).unwrap();
+    store.attach_to_scene(root).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.remove_member(root, subtree);
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+
+    assert!(session.effective_semantic_object(&store, keep).is_ok());
+    for node in removed {
+        assert!(session.effective_semantic_object(&store, node).is_err());
+    }
+    let stats = session.last_structural_publication_stats();
+    assert_eq!(stats.exited_objects, 2);
+    assert_eq!(stats.preparation.possible_exits, 2);
+    assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
+}
+
+#[test]
+fn painter_interleaving_fails_before_semantic_or_runtime_publication() {
+    let mut store = SemanticStore::new();
+    let earlier = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let later = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 2.0,
+    }));
+    let root = store.insert_family();
+    store.add_member(root, later).unwrap();
+    store.attach_to_scene(root).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+    let context = session.publication_context();
+    let frame = session.frame().clone();
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_member(root, earlier);
+    assert!(matches!(
+        session.apply_semantic_transaction(&mut store, transaction),
+        Err(ExecutionSessionPublicationError::Lowering(
+            SemanticPublicationLoweringError::PainterOrderInterleaving { .. }
+        ))
+    ));
+    assert_eq!(store.scene_revision(), context.scene_revision());
+    assert_eq!(session.publication_context(), context);
+    assert_eq!(session.frame(), &frame);
+    assert_eq!(store.node(root).unwrap().members(), &[later]);
+    assert!(session.take_frame_changes().is_empty());
 }
 
 #[test]

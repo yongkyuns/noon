@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod analytic_geometry_authoring;
+mod animation_authoring;
 mod arc_authoring;
 mod camera_authoring;
 mod dashed_line_authoring;
@@ -25,13 +26,14 @@ pub mod semantic_mobject;
 mod shape_matcher_authoring;
 mod text_authoring;
 
+pub use animation_authoring::DeclaredAnimation;
 pub use execution_segment::*;
 pub use execution_session::*;
 pub use live_session::{EffectiveMobjectState, LiveSession, LiveSessionError};
 pub use noon_core::*;
 pub use noon_runtime::{
-    EvaluationError, FrameChanges, FrameObjectState, FrameState, RuntimeWakeState,
-    TimelineWakeState,
+    EvaluationError, FrameChanges, FrameObjectState, FrameState, RendererPublication,
+    RuntimeWakeState, TimelineWakeState,
 };
 pub use reactive_authoring::*;
 pub use retained_family_authoring_lowering::*;
@@ -42,7 +44,9 @@ pub use text_authoring::*;
 
 /// Common imports for direct typed semantic authoring.
 pub mod prelude {
-    pub use crate::{EffectiveMobjectState, ExecutionSession, LiveSession, Mobject, Scene};
+    pub use crate::{
+        DeclaredAnimation, EffectiveMobjectState, ExecutionSession, LiveSession, Mobject, Scene,
+    };
     pub use noon_core::{
         Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,
     };

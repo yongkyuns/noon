@@ -1,21 +1,47 @@
 mod publication;
 pub use publication::*;
 
+use std::collections::{BTreeMap, HashMap};
+
 use crate::execution_segment::{ExecutionSegment, ExecutionSegmentError};
 use noon_compile::{
     lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
     lower_semantic_execution, lower_semantic_execution_root, CompilePatchError,
-    SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
-    SemanticExecutionLoweringError, SemanticExecutionLoweringOutput, SemanticReactiveProjection,
+    ExecutionMutationTransaction, ExecutionPatch, SemanticAffineAnimationTrackError,
+    SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
+    SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
 use noon_core::{
-    AnimationOptions, Camera2DState, MutationTransaction, NativeEventOccurrence,
-    NativeInputRuntimeError, NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId,
-    ReactiveError, ReactiveValue, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
+    AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
+    NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, ReactiveError, ReactiveValue,
+    Rect, SemanticNodeId, SemanticStore, TrackId,
 };
-use noon_runtime::{EvaluationError, FrameChanges, FrameState, RuntimeWakeState, SceneInstance};
+use noon_runtime::{
+    EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, RendererPublication,
+    RuntimeWakeState, SceneInstance, SpatialIndexUpdateStats, SpatialQueryStats,
+};
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
+
+/// Candidate-sized viewport result in canonical frame painter order.
+///
+/// Execution slots remain the index identity; frame indices are a transient
+/// projection for the renderer's currently published dense compatibility view.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionViewportQuery {
+    object_indices: Vec<usize>,
+    spatial_stats: SpatialQueryStats,
+}
+
+impl ExecutionViewportQuery {
+    pub fn object_indices(&self) -> &[usize] {
+        &self.object_indices
+    }
+
+    pub const fn spatial_stats(&self) -> SpatialQueryStats {
+        self.spatial_stats
+    }
+}
 
 /// Error produced when semantic/native reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,12 +200,17 @@ impl From<CompilePatchError> for ExecutionSessionAnimationError {
 pub struct ExecutionSession {
     store_identity: noon_core::SemanticStoreIdentity,
     execution_index: SemanticExecutionIndex,
+    reachability: SemanticExecutionReachability,
+    painter_order: SemanticPainterOrderIndex,
     slots: noon_runtime::ExecutionSlotTable,
+    spatial_index: ExecutionSpatialIndex,
+    last_spatial_update: SpatialIndexUpdateStats,
     reactive_projection: SemanticReactiveProjection,
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
+    last_structural_publication: StructuralPublicationStats,
 }
 
 impl ExecutionSession {
@@ -188,10 +219,14 @@ impl ExecutionSession {
         store: &SemanticStore,
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
+        let reachability = SemanticExecutionReachability::from_store(store)?;
+        let painter_order = semantic_painter_order(store, &reachability);
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
         Ok(Self::from_lowered(
             store.identity(),
             execution_index,
+            reachability,
+            painter_order,
             lowered,
         ))
     }
@@ -207,10 +242,14 @@ impl ExecutionSession {
         root: SemanticNodeId,
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
+        let reachability = SemanticExecutionReachability::from_root(store, root)?;
+        let painter_order = semantic_painter_order(store, &reachability);
         let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
         Ok(Self::from_lowered(
             store.identity(),
             execution_index,
+            reachability,
+            painter_order,
             lowered,
         ))
     }
@@ -218,6 +257,8 @@ impl ExecutionSession {
     fn from_lowered(
         store_identity: noon_core::SemanticStoreIdentity,
         execution_index: SemanticExecutionIndex,
+        reachability: SemanticExecutionReachability,
+        painter_order: SemanticPainterOrderIndex,
         lowered: SemanticExecutionLoweringOutput,
     ) -> Self {
         let camera_object = lowered.camera_object();
@@ -229,22 +270,47 @@ impl ExecutionSession {
             .map_or(Some(0), |id| id.checked_add(1));
         let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
         let reactive_projection = lowered.reactive().clone();
-        let runtime = SceneInstance::from_semantic_execution(lowered);
+        let mut runtime = SceneInstance::from_semantic_execution(lowered);
+        let mut spatial_index = ExecutionSpatialIndex::default();
+        let live_slots =
+            runtime
+                .frame()
+                .objects
+                .iter()
+                .enumerate()
+                .filter_map(|(index, object)| {
+                    if !runtime.object_slot_is_live(index) {
+                        return None;
+                    }
+                    slots.slot_for_object(object.id).map(|slot| (slot, index))
+                });
+        let last_spatial_update = spatial_index.rebuild(runtime.frame(), live_slots);
+        let _ = runtime.take_spatial_changes();
         Self {
             store_identity,
             execution_index,
+            reachability,
+            painter_order,
             slots,
+            spatial_index,
+            last_spatial_update,
             reactive_projection,
             runtime,
             camera_object,
             next_activation_track_id,
             last_native_event_sequence: None,
+            last_structural_publication: StructuralPublicationStats::default(),
         }
     }
 
     /// Current renderer-facing runtime frame.
     pub fn frame(&self) -> &FrameState {
         self.runtime.frame()
+    }
+
+    /// Work performed by the most recent incremental execution-plan patch.
+    pub const fn last_patch_stats(&self) -> noon_runtime::RuntimePatchStats {
+        self.runtime.last_patch_stats()
     }
 
     /// Read-only text resources projected with this execution session.
@@ -262,14 +328,44 @@ impl ExecutionSession {
         self.runtime.geometry_resources()
     }
 
-    /// Stable runtime identity for an initially lowered row. This session does not
-    /// expose structural mutation; value/timeline changes preserve this slot table.
+    /// Stable runtime identity for a current frame row. Structural publication
+    /// retires and allocates durable slots without renumbering unrelated identities.
     pub fn execution_slot_for_frame_index(
         &self,
         index: usize,
     ) -> Option<noon_runtime::ExecutionSlotId> {
+        if !self.runtime.object_slot_is_live(index) {
+            return None;
+        }
         let object = self.frame().objects.get(index)?;
         self.slots.slot_for_object(object.id)
+    }
+
+    /// Query current visible rows through the session-owned execution-slot index.
+    pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
+        self.sync_spatial_index();
+        let query = self.spatial_index.query_rect(bounds);
+        let object_indices: Vec<_> = query
+            .slots()
+            .iter()
+            .filter_map(|&slot| {
+                let object = self.slots.object_for_slot(slot)?;
+                self.runtime.frame_index_for_object(object)
+            })
+            .collect();
+        debug_assert_eq!(
+            object_indices.len(),
+            query.stats().results,
+            "live spatial candidates must resolve through execution identity"
+        );
+        ExecutionViewportQuery {
+            object_indices,
+            spatial_stats: query.stats(),
+        }
+    }
+
+    pub const fn last_spatial_update_stats(&self) -> SpatialIndexUpdateStats {
+        self.last_spatial_update
     }
 
     /// Exact authored/executable/effective publication context of this session.
@@ -304,6 +400,51 @@ impl ExecutionSession {
             })
     }
 
+    fn sync_spatial_index(&mut self) {
+        let changes = self.runtime.take_spatial_changes();
+        if changes.is_empty() {
+            self.last_spatial_update = SpatialIndexUpdateStats::default();
+            return;
+        }
+        if changes.is_all() {
+            let live_slots =
+                self.runtime
+                    .frame()
+                    .objects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, object)| {
+                        if !self.runtime.object_slot_is_live(index) {
+                            return None;
+                        }
+                        self.slots
+                            .slot_for_object(object.id)
+                            .map(|slot| (slot, index))
+                    });
+            self.last_spatial_update = self.spatial_index.rebuild(self.runtime.frame(), live_slots);
+            return;
+        }
+        let mut stats = SpatialIndexUpdateStats::default();
+        for &index in changes.object_indices() {
+            let Some(object) = self.runtime.frame().objects.get(index) else {
+                continue;
+            };
+            if self.runtime.object_slot_is_live(index) {
+                if let Some(slot) = self.slots.slot_for_object(object.id) {
+                    stats.merge_from(self.spatial_index.upsert_frame_slot(
+                        self.runtime.frame(),
+                        slot,
+                        index,
+                        index as u64,
+                    ));
+                }
+            } else {
+                stats.merge_from(self.spatial_index.remove_object(object.id));
+            }
+        }
+        self.last_spatial_update = stats;
+    }
+
     /// Read runtime-owned presentation dirtiness and timeline cadence without
     /// exposing the runtime scheduler or introducing a host-side timing model.
     pub fn wake_state(&self) -> RuntimeWakeState {
@@ -313,6 +454,11 @@ impl ExecutionSession {
     /// Consume renderer-facing invalidation state accumulated by the runtime.
     pub fn take_frame_changes(&mut self) -> FrameChanges {
         self.runtime.take_frame_changes()
+    }
+
+    /// Consume one coherent renderer publication from this typed session.
+    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        self.runtime.take_renderer_publication()
     }
 
     /// Evaluate deterministically at an absolute time.
@@ -352,7 +498,7 @@ impl ExecutionSession {
     /// declaration once; the segment is constructed directly from that resolved projection's
     /// `start_time` / `run_time`; affine payload lowering captures each target's effective
     /// runtime transform at most once; and the session attaches execution-local track identity.
-    /// All emitted tracks are preflighted and published as one existing [`MutationTransaction`],
+    /// All emitted tracks are preflighted and published as one execution transaction,
     /// so a failed activation cannot expose a partial timeline or continuation boundary.
     pub fn activate_animation_segment(
         &mut self,
@@ -388,12 +534,12 @@ impl ExecutionSession {
         for track in tracks.tracks() {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let definition = track.with_track_id(TrackId::new(raw_id))?;
-            mutations.push(ScenePatch::AddTrack(definition));
+            mutations.push(ExecutionPatch::AddTrack(definition));
             next_track_id = raw_id.checked_add(1);
         }
 
-        let transaction = MutationTransaction::from_mutations(mutations);
-        self.runtime.apply_transaction(&transaction)?;
+        let transaction = ExecutionMutationTransaction::from_mutations(mutations);
+        self.runtime.apply_execution_transaction(&transaction)?;
         self.next_activation_track_id = next_track_id;
         Ok(segment)
     }
@@ -490,6 +636,46 @@ impl ExecutionSession {
     /// Resolve an authoritative semantic object identity to its current execution key.
     pub fn execution_object_id(&self, node: SemanticNodeId) -> Option<ObjectId> {
         self.execution_index.execution_object_id(node)
+    }
+}
+
+fn semantic_painter_order(
+    store: &SemanticStore,
+    reachability: &SemanticExecutionReachability,
+) -> SemanticPainterOrderIndex {
+    let mut index = SemanticPainterOrderIndex::default();
+    for node in reachability.reachable_objects() {
+        let state = store
+            .semantic_object_state_checked(node)
+            .expect("reachable semantic object was validated during initial lowering");
+        index.insert(node, state.presentation().order_key());
+    }
+    index
+}
+
+#[derive(Clone, Debug, Default)]
+struct SemanticPainterOrderIndex {
+    ordered: BTreeMap<(i32, u64), SemanticNodeId>,
+    keys: HashMap<SemanticNodeId, (i32, u64)>,
+}
+
+impl SemanticPainterOrderIndex {
+    fn tail(&self) -> Option<(i32, u64)> {
+        self.ordered.last_key_value().map(|(key, _)| *key)
+    }
+
+    fn insert(&mut self, node: SemanticNodeId, key: (i32, u64)) {
+        debug_assert!(self.keys.insert(node, key).is_none());
+        debug_assert!(self.ordered.insert(key, node).is_none());
+    }
+
+    fn remove(&mut self, node: SemanticNodeId) {
+        let key = self
+            .keys
+            .remove(&node)
+            .expect("exited execution object has a painter-order entry");
+        let removed = self.ordered.remove(&key);
+        debug_assert_eq!(removed, Some(node));
     }
 }
 
@@ -642,6 +828,44 @@ mod tests {
             timeline_publication.frame_epoch(),
             reactive_publication.frame_epoch().checked_next().unwrap()
         );
+    }
+
+    #[test]
+    fn viewport_query_maps_slots_to_painter_order_and_refits_local_changes() {
+        let mut store = SemanticStore::new();
+        let moving = store
+            .insert_semantic_input_signal(SemanticVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        let mut left_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.5 });
+        left_state.transform.translation = SemanticVec3::new(-10.0, 0.0, 0.0);
+        let left = store.insert_semantic_object(left_state);
+        let middle =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.5,
+            }));
+        let top = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 0.25,
+        }));
+        for object in [left, middle, top] {
+            store.attach_to_scene(object).unwrap();
+        }
+        store
+            .bind_semantic_signal(moving, middle, SemanticObjectProperty::Translation)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let viewport = Rect::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0));
+
+        let initial = session.query_viewport(viewport);
+        assert_eq!(initial.object_indices(), &[1, 2]);
+        assert_eq!(initial.spatial_stats().results, 2);
+
+        session
+            .set_reactive_input(moving, Vec2::new(20.0, 0.0))
+            .unwrap();
+        let moved = session.query_viewport(viewport);
+        assert_eq!(moved.object_indices(), &[2]);
+        assert_eq!(session.last_spatial_update_stats().full_rebuilds, 0);
+        assert_eq!(session.last_spatial_update_stats().leaves_upserted, 1);
     }
 
     #[test]

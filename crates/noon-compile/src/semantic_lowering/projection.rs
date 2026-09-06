@@ -44,6 +44,16 @@ impl SemanticExecutionIndex {
         self.object_ids.get(&semantic_id).copied()
     }
 
+    /// Install identities for objects newly admitted by incremental reachability.
+    pub fn apply_reachability_update(
+        &mut self,
+        update: &super::SemanticExecutionReachabilityUpdate,
+    ) {
+        for node in update.entered_objects() {
+            self.ensure_object(*node);
+        }
+    }
+
     /// Apply committed A1.5 mutation impacts to the identity index without scanning
     /// unrelated semantic nodes.
     ///
@@ -341,15 +351,71 @@ pub(super) fn lower_semantic_transform(
     node: SemanticNodeId,
     state: &SemanticObjectState,
 ) -> Result<Transform2D, SemanticLoweringError> {
+    lower_semantic_transform_value(state).map_err(|error| error.with_node(node))
+}
+
+/// Value-lowering failure before a transaction-local node has a permanent semantic ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SemanticExecutionValueError {
+    NonFiniteValue {
+        field: SemanticExecutionField,
+    },
+    ValueOutOfRange {
+        field: SemanticExecutionField,
+    },
+    UnsupportedPaintResource {
+        field: SemanticExecutionField,
+        resource: u64,
+    },
+}
+
+impl std::fmt::Display for SemanticExecutionValueError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonFiniteValue { field } => write!(formatter, "non-finite {field} state"),
+            Self::ValueOutOfRange { field } => {
+                write!(
+                    formatter,
+                    "{field} state is outside the f32 execution domain"
+                )
+            }
+            Self::UnsupportedPaintResource { field, resource } => {
+                write!(formatter, "unsupported {field} paint resource {resource}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SemanticExecutionValueError {}
+
+impl SemanticExecutionValueError {
+    fn with_node(self, node: SemanticNodeId) -> SemanticLoweringError {
+        match self {
+            Self::NonFiniteValue { field } => SemanticLoweringError::NonFiniteValue { node, field },
+            Self::ValueOutOfRange { field } => {
+                SemanticLoweringError::ValueOutOfRange { node, field }
+            }
+            Self::UnsupportedPaintResource { field, resource } => {
+                SemanticLoweringError::UnsupportedPaintResource {
+                    node,
+                    field,
+                    resource,
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn lower_semantic_transform_value(
+    state: &SemanticObjectState,
+) -> Result<Transform2D, SemanticExecutionValueError> {
     Ok(Transform2D {
         translation: lower_vector_xy(
-            node,
             SemanticExecutionField::Translation,
             state.transform.translation,
         )?,
-        scale: lower_vector_xy(node, SemanticExecutionField::Scale, state.transform.scale)?,
+        scale: lower_vector_xy(SemanticExecutionField::Scale, state.transform.scale)?,
         rotation: lower_scalar_f32(
-            node,
             SemanticExecutionField::RotationZ,
             state.transform.rotation_z,
         )?,
@@ -357,30 +423,28 @@ pub(super) fn lower_semantic_transform(
 }
 
 fn lower_vector_xy(
-    node: SemanticNodeId,
     field: SemanticExecutionField,
     value: noon_core::SemanticVec3,
-) -> Result<noon_core::Vec2, SemanticLoweringError> {
+) -> Result<noon_core::Vec2, SemanticExecutionValueError> {
     value.lower_xy_f32().map_err(|error| match error {
         noon_core::SemanticLoweringError::NonFiniteVector(_) => {
-            SemanticLoweringError::NonFiniteValue { node, field }
+            SemanticExecutionValueError::NonFiniteValue { field }
         }
         noon_core::SemanticLoweringError::CoordinateOutOfRange(_) => {
-            SemanticLoweringError::ValueOutOfRange { node, field }
+            SemanticExecutionValueError::ValueOutOfRange { field }
         }
     })
 }
 
 fn lower_scalar_f32(
-    node: SemanticNodeId,
     field: SemanticExecutionField,
     value: f64,
-) -> Result<f32, SemanticLoweringError> {
+) -> Result<f32, SemanticExecutionValueError> {
     if !value.is_finite() {
-        return Err(SemanticLoweringError::NonFiniteValue { node, field });
+        return Err(SemanticExecutionValueError::NonFiniteValue { field });
     }
     if value.abs() > f32::MAX as f64 {
-        return Err(SemanticLoweringError::ValueOutOfRange { node, field });
+        return Err(SemanticExecutionValueError::ValueOutOfRange { field });
     }
     Ok(value as f32)
 }
@@ -389,27 +453,29 @@ pub(super) fn lower_semantic_style(
     node: SemanticNodeId,
     state: &SemanticObjectState,
 ) -> Result<Style, SemanticLoweringError> {
+    lower_semantic_style_value(state).map_err(|error| error.with_node(node))
+}
+
+pub(crate) fn lower_semantic_style_value(
+    state: &SemanticObjectState,
+) -> Result<Style, SemanticExecutionValueError> {
     let fill = lower_paint(
-        node,
         SemanticExecutionField::FillPaint,
         SemanticExecutionField::FillOpacity,
         state.style.fill.as_ref(),
         state.style.fill_opacity,
     )?;
     let stroke = lower_paint(
-        node,
         SemanticExecutionField::StrokePaint,
         SemanticExecutionField::StrokeOpacity,
         state.style.stroke.as_ref(),
         state.style.stroke_opacity,
     )?;
     let stroke_width = lower_scalar_f32(
-        node,
         SemanticExecutionField::StrokeWidth,
         state.style.stroke_width,
     )?;
     let opacity = lower_scalar_f32(
-        node,
         SemanticExecutionField::ObjectOpacity,
         state.style.object_opacity,
     )?;
@@ -426,15 +492,14 @@ pub(super) fn lower_semantic_style(
 }
 
 fn lower_paint(
-    node: SemanticNodeId,
     paint_field: SemanticExecutionField,
     opacity_field: SemanticExecutionField,
     paint: Option<&SemanticPaint>,
     opacity: f64,
-) -> Result<Option<Color>, SemanticLoweringError> {
+) -> Result<Option<Color>, SemanticExecutionValueError> {
     // Opacity is authored state even when paint is absent; validate it so lowering
     // never hides invalid semantic values behind a currently disabled paint.
-    let opacity = lower_scalar_f32(node, opacity_field, opacity)? as f64;
+    let opacity = lower_scalar_f32(opacity_field, opacity)? as f64;
     let Some(paint) = paint else {
         return Ok(None);
     };
@@ -446,20 +511,18 @@ fn lower_paint(
                 || !color.blue.is_finite()
                 || !color.alpha.is_finite()
             {
-                return Err(SemanticLoweringError::NonFiniteValue {
-                    node,
-                    field: paint_field,
-                });
+                return Err(SemanticExecutionValueError::NonFiniteValue { field: paint_field });
             }
             let mut color = *color;
-            color.alpha = lower_scalar_f32(node, opacity_field, f64::from(color.alpha) * opacity)?;
+            color.alpha = lower_scalar_f32(opacity_field, f64::from(color.alpha) * opacity)?;
             Ok(Some(color))
         }
-        SemanticPaint::Resource(resource) => Err(SemanticLoweringError::UnsupportedPaintResource {
-            node,
-            field: paint_field,
-            resource: *resource,
-        }),
+        SemanticPaint::Resource(resource) => {
+            Err(SemanticExecutionValueError::UnsupportedPaintResource {
+                field: paint_field,
+                resource: *resource,
+            })
+        }
     }
 }
 

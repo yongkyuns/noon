@@ -14,7 +14,7 @@ pub fn apply_execution_slot_membership_changes(
     exited: &[ObjectId],
     entered: &[ObjectId],
 ) -> Result<ExecutionSlotMutationStats, ExecutionSlotError> {
-    preflight_membership_changes(slots, exited, entered)?;
+    preflight_execution_slot_membership_changes(slots, exited, entered)?;
 
     let mut stats = ExecutionSlotMutationStats::default();
     for object in exited {
@@ -34,7 +34,8 @@ pub fn apply_execution_slot_membership_changes(
     Ok(stats)
 }
 
-fn preflight_membership_changes(
+/// Validate a local net-membership batch without mutating or cloning the slot table.
+pub fn preflight_execution_slot_membership_changes(
     slots: &ExecutionSlotTable,
     exited: &[ObjectId],
     entered: &[ObjectId],
@@ -70,6 +71,34 @@ fn preflight_membership_changes(
         live_overrides.insert(*object, true);
     }
 
+    Ok(())
+}
+
+/// Preflight conservative exits and append capacity before entered semantic IDs exist.
+pub fn preflight_execution_slot_membership_shape(
+    slots: &ExecutionSlotTable,
+    possible_exits: &[ObjectId],
+    possible_entry_count: usize,
+) -> Result<(), ExecutionSlotError> {
+    preflight_execution_slot_membership_changes(slots, possible_exits, &[])?;
+    preflight_membership_capacity(slots.slot_capacity(), slots.len(), possible_entry_count)
+}
+
+fn preflight_membership_capacity(
+    slot_capacity: usize,
+    live_slots: usize,
+    possible_entry_count: usize,
+) -> Result<(), ExecutionSlotError> {
+    // Conservative exits may remain live because of another reachable alias. Only
+    // slots that are already free can prove capacity before exact membership exists.
+    let already_free = slot_capacity.saturating_sub(live_slots);
+    let appended = possible_entry_count.saturating_sub(already_free);
+    let final_capacity = slot_capacity
+        .checked_add(appended)
+        .ok_or(ExecutionSlotError::CapacityExhausted)?;
+    if final_capacity != 0 && u32::try_from(final_capacity - 1).is_err() {
+        return Err(ExecutionSlotError::CapacityExhausted);
+    }
     Ok(())
 }
 
@@ -134,5 +163,20 @@ mod tests {
 
         assert_eq!(stats, ExecutionSlotMutationStats::default());
         assert_eq!(slots.slot_for_object(object), Some(slot));
+    }
+
+    #[test]
+    fn conservative_exits_are_not_credited_toward_entry_capacity() {
+        let Ok(max_capacity) = usize::try_from(u64::from(u32::MAX) + 1) else {
+            return;
+        };
+        assert_eq!(
+            preflight_membership_capacity(max_capacity, max_capacity, 1),
+            Err(ExecutionSlotError::CapacityExhausted)
+        );
+        assert_eq!(
+            preflight_membership_capacity(max_capacity, max_capacity - 1, 1),
+            Ok(())
+        );
     }
 }

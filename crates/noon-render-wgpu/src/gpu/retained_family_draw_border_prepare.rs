@@ -181,6 +181,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,
             text_generation: self.text_generation,

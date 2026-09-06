@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import dataclass
 from typing import Any
 
 import _manim_retained_state as _retained_state
@@ -57,22 +58,79 @@ def _context(scene: _ir.Scene):
     return context
 
 
+@dataclass(frozen=True)
+class _TypedBindingReservation:
+    object: _ir.Object
+    key: str
+    legacy_snapshot: dict[str, Any] | None
+
+
+def _reserve_typed_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    handle: object,
+    key: str | None,
+) -> _TypedBindingReservation:
+    if mobject._scene is not None:
+        if mobject._scene is scene:
+            raise ValueError("Mobject is already bound to this Scene")
+        raise ValueError("Mobject already belongs to another Scene")
+
+    object_id = scene._next_object_id
+    authoring_key = _ir._authoring_key("key", key, f"@object:{object_id}")
+    if object_id in scene._object_keys:
+        raise ValueError(f"canonical wrapper object identity is already bound: {object_id}")
+    if authoring_key in scene._object_key_ids:
+        raise ValueError(f"duplicate object key: {authoring_key}")
+
+    legacy_snapshot = None
+    if getattr(scene, "_legacy_geometry_materialized", False) and not isinstance(
+        mobject, _typst._RetainedTextMobject
+    ):
+        legacy_snapshot = json.loads(str(handle.snapshotJson()))
+        legacy_snapshot["id"] = object_id
+    return _TypedBindingReservation(
+        _ir.Object(object_id, scene._owner), authoring_key, legacy_snapshot
+    )
+
+
+def _commit_typed_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    reservation: _TypedBindingReservation,
+    handle: object,
+) -> _ir.Object:
+    """Commit derived wrapper bookkeeping after the shared Rust bind succeeded."""
+    obj = reservation.object
+    scene._object_keys[obj.id] = reservation.key
+    scene._object_key_ids[reservation.key] = obj.id
+    scene._next_object_id = obj.id + 1
+    scene._next_painter_order += 1
+    _record_mobject_binding(mobject, scene, obj, handle, reservation.legacy_snapshot)
+    return obj
+
+
 def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     handle = getattr(self, "_semantic_handle", None)
     if handle is None:
         materialize_legacy_geometry(scene)
         return _ORIGINAL_BIND(self, scene, key=key)
-    checkpoint = scene._authoring_checkpoint()
-    obj, _ = scene._allocate_object(key)
-    try:
-        _context(scene).bindMobject(str(obj.id), handle)
-    except Exception:
-        scene._restore_authoring_checkpoint(checkpoint)
-        raise
+    reservation = _reserve_typed_binding(self, scene, handle, key)
+    _context(scene).bindMobject(str(reservation.object.id), handle)
+    return _commit_typed_binding(self, scene, reservation, handle)
+
+
+def _record_mobject_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    obj: _ir.Object,
+    handle: object,
+    legacy_snapshot: dict[str, Any] | None = None,
+) -> None:
     scene._object_positions[obj.id] = len(scene._objects)
     # The compatibility table retains identity only on the shared path.
     scene._objects.append({"id": obj.id})
-    if isinstance(self, _typst._RetainedTextMobject):
+    if isinstance(mobject, _typst._RetainedTextMobject):
         handles = getattr(scene, "_semantic_text_handles", None)
         if handles is None:
             handles = scene._semantic_text_handles = {}
@@ -81,14 +139,9 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
         if handles is None:
             handles = scene._semantic_geometry_handles = {}
     handles[obj.id] = handle
-    if getattr(scene, "_legacy_geometry_materialized", False) and not isinstance(
-        self, _typst._RetainedTextMobject
-    ):
-        snapshot = json.loads(str(handle.snapshotJson()))
-        snapshot["id"] = obj.id
-        scene._objects[-1] = snapshot
-    self._bind(scene, obj)
-    return obj
+    if legacy_snapshot is not None:
+        scene._objects[-1] = legacy_snapshot
+    mobject._bind(scene, obj)
 
 
 def materialize_legacy_geometry(scene):
@@ -203,13 +256,36 @@ class LiveExecution:
         context.beginLiveExecution(float(duration))
         self._context = context
 
-    def _handle(self, mobject: _base.Mobject) -> object:
-        if not isinstance(mobject, _base.Mobject) or mobject._scene is not self._scene:
+    def _handle(self, mobject: _base.Mobject, *, allow_detached: bool = False) -> object:
+        if not isinstance(mobject, _base.Mobject):
+            raise ValueError("live Mobject must belong to this Scene")
+        if mobject._scene is not self._scene and not (
+            allow_detached and mobject._scene is None
+        ):
             raise ValueError("live Mobject must belong to this Scene")
         handle = getattr(mobject, "_semantic_handle", None)
         if handle is None:
             raise ValueError("live execution requires a typed semantic Mobject handle")
         return handle
+
+    def add(self, mobject: _base.Mobject) -> None:
+        handle = self._handle(mobject, allow_detached=True)
+        if mobject._scene is self._scene:
+            self._context.liveAdd(str(mobject.id), handle)
+            return
+        reservation = _reserve_typed_binding(mobject, self._scene, handle, None)
+        self._context.liveAdd(str(reservation.object.id), handle)
+        _commit_typed_binding(mobject, self._scene, reservation, handle)
+
+    def remove(self, mobject: _base.Mobject) -> None:
+        self._context.liveRemove(self._handle(mobject))
+
+    def replace_content(self, target: _base.Mobject, source: _base.Mobject) -> None:
+        """Use preauthored source content while preserving target identity and state."""
+        self._context.liveReplaceContent(
+            self._handle(target),
+            self._handle(source, allow_detached=True),
+        )
 
     def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
         self._context.liveSetTranslation(self._handle(mobject), float(x), float(y))
@@ -229,6 +305,77 @@ class LiveExecution:
             float(observed.translationX),
             float(observed.translationY),
         )
+
+    def play(self, animation: "LiveAnimation") -> float:
+        """Activate one declaration that was authored before this session began."""
+        if not isinstance(animation, LiveAnimation) or animation._scene is not self._scene:
+            raise ValueError("live animation must belong to this Scene")
+        return float(self._context.livePlayAnimation(animation._handle))
+
+    def wait(self, duration: float) -> float:
+        """Start a session-owned continuation wait after the active segment completes."""
+        return float(self._context.liveWait(float(duration)))
+
+    def advance_to(self, time: float) -> bool:
+        """Drive the current segment through the existing Rust runtime."""
+        return bool(self._context.liveAdvanceSegmentTo(float(time)))
+
+
+class LiveAnimation:
+    """Opaque Python identity for a predeclared shared semantic animation."""
+
+    def __init__(self, scene: _base.Scene, handle: object) -> None:
+        self._scene = scene
+        self._handle = handle
+
+
+def _live_rate_function_id(rate_func: object) -> str:
+    """Resolve only the established deterministic Python rate-function vocabulary."""
+    if isinstance(rate_func, str):
+        return rate_func
+    import _manim_rate_functions as _rate_functions
+
+    return _rate_functions.easing_from_rate_func(rate_func)
+
+
+def _declare_live_transform_to(
+    self: _base.Scene,
+    source: _base.Mobject,
+    target: _base.Mobject,
+    *,
+    run_time: float = 1.0,
+    rate_func: object = "smooth",
+) -> LiveAnimation:
+    """Declare a replayable affine TransformTo before lowering a live session.
+
+    ``target`` is an ordinary detached Mobject handle in the same Rust store,
+    usually built with ``source.copy()`` and transformed before this call. This
+    wrapper declares no scheduler and does not create animation meaning during
+    ``LiveExecution.play``.
+    """
+    context = execution_context(self)
+    if context is None:
+        raise RuntimeError(
+            "live animation currently supports typed static geometry/native Text without "
+            "callbacks, retained text, or timeline tracks"
+        )
+    if not isinstance(source, _base.Mobject) or source._scene is not self:
+        raise ValueError("live animation source must belong to this Scene")
+    if not isinstance(target, _base.Mobject) or target._scene is not None:
+        raise ValueError("live animation target must be a detached Mobject")
+    source_handle = getattr(source, "_semantic_handle", None)
+    target_handle = getattr(target, "_semantic_handle", None)
+    if source_handle is None or target_handle is None:
+        raise ValueError("live animation requires typed semantic Mobject handles")
+    return LiveAnimation(
+        self,
+        context.declareLiveTransformTo(
+            source_handle,
+            target_handle,
+            float(run_time),
+            _live_rate_function_id(rate_func),
+        ),
+    )
 
 
 def _live_execution(self: _base.Scene, duration: float = 1.0) -> LiveExecution:
@@ -382,5 +529,6 @@ def install() -> None:
     _base.Mobject._bind_to_scene = _bind_mobject
     _base.Scene.play = _play
     _base.Scene.live_execution = _live_execution
+    _base.Scene.declare_live_transform_to = _declare_live_transform_to
     _ir.Scene.to_document = _to_document
     _ir.Scene.identity_document = _identity_document

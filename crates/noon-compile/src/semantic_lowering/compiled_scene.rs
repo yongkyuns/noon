@@ -148,55 +148,23 @@ fn materialize_semantic_projection(
     })
 }
 
-fn lower_content(
+pub(super) fn lower_content(
     node: SemanticNodeId,
     content: SemanticObjectContent,
     store: Option<&SemanticStore>,
     resources: &mut CompiledResources,
 ) -> Result<(ObjectContentRef, Option<Rect>), SemanticCompiledSceneError> {
     match content {
-        SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) => {
-            if !radius.is_finite() {
-                return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
-            }
-            Ok((
-                ObjectContentRef::Geometry(GeometryRef::circle(radius)),
-                None,
-            ))
-        }
-        SemanticObjectContent::Geometry(StoredGeometry::Rectangle { size }) => {
-            if !size.x.is_finite() || !size.y.is_finite() {
-                return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
-            }
-            Ok((
-                ObjectContentRef::Geometry(GeometryRef::Rectangle { size }),
-                None,
-            ))
-        }
-        SemanticObjectContent::Geometry(StoredGeometry::Line { start, end }) => {
-            if !start.x.is_finite()
-                || !start.y.is_finite()
-                || !end.x.is_finite()
-                || !end.y.is_finite()
-            {
-                return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
-            }
-            Ok((
-                ObjectContentRef::Geometry(GeometryRef::line(start, end)),
-                None,
-            ))
-        }
-        SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) => {
-            match store.and_then(|store| store.geometry_resources().get(resource)) {
-                Some(GeometryResource::VectorPath(path)) => Ok((
-                    ObjectContentRef::Geometry(GeometryRef::path(path.as_ref().clone())),
-                    None,
-                )),
-                None => {
-                    Err(SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource })
+        SemanticObjectContent::Geometry(geometry) => lower_semantic_geometry_value(geometry, store)
+            .map(|geometry| (ObjectContentRef::Geometry(geometry), None))
+            .map_err(|error| match error {
+                SemanticGeometryValueError::InvalidAnalyticGeometry => {
+                    SemanticCompiledSceneError::InvalidAnalyticGeometry { node }
                 }
-            }
-        }
+                SemanticGeometryValueError::UnsupportedGeometryResource(resource) => {
+                    SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource }
+                }
+            }),
         SemanticObjectContent::Text(text) => {
             let store = store.ok_or(SemanticCompiledSceneError::Resource {
                 node,
@@ -206,6 +174,59 @@ fn lower_content(
                 .capture_text(store, text)
                 .map_err(|error| SemanticCompiledSceneError::Resource { node, error })?;
             Ok((ObjectContentRef::Text(text), Some(bounds)))
+        }
+    }
+}
+
+/// Geometry content lowering usable while a transaction-local object has no final ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticGeometryValueError {
+    InvalidAnalyticGeometry,
+    UnsupportedGeometryResource(GeometryResourceHandle),
+}
+
+impl std::fmt::Display for SemanticGeometryValueError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidAnalyticGeometry => formatter.write_str("non-finite analytic geometry"),
+            Self::UnsupportedGeometryResource(resource) => write!(
+                formatter,
+                "unresolved geometry resource {}@{}",
+                resource.id.get(),
+                resource.version
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SemanticGeometryValueError {}
+
+pub(crate) fn lower_semantic_geometry_value(
+    geometry: StoredGeometry,
+    store: Option<&SemanticStore>,
+) -> Result<GeometryRef, SemanticGeometryValueError> {
+    match geometry {
+        StoredGeometry::Circle { radius } => radius
+            .is_finite()
+            .then(|| GeometryRef::circle(radius))
+            .ok_or(SemanticGeometryValueError::InvalidAnalyticGeometry),
+        StoredGeometry::Rectangle { size } => (size.x.is_finite() && size.y.is_finite())
+            .then_some(GeometryRef::Rectangle { size })
+            .ok_or(SemanticGeometryValueError::InvalidAnalyticGeometry),
+        StoredGeometry::Line { start, end } => {
+            (start.x.is_finite() && start.y.is_finite() && end.x.is_finite() && end.y.is_finite())
+                .then(|| GeometryRef::line(start, end))
+                .ok_or(SemanticGeometryValueError::InvalidAnalyticGeometry)
+        }
+        StoredGeometry::Resource(resource) => {
+            match store.and_then(|store| store.geometry_resources().get(resource)) {
+                Some(GeometryResource::VectorPath(path)) => {
+                    Ok(GeometryRef::path(path.as_ref().clone()))
+                }
+                None => Err(SemanticGeometryValueError::UnsupportedGeometryResource(
+                    resource,
+                )),
+            }
         }
     }
 }
