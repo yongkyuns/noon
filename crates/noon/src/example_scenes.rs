@@ -227,11 +227,9 @@ pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
     {
         let mut live = scene.live(&mut session);
         let target = live.target_editor(&circle)?;
-        let mut target_style = live.authored(&target)?.style;
-        target_style.fill = Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)));
-        target_style.fill_opacity = 0.4;
-        target_style.object_opacity = 0.5;
-        live.replace_style(&target, target_style.clone())?;
+        live.set_fill(&target, 1.0, 0.0, 0.0, 0.4)?;
+        live.set_object_opacity(&target, 0.5)?;
+        let target_style = live.authored(&target)?.style;
 
         let segment = live.declare_and_activate_transform_to(
             &circle,
@@ -256,12 +254,15 @@ pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
         live.complete_segment(segment)?;
         assert_eq!(live.authored(&circle)?.style, target_style);
 
-        let mut final_style = target_style;
-        final_style.fill = Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)));
-        final_style.fill_opacity = 1.0;
-        final_style.object_opacity = 1.0;
-        live.replace_style(&circle, final_style.clone())?;
-        assert_eq!(live.authored(&circle)?.style, final_style);
+        live.set_fill(&circle, 0.0, 1.0, 0.0, 1.0)?;
+        live.set_object_opacity(&circle, 1.0)?;
+        let final_style = live.authored(&circle)?.style;
+        assert_eq!(
+            final_style.fill,
+            Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
+        );
+        assert_eq!(final_style.fill_opacity, 1.0);
+        assert_eq!(final_style.object_opacity, 1.0);
         let effective = live.effective(&circle)?.style;
         assert_eq!(effective.fill, Some(Color::rgb(0.0, 1.0, 0.0)));
         assert_eq!(effective.opacity, 1.0);
