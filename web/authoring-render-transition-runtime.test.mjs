@@ -33,9 +33,13 @@ class FakePort {
 function createRenderer(renderResults) {
   return {
     freed: false,
+    renderCalls: 0,
     applyDeltaJson: () => true,
     resize() {},
-    render: () => renderResults.shift() ?? true,
+    render() {
+      this.renderCalls += 1;
+      return renderResults.shift() ?? true;
+    },
     rendererBackend: () => "WebGPU",
     gpuGeneration: () => 1,
     time: () => 0,
@@ -169,4 +173,46 @@ test("retained transport acknowledges an exact publication only after it present
   );
   assert.equal(acknowledgement.session, 11);
   assert.equal(acknowledgement.sequence, 9);
+});
+
+test("a stale no-op cannot acknowledge ahead of a pending present", async () => {
+  const harness = createWorkerHarness([true, false, true]);
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  // Retire the old frame callback and leave the current render loop available
+  // to retry the failed incremental present below.
+  harness.animationFrames.shift()(10);
+
+  vm.runInContext(
+    'consumeDelta("first", { session: 12, sequence: 4 });',
+    harness.context,
+  );
+  vm.runInContext(
+    'consumeDelta("stale", { session: 12, sequence: 4 });',
+    harness.context,
+  );
+  assert.equal(
+    harness.nextPort.messages.filter((message) => message.type === "execution_presented").length,
+    0,
+    "a no-op must not acknowledge before the pending frame reaches the surface",
+  );
+
+  harness.animationFrames.shift()(20);
+  await flushTasks();
+  assert.equal(
+    harness.nextPort.messages.filter((message) => message.type === "execution_presented").length,
+    1,
+  );
+  const renderCalls = harness.createdRenderer.renderCalls;
+  harness.createdRenderer.applyDeltaJson = () => false;
+  vm.runInContext(
+    'consumeDelta("already-presented", { session: 12, sequence: 4 });',
+    harness.context,
+  );
+  assert.equal(harness.createdRenderer.renderCalls, renderCalls, "stale duplicate must not redraw");
+  assert.equal(
+    harness.nextPort.messages.filter((message) => message.type === "execution_presented").length,
+    2,
+    "the exact already-presented publication may acknowledge without a redraw",
+  );
 });

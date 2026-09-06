@@ -41,6 +41,7 @@ let needsPresent = false;
 // Renderer-derived metadata for the publication that the next successful
 // present exposes. It is an acknowledgement only, never scene or time state.
 let pendingPresentationPublication = null;
+let lastPresentedPublication = null;
 let running = false;
 let stopped = false;
 let frameLoopGeneration = 0;
@@ -285,6 +286,7 @@ function resetTransportState() {
   bootstrapQueue = [];
   bootstrapPromise = null;
   pendingPresentationPublication = null;
+  lastPresentedPublication = null;
 }
 
 function handleEngineMessage(message) {
@@ -390,7 +392,7 @@ function consumeDelta(json, publication = null) {
   }
   const applied = renderer.applyDeltaJson(json);
   if (!applied) {
-    acknowledgePresented(publication);
+    acknowledgeAlreadyPresented(publication);
     return true;
   }
   pendingPresentationPublication = publication;
@@ -421,6 +423,8 @@ function commitRendererTransition(initial, publication = null) {
   resourceBytes = nextResourceBytes;
   reconnectResourceBundlePending = false;
   needsPresent = false;
+  pendingPresentationPublication = null;
+  lastPresentedPublication = null;
   mode = nextMode;
   bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);
   return true;
@@ -520,9 +524,18 @@ function tryPresent() {
   }
   needsPresent = false;
   presentedFrames += 1;
-  acknowledgePresented(pendingPresentationPublication);
+  const publication = pendingPresentationPublication;
   pendingPresentationPublication = null;
+  if (publication !== null) {
+    lastPresentedPublication = publication;
+  }
+  acknowledgePresented(publication);
   return drainGpuDiagnostics();
+}
+
+function samePublication(left, right) {
+  return left !== null && right !== null &&
+    left.session === right.session && left.sequence === right.sequence;
 }
 
 function acknowledgePresented(publication) {
@@ -536,6 +549,16 @@ function acknowledgePresented(publication) {
   });
 }
 
+function acknowledgeAlreadyPresented(publication) {
+  // `applyDeltaJson` returns false only for a typed stale transport envelope.
+  // It cannot prove a new publication reached the surface. A duplicate of the
+  // exact already-presented envelope is safe to acknowledge without redrawing;
+  // any older or foreign envelope remains unacknowledged.
+  if (!needsPresent && samePublication(publication, lastPresentedPublication)) {
+    acknowledgePresented(publication);
+  }
+}
+
 function flushBootstrapQueue() {
   if (renderer === null) {
     return;
@@ -544,7 +567,7 @@ function flushBootstrapQueue() {
     const { json, publication } = bootstrapQueue.shift();
     const applied = renderer.applyDeltaJson(json);
     if (!applied) {
-      acknowledgePresented(publication);
+      acknowledgeAlreadyPresented(publication);
       continue;
     }
     pendingPresentationPublication = publication;
