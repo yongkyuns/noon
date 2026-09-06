@@ -1821,6 +1821,12 @@ mod tests {
         let scene = Scene::new();
         let mut square = scene.square(1.0).unwrap();
         square.set_translation(2.0, -1.0).unwrap();
+        let detached_family = {
+            let mut store = scene.store().borrow_mut();
+            let family = store.insert_family();
+            store.add_member(family, square.node_id()).unwrap();
+            family
+        };
         let semantic_id = square.node_id();
         let authored = square.state().unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -1853,6 +1859,100 @@ mod tests {
         assert!(!live.contains(&square).unwrap());
         assert_eq!(square.node_id(), semantic_id);
         assert_eq!(square.state().unwrap(), authored);
+        let store = square.store().borrow();
+        let parents = store.node(square.node_id()).unwrap().parents();
+        assert_eq!(parents.len(), 1);
+        assert!(parents.contains(&detached_family));
+    }
+
+    #[test]
+    fn grow_admits_an_unmounted_family_leaf_but_rejects_an_active_alias() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let detached_family = {
+            let mut store = scene.store().borrow_mut();
+            let family = store.insert_family();
+            store.add_member(family, square.node_id()).unwrap();
+            family
+        };
+        let semantic_id = square.node_id();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let endpoint = AffineLifecycleEndpoint::Point {
+            x: 0.0,
+            y: 0.0,
+            rotation_offset: 0.0,
+            point_color: None,
+        };
+
+        let segment = live
+            .declare_and_activate_affine_lifecycle(
+                &square,
+                AffineLifecycleDirection::IntroduceFrom,
+                endpoint,
+                options,
+            )
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(square.node_id(), semantic_id);
+        {
+            let store = square.store().borrow();
+            let parents = store.node(square.node_id()).unwrap().parents();
+            assert_eq!(parents.len(), 2);
+            assert!(parents.contains(&detached_family));
+            assert!(parents.contains(&scene.root()));
+        }
+
+        let before = live.session.publication_context();
+        let aliased_removal = live.declare_and_activate_affine_lifecycle(
+            &square,
+            AffineLifecycleDirection::RemoveTo,
+            AffineLifecycleEndpoint::EffectiveCenter,
+            options,
+        );
+        assert!(matches!(
+            aliased_removal,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::FadeTarget {
+                    error: ExecutionSessionFadeError::TargetIsAliased,
+                    ..
+                }
+            ))
+        ));
+        let result = live.declare_and_activate_affine_lifecycle(
+            &square,
+            AffineLifecycleDirection::IntroduceFrom,
+            endpoint,
+            options,
+        );
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::FadeTarget {
+                    error: ExecutionSessionFadeError::TargetIsNotDetached,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(live.session.publication_context(), before);
+
+        let foreign = Scene::new().square(1.0).unwrap();
+        assert!(matches!(
+            live.declare_and_activate_affine_lifecycle(
+                &foreign,
+                AffineLifecycleDirection::IntroduceFrom,
+                endpoint,
+                options,
+            ),
+            Err(LiveSessionError::ForeignMobjectStore)
+        ));
+        assert_eq!(live.session.publication_context(), before);
     }
 
     #[test]
