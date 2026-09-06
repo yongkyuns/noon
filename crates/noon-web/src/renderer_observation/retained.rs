@@ -195,19 +195,22 @@ pub struct RendererPresentationObservation {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RendererPresentedObservation {
+    pub schema_version: u32,
+    pub backend: &'static str,
+    pub publication: RendererObservationPublication,
+    pub committed: RendererCommittedObjectObservation,
+    pub mirrored: RendererMirroredObjectObservation,
+    pub prepared: RendererPreparedObjectObservation,
+    pub upload: RendererUploadObservation,
+    pub draw: RendererDrawObservation,
+    pub presentation: RendererPresentationObservation,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum RendererObservationOutcome {
-    Presented {
-        schema_version: u32,
-        backend: &'static str,
-        publication: RendererObservationPublication,
-        committed: RendererCommittedObjectObservation,
-        mirrored: RendererMirroredObjectObservation,
-        prepared: RendererPreparedObjectObservation,
-        upload: RendererUploadObservation,
-        draw: RendererDrawObservation,
-        presentation: RendererPresentationObservation,
-    },
+    Presented(Box<RendererPresentedObservation>),
     Absent {
         schema_version: u32,
         publication: RendererObservationPublication,
@@ -379,7 +382,7 @@ pub(crate) fn finish_renderer_observation(
         };
     }
     let submission_membership = prepared.submission_membership;
-    RendererObservationOutcome::Presented {
+    RendererObservationOutcome::Presented(Box::new(RendererPresentedObservation {
         schema_version: RENDERER_OBSERVATION_VERSION,
         backend,
         publication: target.request.publication,
@@ -405,7 +408,7 @@ pub(crate) fn finish_renderer_observation(
             submit_called: true,
             present_called: true,
         },
-    }
+    }))
 }
 
 #[cfg(test)]
@@ -595,16 +598,20 @@ mod tests {
             "success",
         );
 
-        let RendererObservationOutcome::Presented {
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["outcome"], "presented");
+        assert_eq!(json["publication"]["sequence"], 5);
+        assert_eq!(json["presentation"]["presentation_sequence"], 4);
+        let RendererObservationOutcome::Presented(observation) = outcome else {
+            panic!("an exact retained geometry observation must be publishable");
+        };
+        let RendererPresentedObservation {
             prepared,
             upload,
             draw,
             presentation,
             ..
-        } = outcome
-        else {
-            panic!("an exact retained geometry observation must be publishable");
-        };
+        } = *observation;
         assert_eq!(
             (prepared.instance_start, prepared.instance_end),
             (Some(3), Some(4))
