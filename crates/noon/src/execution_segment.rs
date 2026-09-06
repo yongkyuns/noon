@@ -316,8 +316,10 @@ impl ExecutionSession {
     }
 
     /// Return the one forward, endpoint-clamped target shared by every segment
-    /// drive. `None` means an animated segment was already reconciled and is an
-    /// idempotent receipt; callers must not evaluate or invoke callbacks again.
+    /// drive. `None` means an animated segment was already reconciled, or a
+    /// tokenless wait has already been passed, so callers must not evaluate or
+    /// invoke callbacks again. A wait exactly at its endpoint still returns that
+    /// endpoint so required endpoint callbacks are serviced.
     fn segment_drive_target(
         &self,
         segment: ExecutionSegment,
@@ -330,6 +332,9 @@ impl ExecutionSession {
             return Ok(None);
         }
         let current = self.frame().time;
+        if segment.token().is_none() && current > segment.end_time {
+            return Ok(None);
+        }
         Ok(Some(if current >= segment.end_time {
             current
         } else {
@@ -446,6 +451,30 @@ mod tests {
         session.advance_to(9.0).unwrap();
         session.advance_segment_to(segment, 8.0).unwrap();
         assert_eq!(session.frame().time, 9.0);
+    }
+
+    #[test]
+    fn completed_wait_drive_does_not_reenter_callback_barrier_after_its_endpoint() {
+        let mut session = static_session();
+        let wait = session.wait_segment(2.0).unwrap();
+
+        session.advance_to(wait.end_time()).unwrap();
+        assert_eq!(
+            session.segment_drive_target(wait, wait.end_time()).unwrap(),
+            Some(wait.end_time()),
+            "an active wait endpoint must remain eligible for required callbacks"
+        );
+
+        session.advance_to(3.0).unwrap();
+        assert_eq!(
+            session.segment_drive_target(wait, 9.0).unwrap(),
+            None,
+            "a completed wait must not create a later callback barrier"
+        );
+        assert!(matches!(
+            session.advance_segment_to_callback_barrier(wait, 9.0).unwrap(),
+            CallbackAdvance::Ready(frame) if frame.time == 3.0
+        ));
     }
 
     #[test]

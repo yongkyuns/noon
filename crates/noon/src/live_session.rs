@@ -13,9 +13,9 @@ use crate::{
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
         edit_stroke_opacity,
     },
-    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentCompletionError,
-    ExecutionSegmentError, ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
-    ExecutionSessionPublicationError, Mobject,
+    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
+    ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
+    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, PublicationContext, SemanticAnimationCompositionKind,
@@ -82,6 +82,7 @@ pub enum LiveSessionError {
     Animation(String),
     Activation(ExecutionSessionAnimationError),
     Segment(ExecutionSegmentError),
+    Advance(ExecutionSegmentAdvanceError),
     Completion(ExecutionSegmentCompletionError),
     Publication(ExecutionSessionPublicationError),
 }
@@ -96,6 +97,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
+            Self::Advance(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
         }
@@ -119,6 +121,12 @@ impl From<ExecutionSessionAnimationError> for LiveSessionError {
 impl From<ExecutionSegmentError> for LiveSessionError {
     fn from(value: ExecutionSegmentError) -> Self {
         Self::Segment(value)
+    }
+}
+
+impl From<ExecutionSegmentAdvanceError> for LiveSessionError {
+    fn from(value: ExecutionSegmentAdvanceError) -> Self {
+        Self::Advance(value)
     }
 }
 
@@ -405,7 +413,7 @@ impl<'a> LiveSession<'a> {
         self.session
             .advance_segment_to(segment, requested_time)
             .map(|_| ())
-            .map_err(|error| LiveSessionError::Animation(error.to_string()))
+            .map_err(Into::into)
     }
 
     /// Reconcile one endpoint through the existing session publication path.
@@ -783,6 +791,38 @@ mod tests {
             live.effective(&foreign),
             Err(LiveSessionError::ForeignMobjectStore)
         ));
+    }
+
+    #[test]
+    fn live_segment_drive_preserves_foreign_runtime_errors() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+        let mut foreign_runtime = session.clone();
+        let before = foreign_runtime.frame().clone();
+
+        assert!(matches!(
+            scene
+                .live(&mut foreign_runtime)
+                .advance_segment_to(segment, segment.end_time()),
+            Err(LiveSessionError::Advance(
+                ExecutionSegmentAdvanceError::ForeignSegment { .. }
+            ))
+        ));
+        assert_eq!(foreign_runtime.frame(), &before);
     }
 
     #[test]
