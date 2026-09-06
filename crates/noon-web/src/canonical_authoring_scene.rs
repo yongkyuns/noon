@@ -1532,28 +1532,43 @@ fn canonical_native_text_export(
         .text_resources()
         .get(text)
         .ok_or("canonical text export references an unknown text resource")?;
-    if resource.kind != TextSourceKind::Plain {
-        return Err("canonical text export supports native plain text only".into());
-    }
-    let run = resource
-        .runs
-        .first()
-        .ok_or("canonical native text resource has no shaped run")?;
-    let mut object = ObjectSpec::text(
-        id,
-        TextSpec::native_plain(
-            resource.source.as_ref(),
-            run.font.family.as_ref(),
-            run.font_size,
-            native_line_spacing(resource)?,
+    let (text, transform) = match resource.kind {
+        TextSourceKind::Plain => {
+            let run = resource
+                .runs
+                .first()
+                .ok_or("canonical native text resource has no shaped run")?;
+            (
+                TextSpec::native_plain(
+                    resource.source.as_ref(),
+                    run.font.family.as_ref(),
+                    run.font_size,
+                    native_line_spacing(resource)?,
+                ),
+                legacy_text_transform(state.transform)?,
+            )
+        }
+        TextSourceKind::Typst => (
+            TextSpec::typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
+            legacy_typst_text_transform(state.transform)?,
         ),
-    );
-    object.transform = legacy_text_transform(state.transform)?;
+        TextSourceKind::MathTypst => (
+            TextSpec::math_typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
+            legacy_typst_text_transform(state.transform)?,
+        ),
+        kind => {
+            return Err(format!(
+                "canonical text export does not support {kind:?} source"
+            ))
+        }
+    };
+    let mut object = ObjectSpec::text(id, text);
+    object.transform = transform;
     object.style = legacy_style(&state.style)?;
     Ok(object)
 }
 
-/// Derive the temporary #959 native-Text authoring codec from shared semantic
+/// Derive the temporary #959 Text authoring codec from shared semantic
 /// state. This is only consumed when the normal live session cannot run; Python
 /// wrappers never retain a second text source or presentation model.
 #[cfg(target_arch = "wasm32")]
@@ -1572,19 +1587,31 @@ pub(crate) fn canonical_native_text_authoring_spec(
         return Err("canonical text export produced non-text content".into());
     };
     let TextSpec {
-        kind: TextSpecKind::Plain,
+        kind,
         source,
         font_size,
-        options:
+        options,
+    } = text;
+    let mut spec = match (kind, options) {
+        (
+            TextSpecKind::Plain,
             TextSpecOptions::NativePlain {
                 font_family,
                 line_spacing,
             },
-    } = text
-    else {
-        return Err("canonical text export produced non-native content".into());
+        ) => RetainedTextAuthoringSpec::native(source, font_family, font_size, line_spacing)?,
+        (TextSpecKind::Typst, TextSpecOptions::Default) => {
+            RetainedTextAuthoringSpec::new(source, false, font_size)?
+        }
+        (TextSpecKind::MathTypst, TextSpecOptions::Default) => {
+            RetainedTextAuthoringSpec::new(source, true, font_size)?
+        }
+        (kind, _) => {
+            return Err(format!(
+                "canonical text export produced unsupported {kind:?} retained content"
+            ));
+        }
     };
-    let mut spec = RetainedTextAuthoringSpec::native(source, font_family, font_size, line_spacing)?;
     spec.transform = transform;
     spec.color = style.fill.unwrap_or(noon_core::WHITE);
     spec.opacity = style.opacity;
@@ -1593,6 +1620,24 @@ pub(crate) fn canonical_native_text_authoring_spec(
 
 fn legacy_text_transform(transform: SemanticTransform2_5D) -> Result<Transform2D, String> {
     let point_scale = f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE);
+    Ok(Transform2D {
+        translation: Vec2::new(
+            legacy_f32("text translation x", transform.translation.x)?,
+            legacy_f32("text translation y", transform.translation.y)?,
+        ),
+        scale: Vec2::new(
+            legacy_f32("text scale x", transform.scale.x / point_scale)?,
+            legacy_f32("text scale y", transform.scale.y / point_scale)?,
+        ),
+        rotation: legacy_f32("text rotation", transform.rotation_z)?,
+    })
+}
+
+/// Typst resources are fixed 10pt artifacts. The source-level TextSpec carries the
+/// stable public default size and this export derives its presentation scale from
+/// the authoritative effective transform, preserving the same retained output.
+fn legacy_typst_text_transform(transform: SemanticTransform2_5D) -> Result<Transform2D, String> {
+    let point_scale = f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT);
     Ok(Transform2D {
         translation: Vec2::new(
             legacy_f32("text translation x", transform.translation.x)?,
@@ -3915,6 +3960,53 @@ mod tests {
         assert!((*line_spacing - 0.5).abs() < 1.0e-6);
         assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
         assert_eq!(spec.objects[0].transform.scale, Vec2::ONE);
+    }
+
+    #[test]
+    fn typst_and_math_typst_export_source_kind_and_effective_presentation() {
+        let mut context = CanonicalAuthoringScene::default();
+        let label = context
+            .scene
+            .typst(
+                noon::Typst::new("*Noon*")
+                    .with_font_size(72.0)
+                    .color(noon_core::YELLOW)
+                    .shift(Vec2::new(2.0, -1.0)),
+            )
+            .unwrap();
+        let equation = context
+            .scene
+            .math_typst(
+                noon::MathTypst::new("frac(x, 2)")
+                    .set_opacity(0.5)
+                    .shift(Vec2::new(-1.0, 0.5)),
+            )
+            .unwrap();
+        context.bind_mobject(ObjectId::new(4), &label).unwrap();
+        context.bind_mobject(ObjectId::new(5), &equation).unwrap();
+
+        let spec = context
+            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
+            .unwrap();
+        let ObjectSpecContent::Text(label) = &spec.objects[0].content else {
+            panic!("Typst export must remain source-level text");
+        };
+        assert_eq!(label.kind, TextSpecKind::Typst);
+        assert_eq!(label.source, "*Noon*");
+        assert_eq!(label.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
+        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
+        assert_eq!(spec.objects[0].transform.scale, Vec2::new(1.5, 1.5));
+        assert_eq!(spec.objects[0].style.fill, Some(noon_core::YELLOW));
+
+        let ObjectSpecContent::Text(equation) = &spec.objects[1].content else {
+            panic!("MathTypst export must remain source-level text");
+        };
+        assert_eq!(equation.kind, TextSpecKind::MathTypst);
+        assert_eq!(equation.source, "frac(x, 2)");
+        assert_eq!(equation.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
+        assert_eq!(spec.objects[1].transform.translation, Vec2::new(-1.0, 0.5));
+        assert_eq!(spec.objects[1].transform.scale, Vec2::ONE);
+        assert_eq!(spec.objects[1].style.opacity, 0.5);
     }
 
     #[test]
