@@ -331,18 +331,20 @@ mod wasm {
             let prepared_observation = resolved_observation_target.as_ref().map(|target| {
                 prepared.observe_object(target.mirrored.frame_index, target.mirrored.object)
             });
-            let mut upload_writes = resolved_observation_target
-                .is_some()
-                .then(Vec::<UploadWrite>::new);
-            let upload = if resolved_observation_target.is_some() {
+            let observed_prepared = prepared_observation
+                .as_ref()
+                .and_then(|observation| observation.as_ref().ok());
+            let mut upload_writes = observed_prepared.map(|_| Vec::<UploadWrite>::new());
+            let upload = if let Some(observed) = observed_prepared {
                 self.renderer.upload_retained_with_trace(
                     &self.device,
                     &self.queue,
                     &prepared,
                     &mut self.text_gpu,
+                    observed,
                     upload_writes
                         .as_mut()
-                        .expect("resolved observation owns its upload trace"),
+                        .expect("prepared observation owns its upload trace"),
                 )
             } else {
                 self.renderer.upload_retained(

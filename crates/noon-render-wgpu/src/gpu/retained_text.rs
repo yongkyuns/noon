@@ -12,7 +12,7 @@ use noon_core::{
     TextRenderItem, TextResourceLookup, TextVectorItem, Transform2D, Vec2, VectorPath,
 };
 #[cfg(test)]
-use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena};
+use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena, TextVectorStyle};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
 use noon_text_atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
 use noon_text_render_wgpu::{
@@ -2426,17 +2426,24 @@ impl GpuRenderer {
         self.upload_retained_inner(device, queue, prepared, text_state, None)
     }
 
-    /// Upload a retained frame while recording exact geometry and glyph-instance
-    /// buffer writes. The caller owns the opt-in trace allocation.
+    /// Upload a retained frame while recording only writes that intersect one
+    /// prepared target. The caller owns the opt-in trace allocation.
     pub fn upload_retained_with_trace(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         prepared: &PreparedRetainedGpuFrame<'_>,
         text_state: &mut RetainedTextGpuState,
+        observed: &RetainedPreparedObjectObservation,
         upload_writes: &mut Vec<crate::UploadWrite>,
     ) -> RetainedUploadStats {
-        self.upload_retained_inner(device, queue, prepared, text_state, Some(upload_writes))
+        self.upload_retained_inner(
+            device,
+            queue,
+            prepared,
+            text_state,
+            Some((observed, upload_writes)),
+        )
     }
 
     fn upload_retained_inner(
@@ -2445,10 +2452,18 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         prepared: &PreparedRetainedGpuFrame<'_>,
         text_state: &mut RetainedTextGpuState,
-        mut upload_writes: Option<&mut Vec<crate::UploadWrite>>,
+        mut observed_uploads: Option<(
+            &RetainedPreparedObjectObservation,
+            &mut Vec<crate::UploadWrite>,
+        )>,
     ) -> RetainedUploadStats {
-        let geometry = if let Some(writes) = upload_writes.as_deref_mut() {
-            self.upload_with_trace(device, queue, &prepared.geometry, writes)
+        let geometry = if let Some((observed, writes)) = observed_uploads.as_mut() {
+            let mut trace = |buffer, range, offset, bytes: &[u8]| {
+                if observed_geometry_write_matches(observed, buffer, &range) {
+                    push_upload_write(writes, buffer, range, offset, bytes);
+                }
+            };
+            self.upload_with_write_trace(device, queue, &prepared.geometry, &mut trace)
         } else {
             self.upload(device, queue, &prepared.geometry)
         };
@@ -2463,13 +2478,15 @@ impl GpuRenderer {
             let partial = prepared.text.partial_upload_base_generation.is_some()
                 && prepared.text.partial_upload_base_generation
                     == text_state.last_uploaded_generation;
-            let uploaded = if let Some(writes) = upload_writes.as_deref_mut() {
+            let uploaded = if let Some((observed, writes)) = observed_uploads.as_mut() {
                 let mut trace = |plane, range, offset, bytes: &[u8]| {
                     let buffer = match plane {
                         GlyphAtlasPlane::Mask => "text_mask",
                         GlyphAtlasPlane::Color => "text_color",
                     };
-                    push_upload_write(writes, buffer, range, offset, bytes);
+                    if observed_text_write_matches(observed, plane, &range) {
+                        push_upload_write(writes, buffer, range, offset, bytes);
+                    }
                 };
                 if partial {
                     text_state.glyphs.upload_ranges_with_trace(
@@ -2667,6 +2684,38 @@ impl GpuRenderer {
     }
 }
 
+fn observed_geometry_write_matches(
+    observed: &RetainedPreparedObjectObservation,
+    buffer: &'static str,
+    range: &std::ops::Range<usize>,
+) -> bool {
+    observed.geometry.as_ref().is_some_and(|geometry| {
+        let target_buffer = match geometry.primitive {
+            RenderPrimitive::Circle => "circle",
+            RenderPrimitive::Rectangle => "rectangle",
+            RenderPrimitive::Line => "line",
+            RenderPrimitive::Path { .. } | RenderPrimitive::MegaPath { .. } => "path_instance",
+        };
+        buffer == target_buffer && range.contains(&geometry.instance_index)
+    })
+}
+
+fn observed_text_write_matches(
+    observed: &RetainedPreparedObjectObservation,
+    plane: GlyphAtlasPlane,
+    range: &std::ops::Range<usize>,
+) -> bool {
+    observed.glyph_ranges.iter().any(|target| {
+        let target_plane = match target.plane {
+            RetainedGlyphPlane::Mask => GlyphAtlasPlane::Mask,
+            RetainedGlyphPlane::Color => GlyphAtlasPlane::Color,
+        };
+        target_plane == plane
+            && range.start < target.instance_range.end as usize
+            && (target.instance_range.start as usize) < range.end
+    })
+}
+
 impl std::ops::AddAssign for DrawStats {
     fn add_assign(&mut self, rhs: Self) {
         self.draw_calls = self.draw_calls.saturating_add(rhs.draw_calls);
@@ -2708,10 +2757,37 @@ mod tests {
 
     use super::*;
 
-    fn mixed_text_frame() -> (FrameState, TextResourceArena, FontResourceArena) {
-        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+    fn mixed_text_frame() -> (
+        FrameState,
+        TextResourceArena,
+        FontResourceArena,
+        GeometryResourceArena,
+    ) {
+        let mut artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
         let bounds = artifact.resource.bounds;
         let fonts = artifact.fonts;
+        let mut geometries = GeometryResourceArena::new();
+        let vector = geometries.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.25, -0.05))
+                .line_to(Vec2::new(0.25, -0.05))
+                .line_to(Vec2::new(0.25, 0.05))
+                .line_to(Vec2::new(-0.25, 0.05))
+                .close(),
+        );
+        let mut vector_items = artifact.resource.vector_items.to_vec();
+        let vector_index = vector_items.len() as u32;
+        vector_items.push(TextVectorItem {
+            geometry: vector,
+            transform: TextAffineTransform::IDENTITY,
+            style: TextVectorStyle::default(),
+            source_span: None,
+            semantic_key: Some(Arc::from("test-rule")),
+        });
+        artifact.resource.vector_items = vector_items.into();
+        let mut render_items = artifact.resource.render_items.to_vec();
+        render_items.push(TextRenderItem::Vector(vector_index));
+        artifact.resource.render_items = render_items.into();
         let mut texts = TextResourceArena::new();
         let text = texts.insert(artifact.resource).unwrap();
         (
@@ -2743,6 +2819,7 @@ mod tests {
             },
             texts,
             fonts,
+            geometries,
         )
     }
 
@@ -2957,8 +3034,7 @@ mod tests {
 
     #[test]
     fn observed_text_object_reuses_its_existing_glyph_instance_ranges() {
-        let (frame, texts, fonts) = mixed_text_frame();
-        let geometries = GeometryResourceArena::new();
+        let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
@@ -2976,10 +3052,8 @@ mod tests {
             .unwrap();
 
         let observed = prepared.observe_object(1, ObjectId::new(2)).unwrap();
-        assert!(matches!(
-            observed.kind,
-            RetainedPreparedObjectKind::Text | RetainedPreparedObjectKind::Mixed
-        ));
+        assert_eq!(observed.kind, RetainedPreparedObjectKind::Mixed);
+        assert!(observed.geometry.is_some());
         assert_eq!(observed.glyph_ranges.len(), observed.glyph_item_count);
         assert!(!observed.glyph_ranges.is_empty());
         for range in &observed.glyph_ranges {
@@ -3018,9 +3092,84 @@ mod tests {
     }
 
     #[test]
+    fn actual_mixed_text_preparation_traces_target_uploads_and_draws() {
+        let (frame, texts, fonts, geometries) = mixed_text_frame();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        let observed = prepared.observe_object(1, ObjectId::new(2)).unwrap();
+        assert_eq!(observed.kind, RetainedPreparedObjectKind::Mixed);
+        assert!(observed.geometry.is_some());
+        assert!(!observed.glyph_ranges.is_empty());
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut renderer = GpuRenderer::new(&device, format);
+        renderer.set_viewport(&device, &queue, 64, 64);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
+        let mut writes = Vec::new();
+        let upload = renderer.upload_retained_with_trace(
+            &device,
+            &queue,
+            &prepared,
+            &mut text_state,
+            &observed,
+            &mut writes,
+        );
+        assert!(upload.geometry.bytes_uploaded > 0);
+        assert!(upload.text.bytes_uploaded > 0);
+        assert!(writes.iter().any(|write| write.buffer == "path_instance"));
+        assert!(writes
+            .iter()
+            .any(|write| matches!(write.buffer, "text_mask" | "text_color")));
+        assert!(writes.iter().all(|write| write.buffer != "circle"));
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Noon mixed text observation target"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Noon mixed text observation encoder"),
+        });
+        let draw = renderer
+            .encode_retained(
+                &mut encoder,
+                &view,
+                &prepared,
+                &text_state,
+                wgpu::Color::TRANSPARENT,
+            )
+            .unwrap();
+        queue.submit(Some(encoder.finish()));
+        assert!(draw.geometry.draw_calls > 0);
+        assert!(draw.text.draw_calls > 0);
+    }
+
+    #[test]
     fn unchanged_frame_reuses_semantic_scratch_generation() {
-        let (mut frame, texts, fonts) = mixed_text_frame();
-        let geometries = GeometryResourceArena::new();
+        let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
@@ -3092,8 +3241,7 @@ mod tests {
 
     #[test]
     fn mixed_visibility_projects_geometry_and_text_enter_exit_in_painter_order() {
-        let (frame, texts, fonts) = mixed_text_frame();
-        let geometries = GeometryResourceArena::new();
+        let (frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
@@ -3177,8 +3325,7 @@ mod tests {
 
     #[test]
     fn unchanged_text_candidate_reuses_projection_across_clean_and_offscreen_changes() {
-        let (mut frame, texts, fonts) = mixed_text_frame();
-        let geometries = GeometryResourceArena::new();
+        let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
@@ -3252,8 +3399,7 @@ mod tests {
 
     #[test]
     fn metric_change_does_not_reuse_parent_generation() {
-        let (mut frame, texts, fonts) = mixed_text_frame();
-        let geometries = GeometryResourceArena::new();
+        let (mut frame, texts, fonts, geometries) = mixed_text_frame();
         let first_metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let second_metrics = TextDeviceMetrics::uniform(200.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());

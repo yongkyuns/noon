@@ -261,6 +261,9 @@ pub struct UploadWrite {
     pub payload_hash: u64,
 }
 
+pub(crate) type UploadWriteTrace<'a> =
+    dyn FnMut(&'static str, std::ops::Range<usize>, wgpu::BufferAddress, &[u8]) + 'a;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DrawStats {
     pub draw_calls: usize,
@@ -638,7 +641,20 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         writes: &mut Vec<UploadWrite>,
     ) -> UploadStats {
-        self.upload_inner(device, queue, prepared, Some(writes))
+        let mut trace = |buffer, instance_range, byte_offset, bytes: &[u8]| {
+            push_upload_write(writes, buffer, instance_range, byte_offset, bytes);
+        };
+        self.upload_inner(device, queue, prepared, Some(&mut trace))
+    }
+
+    pub(crate) fn upload_with_write_trace(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedFrame<'_>,
+        trace: &mut UploadWriteTrace<'_>,
+    ) -> UploadStats {
+        self.upload_inner(device, queue, prepared, Some(trace))
     }
 
     fn upload_inner(
@@ -646,7 +662,7 @@ impl GpuRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         prepared: &PreparedFrame<'_>,
-        mut writes: Option<&mut Vec<UploadWrite>>,
+        mut trace: Option<&mut UploadWriteTrace<'_>>,
     ) -> UploadStats {
         let circle_bytes = std::mem::size_of_val(prepared.circles);
         let rectangle_bytes = std::mem::size_of_val(prepared.rectangles);
@@ -746,7 +762,7 @@ impl GpuRenderer {
             prepared.circle_dirty_ranges,
             circle_reallocated,
             "circle",
-            &mut writes,
+            &mut trace,
         ) + upload_dirty(
             queue,
             &self.rectangle_buffer,
@@ -754,7 +770,7 @@ impl GpuRenderer {
             prepared.rectangle_dirty_ranges,
             rectangle_reallocated,
             "rectangle",
-            &mut writes,
+            &mut trace,
         ) + upload_dirty(
             queue,
             &self.line_buffer,
@@ -762,7 +778,7 @@ impl GpuRenderer {
             prepared.line_dirty_ranges,
             line_reallocated,
             "line",
-            &mut writes,
+            &mut trace,
         ) + upload_dirty(
             queue,
             &self.path_vertex_buffer,
@@ -770,7 +786,7 @@ impl GpuRenderer {
             prepared.path_vertex_dirty_ranges,
             path_vertex_reallocated,
             "path_vertex",
-            &mut writes,
+            &mut trace,
         ) + upload_dirty(
             queue,
             &self.path_index_buffer,
@@ -778,7 +794,7 @@ impl GpuRenderer {
             prepared.path_index_dirty_ranges,
             path_index_reallocated,
             "path_index",
-            &mut writes,
+            &mut trace,
         ) + upload_dirty(
             queue,
             &self.path_instance_buffer,
@@ -786,7 +802,7 @@ impl GpuRenderer {
             prepared.path_dirty_ranges,
             path_instance_reallocated,
             "path_instance",
-            &mut writes,
+            &mut trace,
         ) + upload_dirty(
             queue,
             &self.mega_path_index_buffer,
@@ -794,7 +810,7 @@ impl GpuRenderer {
             prepared.mega_path_index_dirty_ranges,
             mega_path_index_reallocated,
             "mega_path_index",
-            &mut writes,
+            &mut trace,
         ) + upload_dirty(
             queue,
             &self.mega_path_vertex_instance_buffer,
@@ -802,7 +818,7 @@ impl GpuRenderer {
             prepared.mega_path_instance_dirty_ranges,
             mega_path_vertex_instance_reallocated,
             "mega_path_vertex_instance",
-            &mut writes,
+            &mut trace,
         );
 
         UploadStats {
@@ -1395,14 +1411,14 @@ fn upload_dirty<T: Pod>(
     dirty_ranges: &[std::ops::Range<usize>],
     force_full_upload: bool,
     buffer_name: &'static str,
-    writes: &mut Option<&mut Vec<UploadWrite>>,
+    trace: &mut Option<&mut UploadWriteTrace<'_>>,
 ) -> usize {
     if instances.is_empty() {
         return 0;
     }
     if force_full_upload {
         let bytes = bytemuck::cast_slice(instances);
-        record_upload_write(writes, buffer_name, 0..instances.len(), 0, bytes);
+        record_upload_write(trace, buffer_name, 0..instances.len(), 0, bytes);
         queue.write_buffer(buffer, 0, bytes);
         return bytes.len();
     }
@@ -1412,7 +1428,7 @@ fn upload_dirty<T: Pod>(
     for range in dirty_ranges {
         let bytes = bytemuck::cast_slice(&instances[range.clone()]);
         let byte_offset = (range.start * stride) as wgpu::BufferAddress;
-        record_upload_write(writes, buffer_name, range.clone(), byte_offset, bytes);
+        record_upload_write(trace, buffer_name, range.clone(), byte_offset, bytes);
         queue.write_buffer(buffer, byte_offset, bytes);
         bytes_uploaded += bytes.len();
     }
@@ -1420,14 +1436,14 @@ fn upload_dirty<T: Pod>(
 }
 
 fn record_upload_write(
-    writes: &mut Option<&mut Vec<UploadWrite>>,
+    trace: &mut Option<&mut UploadWriteTrace<'_>>,
     buffer: &'static str,
     instance_range: std::ops::Range<usize>,
     byte_offset: wgpu::BufferAddress,
     bytes: &[u8],
 ) {
-    if let Some(writes) = writes.as_deref_mut() {
-        push_upload_write(writes, buffer, instance_range, byte_offset, bytes);
+    if let Some(trace) = trace.as_deref_mut() {
+        trace(buffer, instance_range, byte_offset, bytes);
     }
 }
 

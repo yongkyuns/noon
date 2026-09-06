@@ -374,14 +374,6 @@ pub(crate) fn finish_renderer_observation(
     let geometry = prepared.geometry;
     let target_write = if let Some(geometry) = geometry {
         let primitive: RendererPreparedPrimitive = geometry.primitive.into();
-        if primitive == RendererPreparedPrimitive::Path {
-            return RendererObservationOutcome::ResourceUnavailable {
-                schema_version: RENDERER_OBSERVATION_VERSION,
-                publication: target.request.publication,
-                slot: target.request.slot,
-                resource: "path_draw_instance_mapping",
-            };
-        }
         let write = upload_writes.iter().find(|write| {
             write.buffer == primitive.upload_buffer()
                 && write.instance_range.contains(&geometry.instance_index)
@@ -403,8 +395,10 @@ pub(crate) fn finish_renderer_observation(
         .filter(|write| {
             prepared.glyph_ranges.iter().any(|range| {
                 write.buffer == glyph_upload_buffer(range.plane)
-                    && write.instance_range.start <= range.instance_range.start as usize
-                    && write.instance_range.end >= range.instance_range.end as usize
+                    && instance_ranges_overlap(
+                        &write.instance_range,
+                        &(range.instance_range.start as usize..range.instance_range.end as usize),
+                    )
             })
         })
         .map(Into::into)
@@ -413,8 +407,10 @@ pub(crate) fn finish_renderer_observation(
         range.instance_dirty
             && !upload_writes.iter().any(|write| {
                 write.buffer == glyph_upload_buffer(range.plane)
-                    && write.instance_range.start <= range.instance_range.start as usize
-                    && write.instance_range.end >= range.instance_range.end as usize
+                    && instance_ranges_overlap(
+                        &write.instance_range,
+                        &(range.instance_range.start as usize..range.instance_range.end as usize),
+                    )
             })
     }) {
         return RendererObservationOutcome::ResourceUnavailable {
@@ -456,6 +452,10 @@ pub(crate) fn finish_renderer_observation(
             present_called: true,
         },
     }))
+}
+
+fn instance_ranges_overlap(left: &std::ops::Range<usize>, right: &std::ops::Range<usize>) -> bool {
+    left.start < right.end && right.start < left.end
 }
 
 const fn glyph_upload_buffer(plane: RetainedGlyphPlane) -> &'static str {
@@ -718,13 +718,13 @@ mod tests {
         };
         let write = UploadWrite {
             buffer: "text_mask",
-            instance_range: 2..7,
-            byte_offset: 128,
-            byte_length: 320,
+            instance_range: 4..5,
+            byte_offset: 256,
+            byte_length: 64,
             payload_hash: 23,
         };
         let mut upload = RetainedUploadStats::default();
-        upload.text.bytes_uploaded = 320;
+        upload.text.bytes_uploaded = 64;
         let mut draw = RetainedDrawStats::default();
         draw.text.draw_calls = 1;
         draw.text.instances_drawn = 3;
@@ -766,6 +766,13 @@ mod tests {
         assert!(observation.upload.target_write.is_none());
         assert_eq!(observation.upload.target_text_writes.len(), 1);
         assert_eq!(observation.upload.target_text_writes[0].buffer, "text_mask");
+        assert_eq!(
+            (
+                observation.upload.target_text_writes[0].instance_start,
+                observation.upload.target_text_writes[0].instance_end,
+            ),
+            (4, 5)
+        );
         assert!(observation.draw.submission_membership);
         assert_eq!(observation.draw.text_instances_drawn, 3);
     }
@@ -783,7 +790,7 @@ mod tests {
             kind: RetainedPreparedObjectKind::Mixed,
             geometry: Some(PreparedGeometryObjectObservation {
                 object: ObjectId::new(21),
-                primitive: RenderPrimitive::Circle,
+                primitive: RenderPrimitive::Path { batch: 0 },
                 instance_index: 3,
                 instance_start: 3,
                 instance_end: 4,
@@ -799,7 +806,7 @@ mod tests {
             glyph_ranges: vec![noon_render_wgpu::RetainedPreparedGlyphRange {
                 plane: RetainedGlyphPlane::Color,
                 page: 1,
-                instance_range: 5..6,
+                instance_range: 5..8,
                 instance_dirty: true,
             }],
             submission_membership: true,
@@ -808,7 +815,7 @@ mod tests {
         };
         let writes = [
             UploadWrite {
-                buffer: "circle",
+                buffer: "path_instance",
                 instance_range: 3..4,
                 byte_offset: 240,
                 byte_length: 80,
@@ -816,8 +823,8 @@ mod tests {
             },
             UploadWrite {
                 buffer: "text_color",
-                instance_range: 5..6,
-                byte_offset: 320,
+                instance_range: 6..7,
+                byte_offset: 384,
                 byte_length: 64,
                 payload_hash: 29,
             },
@@ -845,11 +852,21 @@ mod tests {
             panic!("an exact mixed retained observation must be publishable");
         };
         assert_eq!(observation.prepared.kind, RendererPreparedKind::Mixed);
-        assert_eq!(observation.upload.target_write.unwrap().buffer, "circle");
+        assert_eq!(
+            observation.upload.target_write.unwrap().buffer,
+            "path_instance"
+        );
         assert_eq!(observation.upload.target_text_writes.len(), 1);
         assert_eq!(
             observation.upload.target_text_writes[0].buffer,
             "text_color"
+        );
+        assert_eq!(
+            (
+                observation.upload.target_text_writes[0].instance_start,
+                observation.upload.target_text_writes[0].instance_end,
+            ),
+            (6, 7)
         );
         assert!(observation.draw.submission_membership);
     }
