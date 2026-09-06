@@ -168,9 +168,22 @@ try {
   assert.equal(duringLoss.metrics.objectCount, baseline.metrics.objectCount, "context loss reset scene objects");
 
   await page.evaluate(() => window.__noonContextRecovery.restore());
-  await page.waitForFunction(() => window.__noonContextRecovery?.state.restored === 1, null, {
-    timeout: 10_000,
-  });
+  await page.waitForFunction(
+    () =>
+      window.__noonContextRecovery?.state.restored === 1 &&
+      window.__noonContextRecovery?.state.recovery !== "pending",
+    null,
+    { timeout: 10_000 },
+  );
+  const recoveryState = await page.evaluate(() => ({
+    recovery: window.__noonContextRecovery.state.recovery,
+    error: window.noonSmoke.metrics().error,
+  }));
+  assert.equal(
+    recoveryState.recovery,
+    "ready",
+    `WebGL GPU stack reconstruction failed: ${recoveryState.error ?? "unknown error"}`,
+  );
 
   let recovered = null;
   let lastRecoveryError = null;

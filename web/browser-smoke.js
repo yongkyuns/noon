@@ -252,13 +252,21 @@ async function start() {
     const gl = rendererCanvas?.getContext("webgl2");
     const extension = gl?.getExtension("WEBGL_lose_context");
     if (!gl || !extension) return null;
-    const state = { lost: 0, restored: 0 };
+    const state = { lost: 0, restored: 0, recovery: "idle" };
     rendererCanvas.addEventListener("webglcontextlost", (event) => {
       event.preventDefault();
       state.lost += 1;
     });
-    rendererCanvas.addEventListener("webglcontextrestored", () => {
+    rendererCanvas.addEventListener("webglcontextrestored", async () => {
       state.restored += 1;
+      state.recovery = "pending";
+      try {
+        await renderer.recoverWebGlContext();
+        state.recovery = "ready";
+      } catch (error) {
+        state.recovery = "error";
+        state.error = String(error?.message ?? error);
+      }
     });
     webglContextRecovery = {
       state,
