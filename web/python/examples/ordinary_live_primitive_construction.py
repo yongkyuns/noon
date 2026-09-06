@@ -23,7 +23,7 @@ class OrdinaryLivePrimitiveConstruction(Scene):
             position=(2.0, -1.0, 0.0),
             scale=(1.5, 1.5, 0.0),
             fill=Color(0.0, 0.4, 1.0, 0.6),
-            stroke_width=0.08,
+            stroke_width=8.0,
             stroke_opacity=0.9,
         )
         square = Square(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 from contextvars import ContextVar
 from typing import Any
 
@@ -494,9 +495,12 @@ def _live_primitive_context():
     exists, direct authoring-store insertion would advance the revision outside
     its published mutation transaction.
     """
-    from _manim_reactive import _current_authoring_scene
-
-    scene = _current_authoring_scene()
+    # Without the authoring-scope module there cannot be an active Scene
+    # continuation. Standalone primitive authoring need not initialize it.
+    reactive = sys.modules.get("_manim_reactive")
+    if reactive is None:
+        return None
+    scene = reactive._current_authoring_scene()
     context = getattr(scene, "_canonical_authoring_context", None)
     if context is None:
         return None

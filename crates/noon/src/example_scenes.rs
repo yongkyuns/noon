@@ -2318,6 +2318,7 @@ mod continuation_tests {
             program.resume().unwrap(),
             LiveProgramStatus::Awaiting(_)
         ));
+        program.take_renderer_publication();
         assert!(matches!(
             program.drive_to(&mut callbacks, 1.0).unwrap(),
             LiveProgramStatus::ReadyToResume

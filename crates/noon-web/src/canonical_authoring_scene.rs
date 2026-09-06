@@ -1429,7 +1429,7 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     fn live_create_manim_primitive(
         &mut self,
         options: noon::ManimPrimitiveOptions,

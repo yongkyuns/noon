@@ -997,7 +997,11 @@ try {
     const execution = new harness.AuthoringExecutionClient(canvas);
     harness.primitiveConstructionExecution = execution;
     let resolveAttached;
-    const attached = new Promise((resolve) => { resolveAttached = resolve; });
+    let rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
+    });
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(registration) {
         await execution.startSemanticExecution(registration.semanticExecution, {
@@ -1008,6 +1012,7 @@ try {
         resolveAttached();
       },
     });
+    authoredPromise.catch(rejectAttached);
     await attached;
     const before = (await execution.metrics()).metrics;
     if (before.objectCount !== 1) {
