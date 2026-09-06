@@ -690,7 +690,7 @@ try {
     path.join(repoRoot, "web/python/examples/ordinary_composition_continuation.py"),
     "utf8",
   );
-  const compositionContinuationResult = await page.evaluate(async (source) => {
+  const compositionContinuation = await page.evaluate(async (source) => {
     const harness = window.sharedAuthoringSmoke;
     const canvas = document.createElement("canvas");
     canvas.id = "scene-ordinary-composition-continuation";
@@ -715,48 +715,84 @@ try {
       },
     });
     authoredPromise.then(() => { settled = true; }, () => {});
-
-    let midpoint = null;
     for (let attempt = 0; attempt < 150; attempt += 1) {
-      if (execution !== null && !settled) {
-        try {
-          const state = await execution.state();
-          if (state.time > 0.2 && state.time < 1.8) {
-            midpoint = state;
-            break;
-          }
-        } catch {
-          // The exact player is returned only after a coherent segment endpoint.
-        }
-      }
+      if (execution !== null && registration !== null) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    if (midpoint === null || settled) {
-      throw new Error("composition continuation did not remain pending through its parallel midpoint");
-    }
-    const authored = await authoredPromise;
     if (execution === null || registration === null) {
-      throw new Error("composition continuation did not register its semantic execution");
+      throw new Error("composition source did not register its semantic continuation");
     }
-    if (authored.semanticExecution.contextId !== registration.semanticExecution.contextId ||
-        authored.semanticExecution.continuationGeneration !== registration.generation) {
+    harness.compositionContinuation = { authoredPromise, execution, registration, get settled() { return settled; } };
+    return { canvasId: canvas.id };
+  }, compositionContinuationSource);
+
+  async function observeCompositionDuring(start, end, label) {
+    return page.evaluate(async ({ startTime, endTime, phaseLabel }) => {
+      const continuation = window.sharedAuthoringSmoke.compositionContinuation;
+      let latest = null;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (continuation.settled) break;
+        try {
+          latest = await continuation.execution.state();
+          if (latest.time > startTime && latest.time < endTime) return latest;
+          if (latest.time >= endTime) break;
+        } catch {
+          // The player may be transferred only at an exact endpoint. Keep
+          // observing while the source remains suspended on this segment.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`${phaseLabel} did not reach its observable interval: ${JSON.stringify(latest)}`);
+    }, { startTime: start, endTime: end, phaseLabel: label });
+  }
+
+  const compositionParallelMidpoint = await observeCompositionDuring(0.5, 1.5, "parallel midpoint");
+  const compositionParallelPixels = await page.locator(
+    `#${compositionContinuation.canvasId}`,
+  ).screenshot();
+  const parallelProgress = compositionParallelMidpoint.time / 2;
+  const parallelLeft = renderedWorldPixel(compositionParallelPixels, -2, parallelProgress);
+  const parallelRight = renderedWorldPixel(compositionParallelPixels, 2, -parallelProgress);
+  assert.ok(
+    parallelLeft.red > 180 && parallelLeft.green > 180 && parallelLeft.blue > 180 &&
+      parallelRight.red > 180 && parallelRight.green > 180 && parallelRight.blue > 180,
+    `composition parallel midpoint was not rendered from its captured state: ${JSON.stringify({ compositionParallelMidpoint, parallelLeft, parallelRight })}`,
+  );
+
+  const compositionSequenceMidpoint = await observeCompositionDuring(2.35, 2.55, "sequence midpoint");
+  const compositionSequencePixels = await page.locator(
+    `#${compositionContinuation.canvasId}`,
+  ).screenshot();
+  const sequenceLeft = renderedWorldPixel(compositionSequencePixels, -2, 1);
+  const sequenceRight = renderedWorldPixel(compositionSequencePixels, 2, -1);
+  assert.ok(
+    sequenceLeft.red > sequenceLeft.green + 20 && sequenceLeft.red > sequenceLeft.blue + 20 &&
+      sequenceRight.red > 180 && sequenceRight.green > 180 && sequenceRight.blue > 180,
+    `composition sequence midpoint was not rendered from its captured state: ${JSON.stringify({ compositionSequenceMidpoint, sequenceLeft, sequenceRight })}`,
+  );
+
+  const compositionContinuationResult = await page.evaluate(async () => {
+    const continuation = window.sharedAuthoringSmoke.compositionContinuation;
+    const authored = await continuation.authoredPromise;
+    if (
+      authored.semanticExecution.contextId !== continuation.registration.semanticExecution.contextId ||
+      authored.semanticExecution.continuationGeneration !== continuation.registration.generation
+    ) {
       throw new Error("composition continuation did not retain its early canonical context");
     }
     let metrics;
     for (let attempt = 0; attempt < 150; attempt += 1) {
-      metrics = (await execution.metrics()).metrics;
+      metrics = (await continuation.execution.metrics()).metrics;
       if (metrics.objectCount === 2 && metrics.drawCalls > 0 && metrics.presentedFrames > 0) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    harness.compositionContinuationExecution = execution;
-    return { canvasId: canvas.id, duration: authored.duration, midpoint, metrics };
-  }, compositionContinuationSource);
+    window.sharedAuthoringSmoke.compositionContinuationExecution = continuation.execution;
+    return { duration: authored.duration, metrics };
+  });
   assert.equal(compositionContinuationResult.duration, 4);
-  assert.ok(compositionContinuationResult.midpoint.time > 0.2);
-  assert.ok(compositionContinuationResult.midpoint.time < 1.8);
   assert.equal(compositionContinuationResult.metrics.objectCount, 2);
   const compositionContinuationPixels = await page.locator(
-    `#${compositionContinuationResult.canvasId}`,
+    `#${compositionContinuation.canvasId}`,
   ).screenshot();
   const compositionLeft = renderedWorldPixel(compositionContinuationPixels, -2, 1);
   const compositionRight = renderedWorldPixel(compositionContinuationPixels, 2, -1);
@@ -773,6 +809,7 @@ try {
   await page.evaluate(() => {
     window.sharedAuthoringSmoke.compositionContinuationExecution.terminate();
     window.sharedAuthoringSmoke.compositionContinuationExecution = null;
+    window.sharedAuthoringSmoke.compositionContinuation = null;
   });
 
   // A required callback phase is delivered to the already-suspended async
