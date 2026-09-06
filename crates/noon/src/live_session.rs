@@ -393,6 +393,15 @@ impl<'a> LiveSession<'a> {
         let transform = observed.object.transform;
         let publication = observed.publication;
         drop(store);
+        self.layout_at_transform(mobject, transform, publication)
+    }
+
+    fn layout_at_transform(
+        &self,
+        mobject: &Mobject,
+        transform: Transform2D,
+        publication: PublicationContext,
+    ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
         let bounds = mobject
             .layout_bounds_at(transform)
             .map_err(LiveSessionError::Mobject)?;
@@ -696,6 +705,68 @@ impl<'a> LiveSession<'a> {
         let mut translation = self.authored(mobject)?.transform.translation;
         translation.x += x;
         translation.y += y;
+        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+    }
+
+    /// Move an object's effective layout center to one point through a single
+    /// shared translation publication. Layout evaluation is bounded to this
+    /// object; the caller never reconstructs geometry or an affine offset.
+    pub fn move_to_point(
+        &mut self,
+        mobject: &Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let x = authoring_render_f64("move_to.x", x).map_err(LiveSessionError::Mobject)?;
+        let y = authoring_render_f64("move_to.y", y).map_err(LiveSessionError::Mobject)?;
+        let authored = self.authored(mobject)?;
+        let authored_transform = Transform2D {
+            translation: authored
+                .transform
+                .translation
+                .lower_xy_f32()
+                .map_err(|error| LiveSessionError::Mobject(error.to_string()))?,
+            rotation: authoring_render_f64(
+                "move_to authored rotation",
+                authored.transform.rotation_z,
+            )
+            .map_err(LiveSessionError::Mobject)? as f32,
+            scale: authored
+                .transform
+                .scale
+                .lower_xy_f32()
+                .map_err(|error| LiveSessionError::Mobject(error.to_string()))?,
+        };
+        let publication = self.session.publication_context();
+        let store = self.store.borrow();
+        match self
+            .session
+            .effective_semantic_object(&store, mobject.node_id())
+        {
+            Ok(observed) if !observed.authored_content_layout_applicable() => {
+                return Err(LiveSessionError::Mobject(
+                    "move_to cannot use an effective layout with render-content overrides".into(),
+                ));
+            }
+            Ok(observed) if observed.object.transform != authored_transform => {
+                return Err(LiveSessionError::Mobject(
+                    "move_to cannot compose with an active effective affine driver".into(),
+                ));
+            }
+            Ok(_) | Err(ExecutionSessionPublicationError::UnknownObject(_)) => {}
+            Err(error) => return Err(error.into()),
+        }
+        drop(store);
+        // A detached target has no execution row. Its authored state was created
+        // through this session, so this is the exact coherent layout basis.
+        let layout = self.layout_at_transform(mobject, authored_transform, publication)?;
+        let mut translation = authored.transform.translation;
+        translation.x =
+            authoring_render_f64("move_to translation.x", translation.x + x - layout.center.0)
+                .map_err(LiveSessionError::Mobject)?;
+        translation.y =
+            authoring_render_f64("move_to translation.y", translation.y + y - layout.center.1)
+                .map_err(LiveSessionError::Mobject)?;
         self.set_property(mobject, SemanticObjectProperty::Translation, translation)
     }
 
@@ -1211,6 +1282,88 @@ mod tests {
         let layout = live.effective_layout(&circle).unwrap();
         assert_eq!(layout.center, (2.0, -1.0));
         assert_eq!((layout.width, layout.height), (2.0, 2.0));
+    }
+
+    #[test]
+    fn move_to_point_uses_effective_layout_and_publishes_one_local_translation() {
+        let mut scene = Scene::new();
+        // This line's geometric center is offset from its authored translation,
+        // so setting translation directly would not implement MoveTo semantics.
+        let line = scene.line((0.0, 0.0), (2.0, 0.0)).unwrap();
+        scene.add(&line).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+
+        assert_eq!(live.effective_layout(&line).unwrap().center, (1.0, 0.0));
+        let result = live.move_to_point(&line, 5.0, -3.0).unwrap();
+
+        assert_eq!(result.impacts().len(), 1);
+        assert_eq!(
+            live.authored(&line).unwrap().transform.translation,
+            SemanticVec3::new(4.0, -3.0, 0.0)
+        );
+        assert_eq!(live.effective_layout(&line).unwrap().center, (5.0, -3.0));
+    }
+
+    #[test]
+    fn move_to_point_edits_a_detached_target_without_execution_enrollment() {
+        let mut scene = Scene::new();
+        let frame = scene.rectangle(4.0, 2.0).unwrap();
+        scene.add(&frame).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let target = live.target_editor(&frame).unwrap();
+        live.session.take_frame_changes();
+
+        let result = live.move_to_point(&target, 3.0, -2.0).unwrap();
+
+        assert_eq!(result.impacts().len(), 1);
+        assert_eq!(
+            live.authored(&target).unwrap().transform.translation,
+            SemanticVec3::new(3.0, -2.0, 0.0)
+        );
+        assert_eq!(target.center().unwrap(), (3.0, -2.0));
+        assert!(matches!(
+            live.effective(&target),
+            Err(LiveSessionError::Publication(
+                ExecutionSessionPublicationError::UnknownObject(_)
+            ))
+        ));
+        assert_eq!(live.session.frame().objects.len(), 1);
+        assert!(live.session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn move_to_point_rejects_an_active_affine_driver_before_publication() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.0).unwrap();
+        let before = live.session.publication_context();
+
+        assert!(matches!(
+            live.move_to_point(&circle, 3.0, 0.0),
+            Err(LiveSessionError::Mobject(_))
+        ));
+        assert_eq!(live.session.publication_context(), before);
+        assert_eq!(
+            live.authored(&circle).unwrap().transform.translation,
+            SemanticVec3::ZERO
+        );
     }
 
     #[test]

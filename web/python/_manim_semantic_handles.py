@@ -876,10 +876,29 @@ def _move_to(
             aligned_edge=aligned_edge,
             coor_mask=coor_mask,
         )
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError(
-            "canonical live affine targets currently support shift, scale, and center rotation; move_to needs a shared layout mutation"
-        )
+
+    context = _live_mutation_context(self)
+    if context is not None:
+        if _alignment_is_mobject(point_or_mobject):
+            raise NotImplementedError(
+                "canonical live move_to currently supports point targets only"
+            )
+        edge = _base._as_vec2(aligned_edge)
+        mask = _alignment_mask2(coor_mask)
+        if edge.x != 0.0 or edge.y != 0.0:
+            raise NotImplementedError(
+                "canonical live move_to currently supports center alignment only"
+            )
+        if mask.x != 1.0 or mask.y != 1.0:
+            raise NotImplementedError(
+                "canonical live move_to currently supports the default coordinate mask only"
+            )
+        point = _base._as_vec2(point_or_mobject)
+        try:
+            context.liveMoveToPoint(handle, point.x, point.y)
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return self
 
     edge = _base._as_vec2(aligned_edge)
     if _alignment_is_mobject(point_or_mobject):

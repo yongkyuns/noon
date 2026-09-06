@@ -3344,6 +3344,21 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveMoveToPoint)]
+        pub fn live_move_to_point(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_to_point(handle.semantic_mobject(), x, y)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFill)]
         pub fn live_set_fill(
             &mut self,
