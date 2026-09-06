@@ -160,6 +160,18 @@ pub async fn create_direct_ordinary_affine_callback_continuation_smoke_renderer(
         .await
 }
 
+/// Browser proof that a root-scoped unbound tracker and inactive object are
+/// read through one revision-pinned callback phase in direct Rust/WASM.
+#[wasm_bindgen(js_name = createDirectOrdinaryCallbackSparseReadsSmokeRenderer)]
+pub async fn create_direct_ordinary_callback_sparse_reads_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (program, callbacks) =
+        noon::example_scenes::ordinary_callback_sparse_reads_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
+        .await
+}
+
 /// Browser proof that flat Parallel/Sequence composition uses the same typed
 /// target-neutral session as the native Rust example.
 #[wasm_bindgen(js_name = createDirectOrdinaryCompositionPlaySmokeRenderer)]
