@@ -55,6 +55,7 @@ impl BrowserExecutionWakePlan {
     /// quiescent even though the continuation must drive once to reconcile completion.
     /// Keep [`Self::from_segment`] stable for completed-handle observations and add the
     /// immediate deadline only at the live host's explicit pending-segment boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn from_pending_segment(
         session: &ExecutionSession,
         segment: ExecutionSegment,
@@ -326,7 +327,8 @@ mod tests {
 
     #[test]
     fn pending_zero_wait_requests_one_immediate_host_drive() {
-        let mut session = static_session();
+        let mut store = SemanticStore::new();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         session.take_frame_changes();
         let segment = session.wait_segment(0.0).unwrap();
 
@@ -337,7 +339,7 @@ mod tests {
         );
 
         session.advance_segment_to(segment, 0.0).unwrap();
-        session.complete_segment(segment).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
         assert!(BrowserExecutionWakePlan::from_pending_segment(&session, segment).is_idle());
     }
 
