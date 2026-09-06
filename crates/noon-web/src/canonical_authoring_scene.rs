@@ -1715,7 +1715,7 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             run_time: f64,
             rate_function: &str,
-        ) -> Result<(), JsValue> {
+        ) -> Result<bool, JsValue> {
             source.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
             target.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
             let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)

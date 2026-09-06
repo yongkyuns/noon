@@ -190,7 +190,7 @@ const expectedTypeSurface = [
   "setValueTracker(",
   "authoredDuration(): number",
   "authoredWait(",
-  "ordinaryCanPlayTransformTo(",
+  "ordinaryCanPlayTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, run_time: number, rate_function: string): boolean",
   "ordinaryPlayTransformTo(",
   "ordinaryWait(",
   "liveExecutionOwnership(): string",
