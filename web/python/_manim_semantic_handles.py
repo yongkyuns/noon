@@ -734,6 +734,11 @@ def _clone_mobject(
         "_semantic_handle_fresh",
         "_canonical_live_target_context",
     }
+    if handle is not None and getattr(self, "_retained_handle", None) is handle:
+        # Canonical Text exposes the same opaque Rust handle through its text
+        # methods. Rebind that alias to the target; JsProxy cannot be deep-copied.
+        excluded.add("_retained_handle")
+        clone._retained_handle = clone._semantic_handle
     # A callback registry belongs to its source occurrence. The detached target
     # carries only its opaque semantic handle, never copied callback ownership.
     if target_context is not None:

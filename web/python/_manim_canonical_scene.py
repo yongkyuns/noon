@@ -1452,7 +1452,17 @@ def _build_canonical_composition_candidate(
             child = _canonical_composition_child_options(leaf, child_kwargs)
             source_handle = getattr(source, "_semantic_handle")
             target_handle = getattr(target, "_semantic_handle")
-            point_correspondence = type(leaf) in (_base._AnimationBuilder, _compat._CompatAnimationBuilder) and not math.isclose(float(source_handle.wireRotation), float(target_handle.wireRotation), abs_tol=1e-12)
+            # Resource-backed text has no vector point correspondence. Its
+            # transform uses the same Rust affine channels as native Text.
+            point_correspondence = (
+                not isinstance(source, _typst._RetainedTextMobject)
+                and type(leaf) in (_base._AnimationBuilder, _compat._CompatAnimationBuilder)
+                and not math.isclose(
+                    float(source_handle.wireRotation),
+                    float(target_handle.wireRotation),
+                    abs_tol=1e-12,
+                )
+            )
             if source._scene is None:
                 reservation = reserve(source)
                 method = builder.appendEnteringPointTransformTo if point_correspondence else builder.appendEnteringTransformTo
