@@ -5677,6 +5677,76 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_mixed_candidate_activates_scalar_and_object_or_rolls_back_together() {
+        let mut context = CanonicalAuthoringScene::default();
+        let square = context.scene.square(0.8).unwrap();
+        context.bind_mobject(ObjectId::new(0), &square).unwrap();
+        let tracker = context.create_value_tracker(0.0).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        let invalid = [
+            OrdinaryCompositionChild::Rotate {
+                entering_id: None,
+                target: square.clone(),
+                angle: std::f64::consts::PI,
+                options,
+            },
+            OrdinaryCompositionChild::ValueTracker {
+                tracker: tracker.clone(),
+                target: f64::NAN,
+                options,
+            },
+        ];
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &invalid,
+                composition,
+                play,
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let valid = [
+            OrdinaryCompositionChild::Rotate {
+                entering_id: None,
+                target: square.clone(),
+                angle: std::f64::consts::PI,
+                options,
+            },
+            OrdinaryCompositionChild::ValueTracker {
+                tracker: tracker.clone(),
+                target: 4.0,
+                options,
+            },
+        ];
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &valid,
+                composition,
+                play,
+            )
+            .unwrap();
+        assert_eq!(end, 1.0);
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(0.5).unwrap();
+        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
+        assert!(
+            (player.live_effective(&square).unwrap().transform.rotation_z
+                - std::f64::consts::FRAC_PI_2)
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
     fn mixed_sequence_keeps_rotate_before_transform_in_one_shared_segment() {
         let mut context = CanonicalAuthoringScene::default();
         let rotating = context.scene.square(0.8).unwrap();
