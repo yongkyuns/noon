@@ -4,6 +4,7 @@ Cargo.lock
 __pycache__/
 *.py[cod]
 /web/pkg
+/web/pkg-authoring
 /web/python/compat-bundle.json
 /web/python/compat-bundle.*.json
 /web/python-worker.js
