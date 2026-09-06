@@ -287,15 +287,31 @@ impl PreparedRetainedGpuFrame<'_> {
                 crate::PreparedGeometryObjectOutcome::Unsupported(object) => {
                     RetainedPreparedObjectOutcome::Unsupported(object)
                 }
-            })?
-            .map(|mut prepared| {
-                // Mixed preparation assigns renderer-private scratch IDs. The
-                // indexed source-to-scratch map above proves ownership, so expose
-                // the semantic object selected by the caller rather than leaking
-                // the private scratch ID from the geometry preparer.
-                prepared.object = object;
-                prepared
-            });
+            })?;
+        if geometry.as_ref().is_some_and(|prepared| {
+            let Ok(instance_index) = u32::try_from(prepared.instance_index) else {
+                return true;
+            };
+            !items.iter().any(|item| {
+                matches!(
+                    item,
+                    RetainedRenderItem::Geometry { object_id, batch }
+                        if *object_id == object
+                            && batch.primitive == prepared.primitive
+                            && batch.instance_range.contains(&instance_index)
+                )
+            })
+        }) {
+            return Err(RetainedPreparedObjectOutcome::Absent);
+        }
+        let geometry = geometry.map(|mut prepared| {
+            // Mixed preparation assigns renderer-private scratch IDs. The
+            // indexed source-to-scratch map and target render-item match above
+            // prove ownership, so expose the semantic object selected by the
+            // caller rather than leaking the private scratch ID.
+            prepared.object = object;
+            prepared
+        });
         if items.is_empty() && geometry.is_none() {
             return Err(RetainedPreparedObjectOutcome::Absent);
         }
@@ -3151,6 +3167,35 @@ mod tests {
                         && instance_range == &range.instance_range
                 }));
         }
+    }
+
+    #[test]
+    fn mixed_observation_rejects_a_mismatched_frame_index_and_object() {
+        let (frame, texts, fonts, geometries) = mixed_text_frame();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+
+        assert_eq!(
+            prepared.observe_object(0, ObjectId::new(2)),
+            Err(RetainedPreparedObjectOutcome::Absent)
+        );
+        assert_eq!(
+            prepared.observe_object(1, ObjectId::new(1)),
+            Err(RetainedPreparedObjectOutcome::Absent)
+        );
     }
 
     #[test]
