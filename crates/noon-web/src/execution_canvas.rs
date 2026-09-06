@@ -184,10 +184,7 @@ mod wasm {
             source: NativeStateSource,
             value: NativeInputValue,
         ) -> Result<(), JsValue>;
-        fn emit_native_event(
-            &mut self,
-            occurrence: NativeEventOccurrence,
-        ) -> Result<(), JsValue>;
+        fn emit_native_event(&mut self, occurrence: NativeEventOccurrence) -> Result<(), JsValue>;
     }
 
     struct DirectLiveProgramAdapter<C> {
@@ -202,7 +199,10 @@ mod wasm {
     {
         fn new(mut program: LiveProgram<C>) -> Result<Self, JsValue> {
             let status = program.resume().map_err(js_error)?;
-            if !matches!(status, LiveProgramStatus::Awaiting(_) | LiveProgramStatus::Finished) {
+            if !matches!(
+                status,
+                LiveProgramStatus::Awaiting(_) | LiveProgramStatus::Finished
+            ) {
                 return Err(js_message(
                     "direct live continuation did not begin at an await or finished state",
                 ));
@@ -254,10 +254,15 @@ mod wasm {
             &mut self,
             publication: noon_core::PublicationContext,
         ) -> Result<bool, JsValue> {
-            if !matches!(self.program.status(), LiveProgramStatus::PublicationPending(_)) {
+            if !matches!(
+                self.program.status(),
+                LiveProgramStatus::PublicationPending(_)
+            ) {
                 return Ok(false);
             }
-            self.program.admit_publication(publication).map_err(js_error)?;
+            self.program
+                .admit_publication(publication)
+                .map_err(js_error)?;
             self.resume_if_ready()
         }
 
@@ -272,10 +277,7 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        fn emit_native_event(
-            &mut self,
-            occurrence: NativeEventOccurrence,
-        ) -> Result<(), JsValue> {
+        fn emit_native_event(&mut self, occurrence: NativeEventOccurrence) -> Result<(), JsValue> {
             self.program
                 .emit_native_event(occurrence)
                 .map(|_| ())
@@ -310,9 +312,9 @@ mod wasm {
             C::Error: std::fmt::Display,
         {
             Ok(Self {
-                authority: DirectSourceAuthority::Program(Box::new(
-                    DirectLiveProgramAdapter::new(program)?,
-                )),
+                authority: DirectSourceAuthority::Program(Box::new(DirectLiveProgramAdapter::new(
+                    program,
+                )?)),
                 next_native_event_sequence: 0,
             })
         }
@@ -359,7 +361,9 @@ mod wasm {
 
         fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
             match &mut self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.take_renderer_publication(),
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.take_renderer_publication()
+                }
                 DirectSourceAuthority::Program(program) => program.take_renderer_publication(),
             }
         }
@@ -370,7 +374,9 @@ mod wasm {
         ) -> Result<bool, JsValue> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { .. } => Ok(false),
-                DirectSourceAuthority::Program(program) => program.admit_rendered_publication(publication),
+                DirectSourceAuthority::Program(program) => {
+                    program.admit_rendered_publication(publication)
+                }
             }
         }
 
@@ -384,7 +390,9 @@ mod wasm {
                     .set_native_state_input(source, value)
                     .map(|_| ())
                     .map_err(js_error),
-                DirectSourceAuthority::Program(program) => program.set_native_state_input(source, value),
+                DirectSourceAuthority::Program(program) => {
+                    program.set_native_state_input(source, value)
+                }
             }
         }
 
@@ -858,7 +866,11 @@ mod wasm {
                 })?;
                 let resumed = direct.drive_to(target_time)?;
                 let camera = direct.session().camera().map_err(js_error)?;
-                (direct.session().wake_state().frame_pending(), camera, resumed)
+                (
+                    direct.session().wake_state().frame_pending(),
+                    camera,
+                    resumed,
+                )
             };
             self.sync_camera(camera)?;
             if resumed {
@@ -1532,7 +1544,9 @@ mod wasm {
             let publication_context;
             let draw = {
                 let direct = self.source.direct_source_mut().ok_or_else(|| {
-                    js_message("direct retained rendering requires a direct ExecutionSession source")
+                    js_message(
+                        "direct retained rendering requires a direct ExecutionSession source",
+                    )
                 })?;
                 let visibility = direct.query_viewport(Rect::new(
                     camera.center - half_extent,
@@ -1566,11 +1580,11 @@ mod wasm {
                 let view = surface_texture
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
-                let mut encoder = self
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Noon direct execution render frame"),
-                    });
+                let mut encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Noon direct execution render frame"),
+                        });
                 let draw = self
                     .renderer
                     .encode_retained(
