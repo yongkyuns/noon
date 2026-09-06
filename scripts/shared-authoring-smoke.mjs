@@ -771,6 +771,7 @@ try {
         duration: ordinary.duration,
         objectCount: ordinary.document.objects.length,
         translation: ordinary.document.objects[0].transform.translation,
+        animationTracks: ordinary.document.tracks,
         hasSemanticExecution: Object.hasOwn(ordinary, "semanticExecution"),
       },
       continuationRegistrations,
@@ -784,7 +785,20 @@ try {
   });
   assert.equal(exportBoundary.ordinary.duration, 3);
   assert.equal(exportBoundary.ordinary.objectCount, 1);
-  assert.deepEqual(exportBoundary.ordinary.translation, { x: 2, y: 0 });
+  // Explicit exports retain authored base state and animation tracks rather
+  // than baking the live segment endpoint into a static document.
+  assert.deepEqual(exportBoundary.ordinary.translation, { x: 0, y: 0 });
+  const exportedMotion = exportBoundary.ordinary.animationTracks.find(
+    (track) => track.property === "position" || track.property === "transform",
+  );
+  assert.ok(exportedMotion, JSON.stringify(exportBoundary.ordinary.animationTracks));
+  const translation = exportedMotion.values.vec2 ?? {
+    from: exportedMotion.values.object.from.transform.translation,
+    to: exportedMotion.values.object.to.transform.translation,
+  };
+  assert.deepEqual(translation, { from: { x: 0, y: 0 }, to: { x: 2, y: 0 } });
+  assert.equal(exportedMotion.timing.start_time, 0);
+  assert.equal(exportedMotion.timing.duration, 2);
   assert.equal(exportBoundary.ordinary.hasSemanticExecution, false);
   assert.equal(exportBoundary.continuationRegistrations, 0);
   assert.match(
