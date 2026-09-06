@@ -15,6 +15,7 @@ const {
   createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryCreatePlaySmokeRenderer,
   createDirectOrdinarySquareToCircleSmokeRenderer,
+  createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinarySuccessionSmokeRenderer,
   createDirectOrdinaryUncreatePlaySmokeRenderer,
@@ -720,6 +721,58 @@ async function directSquareToCircleProof(expectedBackend) {
   }
 }
 
+async function directMovingCameraCenterProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectMovingCameraCenterSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+    if (!initial.presentNow || initial.cadence !== "timer" || renderer.objectCount() !== 1) {
+      throw new Error(`direct moving camera did not start with its camera-only wait: ${JSON.stringify(initial)}`);
+    }
+    await presentDirectFrame(renderer);
+    const beforeAdmission = await sampleRenderedNeighborhood(canvas, 0, 0);
+
+    const samples = {};
+    for (const [time, name, x, expectedChannel] of [
+      [300, "admittedSquare", -2, "red"],
+      [800, "firstMidpointSquare", -1, "red"],
+      [1300, "firstEndpointSquare", 0, "red"],
+      [1600, "secondStart", 0, null],
+      [2100, "secondMidpointTriangle", 2, "green"],
+      [2600, "secondEndpointTriangle", 0, "green"],
+    ]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      if (expectedChannel === null) continue;
+      const color = await sampleRenderedColor(canvas, x, 0);
+      samples[name] = color;
+      const other = expectedChannel === "red" ? color.green : color.red;
+      if (color[expectedChannel] <= other + 25) {
+        throw new Error(`direct moving-camera ${name} missed its camera-relative object: ${JSON.stringify(color)}`);
+      }
+    }
+    const directive = JSON.parse(renderer.directWakeDirectiveJson(2600));
+    const metrics = {
+      beforeAdmission,
+      samples,
+      time: renderer.time(),
+      objectCount: renderer.objectCount(),
+      cadence: directive.cadence,
+    };
+    if (renderer.rendererBackend() !== expectedBackend || beforeAdmission > 30 ||
+        metrics.time !== 2.6 || metrics.objectCount !== 3 || metrics.cadence !== "idle") {
+      throw new Error(`direct moving-camera runtime failed: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directLineMatchProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectLineMatchSmokeRenderer(canvas);
@@ -1265,6 +1318,7 @@ async function start() {
     expectedBackend, createDirectOrdinarySquareAndCircleCreateSmokeRenderer, true,
   );
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
+  metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);
   metrics.typst = await directTypstProof(expectedBackend, createDirectTypstTextSmokeRenderer, true);

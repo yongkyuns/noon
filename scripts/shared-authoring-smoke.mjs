@@ -486,6 +486,7 @@ try {
     expectedFinalCenter = null,
     expectedFinalColor = null,
     expectedComposition = false,
+    expectedCamera = false,
   } of [
     {
       filename: "live_semantic_scene.py",
@@ -577,6 +578,13 @@ try {
       expectedFinalCenter: [2, 1],
     },
     {
+      filename: "manim_example_moving_camera_center.py",
+      objectCount: 3,
+      expectedDuration: 2.6,
+      endpointTime: null,
+      expectedCamera: true,
+    },
+    {
       filename: "ordinary_composition_play.py",
       objectCount: 2,
       expectedDuration: 4,
@@ -615,6 +623,7 @@ try {
       expectText,
       expectedFinalCenter,
       expectedComposition,
+      expectedCamera,
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -682,13 +691,13 @@ try {
           const rendered = await waitForFrame(initial.presentedFrames);
           endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
         }
-        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition;
+        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera;
         if (retainForInspection) harness.liveExampleExecution = execution;
         return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     if (objectCount === 0) {
       assert.equal(result.metrics.drawCalls, 0, `${filename}: removed object still draws`);
@@ -757,6 +766,53 @@ try {
         `${filename}: sequence right blue endpoint was not rendered: ${JSON.stringify(right)}`,
       );
     }
+    if (expectedCamera) {
+      async function seekCamera(time, expectedObjectCount) {
+        const metrics = await page.evaluate(async ({ time, expectedObjectCount }) => {
+          const execution = window.sharedAuthoringSmoke.liveExampleExecution;
+          const before = (await execution.metrics()).metrics.presentedFrames;
+          await execution.pause();
+          const sought = await execution.seek(time);
+          let latest;
+          for (let attempt = 0; attempt < 150; attempt += 1) {
+            latest = (await execution.metrics()).metrics;
+            if (latest.presentedFrames > before && latest.objectCount === expectedObjectCount) {
+              return { sought: sought.time, metrics: latest };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          throw new Error(`moving-camera seek did not render: ${JSON.stringify(latest)}`);
+        }, { time, expectedObjectCount });
+        assert.ok(Math.abs(metrics.sought - time) < 1e-6, `${filename}: camera seek ${time}`);
+        return page.locator(`#${result.canvasId}`).screenshot();
+      }
+
+      const beforeAdmission = await seekCamera(0, 1);
+      assert.equal(
+        visiblePixelStats(beforeAdmission, (red, green, blue) => Math.max(red, green, blue) > 80).count,
+        0,
+        `${filename}: geometry appeared before the initial wait`,
+      );
+      const admitted = await seekCamera(0.3, 3);
+      const firstMidpoint = await seekCamera(0.8, 3);
+      const firstEndpoint = await seekCamera(1.3, 3);
+      const secondMidpoint = await seekCamera(2.1, 3);
+      const secondEndpoint = await seekCamera(2.6, 3);
+      const samples = {
+        admittedSquare: renderedWorldPixel(admitted, -2, 0),
+        admittedTriangle: renderedWorldPixel(admitted, 2, 0),
+        firstMidpointSquare: renderedWorldPixel(firstMidpoint, -1, 0),
+        firstEndpointSquare: renderedWorldPixel(firstEndpoint, 0, 0),
+        secondMidpointTriangle: renderedWorldPixel(secondMidpoint, 2, 0),
+        secondEndpointTriangle: renderedWorldPixel(secondEndpoint, 0, 0),
+      };
+      assert.ok(samples.admittedSquare.red > samples.admittedSquare.green + 25, `${filename}: ${JSON.stringify(samples)}`);
+      assert.ok(samples.admittedTriangle.green > samples.admittedTriangle.red + 25, `${filename}: ${JSON.stringify(samples)}`);
+      assert.ok(samples.firstMidpointSquare.red > samples.firstMidpointSquare.green + 25, `${filename}: ${JSON.stringify(samples)}`);
+      assert.ok(samples.firstEndpointSquare.red > samples.firstEndpointSquare.green + 25, `${filename}: ${JSON.stringify(samples)}`);
+      assert.ok(samples.secondMidpointTriangle.green > samples.secondMidpointTriangle.red + 25, `${filename}: ${JSON.stringify(samples)}`);
+      assert.ok(samples.secondEndpointTriangle.green > samples.secondEndpointTriangle.red + 25, `${filename}: ${JSON.stringify(samples)}`);
+    }
     if (expectText) {
       const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
       const pixels = staticTextColor === "yellow"
@@ -769,7 +825,7 @@ try {
         assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
       }
     }
-    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition) {
+    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera) {
       await page.evaluate(() => {
         window.sharedAuthoringSmoke.liveExampleExecution.terminate();
         window.sharedAuthoringSmoke.liveExampleExecution = null;
