@@ -271,7 +271,7 @@ pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
     Ok(session)
 }
 
-/// Execute one ordinary Manim paint animation and a following authored edit.
+/// Execute ordinary Manim paint animations and a following authored edit.
 ///
 /// Both fill and stroke use the shared color and paint-opacity operations. The
 /// exact midpoint and endpoint assertions protect their independent starting
@@ -286,6 +286,58 @@ pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut session = scene.execution_session()?;
     {
         let mut live = scene.live(&mut session);
+
+        live.set_fill(&circle, 0.0, 0.0, 1.0, 0.75)?;
+        let fill_only = live.effective(&circle)?.style;
+        assert_eq!(fill_only.fill, Some(Color::rgba(0.0, 0.0, 1.0, 0.75)));
+        assert_eq!(fill_only.stroke, Some(Color::rgb(1.0, 1.0, 1.0)));
+        live.set_stroke(&circle, 1.0, 1.0, 1.0, 0.4)?;
+        let stroke_only = live.effective(&circle)?.style;
+        assert_eq!(stroke_only.fill, fill_only.fill);
+        assert_eq!(stroke_only.stroke, Some(Color::rgba(1.0, 1.0, 1.0, 0.4)));
+        live.set_opacity(&circle, 0.2)?;
+        let paint_opacity = live.effective(&circle)?.style;
+        assert_eq!(paint_opacity.fill, Some(Color::rgba(0.0, 0.0, 1.0, 0.2)));
+        assert_eq!(paint_opacity.stroke, Some(Color::rgba(1.0, 1.0, 1.0, 0.2)));
+        assert_eq!(paint_opacity.opacity, 1.0);
+
+        let independent_target = live.target_editor(&circle)?;
+        live.set_fill(&independent_target, 1.0, 0.25, 0.75, 0.8)?;
+        live.set_stroke(&independent_target, 0.1, 0.8, 0.2, 0.3)?;
+        let independent = live.declare_and_activate_transform_to(
+            &circle,
+            &independent_target,
+            AnimationOptions::new()
+                .run_time(0.4)
+                .rate_func(RateFunction::Linear),
+        )?;
+        live.advance_segment_to(independent, independent.end_time())?;
+        let independent_endpoint = live.effective(&circle)?.style;
+        assert_eq!(
+            independent_endpoint.fill,
+            Some(Color::rgba(1.0, 0.25, 0.75, 0.8))
+        );
+        assert_eq!(
+            independent_endpoint.stroke,
+            Some(Color::rgba(0.1, 0.8, 0.2, 0.3))
+        );
+        assert_eq!(independent_endpoint.opacity, 1.0);
+        live.complete_segment(independent)?;
+        let independent_authored = live.authored(&circle)?.style;
+        assert_eq!(
+            independent_authored.fill,
+            Some(SemanticPaint::Solid(Color::rgb(1.0, 0.25, 0.75)))
+        );
+        assert_eq!(
+            independent_authored.stroke,
+            Some(SemanticPaint::Solid(Color::rgb(0.1, 0.8, 0.2)))
+        );
+        assert_eq!(independent_authored.fill_opacity, 0.8);
+        assert_eq!(independent_authored.stroke_opacity, 0.3);
+        assert_eq!(independent_authored.object_opacity, 1.0);
+
+        live.set_fill(&circle, 0.0, 0.0, 1.0, 1.0)?;
+        live.set_stroke(&circle, 1.0, 1.0, 1.0, 1.0)?;
         let target = live.target_editor(&circle)?;
         live.set_color(&target, 1.0, 0.0, 0.0, 1.0)?;
         live.set_opacity(&target, 0.5)?;
@@ -297,7 +349,7 @@ pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
                 .run_time(2.0)
                 .rate_func(RateFunction::Linear),
         )?;
-        live.advance_segment_to(segment, 1.0)?;
+        live.advance_segment_to(segment, 1.4)?;
         let midpoint = live.effective(&circle)?.style;
         assert_eq!(midpoint.fill, Some(Color::rgba(0.5, 0.0, 0.5, 0.75)));
         assert_eq!(midpoint.stroke, Some(Color::rgba(1.0, 0.5, 0.5, 0.75)));
@@ -329,7 +381,7 @@ pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
         assert_eq!(effective.stroke, Some(Color::rgb(1.0, 1.0, 0.0)));
         assert_eq!(effective.opacity, 1.0);
     }
-    assert_eq!(session.frame().time, 2.0);
+    assert_eq!(session.frame().time, 2.4);
     Ok(session)
 }
 

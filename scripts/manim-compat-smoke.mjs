@@ -155,39 +155,6 @@ class DefaultVmobjectStyle(Scene):
         self.add(circle, explicit, filled)
 `;
 
-const styleSource = `
-from noon import *
-
-class IndependentStyleOpacity(Scene):
-    def construct(self):
-        square = Square(
-            side_length=0.8,
-            fill_color=BLUE,
-            fill_opacity=0.25,
-            stroke_color=RED,
-            stroke_opacity=0.6,
-            stroke_width=0.06,
-        )
-        assert abs(square.get_fill_opacity() - 0.25) < 1e-9
-        assert abs(square.get_stroke_opacity() - 0.6) < 1e-9
-
-        square.set_fill(opacity=0.75)
-        assert abs(square.get_fill_opacity() - 0.75) < 1e-9
-        assert abs(square.get_stroke_opacity() - 0.6) < 1e-9
-
-        square.set_stroke(opacity=0.4)
-        assert abs(square.get_fill_opacity() - 0.75) < 1e-9
-        assert abs(square.get_stroke_opacity() - 0.4) < 1e-9
-
-        square.set_opacity(0.2)
-        assert abs(square.get_fill_opacity() - 0.2) < 1e-9
-        assert abs(square.get_stroke_opacity() - 0.2) < 1e-9
-        self.add(square)
-
-        target = square.copy().set_fill(PINK, opacity=0.8).set_stroke(GREEN, opacity=0.3)
-        self.play(Transform(square, target), run_time=0.4, rate_func=linear)
-`;
-
 const animateParitySource = `
 from noon import *
 
@@ -491,20 +458,6 @@ try {
   assert.equal(defaultStyle.stroke_width_mode, "screen_space");
   assert.equal(defaultStyle.stroke_join, "miter");
   assert.equal(defaultStyle.stroke_cap, "butt");
-
-  const style = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
-    styleSource,
-  );
-  assert.equal(style.kind, "scene_document");
-  assert.equal(style.document.objects.length, 1);
-  const baseStyle = style.document.objects[0].style;
-  assert.equal(baseStyle.opacity, 1, "independent layer opacity should not consume overall opacity");
-  assert.equal(baseStyle.fill.alpha, 0.2);
-  assert.equal(baseStyle.stroke.alpha, 0.2);
-  const styleTransform = style.document.tracks.find((track) => track.property === "transform");
-  assert.equal(styleTransform.values.object.to.style.fill.alpha, 0.8);
-  assert.equal(styleTransform.values.object.to.style.stroke.alpha, 0.3);
 
   const animateParity = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),

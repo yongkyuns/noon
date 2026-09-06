@@ -444,7 +444,7 @@ try {
     {
       filename: "ordinary_paint_play.py",
       objectCount: 1,
-      expectedDuration: 2,
+      expectedDuration: 2.4,
       endpointTime: null,
       expectedFinalCenter: [0, 0],
       expectedFinalColor: "yellow",

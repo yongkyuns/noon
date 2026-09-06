@@ -353,8 +353,8 @@ async function directOrdinaryPaintPlayProof(expectedBackend) {
       `direct ordinary paint renderer selected ${metrics.backend}; expected ${expectedBackend}`,
     );
   }
-  if (metrics.authoredTime !== 2) {
-    throw new Error(`direct ordinary paint authored time is ${metrics.authoredTime}; expected 2`);
+  if (metrics.authoredTime !== 2.4) {
+    throw new Error(`direct ordinary paint authored time is ${metrics.authoredTime}; expected 2.4`);
   }
   if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
     throw new Error(`direct ordinary paint produced invalid metrics ${JSON.stringify(metrics)}`);
