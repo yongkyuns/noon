@@ -2907,7 +2907,16 @@ mod recursive_composition_tests {
             live.session.publication_context().scene_revision(),
             before.scene_revision().checked_next().unwrap()
         );
-        assert_eq!(live.session.signal_timeline.entry_count(), 1);
+        assert_eq!(
+            scene
+                .store()
+                .borrow()
+                .semantic_signal_state(tracker.node_id())
+                .unwrap()
+                .scalar_timeline()
+                .len(),
+            1
+        );
 
         live.advance_segment_to(segment, 0.25).unwrap();
         assert_eq!(
@@ -2936,7 +2945,16 @@ mod recursive_composition_tests {
             live.session.publication_context().scene_revision(),
             before_completion.checked_next().unwrap()
         );
-        assert_eq!(live.session.signal_timeline.entry_count(), 2);
+        assert_eq!(
+            scene
+                .store()
+                .borrow()
+                .semantic_signal_state(tracker.node_id())
+                .unwrap()
+                .scalar_timeline()
+                .len(),
+            2
+        );
         assert_eq!(
             scene
                 .store()
@@ -2990,5 +3008,98 @@ mod recursive_composition_tests {
             .borrow()
             .has_semantic_signal_scope(tracker.node_id()));
         assert!(session.frame().objects.is_empty());
+    }
+
+    #[test]
+    fn two_detached_trackers_enroll_in_one_mixed_publication() {
+        let scene = Scene::new();
+        let first = ValueTracker::detached(Rc::clone(scene.store()), 1.0).unwrap();
+        let second = ValueTracker::detached(Rc::clone(scene.store()), -2.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new(),
+            children: vec![
+                AnimationCompositionRequest::ValueTracker {
+                    tracker: &first,
+                    target: 3.0,
+                    options: linear(1.0),
+                },
+                AnimationCompositionRequest::ValueTracker {
+                    tracker: &second,
+                    target: 4.0,
+                    options: linear(1.0),
+                },
+            ],
+        };
+
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+
+        assert_eq!(segment.duration(), 1.0);
+        assert_eq!(
+            session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        assert!(scene
+            .store()
+            .borrow()
+            .has_semantic_signal_scope(first.node_id()));
+        assert!(scene
+            .store()
+            .borrow()
+            .has_semantic_signal_scope(second.node_id()));
+        assert_eq!(
+            session.effective_signal_value(first.node_id()),
+            Some(&noon_core::ReactiveValue::Scalar(1.0))
+        );
+        assert_eq!(
+            session.effective_signal_value(second.node_id()),
+            Some(&noon_core::ReactiveValue::Scalar(-2.0))
+        );
+    }
+
+    #[test]
+    fn invalid_second_detached_tracker_rolls_back_both_enrollments() {
+        let scene = Scene::new();
+        let first = ValueTracker::detached(Rc::clone(scene.store()), 1.0).unwrap();
+        let second = ValueTracker::detached(Rc::clone(scene.store()), -2.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new(),
+            children: vec![
+                AnimationCompositionRequest::ValueTracker {
+                    tracker: &first,
+                    target: 3.0,
+                    options: linear(1.0),
+                },
+                AnimationCompositionRequest::ValueTracker {
+                    tracker: &second,
+                    target: f64::NAN,
+                    options: linear(1.0),
+                },
+            ],
+        };
+
+        assert!(scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .is_err());
+        assert_eq!(session.publication_context(), before);
+        assert!(!scene
+            .store()
+            .borrow()
+            .has_semantic_signal_scope(first.node_id()));
+        assert!(!scene
+            .store()
+            .borrow()
+            .has_semantic_signal_scope(second.node_id()));
+        assert_eq!(session.effective_signal_value(first.node_id()), None);
+        assert_eq!(session.effective_signal_value(second.node_id()), None);
     }
 }

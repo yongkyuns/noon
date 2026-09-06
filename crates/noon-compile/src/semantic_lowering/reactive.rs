@@ -30,6 +30,24 @@ pub struct SemanticReactiveProjection {
     timeline_signals: HashSet<SemanticNodeId>,
 }
 
+/// Sparse, validated addition to the existing semantic-to-execution signal projection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedSemanticInputSignalEnrollment {
+    semantic: SemanticNodeId,
+    execution: SignalId,
+    value: ReactiveValue,
+}
+
+impl PreparedSemanticInputSignalEnrollment {
+    pub const fn semantic_signal(&self) -> SemanticNodeId {
+        self.semantic
+    }
+
+    pub const fn execution_signal(&self) -> SignalId {
+        self.execution
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScalarSignalTrack {
     semantic_signal: SemanticNodeId,
@@ -212,6 +230,46 @@ impl SemanticReactiveProjection {
         self.signal_ids.insert(semantic, execution);
         Ok(execution)
     }
+
+    /// Prepare one fresh sparse input addition without cloning or scanning the
+    /// complete reactive graph. The semantic/execution encoding is one-to-one,
+    /// so absence from the indexed semantic map proves derived identity freshness.
+    pub fn prepare_input_signal_enrollment(
+        &self,
+        semantic: SemanticNodeId,
+        value: ReactiveValue,
+    ) -> Result<Option<PreparedSemanticInputSignalEnrollment>, ReactiveError> {
+        if self.execution_signal_id(semantic).is_some() {
+            return Ok(None);
+        }
+        let execution = semantic_execution_signal_id(semantic);
+        if !value.is_finite() {
+            return Err(ReactiveError::NonFiniteValue(execution));
+        }
+        execution
+            .get()
+            .checked_add(1)
+            .ok_or(ReactiveError::SignalIdExhausted)?;
+        Ok(Some(PreparedSemanticInputSignalEnrollment {
+            semantic,
+            execution,
+            value,
+        }))
+    }
+
+    /// Commit one sparse input addition after all surrounding publication work
+    /// has been preflighted.
+    pub fn commit_input_signal_enrollment(
+        &mut self,
+        prepared: PreparedSemanticInputSignalEnrollment,
+    ) -> SignalId {
+        let execution = prepared.execution;
+        self.graph
+            .commit_prepared_input_with_id(execution, prepared.value);
+        let previous = self.signal_ids.insert(prepared.semantic, execution);
+        debug_assert!(previous.is_none());
+        execution
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,6 +386,17 @@ pub fn lower_prepared_scalar_signal_timeline_entries(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     projection: &SemanticReactiveProjection,
 ) -> Result<Vec<CompiledScalarSignalTimelineEntry>, PreparedScalarSignalTimelineError> {
+    lower_prepared_scalar_signal_timeline_entries_with_resolver(prepared, |signal| {
+        projection.execution_signal_id(signal)
+    })
+}
+
+/// Lower a scalar timeline batch while including sparse signal enrollments that
+/// have been preflighted but are not published yet.
+pub fn lower_prepared_scalar_signal_timeline_entries_with_resolver(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    mut execution_signal: impl FnMut(SemanticNodeId) -> Option<SignalId>,
+) -> Result<Vec<CompiledScalarSignalTimelineEntry>, PreparedScalarSignalTimelineError> {
     let mut lowered = Vec::new();
     for (index, mutation) in prepared.candidate_mutations().enumerate() {
         let entry = match mutation {
@@ -355,7 +424,7 @@ pub fn lower_prepared_scalar_signal_timeline_entries(
             )),
             _ => continue,
         };
-        let execution_signal = projection.execution_signal_id(entry.signal()).ok_or(
+        let execution_signal = execution_signal(entry.signal()).ok_or(
             PreparedScalarSignalTimelineError::UnknownExecutionSignal(entry.signal()),
         )?;
         let state = prepared

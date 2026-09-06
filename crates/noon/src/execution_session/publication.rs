@@ -22,8 +22,10 @@ pub(crate) enum SemanticPublicationPurpose {
 }
 
 pub(crate) struct PreparedReactiveEnrollmentBatch {
-    pub projection: noon_compile::SemanticReactiveProjection,
-    pub enrollments: Vec<(PreparedReactiveSignalEnrollment, noon_core::SignalId)>,
+    pub enrollments: Vec<(
+        noon_compile::PreparedSemanticInputSignalEnrollment,
+        PreparedReactiveSignalEnrollment,
+    )>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -279,10 +281,14 @@ impl ExecutionSession {
                 .chain(execution_suffix),
         );
         if let Some(reactive_enrollment) = reactive_enrollment {
-            self.reactive_projection = reactive_enrollment.projection;
-            for (enrollment, signal) in reactive_enrollment.enrollments {
+            for (projection_enrollment, runtime_enrollment) in reactive_enrollment.enrollments {
+                let expected = projection_enrollment.execution_signal();
+                let signal = self
+                    .reactive_projection
+                    .commit_input_signal_enrollment(projection_enrollment);
+                debug_assert_eq!(signal, expected);
                 self.runtime
-                    .commit_reactive_signal_enrollment(enrollment, signal);
+                    .commit_reactive_signal_enrollment(runtime_enrollment, signal);
             }
         }
         self.runtime

@@ -18,7 +18,8 @@ use crate::execution_segment::{
     SegmentCompletionEntry,
 };
 use noon_compile::{
-    derive_prepared_scalar_animation_tracks, lower_prepared_scalar_signal_timeline_entries,
+    derive_prepared_scalar_animation_tracks,
+    lower_prepared_scalar_signal_timeline_entries_with_resolver,
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
     lower_prepared_semantic_animation_schedule, lower_semantic_affine_animation_tracks,
     lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
@@ -1314,11 +1315,13 @@ impl ExecutionSession {
         let noon_compile::CompiledScalarSignalTimelineEntry::Track(track) = &entry else {
             unreachable!("tracker activation prepared one scalar track")
         };
+        let track_from = track.from();
+        let runtime_endpoint = track.to();
         let effective = self.effective_signal_value(signal).cloned();
-        if effective != Some(ReactiveValue::Scalar(track.from())) {
+        if effective != Some(ReactiveValue::Scalar(track_from)) {
             return Err(ExecutionSessionAnimationError::ScalarEffectiveValue {
                 signal,
-                authored: track.from(),
+                authored: track_from,
                 effective,
             });
         }
@@ -1363,7 +1366,7 @@ impl ExecutionSession {
                 scalar_entries: vec![ScalarSegmentCompletionEntry {
                     signal,
                     authored_endpoint: target,
-                    runtime_endpoint: track.to(),
+                    runtime_endpoint,
                     end_time: segment.end_time(),
                 }],
             },
@@ -1400,13 +1403,15 @@ impl ExecutionSession {
         let noon_compile::CompiledScalarSignalTimelineEntry::Hold(hold) = &entry else {
             unreachable!("persistent scalar publication prepared one Hold entry")
         };
+        let execution_signal = hold.execution_signal();
+        let hold_value = hold.value();
         let schedule = self.signal_timeline.prepare_append_batch([entry], time)?;
         let runtime_publication = self
             .runtime
             .prepare_authored_reactive_plan_change(
                 self.publication_context(),
                 prepared.proposed_scene_revision(),
-                &[(hold.execution_signal(), ReactiveValue::Scalar(hold.value()))],
+                &[(execution_signal, ReactiveValue::Scalar(hold_value))],
             )
             .map_err(|error| {
                 ExecutionSessionAnimationError::AuthoredPublication(
@@ -2159,13 +2164,14 @@ impl ExecutionSession {
                 )
             })?;
 
-        let mut prospective_reactive = self.reactive_projection.clone();
-        let mut runtime_enrollments = Vec::new();
+        let mut reactive_enrollments = Vec::new();
+        let mut prepared_execution_signals = HashMap::new();
         let mut seen_scalar_signals = HashSet::new();
         let mut newly_enrolled_signals = HashSet::new();
         for leaf in schedule.scalar_leaves() {
             if !seen_scalar_signals.insert(leaf.signal)
-                || prospective_reactive
+                || self
+                    .reactive_projection
                     .execution_signal_id(leaf.signal)
                     .is_some()
             {
@@ -2193,18 +2199,31 @@ impl ExecutionSession {
                     .into())
                 }
             };
-            let execution = prospective_reactive
-                .install_input_signal(leaf.signal, ReactiveValue::Scalar(initial))?;
-            let enrollment = self.runtime.prepare_reactive_signal_enrollment(
+            let projection_enrollment = self
+                .reactive_projection
+                .prepare_input_signal_enrollment(leaf.signal, ReactiveValue::Scalar(initial))?
+                .expect("fresh scalar signal produces one sparse enrollment");
+            let execution = projection_enrollment.execution_signal();
+            let runtime_enrollment = self.runtime.prepare_reactive_signal_enrollment(
                 Some(execution),
                 ReactiveValue::Scalar(initial),
             )?;
             newly_enrolled_signals.insert(leaf.signal);
-            runtime_enrollments.push((enrollment, execution));
+            prepared_execution_signals.insert(leaf.signal, execution);
+            reactive_enrollments.push((projection_enrollment, runtime_enrollment));
         }
 
         let scalar_timeline_entries =
-            lower_prepared_scalar_signal_timeline_entries(&prepared, &prospective_reactive)?;
+            lower_prepared_scalar_signal_timeline_entries_with_resolver(&prepared, |signal| {
+                self.reactive_projection
+                    .execution_signal_id(signal)
+                    .or_else(|| prepared_execution_signals.get(&signal).copied())
+            })?;
+        let final_scalar_targets = schedule
+            .scalar_leaves()
+            .iter()
+            .map(|leaf| (leaf.signal, leaf.target))
+            .collect::<BTreeMap<_, _>>();
         let mut scalar_completions = BTreeMap::new();
         let mut checked_scalar_starts = HashSet::new();
         for entry in &scalar_timeline_entries {
@@ -2229,13 +2248,9 @@ impl ExecutionSession {
                 track.semantic_signal(),
                 ScalarSegmentCompletionEntry {
                     signal: track.semantic_signal(),
-                    authored_endpoint: schedule
-                        .scalar_leaves()
-                        .iter()
-                        .rev()
-                        .find(|leaf| leaf.signal == track.semantic_signal())
-                        .expect("compiled scalar track retains one scheduled scalar leaf")
-                        .target,
+                    authored_endpoint: *final_scalar_targets
+                        .get(&track.semantic_signal())
+                        .expect("compiled scalar track retains one scheduled scalar leaf"),
                     runtime_endpoint: track.to(),
                     end_time: schedule.start_time() + schedule.run_time(),
                 },
@@ -2321,10 +2336,9 @@ impl ExecutionSession {
             .into_iter()
             .map(ExecutionPatch::AddTrack)
             .collect();
-        let reactive_enrollment = (!runtime_enrollments.is_empty()).then_some(
+        let reactive_enrollment = (!reactive_enrollments.is_empty()).then_some(
             publication::PreparedReactiveEnrollmentBatch {
-                projection: prospective_reactive,
-                enrollments: runtime_enrollments,
+                enrollments: reactive_enrollments,
             },
         );
         let result = self

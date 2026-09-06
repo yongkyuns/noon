@@ -534,7 +534,7 @@ mod tests {
             .unwrap()
             .scalar_timeline();
         assert_eq!(timeline.len(), 2);
-        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = timeline[1] else {
+        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = &timeline[1] else {
             panic!("expected a second scalar track")
         };
         assert_eq!(second.from(), 4.0);

@@ -85,7 +85,7 @@ impl std::fmt::Display for SignalTimelineAppendError {
 
 impl std::error::Error for SignalTimelineAppendError {}
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct PreparedSignalTimelineAppend {
     entries: Vec<CompiledScalarSignalTimelineEntry>,
     current: f64,
@@ -244,6 +244,9 @@ impl SignalTimelineSchedule {
     }
 
     pub(super) fn commit_append(&mut self, prepared: PreparedSignalTimelineAppend) {
+        if prepared.entries.is_empty() {
+            return;
+        }
         for entry in prepared.entries {
             let semantic = entry.semantic_signal();
             let execution = entry.execution_signal();
