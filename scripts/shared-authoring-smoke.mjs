@@ -164,6 +164,39 @@ assert builtins.__noon_export_boundary_setup_count == 0
 result = Scene()
 `;
 
+const unsupportedJspiSource = `from noon import *
+import builtins
+import pyodide.ffi
+
+builtins.__noon_unsupported_jspi_original = pyodide.ffi.can_run_sync
+pyodide.ffi.can_run_sync = lambda: False
+
+class UnsupportedJspiContinuation(Scene):
+    def construct(self):
+        circle = Circle(radius=0.4)
+        self.add(circle)
+        builtins.__noon_unsupported_jspi_scene = self
+        self.play(circle.animate.shift((2.0, 0.0, 0.0)), run_time=1.0, rate_func=linear)
+`;
+
+const restoreUnsupportedJspiSource = `from noon import *
+import builtins
+import pyodide.ffi
+
+try:
+    scene = builtins.__noon_unsupported_jspi_scene
+    context = scene._canonical_authoring_context
+    assert context.liveExecutionOwnership() == "none"
+    assert context.authoredDuration() == 0.0
+    assert scene.time == 0.0
+finally:
+    pyodide.ffi.can_run_sync = builtins.__noon_unsupported_jspi_original
+    del builtins.__noon_unsupported_jspi_original
+    del builtins.__noon_unsupported_jspi_scene
+
+result = Scene()
+`;
+
 const browserArgs = [
   "--enable-unsafe-webgpu",
   "--enable-unsafe-swiftshader",
@@ -713,6 +746,26 @@ try {
     /exportDocument cannot run an async Scene construct/,
   );
   assert.equal(exportBoundary.sentinelObjectCount, 0);
+
+  // A supported ordinary segment must fail at its JSPI capability gate instead
+  // of silently using endpoint-only execution. The restore request verifies the
+  // same worker-resident context never activated a player or advanced time.
+  const unsupportedJspi = await page.evaluate(async ({ source, restoreSource }) => {
+    const harness = window.sharedAuthoringSmoke;
+    let error = null;
+    try {
+      await harness.authoring.run(source, {});
+    } catch (failure) {
+      error = String(failure);
+    } finally {
+      await harness.authoring.run(restoreSource, {});
+    }
+    return { error };
+  }, { source: unsupportedJspiSource, restoreSource: restoreUnsupportedJspiSource });
+  assert.match(
+    unsupportedJspi.error ?? "",
+    /ordinary synchronous canonical play\/wait requires Pyodide JS Promise Integration/,
+  );
 
   // Async Python construct suspends on the worker-owned semantic endpoint. The
   // early descriptor starts the existing execution client while runPythonAsync
