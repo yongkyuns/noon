@@ -3,11 +3,10 @@
 use std::error::Error;
 
 use crate::{
-    AnimationOptions, Color, ExecutionSession, HostCallbackId,
-    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction,
-    RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, TransformToRequest, ValueTracker,
-    Vec2,
+    AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
+    LiveSession, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticNodeId, SemanticPaint,
+    SemanticStyle, SemanticVec3, TransformToRequest, ValueTracker, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -381,7 +380,9 @@ pub fn ordinary_value_tracker_continuation_program(
         .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
 
-    let tracker = scene.value_tracker(0.0).map_err(|error| error.to_string())?;
+    let tracker = scene
+        .value_tracker(0.0)
+        .map_err(|error| error.to_string())?;
     let position = scene
         .position_from_tracker(
             &tracker,
