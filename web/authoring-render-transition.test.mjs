@@ -69,7 +69,7 @@ test("renderer transitions suspend ticks until delayed bootstrap publishes ready
 
   const commit = functionSlice("commitRendererTransition", "bootstrapRenderer");
   assert.match(commit, /const resumeFrameLoop = transitionFrameLoopWasRunning;/);
-  assert.match(commit, /bootstrapRenderer\(initial, resumeFrameLoop\)/);
+  assert.match(commit, /bootstrapRenderer\(initial, resumeFrameLoop, publication\)/);
 
   const bootstrap = functionSlice("bootstrapRenderer", "tryPresent");
   const create = bootstrap.indexOf("await RetainedExecutionCanvasRenderer.create");
