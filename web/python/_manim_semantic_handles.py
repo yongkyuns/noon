@@ -778,6 +778,9 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _compat._as_vec2(direction)
+    if isinstance(self, _compat.Group):
+        # Shared family layout is the separate #61 migration; Group has no leaf binding.
+        return _compat._critical_for(self, axis)
     observed = _bound_layout_observation(self)
     if observed is not None:
         return _base.Vec2(

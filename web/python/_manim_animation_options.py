@@ -111,8 +111,8 @@ def _scale_in_place_builder(
 ) -> object:
     """Lower Manim's ApplyMethod-based scale helpers to a deferred target builder.
 
-    ManimCE v0.21 implements ``ScaleInPlace`` as ``ApplyMethod(mobject.scale, factor)``
-    and ``ShrinkToCenter`` as ``ScaleInPlace(..., 0)``. ``ApplyMethod.create_target``
+    ManimCE v0.21 implements ``ScaleInPlace`` as ``ApplyMethod(mobject.scale, factor)``.
+    ``ApplyMethod.create_target``
     runs from ``Transform.begin()``, so the target must be copied from the mobject state
     that exists when ``Scene.play`` begins rather than when the animation is constructed.
     For a single 2D leaf, Noon's retained scene snapshot plus the ordinary target-state
@@ -121,10 +121,10 @@ def _scale_in_place_builder(
 
     if isinstance(mobject, _compat.Group):
         raise NotImplementedError(
-            "ScaleInPlace/ShrinkToCenter Group/VGroup family scaling is not yet supported"
+            "ScaleInPlace Group/VGroup family scaling is not yet supported"
         )
     if not isinstance(mobject, _base.Mobject):
-        raise TypeError("ScaleInPlace/ShrinkToCenter target must be a Mobject")
+        raise TypeError("ScaleInPlace target must be a Mobject")
 
     factor = float(scale_factor)
     if not math.isfinite(factor):
@@ -135,7 +135,7 @@ def _scale_in_place_builder(
     # geometry-only authoring and worker startup remain untouched.
     import _manim_typst as _typst
 
-    if factor != 0.0 and isinstance(mobject, _typst._RetainedTextMobject):
+    if isinstance(mobject, _typst._RetainedTextMobject):
         import _manim_retained_animate as _retained_animate
 
         _retained_animate.install()
@@ -155,7 +155,6 @@ def _scale_in_place_builder(
             self.source = mobject
             self.mobject = mobject
             self.scale_factor = factor
-            self._canonical_affine_lifecycle = "shrink" if factor == 0.0 else None
             self.anim_args = dict(animation_kwargs)
             self.cannot_pass_args = True
             self.is_chaining = False
@@ -187,10 +186,18 @@ def ScaleInPlace(mobject: object, scale_factor: float, **kwargs: Any) -> object:
     return _scale_in_place_builder(mobject, scale_factor, kwargs)
 
 
-def ShrinkToCenter(mobject: object, **kwargs: Any) -> object:
-    """Shrink one 2D leaf to its center, matching Manim's zero-scale helper."""
+class ShrinkToCenter:
+    """Inert request for the shared Rust scale-to-center removal lifecycle."""
 
-    return _scale_in_place_builder(mobject, 0.0, kwargs)
+    _canonical_affine_lifecycle = "shrink"
+
+    def __init__(self, mobject: object, **kwargs: Any) -> None:
+        if isinstance(mobject, _compat.Group):
+            raise NotImplementedError("ShrinkToCenter currently supports one leaf Mobject")
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("ShrinkToCenter target must be a Mobject")
+        self.mobject = mobject
+        self.anim_args = dict(kwargs)
 
 
 public = {

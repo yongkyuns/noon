@@ -16,8 +16,6 @@
     {"path": "web/python/_manim_composition.py", "token": "copy.deepcopy", "maximum": 3, "migration_issue": "#61"},
     {"path": "web/python/_manim_draw_border_then_fill.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
     {"path": "web/python/_manim_draw_border_then_fill.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
-    {"path": "web/python/_manim_growing.py", "token": "copy.deepcopy", "maximum": 4, "migration_issue": "#61"},
-    {"path": "web/python/_manim_growing.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_lifecycle.py", "token": "copy.deepcopy", "maximum": 4, "migration_issue": "#61"},
     {"path": "web/python/_manim_lifecycle.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_rotate.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
@@ -230,6 +228,13 @@
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/authoring.rs", "symbol": "resolve_animation_options"},
       "adapters": [{"language": "python", "path": "web/python/_manim_animation_options.py", "symbol": "resolve"}]
+    },
+    {
+      "id": "animate.affine-lifecycle",
+      "surface": "Single-leaf GrowFromPoint/Center/Edge, SpinInFromNothing and ShrinkToCenter",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "declare_and_activate_affine_lifecycle"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_play_canonical_affine_lifecycle"}]
     },
     {
       "id": "animate.target-state",

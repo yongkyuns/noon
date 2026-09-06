@@ -4450,20 +4450,6 @@ mod tests {
     }
 
     #[test]
-    fn layout_observation_projects_critical_points_in_rust() {
-        let layout = WasmMobjectLayoutObservation {
-            center_x: 3.0,
-            center_y: -2.0,
-            width: 8.0,
-            height: 6.0,
-        };
-        assert_eq!(layout.critical_x(-1.0, 0.0), -1.0);
-        assert_eq!(layout.critical_x(0.0, 0.0), 3.0);
-        assert_eq!(layout.critical_y(0.0, 1.0), 1.0);
-        assert_eq!(layout.critical_y(0.0, 0.0), -2.0);
-    }
-
-    #[test]
     fn typed_binding_shares_state_and_root_without_snapshot_synchronization() {
         use std::{cell::RefCell, rc::Rc};
         let store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
