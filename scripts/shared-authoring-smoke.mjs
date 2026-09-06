@@ -146,11 +146,11 @@ class OrdinaryExportBoundary(Scene):
 const asyncExportBoundarySource = `from noon import *
 import builtins
 
-builtins.__noon_export_boundary_setup_count = 0
+builtins._noon_export_boundary_setup_count = 0
 
 class AsyncExportBoundary(Scene):
     def setup(self):
-        builtins.__noon_export_boundary_setup_count += 1
+        builtins._noon_export_boundary_setup_count += 1
         return super().setup()
 
     async def construct(self):
@@ -160,7 +160,7 @@ class AsyncExportBoundary(Scene):
 const exportBoundarySentinelSource = `from noon import *
 import builtins
 
-assert builtins.__noon_export_boundary_setup_count == 0
+assert builtins._noon_export_boundary_setup_count == 0
 result = Scene()
 `;
 
@@ -168,14 +168,14 @@ const unsupportedJspiSource = `from noon import *
 import builtins
 import pyodide.ffi
 
-builtins.__noon_unsupported_jspi_original = pyodide.ffi.can_run_sync
+builtins._noon_unsupported_jspi_original = pyodide.ffi.can_run_sync
 pyodide.ffi.can_run_sync = lambda: False
 
 class UnsupportedJspiContinuation(Scene):
     def construct(self):
         circle = Circle(radius=0.4)
         self.add(circle)
-        builtins.__noon_unsupported_jspi_scene = self
+        builtins._noon_unsupported_jspi_scene = self
         self.play(circle.animate.shift((2.0, 0.0, 0.0)), run_time=1.0, rate_func=linear)
 `;
 
@@ -184,15 +184,15 @@ import builtins
 import pyodide.ffi
 
 try:
-    scene = builtins.__noon_unsupported_jspi_scene
+    scene = builtins._noon_unsupported_jspi_scene
     context = scene._canonical_authoring_context
     assert context.liveExecutionOwnership() == "none"
     assert context.authoredDuration() == 0.0
     assert scene.time == 0.0
 finally:
-    pyodide.ffi.can_run_sync = builtins.__noon_unsupported_jspi_original
-    del builtins.__noon_unsupported_jspi_original
-    del builtins.__noon_unsupported_jspi_scene
+    pyodide.ffi.can_run_sync = builtins._noon_unsupported_jspi_original
+    del builtins._noon_unsupported_jspi_original
+    del builtins._noon_unsupported_jspi_scene
 
 result = Scene()
 `;
