@@ -44,6 +44,9 @@ const expectedJavascriptSurface = [
   "drainReturnedPublicationJson(",
   "export class WasmCallbackTransform",
   "callbackRotateTransformAboutPoint(",
+  "export class WasmCallbackPaint",
+  "callbackPaintSetColor(",
+  "callbackPaintSetFill(",
   "export class WasmValueTrackerHandle",
   "export class WasmTrackerPositionHandle",
   "export class WasmNativeVectorSignalHandle",
@@ -206,6 +209,11 @@ const expectedTypeSurface = [
   "readonly scaleX: number",
   "readonly scaleY: number",
   "callbackRotateTransformAboutPoint(translation_x: number, translation_y: number, rotation: number, scale_x: number, scale_y: number, angle: number, pivot_x: number, pivot_y: number): WasmCallbackTransform",
+  "export class WasmCallbackPaint",
+  "readonly hasFill: boolean",
+  "readonly hasStroke: boolean",
+  "callbackPaintSetColor(",
+  "callbackPaintSetFill(",
   "export class WasmValueTrackerHandle",
   "export class WasmTrackerPositionHandle",
   "export class WasmNativeVectorSignalHandle",
@@ -317,6 +325,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(",
+    "export function createDirectCallbackPaintSmokeRenderer(",
     "export function createDirectOrdinaryAffineCallbackContinuationSmokeRenderer(",
     "export function createDirectOrdinaryAffineContinuationSmokeRenderer(",
     "export function createDirectOrdinaryCompositionPlaySmokeRenderer(",
@@ -326,6 +335,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
   );
   expectedTypeSurface.push(
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectCallbackPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryAffineCallbackContinuationSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryAffineContinuationSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryCompositionPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",

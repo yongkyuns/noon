@@ -1521,6 +1521,56 @@ mod wasm {
         }
     }
 
+    fn callback_color(
+        label: &str,
+        red: Option<f64>,
+        green: Option<f64>,
+        blue: Option<f64>,
+        alpha: Option<f64>,
+    ) -> Result<Option<Color>, JsValue> {
+        match (red, green, blue, alpha) {
+            (None, None, None, None) => Ok(None),
+            (Some(red), Some(green), Some(blue), Some(alpha)) => {
+                let channel = |name: &str, value: f64| {
+                    if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
+                        Err(js_error(format!(
+                            "{label}.{name} must be a finite f32-compatible number"
+                        )))
+                    } else {
+                        Ok(value as f32)
+                    }
+                };
+                if !(0.0..=1.0).contains(&alpha) {
+                    return Err(js_error(format!("{label}.alpha must be between 0 and 1")));
+                }
+                Ok(Some(Color::rgba(
+                    channel("red", red)?,
+                    channel("green", green)?,
+                    channel("blue", blue)?,
+                    alpha as f32,
+                )))
+            }
+            _ => Err(js_error(format!(
+                "{label} must provide either all RGBA channels or none"
+            ))),
+        }
+    }
+
+    fn callback_paint_style(fill: Option<Color>, stroke: Option<Color>) -> Style {
+        Style {
+            fill,
+            stroke,
+            ..Style::default()
+        }
+    }
+
+    fn callback_paint_result(style: Style) -> WasmCallbackPaint {
+        WasmCallbackPaint {
+            fill: style.fill,
+            stroke: style.stroke,
+        }
+    }
+
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
         inner: CanonicalAuthoringScene,
@@ -1543,6 +1593,13 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmCallbackTransform {
         transform: Transform2D,
+    }
+
+    /// Pure derived paint result for one shared callback style operation.
+    #[wasm_bindgen]
+    pub struct WasmCallbackPaint {
+        fill: Option<Color>,
+        stroke: Option<Color>,
     }
 
     /// Opaque JS/Python wrapper over a replayable shared semantic declaration.
@@ -1652,6 +1709,59 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = scaleY)]
         pub fn scale_y(&self) -> f64 {
             f64::from(self.transform.scale.y)
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmCallbackPaint {
+        #[wasm_bindgen(getter, js_name = hasFill)]
+        pub fn has_fill(&self) -> bool {
+            self.fill.is_some()
+        }
+
+        #[wasm_bindgen(getter, js_name = fillRed)]
+        pub fn fill_red(&self) -> Option<f64> {
+            self.fill.map(|color| f64::from(color.red))
+        }
+
+        #[wasm_bindgen(getter, js_name = fillGreen)]
+        pub fn fill_green(&self) -> Option<f64> {
+            self.fill.map(|color| f64::from(color.green))
+        }
+
+        #[wasm_bindgen(getter, js_name = fillBlue)]
+        pub fn fill_blue(&self) -> Option<f64> {
+            self.fill.map(|color| f64::from(color.blue))
+        }
+
+        #[wasm_bindgen(getter, js_name = fillAlpha)]
+        pub fn fill_alpha(&self) -> Option<f64> {
+            self.fill.map(|color| f64::from(color.alpha))
+        }
+
+        #[wasm_bindgen(getter, js_name = hasStroke)]
+        pub fn has_stroke(&self) -> bool {
+            self.stroke.is_some()
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeRed)]
+        pub fn stroke_red(&self) -> Option<f64> {
+            self.stroke.map(|color| f64::from(color.red))
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeGreen)]
+        pub fn stroke_green(&self) -> Option<f64> {
+            self.stroke.map(|color| f64::from(color.green))
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeBlue)]
+        pub fn stroke_blue(&self) -> Option<f64> {
+            self.stroke.map(|color| f64::from(color.blue))
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeAlpha)]
+        pub fn stroke_alpha(&self) -> Option<f64> {
+            self.stroke.map(|color| f64::from(color.alpha))
         }
     }
 
@@ -1797,6 +1907,98 @@ mod wasm {
             )
             .map_err(js_error)?;
             Ok(WasmCallbackTransform { transform })
+        }
+
+        /// Apply shared Manim `set_color` semantics to callback-local paint.
+        #[wasm_bindgen(js_name = callbackPaintSetColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_paint_set_color(
+            &self,
+            fill_red: Option<f64>,
+            fill_green: Option<f64>,
+            fill_blue: Option<f64>,
+            fill_alpha: Option<f64>,
+            stroke_red: Option<f64>,
+            stroke_green: Option<f64>,
+            stroke_blue: Option<f64>,
+            stroke_alpha: Option<f64>,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<WasmCallbackPaint, JsValue> {
+            let style = callback_paint_style(
+                callback_color("callback fill", fill_red, fill_green, fill_blue, fill_alpha)?,
+                callback_color(
+                    "callback stroke",
+                    stroke_red,
+                    stroke_green,
+                    stroke_blue,
+                    stroke_alpha,
+                )?,
+            );
+            Ok(callback_paint_result(
+                noon::effective_style_with_color(style, red, green, blue, alpha)
+                    .map_err(js_error)?,
+            ))
+        }
+
+        /// Apply shared Manim `set_fill` semantics to callback-local paint.
+        #[wasm_bindgen(js_name = callbackPaintSetFill)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_paint_set_fill(
+            &self,
+            fill_red: Option<f64>,
+            fill_green: Option<f64>,
+            fill_blue: Option<f64>,
+            fill_alpha: Option<f64>,
+            stroke_red: Option<f64>,
+            stroke_green: Option<f64>,
+            stroke_blue: Option<f64>,
+            stroke_alpha: Option<f64>,
+            color_red: Option<f64>,
+            color_green: Option<f64>,
+            color_blue: Option<f64>,
+            color_alpha: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<WasmCallbackPaint, JsValue> {
+            let fill =
+                callback_color("callback fill", fill_red, fill_green, fill_blue, fill_alpha)?;
+            let color = callback_color(
+                "callback requested fill",
+                color_red,
+                color_green,
+                color_blue,
+                color_alpha,
+            )?;
+            let stroke = callback_color(
+                "callback stroke",
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+            )?;
+            let style = callback_paint_style(fill, stroke);
+            let style = match (color, opacity) {
+                (Some(color), Some(opacity)) => noon::effective_style_with_fill(
+                    style,
+                    f64::from(color.red),
+                    f64::from(color.green),
+                    f64::from(color.blue),
+                    opacity,
+                ),
+                (Some(color), None) => noon::effective_style_with_fill_color(
+                    style,
+                    f64::from(color.red),
+                    f64::from(color.green),
+                    f64::from(color.blue),
+                    f64::from(color.alpha),
+                ),
+                (None, Some(opacity)) => noon::effective_style_with_fill_opacity(style, opacity),
+                (None, None) => Ok(style),
+            }
+            .map_err(js_error)?;
+            Ok(callback_paint_result(style))
         }
 
         #[wasm_bindgen(js_name = bindMobject)]

@@ -40,6 +40,7 @@ for (const required of [
   "Mobject::from_text",
   "Text::new(\"Noon\")",
   "example_scenes::live_affine_callbacks",
+  "example_scenes::live_callback_paint",
   "example_scenes::live_affine_completion",
   "example_scenes::ordinary_affine_play",
   "example_scenes::ordinary_fade_continuation_program",

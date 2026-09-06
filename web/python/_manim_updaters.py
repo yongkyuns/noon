@@ -712,6 +712,38 @@ class _CanonicalCallbackContext:
             _phase_number("rotation result.scale.y", result.scaleY),
         )
 
+    def paint_set_color(
+        self,
+        style: _PhaseStyle,
+        color: tuple[float, float, float, float],
+    ) -> tuple[
+        tuple[float, float, float, float] | None,
+        tuple[float, float, float, float] | None,
+    ]:
+        result = self._operations.callbackPaintSetColor(
+            *_phase_optional_color_args(style.fill),
+            *_phase_optional_color_args(style.stroke),
+            *color,
+        )
+        return (
+            _phase_callback_paint_color(result, "fill"),
+            _phase_callback_paint_color(result, "stroke"),
+        )
+
+    def paint_set_fill(
+        self,
+        style: _PhaseStyle,
+        color: tuple[float, float, float, float] | None,
+        opacity: float | None,
+    ) -> tuple[float, float, float, float] | None:
+        result = self._operations.callbackPaintSetFill(
+            *_phase_optional_color_args(style.fill),
+            *_phase_optional_color_args(style.stroke),
+            *_phase_optional_color_args(color),
+            opacity,
+        )
+        return _phase_callback_paint_color(result, "fill")
+
     def style_changed(
         self, key: tuple[int, int], before: _PhaseStyle, row: _PhasePropertyRow
     ) -> None:
@@ -760,6 +792,27 @@ def _phase_color_wire(value: tuple[float, float, float, float] | None) -> dict[s
     if value is None:
         return None
     return {"red": value[0], "green": value[1], "blue": value[2], "alpha": value[3]}
+
+
+def _phase_optional_color_args(
+    value: tuple[float, float, float, float] | None,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    return (None, None, None, None) if value is None else value
+
+
+def _phase_callback_paint_color(
+    result: object, layer: str
+) -> tuple[float, float, float, float] | None:
+    title = layer.capitalize()
+    if not bool(getattr(result, f"has{title}")):
+        return None
+    return tuple(
+        _phase_number(
+            f"paint result.{layer}.{channel}",
+            getattr(result, f"{layer}{channel.capitalize()}"),
+        )
+        for channel in ("red", "green", "blue", "alpha")
+    )  # type: ignore[return-value]
 
 
 def _phase_bounds(value: object) -> tuple[float, float, float, float] | None:
@@ -914,13 +967,10 @@ def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobje
         return _ORIGINAL_SET_COLOR(self, color)
     context, key, row = value
     color_value = _phase_color("set_color", color.to_ir())
+    assert color_value is not None
     before = row.style
-    if row.style.fill is not None:
-        row.style = replace(row.style, fill=color_value)
-    if row.style.stroke is not None:
-        row.style = replace(row.style, stroke=color_value)
-    if row.style.fill is None and row.style.stroke is None:
-        row.style = replace(row.style, fill=color_value)
+    fill, stroke = context.paint_set_color(row.style, color_value)
+    row.style = replace(row.style, fill=fill, stroke=stroke)
     context.style_changed(key, before, row)
     return self
 
@@ -934,10 +984,10 @@ def _canonical_set_fill(
     context, key, row = value
     before = row.style
     fill = None if color is None else _phase_color("set_fill", color.to_ir())
-    style = replace(row.style, fill=fill)
-    if opacity is not None:
-        style = replace(style, opacity=float(opacity))
-    row.style = style
+    row.style = replace(
+        row.style,
+        fill=context.paint_set_fill(row.style, fill, opacity),
+    )
     context.style_changed(key, before, row)
     return self
 
