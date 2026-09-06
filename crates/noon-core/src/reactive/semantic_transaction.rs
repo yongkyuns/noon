@@ -8,10 +8,11 @@ use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
     AnimationOptions, HostCallbackId, SemanticAnimationCompositionKind, SemanticAnimationState,
     SemanticFadeDirection, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
-    SemanticObjectProperty, SemanticObjectState, SemanticScalarSignalTrack,
-    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
-    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
-    SemanticStore, SemanticStoreError, SemanticStyle, SemanticUpdaterRegistration, StoredGeometry,
+    SemanticObjectProperty, SemanticObjectState, SemanticScalarSignalHold,
+    SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
+    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
+    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
+    SemanticUpdaterRegistration, StoredGeometry,
 };
 use crate::TrackTiming;
 
@@ -59,6 +60,11 @@ pub enum SemanticMutation {
         from: f64,
         to: f64,
         timing: TrackTiming,
+    },
+    SetScalarSignalAt {
+        signal: SemanticNodeId,
+        value: f64,
+        time: f64,
     },
     SetProperty {
         object: SemanticTransactionNodeRef,
@@ -148,6 +154,7 @@ impl SemanticMutation {
             Self::AddAnimation { animation, .. } => animation.intent().node_references().collect(),
             Self::SetSignal { .. }
             | Self::AddScalarSignalTrack { .. }
+            | Self::SetScalarSignalAt { .. }
             | Self::AddNode { .. }
             | Self::RemoveAnimation { .. } => Vec::new(),
         }
@@ -168,6 +175,7 @@ impl SemanticMutation {
         match self {
             Self::SetSignal { signal, .. } => Some(*signal),
             Self::AddScalarSignalTrack { signal, .. } => Some(*signal),
+            Self::SetScalarSignalAt { signal, .. } => Some(*signal),
             Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
@@ -187,7 +195,7 @@ impl SemanticMutation {
     const fn key(&self) -> Option<SemanticMutationKey> {
         match self {
             Self::SetSignal { signal, .. } => Some(SemanticMutationKey::Signal(*signal)),
-            Self::AddScalarSignalTrack { .. } => None,
+            Self::AddScalarSignalTrack { .. } | Self::SetScalarSignalAt { .. } => None,
             Self::SetProperty {
                 object, property, ..
             } => Some(SemanticMutationKey::ObjectProperty {
@@ -261,7 +269,7 @@ pub enum SemanticMutationImpact {
     SignalValue {
         signal: SemanticNodeId,
     },
-    SignalTracks {
+    SignalTimeline {
         signal: SemanticNodeId,
     },
     ObjectProperty {
@@ -363,6 +371,21 @@ impl SemanticMutationTransaction {
             from,
             to,
             timing,
+        });
+        self
+    }
+
+    /// Persist one scalar input value from an explicit authored time onward.
+    pub fn set_scalar_signal_at(
+        &mut self,
+        signal: SemanticNodeId,
+        value: f64,
+        time: f64,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetScalarSignalAt {
+            signal,
+            value,
+            time,
         });
         self
     }
@@ -806,8 +829,8 @@ impl SemanticMutationTransaction {
         let mut staged_object_order = Vec::new();
         let mut staged_updaters =
             HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
-        let mut staged_signal_tracks =
-            HashMap::<SemanticNodeId, Vec<SemanticScalarSignalTrack>>::new();
+        let mut staged_signal_timeline =
+            HashMap::<SemanticNodeId, Vec<SemanticScalarSignalTimelineEntry>>::new();
         let mut available_pending_animations = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
@@ -975,8 +998,8 @@ impl SemanticMutationTransaction {
                             error: SemanticSignalError::NativeOwnedSignal { signal: *signal },
                         });
                     }
-                    if !state.scalar_tracks().is_empty()
-                        || staged_signal_tracks.contains_key(signal)
+                    if !state.scalar_timeline().is_empty()
+                        || staged_signal_timeline.contains_key(signal)
                     {
                         return Err(SemanticMutationTransactionError::Signal {
                             index,
@@ -1139,16 +1162,46 @@ impl SemanticMutationTransaction {
                     let existing_last = store
                         .semantic_signal_state(*signal)
                         .ok()
-                        .and_then(|state| state.scalar_tracks().last().copied());
-                    let tracks = staged_signal_tracks.entry(*signal).or_default();
-                    let previous = tracks.last().copied().or(existing_last);
+                        .and_then(|state| state.scalar_timeline().last().copied());
+                    let timeline = staged_signal_timeline.entry(*signal).or_default();
+                    let previous = timeline.last().copied().or(existing_last);
                     store
                         .validate_semantic_scalar_signal_track_after(track, previous)
                         .map_err(|error| SemanticMutationTransactionError::SignalTrack {
                             index,
                             error,
                         })?;
-                    tracks.push(track);
+                    timeline.push(SemanticScalarSignalTimelineEntry::Track(track));
+                    changed.push(true);
+                }
+                SemanticMutation::SetScalarSignalAt {
+                    signal,
+                    value,
+                    time,
+                } => {
+                    if targets.contains(&SemanticMutationKey::Signal(*signal)) {
+                        return Err(SemanticMutationTransactionError::Signal {
+                            index,
+                            error: SemanticSignalError::TimelineOwnedSignal { signal: *signal },
+                        });
+                    }
+                    let hold = SemanticScalarSignalHold::new(*signal, *value, *time);
+                    let existing_last = store
+                        .semantic_signal_state(*signal)
+                        .ok()
+                        .and_then(|state| state.scalar_timeline().last().copied());
+                    let timeline = staged_signal_timeline.entry(*signal).or_default();
+                    let previous = timeline.last().copied().or(existing_last);
+                    store
+                        .validate_semantic_scalar_signal_entry_after(
+                            SemanticScalarSignalTimelineEntry::Hold(hold),
+                            previous,
+                        )
+                        .map_err(|error| SemanticMutationTransactionError::SignalTrack {
+                            index,
+                            error,
+                        })?;
+                    timeline.push(SemanticScalarSignalTimelineEntry::Hold(hold));
                     changed.push(true);
                 }
                 SemanticMutation::RemoveUpdater {

@@ -220,7 +220,7 @@ impl SemanticExecutionReachability {
                     self.remove_node(node, &mut journal);
                 }
                 SemanticMutationImpact::SignalValue { .. }
-                | SemanticMutationImpact::SignalTracks { .. }
+                | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }

@@ -604,6 +604,54 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    /// Atomically activate one ordinary scalar tracker play without advancing it.
+    /// The one retained execution player owns the segment and any required callback
+    /// barriers; Python receives only the shared segment endpoint.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_value_tracker_play(
+        &mut self,
+        tracker: &noon::ValueTracker,
+        target: f64,
+        duration: f64,
+        rate_function: noon_core::RateFunction,
+    ) -> Result<f64, String> {
+        if !tracker.is_in_store(self.scene.store()) {
+            return Err("ValueTracker belongs to another scene store".into());
+        }
+        self.scene
+            .store()
+            .borrow()
+            .semantic_signal_state(tracker.node_id())
+            .map_err(|error| error.to_string())?;
+        if !target.is_finite() || target.abs() > f32::MAX as f64 {
+            return Err("ValueTracker target must fit the runtime scalar range".into());
+        }
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err("ValueTracker duration must be finite and positive".into());
+        }
+        if self.live_player.is_none() {
+            if self.scene.time() != 0.0 {
+                return Err(
+                    "ordinary ValueTracker play cannot follow pre-execution canonical timing"
+                        .into(),
+                );
+            }
+            self.prepare_local_player_for_run()?;
+            let mut player = self.build_live_player(duration.max(1.0), 0)?;
+            let end_time = player.live_declare_and_activate_value_tracker(
+                tracker,
+                target,
+                duration,
+                rate_function,
+            )?;
+            self.live_player = Some(player);
+            self.live_player_returned = false;
+            return Ok(end_time);
+        }
+        self.active_live_player()?
+            .live_declare_and_activate_value_tracker(tracker, target, duration, rate_function)
+    }
+
     /// The authored scalar-track endpoint used for handoff before a player exists.
     #[cfg(any(target_arch = "wasm32", test))]
     fn authored_duration(&self) -> f64 {
@@ -1915,6 +1963,27 @@ mod wasm {
             let tracker = tracker.tracker_in(self.inner.scene.store())?;
             self.inner
                 .set_tracker_value(tracker, value)
+                .map_err(js_error)
+        }
+
+        /// Begin one ordinary scalar tracker play for the shared continuation host.
+        #[wasm_bindgen(js_name = beginOrdinaryValueTrackerPlay)]
+        pub fn begin_ordinary_value_tracker_play(
+            &mut self,
+            tracker: &WasmValueTrackerHandle,
+            target: f64,
+            duration: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported ValueTracker rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.inner
+                .begin_ordinary_value_tracker_play(tracker, target, duration, rate_function)
                 .map_err(js_error)
         }
 
@@ -4008,16 +4077,81 @@ mod tests {
                 .unwrap(),
             4.0
         );
-        let tracks = context
+        let timeline = context
             .scene
             .store()
             .borrow()
             .semantic_signal_state(tracker.node_id())
             .unwrap()
-            .scalar_tracks()
+            .scalar_timeline()
             .to_vec();
-        assert_eq!(tracks[1].timing().start_time, 3.0);
+        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = timeline[1] else {
+            panic!("expected a second scalar track")
+        };
+        assert_eq!(second.timing().start_time, 3.0);
         assert_eq!(context.authored_duration(), 4.0);
+    }
+
+    #[test]
+    fn ordinary_scalar_begin_is_provisional_and_postcompletion_set_persists() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let tracker = context.create_value_tracker(0.0).unwrap();
+        let position = context
+            .tracker_position(
+                &tracker,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(-2.0, 0.0, 0.0),
+            )
+            .unwrap();
+        context.bind_tracker_position(&circle, &position).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+
+        assert!(context
+            .begin_ordinary_value_tracker_play(&tracker, f64::MAX, 2.0, RateFunction::Linear,)
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let end = context
+            .begin_ordinary_value_tracker_play(&tracker, 2.0, 2.0, RateFunction::Linear)
+            .unwrap();
+        assert_eq!(end, 2.0);
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(1.0).unwrap();
+        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 1.0);
+        assert_eq!(
+            player
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            -1.0
+        );
+        player.live_advance_segment_to(2.0).unwrap();
+        player.live_complete_segment().unwrap();
+        player.live_set_signal(&tracker, 3.0).unwrap();
+        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 3.0);
+        assert_eq!(
+            player
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            1.0
+        );
+        assert_eq!(
+            context
+                .scene
+                .store()
+                .borrow()
+                .semantic_input_scalar_value_at(tracker.node_id(), 1.0)
+                .unwrap(),
+            1.0
+        );
     }
 
     #[test]

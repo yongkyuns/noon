@@ -16,6 +16,7 @@ use crate::{
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
+    ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, PublicationContext, SemanticAnimationCompositionKind,
@@ -362,6 +363,48 @@ impl<'a> LiveSession<'a> {
                 target.node_id(),
                 options,
             )
+            .map_err(Into::into)
+    }
+
+    /// Atomically append and activate one scalar tracker interval at the current
+    /// session time. The returned segment uses the same completion barrier as
+    /// object-property animation tracks.
+    pub fn declare_and_activate_value_tracker(
+        &mut self,
+        tracker: &ValueTracker,
+        target: f64,
+        duration: f64,
+        rate_func: noon_core::RateFunction,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        tracker
+            .require_store(&self.store)
+            .map_err(LiveSessionError::Animation)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_value_tracker(
+                &mut store,
+                tracker.node_id(),
+                target,
+                duration,
+                rate_func,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Persist one tracker value at the current live authored time after its
+    /// active segment has completed and released timeline ownership.
+    pub fn set_value(
+        &mut self,
+        tracker: &ValueTracker,
+        value: f64,
+    ) -> Result<(), LiveSessionError> {
+        tracker
+            .require_store(&self.store)
+            .map_err(LiveSessionError::Animation)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .set_scalar_signal_value(&mut store, tracker.node_id(), value)
+            .map(|_| ())
             .map_err(Into::into)
     }
 

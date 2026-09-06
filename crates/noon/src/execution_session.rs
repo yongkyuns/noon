@@ -5,6 +5,7 @@ mod signal_timeline;
 pub use callback::*;
 pub use completion::*;
 pub use publication::*;
+pub use signal_timeline::SignalTimelineAppendError;
 
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
 use signal_timeline::SignalTimelineSchedule;
@@ -13,22 +14,25 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::execution_segment::{
     ExecutionSegment, ExecutionSegmentError, ExecutionSegmentSequence, ExecutionSegmentToken,
-    PendingSegmentCompletion, SegmentCompletionEntry,
+    PendingSegmentCompletion, PendingSegmentCompletionKind, SegmentCompletionEntry,
 };
 use noon_compile::{
-    lower_prepared_semantic_animation_composition, lower_semantic_affine_animation_tracks,
-    lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
-    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
-    PreparedSemanticAnimationLoweringError, SemanticAffineAnimationTrackError,
-    SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
-    SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
+    lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
+    lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
+    lower_semantic_execution, lower_semantic_execution_root, CompilePatchError,
+    EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
+    PreparedScalarSignalTimelineError, PreparedSemanticAnimationLoweringError,
+    SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
+    SemanticExecutionLoweringError, SemanticExecutionLoweringOutput, SemanticExecutionReachability,
+    SemanticReactiveProjection,
 };
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
-    NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, ReactiveError, ReactiveValue,
-    Rect, SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
-    SemanticSceneOperationError, SemanticStore, SemanticTransactionNodeRef, TimelineError, TrackId,
+    NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, RateFunction, ReactiveError,
+    ReactiveValue, Rect, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
+    SemanticNodeId, SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
+    SemanticTransactionNodeRef, TimelineError, TrackId, TrackTiming,
 };
 use noon_runtime::{
     EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, RendererPublication,
@@ -228,6 +232,17 @@ pub enum ExecutionSessionAnimationError {
     Segment(ExecutionSegmentError),
     Payload(SemanticAffineAnimationTrackError),
     PreparedAnimation(PreparedSemanticAnimationLoweringError),
+    PreparedScalarTimeline(PreparedScalarSignalTimelineError),
+    ScalarTimeline(SignalTimelineAppendError),
+    ScalarQuery(SemanticScalarSignalQueryError),
+    ScalarEffectiveValue {
+        signal: SemanticNodeId,
+        authored: f32,
+        effective: Option<ReactiveValue>,
+    },
+    TimelineOwnedSignal {
+        signal: SemanticNodeId,
+    },
     TargetState {
         target: SemanticNodeId,
         error: SemanticSceneOperationError,
@@ -273,6 +288,25 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
                 "semantic animation payload lowering failed: {error}"
             ),
             Self::PreparedAnimation(error) => error.fmt(formatter),
+            Self::PreparedScalarTimeline(error) => error.fmt(formatter),
+            Self::ScalarTimeline(error) => error.fmt(formatter),
+            Self::ScalarQuery(error) => error.fmt(formatter),
+            Self::ScalarEffectiveValue {
+                signal,
+                authored,
+                effective,
+            } => write!(
+                formatter,
+                "semantic scalar signal {}:{} authored value {authored} does not match current effective value {effective:?}",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::TimelineOwnedSignal { signal } => write!(
+                formatter,
+                "semantic scalar signal {}:{} still has an active timeline owner",
+                signal.slot(),
+                signal.generation()
+            ),
             Self::TargetState { target, error } => write!(
                 formatter,
                 "animation target-state node {}:{} is invalid: {error}",
@@ -327,6 +361,24 @@ impl From<SemanticAffineAnimationTrackError> for ExecutionSessionAnimationError 
 impl From<PreparedSemanticAnimationLoweringError> for ExecutionSessionAnimationError {
     fn from(value: PreparedSemanticAnimationLoweringError) -> Self {
         Self::PreparedAnimation(value)
+    }
+}
+
+impl From<PreparedScalarSignalTimelineError> for ExecutionSessionAnimationError {
+    fn from(value: PreparedScalarSignalTimelineError) -> Self {
+        Self::PreparedScalarTimeline(value)
+    }
+}
+
+impl From<SignalTimelineAppendError> for ExecutionSessionAnimationError {
+    fn from(value: SignalTimelineAppendError) -> Self {
+        Self::ScalarTimeline(value)
+    }
+}
+
+impl From<SemanticScalarSignalQueryError> for ExecutionSessionAnimationError {
+    fn from(value: SemanticScalarSignalQueryError) -> Self {
+        Self::ScalarQuery(value)
     }
 }
 
@@ -500,7 +552,8 @@ impl ExecutionSession {
             .map_or(Some(0), |id| id.checked_add(1));
         let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
         let mut reactive_projection = lowered.reactive().clone();
-        let signal_timeline = SignalTimelineSchedule::new(reactive_projection.take_scalar_tracks());
+        let signal_timeline =
+            SignalTimelineSchedule::new(reactive_projection.take_scalar_timeline());
         let callback_schedule = CallbackSchedule::new(lowered.host_callbacks().clone());
         let mut runtime = SceneInstance::from_semantic_execution(lowered);
         let mut spatial_index = ExecutionSpatialIndex::default();
@@ -853,8 +906,10 @@ impl ExecutionSession {
         self.pending_segment_completion = Some(PendingSegmentCompletion {
             token,
             activation_scene_revision: store.scene_revision(),
-            lifecycle_root: None,
-            entries: completions,
+            kind: PendingSegmentCompletionKind::ObjectTracks {
+                lifecycle_root: None,
+                entries: completions,
+            },
         });
         self.next_activation_track_id = next_track_id;
         Ok(segment)
@@ -885,6 +940,144 @@ impl ExecutionSession {
             AnimationOptions::new(),
             None,
         )
+    }
+
+    /// Atomically append and activate one scalar ValueTracker timeline interval.
+    ///
+    /// The semantic track, derived schedule entry, revision publication, and
+    /// completion token become visible together. The first live slice admits only
+    /// entries beginning at the current frame and rejects event interleaving.
+    pub fn declare_and_activate_value_tracker(
+        &mut self,
+        store: &mut SemanticStore,
+        signal: SemanticNodeId,
+        target: f64,
+        duration: f64,
+        rate_func: RateFunction,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let start_time = self.runtime.frame().time;
+        let from = store.semantic_input_scalar_value_at(signal, start_time)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_scalar_signal_track(
+            signal,
+            from,
+            target,
+            TrackTiming::new(start_time, duration, rate_func),
+        );
+        let prepared = transaction.prepare(store).map_err(|error| {
+            ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::Semantic(error),
+            )
+        })?;
+        let entry =
+            lower_prepared_scalar_signal_timeline_entry(&prepared, &self.reactive_projection)?;
+        let noon_compile::CompiledScalarSignalTimelineEntry::Track(track) = entry else {
+            unreachable!("tracker activation prepared one scalar track")
+        };
+        let effective = self.effective_signal_value(signal).cloned();
+        if effective != Some(ReactiveValue::Scalar(track.from())) {
+            return Err(ExecutionSessionAnimationError::ScalarEffectiveValue {
+                signal,
+                authored: track.from(),
+                effective,
+            });
+        }
+        let schedule = self.signal_timeline.prepare_append(entry, start_time)?;
+        let mut segment = ExecutionSegment::from_duration(start_time, duration)?;
+        let runtime_publication = self
+            .runtime
+            .prepare_authored_plan_change(
+                self.publication_context(),
+                prepared.proposed_scene_revision(),
+            )
+            .map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Runtime(error),
+                )
+            })?;
+        let raw_sequence = self
+            .next_segment_sequence
+            .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
+        let next_segment_sequence = raw_sequence.checked_add(1);
+        let token = ExecutionSegmentToken::new(
+            self.runtime.runtime_identity(),
+            ExecutionSegmentSequence::new(raw_sequence),
+        );
+
+        let (_result, store) = prepared.commit_with_store();
+        self.signal_timeline.commit_append(schedule);
+        self.runtime
+            .apply_prepared_authored_plan_change(runtime_publication)
+            .expect("scalar authored plan publication was preflighted under exclusive ownership");
+        self.next_segment_sequence = next_segment_sequence;
+        segment = segment.with_completion_token(token);
+        self.pending_segment_completion = Some(PendingSegmentCompletion {
+            token,
+            activation_scene_revision: store.scene_revision(),
+            kind: PendingSegmentCompletionKind::ScalarTrack {
+                signal,
+                authored_endpoint: target,
+                runtime_endpoint: track.to(),
+                end_time: segment.end_time(),
+            },
+        });
+        Ok(segment)
+    }
+
+    /// Persist one scalar input value at the current live authored time.
+    ///
+    /// This appends a semantic Hold, updates only the signal's compiled event
+    /// group, evaluates its dirty reactive closure, and publishes all three
+    /// layers under one revision transition. Active segment ownership and native
+    /// source ownership are rejected during preflight.
+    pub fn set_scalar_signal_value(
+        &mut self,
+        store: &mut SemanticStore,
+        signal: SemanticNodeId,
+        value: f64,
+    ) -> Result<&FrameState, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        if self.signal_timeline.owns(signal) {
+            return Err(ExecutionSessionAnimationError::TimelineOwnedSignal { signal });
+        }
+        let time = self.runtime.frame().time;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_scalar_signal_at(signal, value, time);
+        let prepared = transaction.prepare(store).map_err(|error| {
+            ExecutionSessionAnimationError::AuthoredPublication(
+                ExecutionSessionPublicationError::Semantic(error),
+            )
+        })?;
+        let entry =
+            lower_prepared_scalar_signal_timeline_entry(&prepared, &self.reactive_projection)?;
+        let noon_compile::CompiledScalarSignalTimelineEntry::Hold(hold) = entry else {
+            unreachable!("persistent scalar publication prepared one Hold entry")
+        };
+        let schedule = self.signal_timeline.prepare_append(entry, time)?;
+        let runtime_publication = self
+            .runtime
+            .prepare_authored_reactive_plan_change(
+                self.publication_context(),
+                prepared.proposed_scene_revision(),
+                &[(hold.execution_signal(), ReactiveValue::Scalar(hold.value()))],
+            )
+            .map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Runtime(error),
+                )
+            })?;
+
+        let (_result, store) = prepared.commit_with_store();
+        self.signal_timeline.commit_append(schedule);
+        self.runtime
+            .apply_prepared_authored_reactive_plan_change(runtime_publication)
+            .expect("persistent scalar publication was preflighted under exclusive ownership");
+        debug_assert_eq!(
+            store.scene_revision(),
+            self.publication_context().scene_revision()
+        );
+        Ok(self.runtime.frame())
     }
 
     /// Atomically declare and activate one flat Parallel or Sequence composition.
@@ -1153,8 +1346,10 @@ impl ExecutionSession {
             self.pending_segment_completion = Some(PendingSegmentCompletion {
                 token,
                 activation_scene_revision,
-                lifecycle_root: lifecycle.map(|(root, _)| root),
-                entries,
+                kind: PendingSegmentCompletionKind::ObjectTracks {
+                    lifecycle_root: lifecycle.map(|(root, _)| root),
+                    entries,
+                },
             });
         }
         Ok(segment)
@@ -1393,7 +1588,8 @@ mod tests {
     use noon_core::{
         AnimationOptions, NativeEventSource, NativeStateSource, RateFunction,
         SemanticMutationTransaction, SemanticObjectProperty, SemanticObjectRole,
-        SemanticObjectState, SemanticSignalExpr, SemanticVec3, StoredGeometry, TrackTiming, Vec2,
+        SemanticObjectState, SemanticSignalExpr, SemanticSignalValue, SemanticVec3, StoredGeometry,
+        TrackTiming, Vec2,
     };
     use noon_runtime::TimelineWakeState;
 
@@ -2079,6 +2275,143 @@ mod tests {
             session.wake_state().timeline(),
             TimelineWakeState::Continuous
         );
+    }
+
+    #[test]
+    fn live_scalar_completion_releases_ownership_and_preserves_history_locally() {
+        let mut store = SemanticStore::new();
+        let driven =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let unrelated =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 2.0,
+            }));
+        store.attach_to_scene(driven).unwrap();
+        store.attach_to_scene(unrelated).unwrap();
+        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let position = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::Add(
+                Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(
+                    SemanticVec3::new(-2.0, 0.0, 0.0),
+                ))),
+                Box::new(SemanticSignalExpr::Mul(
+                    Box::new(SemanticSignalExpr::signal(tracker)),
+                    Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(
+                        SemanticVec3::new(1.0, 0.0, 0.0),
+                    ))),
+                )),
+            ))
+            .unwrap();
+        store
+            .bind_semantic_signal(position, driven, SemanticObjectProperty::Translation)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.take_frame_changes();
+
+        let revision = store.scene_revision();
+        let publication = session.publication_context();
+        let segment = session
+            .declare_and_activate_value_tracker(&mut store, tracker, 2.0, 2.0, RateFunction::Linear)
+            .unwrap();
+        assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
+        assert_eq!(
+            session.publication_context().scene_revision(),
+            store.scene_revision()
+        );
+        assert_eq!(
+            session.publication_context().execution_revision(),
+            publication.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(session.signal_timeline.entry_count(), 1);
+        assert_eq!(session.signal_timeline.event_count(), 2);
+        assert_eq!(
+            session.set_reactive_input(tracker, 9.0_f32),
+            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal: tracker })
+        );
+
+        session.advance_segment_to(segment, 1.0).unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(-1.0, 0.0)
+        );
+        session.seek(0.5).unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(0.5))
+        );
+        session.advance_segment_to(segment, 2.0).unwrap();
+        session.take_frame_changes();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(session.signal_timeline.entry_count(), 2);
+        assert_eq!(session.signal_timeline.event_count(), 3);
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.0), Ok(1.0));
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 2.0), Ok(2.0));
+
+        let unrelated_before = session.frame().objects[1].clone();
+        session
+            .set_scalar_signal_value(&mut store, tracker, 3.0)
+            .unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(3.0))
+        );
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(1.0, 0.0)
+        );
+        assert_eq!(session.frame().objects[1], unrelated_before);
+        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+
+        session.seek(1.0).unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
+        session.advance_to(2.5).unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(3.0))
+        );
+        let second = session
+            .declare_and_activate_value_tracker(&mut store, tracker, 5.0, 1.0, RateFunction::Linear)
+            .unwrap();
+        session.advance_segment_to(second, 3.5).unwrap();
+        session.complete_segment(&mut store, second).unwrap();
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.0), Ok(1.0));
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 2.5), Ok(3.0));
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 3.0), Ok(4.0));
+        assert_eq!(store.semantic_input_scalar_value_at(tracker, 3.5), Ok(5.0));
+    }
+
+    #[test]
+    fn live_scalar_lowering_failure_leaves_semantic_runtime_and_schedule_unchanged() {
+        let mut store = SemanticStore::new();
+        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let revision = store.scene_revision();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+
+        assert!(session
+            .declare_and_activate_value_tracker(
+                &mut store,
+                tracker,
+                f64::MAX,
+                1.0,
+                RateFunction::Linear,
+            )
+            .is_err());
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+        assert_eq!(session.signal_timeline.entry_count(), 0);
+        assert_eq!(session.signal_timeline.event_count(), 0);
     }
 
     #[test]

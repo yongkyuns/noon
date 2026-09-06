@@ -241,8 +241,8 @@ fn tracker_track_endpoint(tracker: &ValueTracker) -> Result<f64, String> {
     let state = store
         .semantic_signal_state(tracker.node)
         .map_err(|error| error.to_string())?;
-    if let Some(track) = state.scalar_tracks().last() {
-        return Ok(track.to());
+    if let Some(entry) = state.scalar_timeline().last() {
+        return Ok(entry.terminal_value());
     }
     match state.source() {
         SemanticSignalSource::Input(SemanticSignalValue::Scalar(value)) => Ok(*value),
@@ -285,15 +285,15 @@ mod tests {
             .semantic_signal_state(tracker.node_id())
             .unwrap()
             .clone();
-        assert_eq!(signal.scalar_tracks().len(), 1);
-        assert_eq!(signal.scalar_tracks()[0].from(), 0.0);
-        assert_eq!(signal.scalar_tracks()[0].to(), 4.0);
-        assert_eq!(signal.scalar_tracks()[0].timing().start_time, 0.0);
-        assert_eq!(signal.scalar_tracks()[0].timing().duration, 2.0);
-        assert_eq!(
-            signal.scalar_tracks()[0].timing().easing,
-            RateFunction::Linear
-        );
+        let [noon_core::SemanticScalarSignalTimelineEntry::Track(track)] = signal.scalar_timeline()
+        else {
+            panic!("expected one scalar track")
+        };
+        assert_eq!(track.from(), 0.0);
+        assert_eq!(track.to(), 4.0);
+        assert_eq!(track.timing().start_time, 0.0);
+        assert_eq!(track.timing().duration, 2.0);
+        assert_eq!(track.timing().easing, RateFunction::Linear);
         assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 4.0);
         assert!(scene.set_value(&tracker, 1.0).is_err());
     }
@@ -329,14 +329,17 @@ mod tests {
             .unwrap();
 
         let store = scene.store().borrow();
-        let tracks = store
+        let timeline = store
             .semantic_signal_state(tracker.node_id())
             .unwrap()
-            .scalar_tracks();
-        assert_eq!(tracks.len(), 2);
-        assert_eq!(tracks[1].from(), 4.0);
-        assert_eq!(tracks[1].to(), 6.0);
-        assert_eq!(tracks[1].timing().start_time, 3.0);
+            .scalar_timeline();
+        assert_eq!(timeline.len(), 2);
+        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = timeline[1] else {
+            panic!("expected a second scalar track")
+        };
+        assert_eq!(second.from(), 4.0);
+        assert_eq!(second.to(), 6.0);
+        assert_eq!(second.timing().start_time, 3.0);
         assert_eq!(scene.time(), 4.0);
         assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 6.0);
     }

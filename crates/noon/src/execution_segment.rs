@@ -49,11 +49,24 @@ pub(crate) struct SegmentCompletionEntry {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) enum PendingSegmentCompletionKind {
+    ObjectTracks {
+        lifecycle_root: Option<SemanticNodeId>,
+        entries: Vec<SegmentCompletionEntry>,
+    },
+    ScalarTrack {
+        signal: SemanticNodeId,
+        authored_endpoint: f64,
+        runtime_endpoint: f32,
+        end_time: f64,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct PendingSegmentCompletion {
     pub token: ExecutionSegmentToken,
     pub activation_scene_revision: noon_core::SceneRevision,
-    pub lifecycle_root: Option<SemanticNodeId>,
-    pub entries: Vec<SegmentCompletionEntry>,
+    pub kind: PendingSegmentCompletionKind,
 }
 
 /// One authored-time continuation boundary owned by the execution session layer.
