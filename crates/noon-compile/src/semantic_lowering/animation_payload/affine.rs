@@ -3,8 +3,8 @@ use std::collections::{hash_map::Entry, HashMap};
 use noon_core::{
     validate_track_definition, ObjectId, Property, ResolvedAnimationOptions,
     SemanticAnimationError, SemanticAnimationIntent, SemanticLoweringError, SemanticNodeId,
-    SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue, SemanticStore,
-    SemanticStyle, Style, TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
+    SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue, SemanticStore, Style,
+    TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
 };
 
 use super::super::{
@@ -22,12 +22,18 @@ pub struct EffectiveAnimationProperties {
 /// Exact authored reconciliation performed when one execution channel is released.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationCompletion {
-    None,
     Property {
         property: SemanticObjectProperty,
         value: SemanticSignalValue,
     },
-    Style(SemanticStyle),
+    Fill {
+        paint: Option<noon_core::SemanticPaint>,
+        opacity: f64,
+    },
+    Stroke {
+        paint: Option<noon_core::SemanticPaint>,
+        opacity: f64,
+    },
 }
 
 /// One existing execution-timeline channel lowered from an activated semantic animation.
@@ -548,9 +554,7 @@ pub(super) fn validate_affine_payload(
     if source.content != target.content {
         return Err(AffinePayloadIssue::UnsupportedContentChange);
     }
-    if source.style.stroke != target.style.stroke
-        || source.style.stroke_opacity != target.style.stroke_opacity
-        || source.style.stroke_width != target.style.stroke_width
+    if source.style.stroke_width != target.style.stroke_width
         || source.style.stroke_width_mode != target.style.stroke_width_mode
         || source.style.stroke_join != target.style.stroke_join
         || source.style.stroke_cap != target.style.stroke_cap
@@ -615,7 +619,7 @@ pub(super) fn lower_affine_channels(
     };
     let target_style = lower_semantic_style(target_state, target)
         .map_err(AffinePayloadIssue::InvalidTargetStyle)?;
-    let mut channels = Vec::with_capacity(5);
+    let mut channels = Vec::with_capacity(6);
     push_affine_channel(
         source,
         SemanticObjectProperty::Translation,
@@ -672,20 +676,33 @@ pub(super) fn lower_affine_channels(
             from: from.style.fill,
             to: target_style.fill,
         },
-        SemanticAnimationCompletion::Style(target.style.clone()),
+        SemanticAnimationCompletion::Fill {
+            paint: target.style.fill.clone(),
+            opacity: target.style.fill_opacity,
+        },
         fill_changed,
+        &mut channels,
+    )?;
+    let stroke_changed = source.style.stroke != target.style.stroke
+        || source.style.stroke_opacity != target.style.stroke_opacity
+        || from.style.stroke != target_style.stroke;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::StrokeOpacity,
+        Property::Stroke,
+        TrackValues::Color {
+            from: from.style.stroke,
+            to: target_style.stroke,
+        },
+        SemanticAnimationCompletion::Stroke {
+            paint: target.style.stroke.clone(),
+            opacity: target.style.stroke_opacity,
+        },
+        stroke_changed,
         &mut channels,
     )?;
     let opacity_changed = source.style.object_opacity != target.style.object_opacity
         || from.style.opacity != target_style.opacity;
-    let completion = if fill_changed {
-        SemanticAnimationCompletion::None
-    } else {
-        SemanticAnimationCompletion::Property {
-            property: SemanticObjectProperty::ObjectOpacity,
-            value: SemanticSignalValue::Scalar(target.style.object_opacity),
-        }
-    };
     push_affine_channel(
         source,
         SemanticObjectProperty::ObjectOpacity,
@@ -694,7 +711,10 @@ pub(super) fn lower_affine_channels(
             from: from.style.opacity,
             to: target_style.opacity,
         },
-        completion,
+        SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::ObjectOpacity,
+            value: SemanticSignalValue::Scalar(target.style.object_opacity),
+        },
         opacity_changed,
         &mut channels,
     )?;
@@ -831,7 +851,8 @@ fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Rotation => 1,
         Property::Scale => 2,
         Property::Fill => 3,
-        Property::Opacity => 4,
+        Property::Stroke => 4,
+        Property::Opacity => 5,
         _ => unreachable!("shared animation payload lowering only registers supported drivers"),
     };
     (object.get(), slot)
@@ -959,14 +980,15 @@ mod tests {
     }
 
     #[test]
-    fn style_channels_capture_effective_values_and_reconcile_one_exact_style() {
+    fn paint_channels_capture_effective_values_and_reconcile_exact_fields() {
         let mut store = SemanticStore::new();
         let target = visible_object(&mut store);
         let mut target_state = store.semantic_object_state_checked(target).unwrap().clone();
         target_state.style.fill = Some(SemanticPaint::Solid(Color::RED));
         target_state.style.fill_opacity = 0.5;
+        target_state.style.stroke = Some(SemanticPaint::Solid(Color::GREEN));
+        target_state.style.stroke_opacity = 0.4;
         target_state.style.object_opacity = 0.25;
-        let expected_style = target_state.style.clone();
         let target_state = store.insert_semantic_object(target_state);
         let animation = store
             .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
@@ -974,6 +996,7 @@ mod tests {
         let index = index(&store);
         let current = Style {
             fill: Some(Color::BLUE),
+            stroke: Some(Color::WHITE),
             opacity: 0.75,
             ..Style::default()
         };
@@ -990,7 +1013,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(projection.len(), 2);
+        assert_eq!(projection.len(), 3);
         assert_eq!(projection.tracks()[0].property, Property::Fill);
         assert_eq!(
             projection.tracks()[0].values,
@@ -1004,12 +1027,26 @@ mod tests {
         );
         assert_eq!(
             projection.tracks()[0].completion,
-            SemanticAnimationCompletion::Style(expected_style)
+            SemanticAnimationCompletion::Fill {
+                paint: Some(SemanticPaint::Solid(Color::RED)),
+                opacity: 0.5,
+            }
         );
-        assert_eq!(projection.tracks()[1].property, Property::Opacity);
+        assert_eq!(projection.tracks()[1].property, Property::Stroke);
         assert_eq!(
             projection.tracks()[1].completion,
-            SemanticAnimationCompletion::None
+            SemanticAnimationCompletion::Stroke {
+                paint: Some(SemanticPaint::Solid(Color::GREEN)),
+                opacity: 0.4,
+            }
+        );
+        assert_eq!(projection.tracks()[2].property, Property::Opacity);
+        assert_eq!(
+            projection.tracks()[2].completion,
+            SemanticAnimationCompletion::Property {
+                property: SemanticObjectProperty::ObjectOpacity,
+                value: SemanticSignalValue::Scalar(0.25),
+            }
         );
     }
 
@@ -1039,6 +1076,63 @@ mod tests {
                 animation,
                 target,
                 property: SemanticObjectProperty::FillOpacity,
+            })
+        );
+    }
+
+    #[test]
+    fn stroke_binding_conflict_fails_before_paint_track_publication() {
+        let mut store = SemanticStore::new();
+        let target = visible_object(&mut store);
+        let opacity = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        store
+            .bind_semantic_signal(opacity, target, SemanticObjectProperty::StrokeOpacity)
+            .unwrap();
+        let mut target_state = store.semantic_object_state_checked(target).unwrap().clone();
+        target_state.style.stroke = Some(SemanticPaint::Solid(Color::GREEN));
+        target_state.style.stroke_opacity = 0.5;
+        let target_state = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .unwrap();
+        let index = index(&store);
+
+        assert_eq!(
+            lower_semantic_affine_animation_tracks(
+                &store,
+                &schedule(&store, &index, animation),
+                |_| Some(effective(Transform2D::default())),
+            ),
+            Err(SemanticAffineAnimationTrackError::ReactiveDriverConflict {
+                animation,
+                target,
+                property: SemanticObjectProperty::StrokeOpacity,
+            })
+        );
+    }
+
+    #[test]
+    fn stroke_width_change_remains_explicitly_unsupported() {
+        let mut store = SemanticStore::new();
+        let target = visible_object(&mut store);
+        let mut target_state = store.semantic_object_state_checked(target).unwrap().clone();
+        target_state.style.stroke_width = 2.0;
+        let target_state = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .unwrap();
+        let index = index(&store);
+
+        assert_eq!(
+            lower_semantic_affine_animation_tracks(
+                &store,
+                &schedule(&store, &index, animation),
+                |_| Some(effective(Transform2D::default())),
+            ),
+            Err(SemanticAffineAnimationTrackError::UnsupportedStyleChange {
+                animation,
+                target,
+                target_state,
             })
         );
     }

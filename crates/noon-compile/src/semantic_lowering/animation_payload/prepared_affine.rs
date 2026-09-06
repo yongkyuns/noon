@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_style_payload_rejects_unsupported_stroke_change_before_capture() {
+    fn prepared_style_payload_rejects_unsupported_stroke_width_before_capture() {
         let mut store = SemanticStore::new();
         let source =
             store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -325,7 +325,7 @@ mod tests {
             }));
         store.attach_to_scene(source).unwrap();
         let mut target = store.semantic_object_state_checked(source).unwrap().clone();
-        target.style.stroke = Some(SemanticPaint::Solid(Color::RED));
+        target.style.stroke_width = 2.0;
         let target = store.insert_semantic_object(target);
         let mut index = SemanticExecutionIndex::new();
         index.lower_scene(&store).unwrap();
@@ -363,6 +363,8 @@ mod tests {
         target.transform.scale = SemanticVec3::new(1.5, 0.5, 1.0);
         target.style.fill = Some(SemanticPaint::Solid(Color::RED));
         target.style.fill_opacity = 0.5;
+        target.style.stroke = Some(SemanticPaint::Solid(Color::GREEN));
+        target.style.stroke_opacity = 0.4;
         target.style.object_opacity = 0.25;
         let target = store.insert_semantic_object(target);
         let options = AnimationOptions::new()
@@ -379,6 +381,7 @@ mod tests {
             scale: Vec2::new(1.0, 2.0),
         });
         effective.style.fill = Some(Color::BLUE);
+        effective.style.stroke = Some(Color::WHITE);
         effective.style.opacity = 0.75;
 
         let schedule =

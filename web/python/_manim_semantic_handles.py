@@ -201,6 +201,7 @@ _ORIGINAL_BECOME = _base.Mobject.become
 _ORIGINAL_REPLACE = _base.Mobject.replace
 
 _ORIGINAL_SET_FILL = _compat.VMobject.set_fill
+_ORIGINAL_VMOBJECT_SET_COLOR = _compat.VMobject.set_color
 _ORIGINAL_SET_STROKE = _compat.VMobject.set_stroke
 _ORIGINAL_SET_OPACITY = _compat.VMobject.set_opacity
 _ORIGINAL_GET_FILL_OPACITY = _compat.VMobject.get_fill_opacity
@@ -899,10 +900,18 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
     handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_COLOR(self, color)
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError("canonical live affine targets do not support style edits")
     if not isinstance(color, _base.Color):
         raise TypeError("color must be a Color")
+    live_context = _live_mutation_context(self)
+    if live_context is not None:
+        try:
+            live_context.liveSetColor(
+                handle, color.red, color.green, color.blue, color.alpha
+            )
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        _sync_bound_style(self, handle)
+        return self
 
     # Manim changes fill/stroke RGB independently of the channels' existing opacity.
     # The shared wire projection lets both detached and bound objects choose channels
@@ -922,6 +931,18 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
         handle.setFillColor(color.red, color.green, color.blue, color.alpha)
     _sync_bound_style(self, handle)
     return self
+
+
+def _set_vmobject_color(
+    self: _compat.VMobject,
+    color: object,
+    family: bool = True,
+) -> _compat.VMobject:
+    handle = _mutation_handle_for(self)
+    if handle is None:
+        return _ORIGINAL_VMOBJECT_SET_COLOR(self, color, family=family)
+    del family
+    return _set_color(self, _phase_b._as_color("color", color))
 
 
 def _become(
@@ -1178,8 +1199,37 @@ def _set_stroke(
         return _ORIGINAL_SET_STROKE(
             self, color=color, width=width, opacity=opacity, family=family
         )
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError("canonical live affine targets do not support style edits")
+    live_context = _live_mutation_context(self)
+    if live_context is not None:
+        if width is not None:
+            raise NotImplementedError(
+                "canonical live style targets do not support stroke-width animation"
+            )
+        try:
+            if color is not None and opacity is not None:
+                parsed = _phase_b._as_color("stroke color", color)
+                live_context.liveSetStroke(
+                    handle,
+                    parsed.red,
+                    parsed.green,
+                    parsed.blue,
+                    _phase_b._opacity("stroke opacity", opacity),
+                )
+            elif color is not None:
+                parsed = _phase_b._as_color("stroke color", color)
+                live_context.liveSetStrokeColor(
+                    handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
+                )
+            elif opacity is None:
+                live_context.liveDisableStroke(handle)
+            else:
+                live_context.liveSetStrokeOpacity(
+                    handle, _phase_b._opacity("stroke opacity", opacity)
+                )
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        _sync_bound_style(self, handle)
+        return self
     if color is not None:
         parsed = _phase_b._as_color("stroke color", color)
         handle.setStrokeColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
@@ -1825,6 +1875,7 @@ def install() -> None:
 
     _compat.VMobject.copy = _copy_mobject
     _compat.VMobject._copy_for_animate_target = _target_mobject
+    _compat.VMobject.set_color = _set_vmobject_color
     _compat.VMobject.set_fill = _set_fill
     _compat.VMobject.set_stroke = _set_stroke
     _compat.VMobject.set_opacity = _set_opacity

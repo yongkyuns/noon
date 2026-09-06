@@ -1836,6 +1836,84 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetColor)]
+        pub fn live_set_color(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_color(handle.semantic_mobject(), red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetStroke)]
+        pub fn live_set_stroke(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_stroke(handle.semantic_mobject(), red, green, blue, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetStrokeColor)]
+        pub fn live_set_stroke_color(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveDisableStroke)]
+        pub fn live_disable_stroke(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_disable_stroke(handle.semantic_mobject())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetStrokeOpacity)]
+        pub fn live_set_stroke_opacity(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_stroke_opacity(handle.semantic_mobject(), opacity)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetOpacity)]
         pub fn live_set_opacity(
             &mut self,

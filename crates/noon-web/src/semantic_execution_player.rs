@@ -273,6 +273,61 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_color(
+        &mut self,
+        mobject: &noon::Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_color(mobject, red, green, blue, alpha))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_stroke(
+        &mut self,
+        mobject: &noon::Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_stroke(mobject, red, green, blue, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_stroke_color(
+        &mut self,
+        mobject: &noon::Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_stroke_color(mobject, red, green, blue, alpha))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_disable_stroke(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+        self.with_live_session(|live| live.disable_stroke(mobject))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_stroke_opacity(
+        &mut self,
+        mobject: &noon::Mobject,
+        opacity: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_stroke_opacity(mobject, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_opacity(
         &mut self,
         mobject: &noon::Mobject,
