@@ -31,6 +31,11 @@ function fixture(transportMode = "transferable", runRequiredCallbackPhase = null
     initialCallbackPhaseJson: () => null,
     resourceBundleBytes: () => new Uint8Array([1]),
     tickCallbackPhaseJson: () => null,
+    advanceForwardToCallbackPhaseJson: (value) => {
+      if (!Number.isFinite(value) || value < time) throw new Error("invalid forward time");
+      time = value;
+      return null;
+    },
     drainDeltaJson: () => null,
     commitCallbackPhaseJson: () => {},
     failCallbackPhaseJson: () => {},
@@ -118,6 +123,282 @@ test("native state and event controls reach the leased player in accepted order"
     assert.equal(rejected.type, "error");
     assert.match(rejected.message, /native value rejected/);
     assert.equal(f.stats().nativeInputs.length, 2);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("forward authored-time control commits its callback phase before its matching publication presents", async () => {
+  let callbackFrames = 0;
+  let committed = 0;
+  const f = fixture("transferable", async (phase) => {
+    callbackFrames += 1;
+    assert.equal(phase.time, 1.0);
+    return JSON.stringify({ token: phase.token, writes: [] });
+  });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_ack",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    f.player.pause();
+    const advanceForward = f.player.advanceForwardToCallbackPhaseJson;
+    let advances = 0;
+    f.player.advanceForwardToCallbackPhaseJson = (time) => {
+      assert.equal(time, 1.0);
+      advanceForward(time);
+      if (advances++ === 0) {
+        return JSON.stringify({ token: { sequence: "1" }, time });
+      }
+      return null;
+    };
+    f.player.commitCallbackPhaseJson = (batch) => {
+      assert.equal(batch, '{"token":{"sequence":"1"},"writes":[]}');
+      committed += 1;
+    };
+    f.player.drainDeltaJson = () => f.player.initialDeltaJson();
+    const advancedDelta = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta" && message.sequence !== initialDelta.sequence,
+    );
+    const advance = request(f.control.port2, "advance_to", 30, { time: 1.0 });
+    const delta = await advancedDelta;
+    let settled = false;
+    advance.then(() => { settled = true; });
+    await turn();
+    assert.equal(callbackFrames, 1);
+    assert.equal(committed, 1);
+    assert.equal(settled, false, "control must wait for renderer presentation");
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: delta.session,
+      sequence: delta.sequence,
+    });
+    assert.equal((await advance).time, 1.0);
+    endpoint.stop();
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("forward authored-time control crosses every required barrier before publishing its requested frame", async () => {
+  const callbackTimes = [];
+  const committedTokens = [];
+  const f = fixture("transferable", async (phase) => {
+    callbackTimes.push(phase.time);
+    return JSON.stringify({ token: phase.token, writes: [] });
+  });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_ack",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    f.player.pause();
+    const advanceForward = f.player.advanceForwardToCallbackPhaseJson;
+    const barriers = [1, 2];
+    f.player.advanceForwardToCallbackPhaseJson = (requested) => {
+      const barrier = barriers.shift();
+      advanceForward(barrier ?? requested);
+      return barrier === undefined
+        ? null
+        : JSON.stringify({ token: { sequence: String(barrier) }, time: barrier });
+    };
+    f.player.commitCallbackPhaseJson = (batch) => {
+      committedTokens.push(JSON.parse(batch).token.sequence);
+    };
+    f.player.drainDeltaJson = () => f.player.initialDeltaJson();
+    const finalDelta = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta" && message.sequence !== initialDelta.sequence,
+    );
+    const advanced = request(f.control.port2, "advance_to", 33, { time: 3 });
+    const delta = await finalDelta;
+    let settled = false;
+    advanced.then(() => { settled = true; });
+    await turn();
+    assert.deepEqual(callbackTimes, [1, 2]);
+    assert.deepEqual(committedTokens, ["1", "2"]);
+    assert.equal(settled, false, "must not resolve at an earlier callback barrier");
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: delta.session,
+      sequence: delta.sequence,
+    });
+    assert.equal((await advanced).time, 3);
+    endpoint.stop();
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("forward authored-time control accepts an unchanged already coherent frame without a redraw", async () => {
+  const f = fixture();
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_ack",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    const advanceForward = f.player.advanceForwardToCallbackPhaseJson;
+    f.player.advanceForwardToCallbackPhaseJson = (time) => {
+      assert.equal(time, 0.5);
+      advanceForward(time);
+      return null;
+    };
+    f.player.drainDeltaJson = () => null;
+    const whilePlaying = await request(f.control.port2, "advance_to", 31, { time: 0.5 });
+    assert.equal(whilePlaying.type, "error");
+    assert.match(whilePlaying.message, /pause semantic execution/);
+    f.player.pause();
+    assert.equal((await request(f.control.port2, "advance_to", 31, { time: 0.5 })).time, 0.5);
+    endpoint.stop();
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("unchanged control waits for the initial publication's exact presentation", async () => {
+  const f = fixture();
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.player.pause();
+    f.player.drainDeltaJson = () => null;
+
+    const result = nextMatching(f.control.port2, (message) => message.requestId === 34);
+    f.control.port2.postMessage({
+      channel: "noon.engine",
+      protocolVersion: 1,
+      type: "advance_to",
+      requestId: 34,
+      time: 0.5,
+    });
+    let settled = false;
+    result.then(() => { settled = true; });
+    await turn();
+    assert.equal(settled, false, "unchanged control must retain the initial presentation barrier");
+
+    const invalid = nextMatching(
+      f.control.port2,
+      (message) => message.type === "error" && message.requestId === null,
+    );
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: initialDelta.session + 1,
+      sequence: initialDelta.sequence,
+    });
+    assert.match((await invalid).message, /invalid execution publication/);
+    await turn();
+    assert.equal(settled, false, "a foreign-session presentation must not release the barrier");
+
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    assert.equal((await result).time, 0.5);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("unchanged control waits for a previously sent publication still pending presentation", async () => {
+  const f = fixture();
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_ack",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+
+    const changed = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta" && message.sequence !== initialDelta.sequence,
+    );
+    const seek = request(f.control.port2, "seek", 35, { time: 0.5 });
+    const changedDelta = await changed;
+    assert.equal((await seek).time, 0.5);
+    f.player.pause();
+    f.player.drainDeltaJson = () => null;
+
+    const advance = request(f.control.port2, "advance_to", 36, { time: 0.5 });
+    let settled = false;
+    advance.then(() => { settled = true; });
+    await turn();
+    assert.equal(settled, false, "unchanged control must wait for the preceding seek publication");
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    await turn();
+    assert.equal(settled, false, "an older presentation must not release the newer barrier");
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: changedDelta.session,
+      sequence: changedDelta.sequence,
+    });
+    assert.equal((await advance).time, 0.5);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("forward authored-time control rejects when the renderer fails before presentation", async () => {
+  const f = fixture();
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_ack",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    f.player.pause();
+    f.player.drainDeltaJson = () => f.player.initialDeltaJson();
+    const advancedDelta = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta" && message.sequence !== initialDelta.sequence,
+    );
+    const result = request(f.control.port2, "advance_to", 32, { time: 0.5 });
+    await advancedDelta;
+    f.render.port2.postMessage({ type: "render_error", message: "presentation failed" });
+    const rejected = await result;
+    assert.equal(rejected.type, "error");
+    assert.match(rejected.message, /presentation failed/);
+    endpoint.stop();
   } finally { endpoint?.stop(); f.close(); }
 });
 

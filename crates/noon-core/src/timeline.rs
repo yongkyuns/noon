@@ -90,6 +90,7 @@ pub enum Property {
     Rotation,
     Scale,
     Fill,
+    Stroke,
     Opacity,
     Appearance,
     Reveal,
@@ -110,7 +111,7 @@ impl Property {
         match self {
             Self::Presence => ValueKind::Bool,
             Self::Transform => ValueKind::Object,
-            Self::Fill => ValueKind::Color,
+            Self::Fill | Self::Stroke => ValueKind::Color,
             Self::Position | Self::Scale => ValueKind::Vec2,
             Self::Rotation | Self::Opacity | Self::Appearance | Self::Reveal | Self::Morph => {
                 ValueKind::Scalar

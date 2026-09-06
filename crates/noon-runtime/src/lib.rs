@@ -1124,7 +1124,12 @@ impl SceneInstance {
                 self.frame.objects[index].style = *style;
                 self.reapply_properties(
                     index,
-                    &[Property::Transform, Property::Fill, Property::Opacity],
+                    &[
+                        Property::Transform,
+                        Property::Fill,
+                        Property::Stroke,
+                        Property::Opacity,
+                    ],
                 );
             }
             _ => unreachable!("value patch helper only accepts object-local property patches"),
@@ -1344,13 +1349,14 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 10] = [
+const PROPERTY_ORDER: [Property; 11] = [
     Property::Presence,
     Property::Transform,
     Property::Position,
     Property::Rotation,
     Property::Scale,
     Property::Fill,
+    Property::Stroke,
     Property::Opacity,
     Property::Appearance,
     Property::Reveal,
@@ -1594,6 +1600,7 @@ fn apply_group_to_row(
             Property::Rotation => Some(EvaluatedValue::Scalar(base_transform.rotation)),
             Property::Scale => Some(EvaluatedValue::Vec2(base_transform.scale)),
             Property::Fill => Some(EvaluatedValue::Color(base_style.fill)),
+            Property::Stroke => Some(EvaluatedValue::Color(base_style.stroke)),
             Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
             Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
@@ -1668,6 +1675,11 @@ fn apply_evaluated_value(
         (Property::Fill, EvaluatedValue::Color(value)) => {
             let changed = row.style.fill != value;
             row.style.fill = value;
+            changed
+        }
+        (Property::Stroke, EvaluatedValue::Color(value)) => {
+            let changed = row.style.stroke != value;
+            row.style.stroke = value;
             changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
@@ -2139,10 +2151,10 @@ const fn lerp(from: f32, to: f32, progress: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use noon_compile::CompiledScene;
+    use noon_compile::{CompiledObject, CompiledScene};
     use noon_core::{
         Color, CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, Property,
-        RateFunction, SceneDefinition, Style, TrackDefinition, TrackTiming,
+        RateFunction, SceneDefinition, Style, TrackDefinition, TrackId, TrackTiming,
     };
 
     use super::*;
@@ -2741,6 +2753,60 @@ mod tests {
         assert!(instance.take_frame_changes().is_empty());
         instance.advance_to(2.0).unwrap();
         assert_eq!(instance.frame().objects[0].style.fill, Some(Color::RED));
+    }
+
+    #[test]
+    fn stroke_track_uses_optional_paint_appearance_and_local_style_dirtying() {
+        let object = ObjectId::new(1);
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Stroke,
+            values: TrackValues::Color {
+                from: None,
+                to: Some(Color {
+                    alpha: 0.4,
+                    ..Color::BLUE
+                }),
+            },
+            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                GeometryRef::circle(1.0),
+                Transform2D::default(),
+                Style {
+                    stroke: None,
+                    ..Style::default()
+                },
+            )],
+            &[track],
+        )
+        .expect("scene must compile");
+        let mut instance = SceneInstance::new(compiled);
+        instance.take_frame_changes();
+
+        instance.advance_to(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].style.stroke,
+            Some(Color {
+                alpha: 0.2,
+                ..Color::BLUE
+            })
+        );
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+        instance.advance_to(1.0).unwrap();
+        assert!(instance.take_frame_changes().is_empty());
+        instance.advance_to(2.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].style.stroke,
+            Some(Color {
+                alpha: 0.4,
+                ..Color::BLUE
+            })
+        );
     }
 
     #[test]

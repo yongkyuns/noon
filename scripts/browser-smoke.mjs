@@ -370,6 +370,27 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM ordinary style play did not render its post-completion green edit",
   );
   assert.equal(
+    direct.metrics.ordinaryPaintPlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary paint play did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryPaintPlay?.authoredTime,
+    2,
+    "direct Rust/WASM ordinary paint play did not preserve the shared session time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryPaintPlay?.objectCount,
+    1,
+    "direct Rust/WASM ordinary paint scene did not retain its Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.ordinaryPaintPlay?.endpointColor.red >= 180 &&
+      direct.metrics.ordinaryPaintPlay?.endpointColor.green >= 180 &&
+      direct.metrics.ordinaryPaintPlay?.endpointColor.blue <= 100,
+    "direct Rust/WASM ordinary paint play did not render its post-completion yellow edit",
+  );
+  assert.equal(
     direct.metrics.valueTracker?.backend,
     expectedBackend,
     "direct Rust/WASM ValueTracker did not use the selected renderer backend",

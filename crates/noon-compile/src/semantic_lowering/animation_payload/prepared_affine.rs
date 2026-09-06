@@ -109,6 +109,53 @@ impl std::fmt::Display for PreparedSemanticTransformToError {
 
 impl std::error::Error for PreparedSemanticTransformToError {}
 
+impl PreparedSemanticTransformToError {
+    /// Whether this is an explicitly unsupported semantic payload rather than
+    /// invalid provenance, identity, value, or execution state.
+    pub const fn is_unsupported_payload(&self) -> bool {
+        matches!(
+            self,
+            Self::UnsupportedContentChange
+                | Self::UnsupportedStyleChange
+                | Self::UnsupportedPainterOrderChange
+                | Self::UnsupportedBindingChange
+                | Self::UnsupportedDepthChange(_)
+                | Self::UnsupportedLifecycle { .. }
+                | Self::ReactiveDriverConflict(_)
+        )
+    }
+}
+
+/// Validate an inert TransformTo payload before any declaration, runtime, or
+/// execution identity is created.
+///
+/// This is the shared capability check for language facades deciding whether a
+/// typed ordinary transform can enter the canonical session. It deliberately
+/// reads only the two store-owned semantic object states and resolved options.
+pub fn validate_semantic_transform_to_payload(
+    store: &SemanticStore,
+    target: SemanticNodeId,
+    target_state: SemanticNodeId,
+    options: AnimationOptions,
+) -> Result<(), PreparedSemanticTransformToError> {
+    let source = store
+        .semantic_object_state_checked(target)
+        .map_err(|error| PreparedSemanticTransformToError::Target {
+            node: target,
+            error,
+        })?;
+    let target_object = store
+        .semantic_object_state_checked(target_state)
+        .map_err(|error| PreparedSemanticTransformToError::Target {
+            node: target_state,
+            error,
+        })?;
+    let options = resolve_animation_options(AnimationDefaults::MANIM, options, options)
+        .map_err(PreparedSemanticTransformToError::Options)?;
+    validate_affine_payload(source, target_object, options)
+        .map_err(|issue| prepared_payload_error(target, issue))
+}
+
 /// Lower one not-yet-committed affine declaration without reserving semantic identity.
 ///
 /// The result is inert until the session publishes it together with the semantic declaration.
@@ -317,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_style_payload_rejects_unsupported_stroke_change_before_capture() {
+    fn prepared_style_payload_rejects_unsupported_stroke_width_before_capture() {
         let mut store = SemanticStore::new();
         let source =
             store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -325,7 +372,7 @@ mod tests {
             }));
         store.attach_to_scene(source).unwrap();
         let mut target = store.semantic_object_state_checked(source).unwrap().clone();
-        target.style.stroke = Some(SemanticPaint::Solid(Color::RED));
+        target.style.stroke_width = 2.0;
         let target = store.insert_semantic_object(target);
         let mut index = SemanticExecutionIndex::new();
         index.lower_scene(&store).unwrap();
@@ -363,6 +410,8 @@ mod tests {
         target.transform.scale = SemanticVec3::new(1.5, 0.5, 1.0);
         target.style.fill = Some(SemanticPaint::Solid(Color::RED));
         target.style.fill_opacity = 0.5;
+        target.style.stroke = Some(SemanticPaint::Solid(Color::GREEN));
+        target.style.stroke_opacity = 0.4;
         target.style.object_opacity = 0.25;
         let target = store.insert_semantic_object(target);
         let options = AnimationOptions::new()
@@ -379,6 +428,7 @@ mod tests {
             scale: Vec2::new(1.0, 2.0),
         });
         effective.style.fill = Some(Color::BLUE);
+        effective.style.stroke = Some(Color::WHITE);
         effective.style.opacity = 0.75;
 
         let schedule =

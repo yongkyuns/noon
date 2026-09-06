@@ -16,8 +16,9 @@ mod layout;
 mod style;
 use bounds::layout_for_content;
 pub(crate) use style::{
-    edit_disable_fill, edit_fill, edit_fill_color, edit_fill_opacity, edit_manim_opacity,
-    edit_object_opacity,
+    edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
+    edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
+    edit_stroke_opacity,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]

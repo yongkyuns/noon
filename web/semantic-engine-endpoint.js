@@ -3,10 +3,11 @@
 import {
   EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE,
   SharedExecutionDeltaWriter, TransferableExecutionDeltaSender,
-  createSharedExecutionMailbox,
+  createSharedExecutionMailbox, executionDeltaMetadata,
 } from "./execution-transport.js";
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
+export const MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE = 128;
 
 export async function attachSemanticEngine(
   context,
@@ -32,17 +33,76 @@ export async function attachSemanticEngine(
   let callbackGeneration = 0;
   let pendingPhaseJson = null;
   let callbackFault = null;
+  let lastSentPublication = null;
+  let lastPresentedPublication = null;
+  let pendingPresentation = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
   const writable = () => typeof transport.canSend === "function" ? transport.canSend() : transport.inFlight() < 2;
   const send = (json) => {
-    if (json == null) return;
+    if (json == null) return null;
+    const publication = executionDeltaMetadata(json);
     if (!transport.send(json)) throw new Error("semantic transport became backpressured after admission");
+    lastSentPublication = publication;
     if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
+    return publication;
+  };
+  const samePublication = (left, right) =>
+    left !== null && right !== null &&
+    left.session === right.session && left.sequence === right.sequence;
+  const publicationAlreadyPresented = (publication) =>
+    samePublication(lastPresentedPublication, publication);
+  const rejectPendingPresentation = (error) => {
+    if (pendingPresentation === null) return;
+    const { reject } = pendingPresentation;
+    pendingPresentation = null;
+    reject(error);
+  };
+  const awaitPresentation = (publication) => {
+    // An unchanged coherent frame emits no delta, but the most recently sent
+    // publication may still be waiting for the surface. Reuse its transport
+    // metadata as the barrier without retaining a scene or frame mirror.
+    const requiredPublication = publication ?? lastSentPublication;
+    if (requiredPublication === null || publicationAlreadyPresented(requiredPublication)) {
+      return Promise.resolve();
+    }
+    if (pendingPresentation !== null) {
+      throw new Error("semantic endpoint already awaits a renderer publication");
+    }
+    return new Promise((resolve, reject) => {
+      pendingPresentation = { publication: requiredPublication, resolve, reject };
+    });
+  };
+  const notePresentedPublication = (publication) => {
+    if (!publication || !Number.isSafeInteger(publication.session) ||
+        publication.session < 0 || !Number.isSafeInteger(publication.sequence) ||
+        publication.sequence < 0 || publication.session !== session ||
+        lastSentPublication === null ||
+        publication.session !== lastSentPublication.session ||
+        publication.sequence > lastSentPublication.sequence) {
+      fail(new Error("renderer reported an invalid execution publication"));
+      return;
+    }
+    if (lastPresentedPublication !== null &&
+        publication.session === lastPresentedPublication.session &&
+        publication.sequence < lastPresentedPublication.sequence) {
+      return;
+    }
+    lastPresentedPublication = publication;
+    if (pendingPresentation !== null &&
+        samePublication(pendingPresentation.publication, publication)) {
+      const { resolve } = pendingPresentation;
+      pendingPresentation = null;
+      resolve();
+    }
   };
   const state = (type) => ({ type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" });
-  async function publishCallbackPhase(phaseJson, { initial = false } = {}) {
+  async function publishCallbackPhase(
+    phaseJson,
+    { initial = false, emitDelta = true, onPhaseToken = null } = {},
+  ) {
+    let phaseToken = null;
     if (phaseJson !== null && phaseJson !== undefined) {
       if (runRequiredCallbackPhase === null) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve original phase error */ }
@@ -51,6 +111,11 @@ export async function attachSemanticEngine(
       let phase;
       try {
         phase = JSON.parse(phaseJson);
+        phaseToken = JSON.stringify(phase?.token);
+        if (phaseToken === undefined) {
+          throw new Error("canonical callback phase is missing its token");
+        }
+        onPhaseToken?.(phaseToken);
       } catch (error) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve parse failure */ }
         throw new Error(`canonical callback phase view was not valid JSON: ${error}`);
@@ -60,7 +125,7 @@ export async function attachSemanticEngine(
       try {
         const batchJson = await runRequiredCallbackPhase(phase);
         if (stopped || phaseGeneration !== callbackGeneration || player === null) {
-          return false;
+          return { phaseToken, publication: null, interrupted: true };
         }
         player.commitCallbackPhaseJson(batchJson);
         pendingPhaseJson = null;
@@ -73,9 +138,55 @@ export async function attachSemanticEngine(
         throw error;
       }
     }
-    if (stopped || player === null) return false;
-    send(initial ? player.initialDeltaJson() : player.drainDeltaJson());
-    return true;
+    if (stopped || player === null) {
+      return { phaseToken, publication: null, interrupted: true };
+    }
+    return {
+      phaseToken,
+      publication: emitDelta
+        ? send(initial ? player.initialDeltaJson() : player.drainDeltaJson())
+        : null,
+      interrupted: false,
+    };
+  }
+
+  async function advanceToAuthoredTime(time) {
+    const phaseTokens = new Set();
+    let phaseCount = 0;
+    while (!stopped && player !== null) {
+      if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE && player.time() < time) {
+        throw new Error(
+          "forward authored-time advance reached its callback phase bound before the requested time",
+        );
+      }
+      const result = await publishCallbackPhase(
+        player.advanceForwardToCallbackPhaseJson(time),
+        {
+          emitDelta: false,
+          onPhaseToken(token) {
+            if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE) {
+              throw new Error(
+                "forward authored-time advance exceeded its callback phase bound",
+              );
+            }
+            if (phaseTokens.has(token)) {
+              throw new Error("canonical callback advance repeated a phase token");
+            }
+            phaseTokens.add(token);
+            phaseCount += 1;
+          },
+        },
+      );
+      if (result.interrupted) return null;
+      if (result.phaseToken !== null) continue;
+      if (Math.abs(player.time() - time) > 1e-9) {
+        throw new Error(
+          `forward authored-time advance stopped at ${player.time()} before requested time ${time}`,
+        );
+      }
+      return send(player.drainDeltaJson());
+    }
+    return null;
   }
 
   async function drain() {
@@ -91,6 +202,18 @@ export async function attachSemanticEngine(
           case "set_loop_duration": player.setLoopDuration(message.loopDurationSeconds); break;
           case "seek": latestTick = null; send(player.seekDeltaJson(message.time)); break;
           case "restart_playback": latestTick = null; send(player.seekDeltaJson(0)); break;
+          case "advance_to": {
+            if (callbackFault !== null) throw callbackFault;
+            if (player.isPlaying()) {
+              throw new Error(
+                "pause semantic execution before forward authored-time advancement",
+              );
+            }
+            latestTick = null;
+            const publication = await advanceToAuthoredTime(message.time);
+            await awaitPresentation(publication);
+            break;
+          }
           case "native_state_input":
             player.setNativeStateInputJson(JSON.stringify({
               source: message.source,
@@ -104,6 +227,7 @@ export async function attachSemanticEngine(
             break;
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
+        if (stopped || player === null) break;
         post({ requestId: message.requestId, ...state(message.type) });
       } catch (error) { fail(error, message.requestId); }
       }
@@ -135,6 +259,7 @@ export async function attachSemanticEngine(
     if (stopped) return;
     stopped = true;
     callbackGeneration += 1;
+    rejectPendingPresentation(new Error("semantic execution stopped before renderer publication"));
     controls.length = 0;
     latestTick = null;
     if (player !== null) {
@@ -183,7 +308,7 @@ export async function attachSemanticEngine(
           return;
         }
         if (![
-          "pause", "resume", "seek", "restart_playback", "set_loop_duration",
+          "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
           "native_state_input", "native_event",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
@@ -202,7 +327,12 @@ export async function attachSemanticEngine(
         latestTick = message.timestamp;
         void drain();
       } else if (message?.type === "transport_writable") void drain();
-      else if (message?.type === "render_error") fail(new Error(message.message));
+      else if (message?.type === "execution_presented") notePresentedPublication(message);
+      else if (message?.type === "render_error") {
+        const error = new Error(message.message);
+        rejectPendingPresentation(error);
+        fail(error);
+      }
     });
     const resources = Uint8Array.from(player.resourceBundleBytes());
     if (resources.byteLength === 0) {

@@ -6,6 +6,30 @@ pub(crate) fn edit_object_opacity(style: &mut SemanticStyle, opacity: f64) -> Re
     Ok(())
 }
 
+pub(crate) fn edit_color(
+    style: &mut SemanticStyle,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<(), String> {
+    let color = opaque_color("color", red, green, blue)?;
+    let requested_opacity = unit_opacity("color.alpha", alpha)?;
+    let had_fill = style.fill.is_some();
+    let had_stroke = style.stroke.is_some();
+    if had_fill {
+        style.fill = Some(SemanticPaint::Solid(color));
+    }
+    if had_stroke {
+        style.stroke = Some(SemanticPaint::Solid(color));
+    }
+    if !had_fill && !had_stroke {
+        style.fill = Some(SemanticPaint::Solid(color));
+        style.fill_opacity = requested_opacity;
+    }
+    Ok(())
+}
+
 pub(crate) fn edit_disable_fill(style: &mut SemanticStyle) {
     style.fill = None;
 }
@@ -60,6 +84,49 @@ pub(crate) fn edit_manim_opacity(style: &mut SemanticStyle, opacity: f64) -> Res
     Ok(())
 }
 
+pub(crate) fn edit_disable_stroke(style: &mut SemanticStyle) {
+    style.stroke = None;
+}
+
+pub(crate) fn edit_stroke_color(
+    style: &mut SemanticStyle,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<(), String> {
+    let color = opaque_color("stroke", red, green, blue)?;
+    let requested_opacity = unit_opacity("stroke.alpha", alpha)?;
+    if style.stroke.is_none() {
+        style.stroke_opacity = requested_opacity;
+    }
+    style.stroke = Some(SemanticPaint::Solid(color));
+    Ok(())
+}
+
+pub(crate) fn edit_stroke_opacity(style: &mut SemanticStyle, opacity: f64) -> Result<(), String> {
+    let opacity = unit_opacity("stroke opacity", opacity)?;
+    if style.stroke.is_none() {
+        style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+    }
+    style.stroke_opacity = opacity;
+    Ok(())
+}
+
+pub(crate) fn edit_stroke(
+    style: &mut SemanticStyle,
+    red: f64,
+    green: f64,
+    blue: f64,
+    opacity: f64,
+) -> Result<(), String> {
+    let color = opaque_color("stroke", red, green, blue)?;
+    let opacity = unit_opacity("stroke opacity", opacity)?;
+    style.stroke = Some(SemanticPaint::Solid(color));
+    style.stroke_opacity = opacity;
+    Ok(())
+}
+
 impl Mobject {
     pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
         let mut state = self.state()?;
@@ -98,22 +165,7 @@ impl Mobject {
     pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let color = opaque_color("color", red, green, blue)?;
-        let opacity = unit_opacity("color.alpha", alpha)?;
-        let had_fill = state.style.fill.is_some();
-        let had_stroke = state.style.stroke.is_some();
-        if had_fill {
-            state.style.fill = Some(SemanticPaint::Solid(color));
-            state.style.fill_opacity = opacity;
-        }
-        if had_stroke {
-            state.style.stroke = Some(SemanticPaint::Solid(color));
-            state.style.stroke_opacity = opacity;
-        }
-        if !had_fill && !had_stroke {
-            state.style.fill = Some(SemanticPaint::Solid(color));
-            state.style.fill_opacity = opacity;
-        }
+        edit_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
     pub fn disable_fill(&mut self) -> Result<(), String> {
@@ -163,7 +215,7 @@ impl Mobject {
     pub fn disable_stroke(&mut self) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        state.style.stroke = None;
+        edit_disable_stroke(&mut state.style);
         self.commit_state(state)
     }
     pub fn set_stroke_color(
@@ -175,12 +227,7 @@ impl Mobject {
     ) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let color = opaque_color("stroke", red, green, blue)?;
-        let requested_opacity = unit_opacity("stroke.alpha", alpha)?;
-        if state.style.stroke.is_none() {
-            state.style.stroke_opacity = requested_opacity;
-        }
-        state.style.stroke = Some(SemanticPaint::Solid(color));
+        edit_stroke_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
     pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
@@ -200,11 +247,7 @@ impl Mobject {
     pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let opacity = unit_opacity("stroke opacity", opacity)?;
-        if state.style.stroke.is_none() {
-            state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
-        }
-        state.style.stroke_opacity = opacity;
+        edit_stroke_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
     }
     pub fn stroke_opacity(&self) -> Result<f64, String> {

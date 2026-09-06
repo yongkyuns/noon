@@ -127,6 +127,16 @@ pub async fn create_direct_ordinary_style_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Browser proof that ordinary fill/stroke color and opacity animate through
+/// the same target-neutral Rust session as the native example.
+#[wasm_bindgen(js_name = createDirectOrdinaryPaintPlaySmokeRenderer)]
+pub async fn create_direct_ordinary_paint_play_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::ordinary_paint_play().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Browser proof that the target-neutral Rust scalar tracker example executes
 /// and renders through the typed direct single-context WASM path.
 #[wasm_bindgen(js_name = createDirectValueTrackerSmokeRenderer)]

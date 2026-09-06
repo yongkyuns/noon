@@ -9,8 +9,9 @@
 use crate::{
     semantic_mobject::authoring_render_f64,
     semantic_mobject::{
-        edit_disable_fill, edit_fill, edit_fill_color, edit_fill_opacity, edit_manim_opacity,
-        edit_object_opacity,
+        edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
+        edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
+        edit_stroke_opacity,
     },
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentCompletionError,
     ExecutionSegmentError, ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
@@ -503,6 +504,63 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_fill_opacity(style, opacity))
     }
 
+    /// Recolor the currently enabled fill and stroke without changing their opacity.
+    pub fn set_color(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_color(style, red, green, blue, alpha))
+    }
+
+    /// Set stroke color and opacity through one authoritative style publication.
+    pub fn set_stroke(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_stroke(style, red, green, blue, opacity)
+        })
+    }
+
+    pub fn set_stroke_color(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_stroke_color(style, red, green, blue, alpha)
+        })
+    }
+
+    pub fn disable_stroke(
+        &mut self,
+        mobject: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_disable_stroke(style);
+            Ok(())
+        })
+    }
+
+    pub fn set_stroke_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_stroke_opacity(style, opacity))
+    }
+
     /// Apply Manim's paint-opacity operation to the currently enabled paint channels.
     pub fn set_opacity(
         &mut self,
@@ -603,6 +661,26 @@ mod tests {
         let style = live.authored(&target).unwrap().style;
         assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::WHITE)));
         assert_eq!(style.fill_opacity, 0.25);
+
+        live.set_stroke(&target, 0.0, 0.0, 1.0, 0.7).unwrap();
+        live.set_color(&target, 0.0, 1.0, 0.0, 1.0).unwrap();
+        let style = live.authored(&target).unwrap().style;
+        assert_eq!(
+            style.fill,
+            Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
+        );
+        assert_eq!(
+            style.stroke,
+            Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
+        );
+        assert_eq!(style.fill_opacity, 0.25);
+        assert_eq!(style.stroke_opacity, 0.7);
+
+        live.set_opacity(&target, 0.5).unwrap();
+        let style = live.authored(&target).unwrap().style;
+        assert_eq!(style.fill_opacity, 0.5);
+        assert_eq!(style.stroke_opacity, 0.5);
+        assert_eq!(style.object_opacity, 0.5);
     }
 
     #[test]

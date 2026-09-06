@@ -73,6 +73,7 @@ pub struct DynamicProperties {
     pub rotation: bool,
     pub scale: bool,
     pub fill: bool,
+    pub stroke: bool,
     pub opacity: bool,
     pub appearance: bool,
     pub reveal: bool,
@@ -88,6 +89,7 @@ impl DynamicProperties {
             Property::Rotation => self.rotation = true,
             Property::Scale => self.scale = true,
             Property::Fill => self.fill = true,
+            Property::Stroke => self.stroke = true,
             Property::Opacity => self.opacity = true,
             Property::Appearance => self.appearance = true,
             Property::Reveal => self.reveal = true,
@@ -102,6 +104,7 @@ impl DynamicProperties {
             || self.rotation
             || self.scale
             || self.fill
+            || self.stroke
             || self.opacity
             || self.appearance
             || self.reveal
@@ -658,6 +661,7 @@ impl CompiledScene {
                         | Property::Rotation
                         | Property::Scale
                         | Property::Fill
+                        | Property::Stroke
                         | Property::Opacity
                 )
             {
@@ -1209,6 +1213,7 @@ impl CompiledScene {
                             | Property::Rotation
                             | Property::Scale
                             | Property::Fill
+                            | Property::Stroke
                             | Property::Opacity
                     )
                 {
@@ -1523,10 +1528,11 @@ const fn property_rank(property: Property) -> u8 {
         Property::Rotation => 3,
         Property::Scale => 4,
         Property::Fill => 5,
-        Property::Opacity => 6,
-        Property::Appearance => 7,
-        Property::Reveal => 8,
-        Property::Morph => 9,
+        Property::Stroke => 6,
+        Property::Opacity => 7,
+        Property::Appearance => 8,
+        Property::Reveal => 9,
+        Property::Morph => 10,
     }
 }
 
@@ -1719,6 +1725,7 @@ mod tests {
                 rotation: false,
                 scale: false,
                 fill: false,
+                stroke: false,
                 opacity: true,
                 appearance: false,
                 reveal: false,
@@ -1888,6 +1895,7 @@ mod tests {
                 rotation: false,
                 scale: false,
                 fill: false,
+                stroke: false,
                 opacity: false,
                 appearance: false,
                 reveal: true,

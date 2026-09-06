@@ -369,6 +369,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Rotation
                             | Property::Scale
                             | Property::Fill
+                            | Property::Stroke
                             | Property::Opacity
                     )
                 {

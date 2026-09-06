@@ -38,6 +38,10 @@ let transitionMode = null;
 let transitionResourceBytes = null;
 let transitionFrameLoopWasRunning = false;
 let needsPresent = false;
+// Renderer-derived metadata for the publication that the next successful
+// present exposes. It is an acknowledgement only, never scene or time state.
+let pendingPresentationPublication = null;
+let lastPresentedPublication = null;
 let running = false;
 let stopped = false;
 let frameLoopGeneration = 0;
@@ -265,7 +269,7 @@ function attachRenderPort(port) {
   if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
     transferableReceiver = new TransferableExecutionDeltaReceiver(
       port,
-      (json) => (renderPort === port ? consumeDelta(json) : true),
+      (json, metadata) => (renderPort === port ? consumeDelta(json, metadata) : true),
     );
   }
   port.start();
@@ -281,6 +285,8 @@ function resetTransportState() {
   transferableReceiver = null;
   bootstrapQueue = [];
   bootstrapPromise = null;
+  pendingPresentationPublication = null;
+  lastPresentedPublication = null;
 }
 
 function handleEngineMessage(message) {
@@ -348,7 +354,7 @@ function handleRetainedResources(message) {
 function drainTransport() {
   try {
     if (sharedReader !== null) {
-      const drained = sharedReader.drain((json) => consumeDelta(json));
+      const drained = sharedReader.drain((json, metadata) => consumeDelta(json, metadata));
       if (drained > 0) {
         renderPort?.postMessage({ type: "transport_writable" });
       }
@@ -359,22 +365,22 @@ function drainTransport() {
   }
 }
 
-function consumeDelta(json) {
+function consumeDelta(json, publication = null) {
   if (transitionMode !== null) {
-    return commitRendererTransition(json);
+    return commitRendererTransition(json, publication);
   }
   if (renderer === null) {
     if (mode === MODE_RETAINED && resourceBytes === null) {
       throw new Error("retained authoring snapshot arrived before its resource bundle");
     }
     if (bootstrapPromise === null) {
-      bootstrapPromise = bootstrapRenderer(json);
+      bootstrapPromise = bootstrapRenderer(json, true, publication);
       return true;
     }
     if (bootstrapQueue.length >= BOOTSTRAP_QUEUE_LIMIT) {
       return false;
     }
-    bootstrapQueue.push(json);
+    bootstrapQueue.push({ json, publication });
     return true;
   }
 
@@ -386,14 +392,16 @@ function consumeDelta(json) {
   }
   const applied = renderer.applyDeltaJson(json);
   if (!applied) {
+    acknowledgeAlreadyPresented(publication);
     return true;
   }
+  pendingPresentationPublication = publication;
   needsPresent = true;
   tryPresent();
   return true;
 }
 
-function commitRendererTransition(initial) {
+function commitRendererTransition(initial, publication = null) {
   const nextMode = transitionMode;
   if (nextMode === null) {
     throw new Error("authoring render transition has no pending mode");
@@ -415,12 +423,14 @@ function commitRendererTransition(initial) {
   resourceBytes = nextResourceBytes;
   reconnectResourceBundlePending = false;
   needsPresent = false;
+  pendingPresentationPublication = null;
+  lastPresentedPublication = null;
   mode = nextMode;
-  bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop);
+  bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);
   return true;
 }
 
-async function bootstrapRenderer(initial, resumeFrameLoop = true) {
+async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null) {
   const bootstrapGeneration = frameLoopGeneration;
   try {
     let createdRenderer;
@@ -446,6 +456,7 @@ async function bootstrapRenderer(initial, resumeFrameLoop = true) {
     }
     renderer.resize(width, height);
     if (!drainGpuDiagnostics()) return;
+    pendingPresentationPublication = publication;
     needsPresent = true;
     while (!tryPresent()) {
       if (
@@ -513,7 +524,39 @@ function tryPresent() {
   }
   needsPresent = false;
   presentedFrames += 1;
+  const publication = pendingPresentationPublication;
+  pendingPresentationPublication = null;
+  if (publication !== null) {
+    lastPresentedPublication = publication;
+  }
+  acknowledgePresented(publication);
   return drainGpuDiagnostics();
+}
+
+function samePublication(left, right) {
+  return left !== null && right !== null &&
+    left.session === right.session && left.sequence === right.sequence;
+}
+
+function acknowledgePresented(publication) {
+  if (publication === null || renderPort === null) {
+    return;
+  }
+  renderPort.postMessage({
+    type: "execution_presented",
+    session: publication.session,
+    sequence: publication.sequence,
+  });
+}
+
+function acknowledgeAlreadyPresented(publication) {
+  // `applyDeltaJson` returns false only for a typed stale transport envelope.
+  // It cannot prove a new publication reached the surface. A duplicate of the
+  // exact already-presented envelope is safe to acknowledge without redrawing;
+  // any older or foreign envelope remains unacknowledged.
+  if (!needsPresent && samePublication(publication, lastPresentedPublication)) {
+    acknowledgePresented(publication);
+  }
 }
 
 function flushBootstrapQueue() {
@@ -521,11 +564,13 @@ function flushBootstrapQueue() {
     return;
   }
   while (!needsPresent && bootstrapQueue.length > 0) {
-    const json = bootstrapQueue.shift();
+    const { json, publication } = bootstrapQueue.shift();
     const applied = renderer.applyDeltaJson(json);
     if (!applied) {
+      acknowledgeAlreadyPresented(publication);
       continue;
     }
+    pendingPresentationPublication = publication;
     needsPresent = true;
     if (!tryPresent()) {
       break;

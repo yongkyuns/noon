@@ -4,6 +4,7 @@ import {
   createDirectExecutionSmokeRenderer,
   createDirectNativeSignalsSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
+  createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
   createDirectValueTrackerSmokeRenderer,
 } from "./pkg/noon_web.js";
@@ -325,6 +326,49 @@ async function directOrdinaryStylePlayProof(expectedBackend) {
   return metrics;
 }
 
+async function directOrdinaryPaintPlayProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryPaintPlaySmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow) {
+    throw new Error("direct ordinary paint session did not expose its settled publication");
+  }
+  await presentDirectFrame(renderer);
+
+  // The shared Rust builder verifies both paint channels at their midpoint and
+  // endpoint. This final yellow pixel proves that completion released them for
+  // a later ordinary set_color/set_opacity publication.
+  const endpointColor = await sampleRenderedColor(canvas, 0, 0);
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    endpointColor,
+  };
+  if (metrics.backend !== expectedBackend) {
+    throw new Error(
+      `direct ordinary paint renderer selected ${metrics.backend}; expected ${expectedBackend}`,
+    );
+  }
+  if (metrics.authoredTime !== 2) {
+    throw new Error(`direct ordinary paint authored time is ${metrics.authoredTime}; expected 2`);
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
+    throw new Error(`direct ordinary paint produced invalid metrics ${JSON.stringify(metrics)}`);
+  }
+  if (
+    endpointColor.red < 180 ||
+    endpointColor.green < 180 ||
+    endpointColor.blue > 100
+  ) {
+    throw new Error(`direct ordinary paint did not render its yellow authored edit ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
 async function directValueTrackerProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectValueTrackerSmokeRenderer(canvas);
@@ -514,6 +558,7 @@ async function start() {
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
+  metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);
   metrics.valueTracker = await directValueTrackerProof(expectedBackend);
   metrics.nativeSignals = await directNativeSignalsProof(expectedBackend);
 

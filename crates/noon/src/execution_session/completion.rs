@@ -176,27 +176,48 @@ impl ExecutionSession {
         let mut semantic = SemanticMutationTransaction::new();
         let mut release = Vec::with_capacity(pending.entries.len());
 
-        // A Fill channel carries the exact authored style because fill paint has no
-        // scalar semantic-property representation. Merge any independently lowered
-        // object-opacity endpoint into that style before emitting one mutation, so
-        // completion never constructs a forbidden ReplaceStyle + style-property batch.
+        // Paint channels carry only their exact semantic fields. Start from the
+        // current authored style once per affected object, merge every completed
+        // style domain, then emit one replacement so parallel paint channels cannot
+        // overwrite each other or unrelated style fields.
         let mut completed_styles = BTreeMap::new();
         for entry in &pending.entries {
-            if let SemanticAnimationCompletion::Style(style) = &entry.completion {
-                completed_styles.insert(entry.semantic_object, style.clone());
-            }
-        }
-        for entry in &pending.entries {
-            let SemanticAnimationCompletion::Property {
-                property: SemanticObjectProperty::ObjectOpacity,
-                value: SemanticSignalValue::Scalar(value),
-            } = &entry.completion
-            else {
+            let is_style_domain = matches!(
+                &entry.completion,
+                SemanticAnimationCompletion::Fill { .. }
+                    | SemanticAnimationCompletion::Stroke { .. }
+                    | SemanticAnimationCompletion::Property {
+                        property: SemanticObjectProperty::ObjectOpacity,
+                        ..
+                    }
+            );
+            if !is_style_domain {
                 continue;
-            };
-            if let Some(style) = completed_styles.get_mut(&entry.semantic_object) {
-                style.object_opacity = *value;
             }
+            let style = completed_styles
+                .entry(entry.semantic_object)
+                .or_insert_with(|| {
+                    store
+                        .semantic_object_state_checked(entry.semantic_object)
+                        .expect("pending completion object remains live at the same scene revision")
+                        .style
+                        .clone()
+                });
+            match &entry.completion {
+                SemanticAnimationCompletion::Fill { paint, opacity } => {
+                    style.fill = paint.clone();
+                    style.fill_opacity = *opacity;
+                }
+                SemanticAnimationCompletion::Stroke { paint, opacity } => {
+                    style.stroke = paint.clone();
+                    style.stroke_opacity = *opacity;
+                }
+                SemanticAnimationCompletion::Property {
+                    property: SemanticObjectProperty::ObjectOpacity,
+                    value: SemanticSignalValue::Scalar(value),
+                } => style.object_opacity = *value,
+                _ => unreachable!("style-domain completion was classified above"),
+            };
         }
         for (object, style) in &completed_styles {
             semantic.replace_style(*object, style.clone());
@@ -204,15 +225,13 @@ impl ExecutionSession {
 
         for entry in &pending.entries {
             match &entry.completion {
-                SemanticAnimationCompletion::None => {}
                 SemanticAnimationCompletion::Property { property, value } => {
-                    if !(*property == SemanticObjectProperty::ObjectOpacity
-                        && completed_styles.contains_key(&entry.semantic_object))
-                    {
+                    if *property != SemanticObjectProperty::ObjectOpacity {
                         semantic.set_property(entry.semantic_object, *property, value.clone());
                     }
                 }
-                SemanticAnimationCompletion::Style(_) => {}
+                SemanticAnimationCompletion::Fill { .. }
+                | SemanticAnimationCompletion::Stroke { .. } => {}
             }
             release.push(ExecutionPatch::ReconcileTrack {
                 track: entry.track,
@@ -367,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn style_completion_publishes_exact_authored_style_and_releases_both_channels() {
+    fn paint_completion_coalesces_exact_fields_and_releases_all_channels() {
         let mut store = SemanticStore::new();
         let object =
             store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -377,6 +396,8 @@ mod tests {
         let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
         target_state.style.fill = Some(SemanticPaint::Solid(Color::RED));
         target_state.style.fill_opacity = 0.4;
+        target_state.style.stroke = Some(SemanticPaint::Solid(Color::GREEN));
+        target_state.style.stroke_opacity = 0.25;
         target_state.style.object_opacity = 0.5;
         let expected = target_state.style.clone();
         let target = store.insert_semantic_object(target_state);
@@ -397,7 +418,15 @@ mod tests {
         session.advance_segment_to(segment, 1.0).unwrap();
         let style = session.frame().objects[0].style;
         let fill = style.fill.unwrap();
+        let stroke = style.stroke.unwrap();
         assert!((fill.alpha - 0.7).abs() < 1e-6);
+        assert_eq!(
+            stroke,
+            Color {
+                alpha: 0.125,
+                ..Color::GREEN
+            }
+        );
         assert!((style.opacity - 0.75).abs() < 1e-6);
 
         session.advance_segment_to(segment, 2.0).unwrap();
@@ -422,6 +451,69 @@ mod tests {
             })
         );
         assert_eq!(session.frame().objects[0].style.opacity, 0.5);
+        assert_eq!(
+            session.frame().objects[0].style.stroke,
+            Some(Color {
+                alpha: 0.25,
+                ..Color::GREEN
+            })
+        );
+    }
+
+    #[test]
+    fn fill_completion_preserves_bound_opacity_and_stroke_siblings() {
+        let mut store = SemanticStore::new();
+        let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        source.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        source.style.stroke_opacity = 1.0;
+        let object = store.insert_semantic_object(source);
+        store.attach_to_scene(object).unwrap();
+        let object_opacity = store.insert_semantic_input_signal(0.65_f64).unwrap();
+        store
+            .bind_semantic_signal(
+                object_opacity,
+                object,
+                SemanticObjectProperty::ObjectOpacity,
+            )
+            .unwrap();
+
+        let mut target = store.semantic_object_state_checked(object).unwrap().clone();
+        target.style.fill = Some(SemanticPaint::Solid(Color::RED));
+        target.style.fill_opacity = 0.4;
+        let target = store.insert_semantic_object(target);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        session.advance_segment_to(segment, 2.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+
+        let authored = &store.semantic_object_state_checked(object).unwrap().style;
+        assert_eq!(authored.fill, Some(SemanticPaint::Solid(Color::RED)));
+        assert_eq!(authored.fill_opacity, 0.4);
+        assert_eq!(authored.stroke, Some(SemanticPaint::Solid(Color::WHITE)));
+        assert_eq!(authored.stroke_opacity, 1.0);
+        let effective = session.frame().objects[0].style;
+        assert_eq!(
+            effective.fill,
+            Some(Color {
+                alpha: 0.4,
+                ..Color::RED
+            })
+        );
+        assert_eq!(authored.object_opacity, 1.0);
+        assert_eq!(effective.opacity, 0.65);
+        assert_eq!(effective.stroke, Some(Color::WHITE));
     }
 
     #[test]
