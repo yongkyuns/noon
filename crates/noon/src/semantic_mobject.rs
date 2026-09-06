@@ -277,6 +277,54 @@ impl Mobject {
         self.require_same_store(other)?;
         self.commit_state(other.state()?)
     }
+
+    /// Match this analytic Line's immutable local endpoints to another analytic
+    /// Line's world endpoints using one rotation, translation, and uniform scale.
+    /// Content and paint remain owned by this object.
+    pub fn match_line_handle(&mut self, other: &Self) -> Result<(), String> {
+        self.require_same_store(other)?;
+        let target = other.state()?;
+        if target.transform.scale.x != target.transform.scale.y {
+            return Err("Line.match_points target has unsupported nonuniform scaling".into());
+        }
+        let StoredGeometry::Line { start, end } = target
+            .content
+            .geometry()
+            .ok_or("Line.match_points requires an analytic Line target")?
+        else {
+            return Err("Line.match_points requires an analytic Line target".into());
+        };
+        let target_start = semantic_transform_point(target.transform, start)?;
+        let target_end = semantic_transform_point(target.transform, end)?;
+        let transform = self.line_match_transform(target_start, target_end)?;
+        let mut state = self.state()?;
+        state.transform.translation.x = f64::from(transform.translation.x);
+        state.transform.translation.y = f64::from(transform.translation.y);
+        state.transform.rotation_z = f64::from(transform.rotation);
+        state.transform.scale.x = f64::from(transform.scale.x);
+        state.transform.scale.y = f64::from(transform.scale.y);
+        self.commit_state(state)
+    }
+
+    /// Derive the effective transform that maps this analytic Line's immutable
+    /// local endpoints onto two requested world endpoints. This is pure: callback
+    /// hosts can validate first, then stage the returned transform in their phase
+    /// overlay without editing authored state.
+    pub fn line_match_transform(
+        &self,
+        target_start: Vec2,
+        target_end: Vec2,
+    ) -> Result<Transform2D, String> {
+        let state = self.state()?;
+        let StoredGeometry::Line { start, end } = state
+            .content
+            .geometry()
+            .ok_or("Line.match_points requires an analytic Line source")?
+        else {
+            return Err("Line.match_points requires an analytic Line source".into());
+        };
+        line_match_transform(start, end, target_start, target_end)
+    }
     pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
         self.validate()?;
         let center = self.center()?;
@@ -476,6 +524,70 @@ pub(crate) fn rotate_affine_about_point(
         ),
         authoring_render_f64("rotation result", rotation + angle)?,
     ))
+}
+
+fn semantic_transform_point(transform: SemanticTransform2_5D, point: Vec2) -> Result<Vec2, String> {
+    if transform.scale.x != transform.scale.y {
+        return Err("Line.match_points target has unsupported nonuniform scaling".into());
+    }
+    let scale = authoring_render_f64("Line.match_points target scale", transform.scale.x)?;
+    let rotation = authoring_render_f64("Line.match_points target rotation", transform.rotation_z)?;
+    let translation_x = authoring_render_f64(
+        "Line.match_points target translation.x",
+        transform.translation.x,
+    )?;
+    let translation_y = authoring_render_f64(
+        "Line.match_points target translation.y",
+        transform.translation.y,
+    )?;
+    let x = f64::from(point.x) * scale;
+    let y = f64::from(point.y) * scale;
+    let (sine, cosine) = rotation.sin_cos();
+    semantic_xy(
+        x * cosine - y * sine + translation_x,
+        x * sine + y * cosine + translation_y,
+    )
+}
+
+/// Shared analytic Line endpoint matching used by authored and callback paths.
+pub fn line_match_transform(
+    source_start: Vec2,
+    source_end: Vec2,
+    target_start: Vec2,
+    target_end: Vec2,
+) -> Result<Transform2D, String> {
+    let finite = |point: Vec2| point.x.is_finite() && point.y.is_finite();
+    if !finite(source_start) || !finite(source_end) || !finite(target_start) || !finite(target_end)
+    {
+        return Err("Line.match_points endpoints must be finite".into());
+    }
+    let source_x = f64::from(source_end.x - source_start.x);
+    let source_y = f64::from(source_end.y - source_start.y);
+    let target_x = f64::from(target_end.x - target_start.x);
+    let target_y = f64::from(target_end.y - target_start.y);
+    let source_length = source_x.hypot(source_y);
+    let target_length = target_x.hypot(target_y);
+    if source_length == 0.0 || target_length == 0.0 {
+        return Err("Line.match_points requires nondegenerate source and target Lines".into());
+    }
+    let scale = target_length / source_length;
+    let rotation = target_y.atan2(target_x) - source_y.atan2(source_x);
+    let (sine, cosine) = rotation.sin_cos();
+    let local_x = f64::from(source_start.x) * scale;
+    let local_y = f64::from(source_start.y) * scale;
+    let translation_x = f64::from(target_start.x) - (local_x * cosine - local_y * sine);
+    let translation_y = f64::from(target_start.y) - (local_x * sine + local_y * cosine);
+    Ok(Transform2D {
+        translation: Vec2::new(
+            finite_f32("Line.match_points translation.x", translation_x)?,
+            finite_f32("Line.match_points translation.y", translation_y)?,
+        ),
+        rotation: finite_f32("Line.match_points rotation", rotation)?,
+        scale: {
+            let scale = finite_f32("Line.match_points uniform scale", scale)?;
+            Vec2::new(scale, scale)
+        },
+    })
 }
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {

@@ -386,26 +386,46 @@ def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
 
 
 def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
-    if not isinstance(mobject, _base.Mobject):
-        raise TypeError("match_points expects a Mobject")
-    source = self._current_raw()
-    target = mobject._current_raw()
-    source_kind = next(iter(source.geometry), None)
-    target_kind = next(iter(target.geometry), None)
-    if source_kind != target_kind or source_kind not in {"line", "vector_path"}:
+    if not isinstance(self, _compat.Line) or not isinstance(mobject, _compat.Line):
         raise NotImplementedError(
-            "match_points currently supports Line/VMobject-path pairs with matching geometry kinds"
+            "match_points currently supports analytic Line-to-Line matching"
         )
-    # Manim stores transformed VMobject points directly. Noon separates affine placement,
-    # so copying the target point state also copies its affine placement while source style
-    # (notably MovingDots' red line color) remains untouched. _ir snapshots are immutable,
-    # therefore construct one replacement value rather than mutating a frozen dataclass.
-    raw = _base._ir.Mobject(
-        geometry=copy.deepcopy(target.geometry),
-        transform=copy.deepcopy(target.transform),
-        style=copy.deepcopy(source.style),
-    )
-    return self._apply(raw)
+    # The canonical callback path stages the Rust-derived effective transform in
+    # its ordered overlay. A callback-local target is an opaque endpoint operand
+    # and therefore never allocates semantic identity in the authoring store.
+    try:
+        from _manim_updaters import canonical_line_match
+
+        if canonical_line_match(self, mobject):
+            return self
+    except ImportError:
+        pass
+
+    source_handle = getattr(self, "_semantic_handle", None)
+    target_handle = getattr(mobject, "_semantic_handle", None)
+    if (
+        source_handle is None
+        or target_handle is None
+        or not bool(getattr(self, "_semantic_handle_fresh", False))
+        or not bool(getattr(mobject, "_semantic_handle_fresh", False))
+        or not hasattr(source_handle, "matchLine")
+    ):
+        raise NotImplementedError(
+            "Line.match_points requires opaque shared semantic Line handles"
+        )
+    try:
+        source_handle.matchLine(target_handle)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    # Legacy bound snapshots remain an explicit migration projection. Canonical
+    # scenes already observe the same handle and need no Python-side state copy.
+    try:
+        from _manim_semantic_handles import _sync_bound_transform
+
+        _sync_bound_transform(self, source_handle)
+    except ImportError:
+        pass
+    return self
 
 
 def install() -> None:

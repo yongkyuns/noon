@@ -13,6 +13,7 @@ import inspect
 import json
 import math
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 
@@ -25,6 +26,9 @@ _TRACKED_MOBJECTS: list[_base.Mobject] = []
 _SESSIONS: dict[int, "_UpdaterSession"] = {}
 _CANONICAL_SESSIONS: dict[int, "_CanonicalCallbackSession"] = {}
 _ACTIVE_CONTEXTS: dict[int, Any] = {}
+_ACTIVE_CANONICAL_CONTEXT: ContextVar["_CanonicalCallbackContext | None"] = ContextVar(
+    "noon_active_canonical_callback", default=None
+)
 
 _ORIGINAL_CURRENT_RAW = _base.Mobject._current_raw
 _ORIGINAL_APPLY = _base.Mobject._apply
@@ -814,6 +818,27 @@ class _CanonicalCallbackContext:
             *color,
         )
         return _phase_callback_paint_color(result, "stroke")
+    def line_target(
+        self, start: _base.Vec2, end: _base.Vec2
+    ) -> object:
+        return self._operations.callbackLineTarget(start.x, start.y, end.x, end.y)
+
+    def line_match_transform(
+        self, source: _base.Mobject, target: object
+    ) -> _PhaseTransform:
+        handle = getattr(source, "_semantic_handle", None)
+        if handle is None or not bool(getattr(source, "_semantic_handle_fresh", False)):
+            raise NotImplementedError(
+                "canonical Line.match_points requires an opaque semantic Line source"
+            )
+        result = self._operations.callbackMatchLineTransform(handle, target)
+        return _PhaseTransform(
+            _phase_number("Line.match_points result.translation.x", result.translationX),
+            _phase_number("Line.match_points result.translation.y", result.translationY),
+            _phase_number("Line.match_points result.rotation", result.rotation),
+            _phase_number("Line.match_points result.scale.x", result.scaleX),
+            _phase_number("Line.match_points result.scale.y", result.scaleY),
+        )
 
     def style_changed(
         self, key: tuple[int, int], before: _PhaseStyle, row: _PhasePropertyRow
@@ -829,6 +854,34 @@ class _CanonicalCallbackContext:
 
     def effective_batch(self) -> dict[str, Any]:
         return {"token": self.token, "writes": self._writes}
+
+
+def callback_line_target(
+    start: _base.Vec2, end: _base.Vec2
+) -> tuple["_CanonicalCallbackContext", object] | None:
+    """Create a Rust-owned endpoint operand only during a canonical phase."""
+
+    context = _ACTIVE_CANONICAL_CONTEXT.get()
+    return None if context is None else (context, context.line_target(start, end))
+
+
+def canonical_line_match(source: _base.Mobject, target: object) -> bool:
+    """Stage one shared analytic Line transform in the active ordered overlay."""
+
+    value = _canonical_row(source)
+    if value is None:
+        return False
+    context, key, row = value
+    operand = getattr(target, "_callback_line_target", None)
+    if operand is None or getattr(target, "_callback_line_context", None) is not context:
+        raise NotImplementedError(
+            "canonical Line.match_points target must belong to this callback phase"
+        )
+    before = row.transform
+    row.transform = context.line_match_transform(source, operand)
+    row.invalidate_bounds()
+    context.transform_changed(key, before, row)
+    return True
 
 
 def canonical_callback_scalar_value(scene: _base.Scene, handle: object) -> float:
@@ -1298,6 +1351,7 @@ def run_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> str:
     if scene_key in _ACTIVE_CONTEXTS:
         raise RuntimeError("nested Noon callback phases are not supported")
     _ACTIVE_CONTEXTS[scene_key] = context
+    context_token = _ACTIVE_CANONICAL_CONTEXT.set(context)
     # A canonical phase currently has no typed signal read-set. Enter an empty
     # signal scope so ValueTracker reads fail explicitly instead of falling back
     # to the wrapper's authored scalar value.
@@ -1335,6 +1389,7 @@ def run_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> str:
             _invoke(callback, mobject, context.delta_time)
     finally:
         reactive._leave_callback_signal_values()
+        _ACTIVE_CANONICAL_CONTEXT.reset(context_token)
         _ACTIVE_CONTEXTS.pop(scene_key, None)
 
     return _json_phase(context.effective_batch())

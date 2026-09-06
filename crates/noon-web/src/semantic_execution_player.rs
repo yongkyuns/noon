@@ -2256,9 +2256,7 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let midpoint = player
-            .live_drive_segment_to_authored_time(1.25)
-            .unwrap();
+        let midpoint = player.live_drive_segment_to_authored_time(1.25).unwrap();
         assert!(midpoint.callback_phase_json().is_none());
         assert!(!midpoint.reached_endpoint());
         assert_eq!(player.time(), 1.25);
@@ -2274,7 +2272,11 @@ mod tests {
             .live_drive_segment_to_authored_time(3.0)
             .unwrap()
             .reached_endpoint());
-        assert_eq!(player.time(), 2.0, "Rust clamps the external sample at the segment boundary");
+        assert_eq!(
+            player.time(),
+            2.0,
+            "Rust clamps the external sample at the segment boundary"
+        );
         player.live_complete_segment().unwrap();
         assert!(player.live_drive_segment_to_authored_time(3.0).is_err());
 

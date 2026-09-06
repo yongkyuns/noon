@@ -1612,6 +1612,15 @@ mod wasm {
         stroke: Option<Color>,
     }
 
+    /// Callback-local analytic Line operand. It owns only validated endpoints and
+    /// allocates no semantic identity or authored store node.
+    #[wasm_bindgen]
+    pub struct WasmCallbackLineTarget {
+        start: Vec2,
+        end: Vec2,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
     /// Opaque JS/Python wrapper over a replayable shared semantic declaration.
     #[wasm_bindgen]
     pub struct WasmDeclaredAnimationHandle {
@@ -2062,6 +2071,52 @@ mod wasm {
                 )
                 .map_err(js_error)?,
             ))
+        }
+
+        #[wasm_bindgen(js_name = callbackLineTarget)]
+        pub fn callback_line_target(
+            &self,
+            start_x: f64,
+            start_y: f64,
+            end_x: f64,
+            end_y: f64,
+        ) -> Result<WasmCallbackLineTarget, JsValue> {
+            let point = |name: &str, x: f64, y: f64| {
+                if !x.is_finite()
+                    || !y.is_finite()
+                    || x.abs() > f64::from(f32::MAX)
+                    || y.abs() > f64::from(f32::MAX)
+                {
+                    return Err(js_error(format!(
+                        "Line.match_points {name} must be finite f32-compatible coordinates"
+                    )));
+                }
+                Ok(Vec2::new(x as f32, y as f32))
+            };
+            Ok(WasmCallbackLineTarget {
+                start: point("start", start_x, start_y)?,
+                end: point("end", end_x, end_y)?,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = callbackMatchLineTransform)]
+        pub fn callback_match_line_transform(
+            &self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &WasmCallbackLineTarget,
+        ) -> Result<WasmCallbackTransform, JsValue> {
+            source.id_in_store(self.inner.scene.store(), "Line.match_points source")?;
+            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), &target.store) {
+                return Err(js_error(
+                    "Line.match_points target belongs to another callback context",
+                ));
+            }
+            let transform = source
+                .semantic_mobject()
+                .line_match_transform(target.start, target.end)
+                .map_err(js_error)?;
+            Ok(WasmCallbackTransform { transform })
         }
 
         #[wasm_bindgen(js_name = bindMobject)]
