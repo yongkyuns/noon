@@ -443,9 +443,14 @@ impl CanonicalAuthoringScene {
 
     /// Create one scalar signal in this context's shared semantic store.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn create_value_tracker(&self, initial: f64) -> Result<noon::ValueTracker, String> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene.value_tracker(initial)
+    fn create_value_tracker(&mut self, initial: f64) -> Result<noon::ValueTracker, String> {
+        if self.live_player_transferred {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.live_player.as_mut() {
+            Some(player) => player.live_value_tracker(initial),
+            None => self.scene.value_tracker(initial),
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -4192,6 +4197,31 @@ mod tests {
             Vec2::new(2.0, 0.0)
         );
         assert!(player.live_set_signal(&tracker, 3.0).is_err());
+    }
+
+    #[test]
+    fn scalar_tracker_creation_uses_the_owned_live_session() {
+        let mut context = CanonicalAuthoringScene::default();
+        context.live_player(1.0).unwrap();
+
+        let tracker = context.create_value_tracker(1.25).unwrap();
+        assert_eq!(context.tracker_value(&tracker).unwrap(), 1.25);
+        assert!(context
+            .scene
+            .store()
+            .borrow()
+            .is_semantic_signal_scoped(context.scene.root(), tracker.node_id()));
+
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context.create_value_tracker(f64::MAX).is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(context.tracker_value(&tracker).unwrap(), 1.25);
+
+        let leased = context.take_execution_player(1.0, 91).unwrap();
+        assert!(context.create_value_tracker(2.0).is_err());
+        context.return_execution_player(leased).unwrap();
+        let returned_tracker = context.create_value_tracker(2.0).unwrap();
+        assert_eq!(context.tracker_value(&returned_tracker).unwrap(), 2.0);
     }
 
     #[test]
