@@ -1,6 +1,6 @@
-use noon_render_wgpu::RendererConfig;
+//! Native presentation of the shared detached Uncreate example.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = noon::example_scenes::ordinary_uncreate_continuation_program()?;
-    noon_native::run_live_program("Noon ordinary Uncreate", RendererConfig::default(), program)
+    noon_native::run_live_program(noon::example_scenes::ordinary_uncreate_continuation_program()?)?;
+    Ok(())
 }

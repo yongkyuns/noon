@@ -890,7 +890,7 @@ def _canonical_uncreate_options(animation: object, kwargs: dict[str, object]) ->
         return None
     if getattr(animation, "remover", None) is not True:
         return None
-    return _canonical_affine_options(animation, kwargs, builder_args={})
+    return _canonical_affine_options(animation, kwargs)
 
 
 def _play_canonical_create(

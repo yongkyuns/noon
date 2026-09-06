@@ -520,6 +520,26 @@ try {
       expectedFinalCenter: [0, 0],
     },
     {
+      filename: "manim_example_show_uncreate.py",
+      objectCount: 0,
+      expectedDuration: 1,
+      endpointTime: null,
+    },
+    {
+      filename: "manim_example_typst_text.py",
+      objectCount: 1,
+      expectedDuration: null,
+      endpointTime: null,
+      expectText: true,
+    },
+    {
+      filename: "manim_example_math_typst.py",
+      objectCount: 1,
+      expectedDuration: null,
+      endpointTime: null,
+      expectText: true,
+    },
+    {
       filename: "manim_example_succession.py",
       objectCount: 4,
       expectedDuration: 4,

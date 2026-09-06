@@ -5247,6 +5247,25 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_uncreate_releases_membership_and_preserves_same_handle_reentry() {
+        let mut context = CanonicalAuthoringScene::default();
+        let square = context.scene.square(2.0).unwrap();
+        let id = ObjectId::new(0);
+        let end = context
+            .begin_ordinary_uncreate(id, &square, AnimationOptions::new())
+            .unwrap();
+        assert_eq!(end, 1.0);
+        assert!(context.live_contains_mobject(&square).unwrap());
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(end).unwrap();
+        player.live_complete_segment().unwrap();
+        assert!(!context.live_contains_mobject(&square).unwrap());
+        context.live_add_mobject(id, &square).unwrap();
+        assert!(context.live_contains_mobject(&square).unwrap());
+        assert_eq!(context.identities.get(&square.node_id()), Some(&id));
+    }
+
+    #[test]
     fn ordinary_parallel_create_commits_bindings_only_after_shared_admission() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
