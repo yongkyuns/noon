@@ -395,15 +395,20 @@ impl ExecutionSession {
             &self.reactive_projection,
         )
         .map_err(ExecutionSegmentCompletionError::PreparedScalarTimeline)?;
+        let handled_scalar_signals = timeline_entries
+            .iter()
+            .map(noon_compile::CompiledScalarSignalTimelineEntry::semantic_signal)
+            .collect::<std::collections::HashSet<_>>();
         let timeline = self
             .signal_timeline
             .prepare_append_batch(timeline_entries, actual_time)
             .map_err(ExecutionSegmentCompletionError::ScalarTimeline)?;
-        self.apply_prepared_semantic_transaction_with_execution(
+        self.apply_prepared_scalar_timeline_transaction_with_execution(
             prepared,
             release,
             Some(effective),
             super::publication::SemanticPublicationPurpose::SegmentCompletion,
+            handled_scalar_signals,
         )?;
         self.signal_timeline.commit_append(timeline);
         self.pending_segment_completion = None;

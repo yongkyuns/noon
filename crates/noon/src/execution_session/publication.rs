@@ -1,6 +1,7 @@
 use noon_compile::{
-    prepare_semantic_publication, validate_semantic_publication, ExecutionMutationTransaction,
-    ExecutionPatch, SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
+    prepare_semantic_publication, prepare_semantic_publication_with_scalar_timeline,
+    validate_semantic_publication, ExecutionMutationTransaction, ExecutionPatch,
+    SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
 };
 use noon_core::{
     PreparedSemanticMutationTransaction, PublicationContext, SceneRevision,
@@ -188,11 +189,12 @@ impl ExecutionSession {
         effective: Option<PreparedEffectivePropertyBatch>,
         purpose: SemanticPublicationPurpose,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
-        self.apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+        self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             execution_prefix,
             effective,
             purpose,
+            None,
             None,
         )
     }
@@ -204,6 +206,44 @@ impl ExecutionSession {
         effective: Option<PreparedEffectivePropertyBatch>,
         purpose: SemanticPublicationPurpose,
         reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
+        handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_prepared_semantic_transaction_with_execution_contract(
+            prepared,
+            execution_prefix,
+            effective,
+            purpose,
+            reactive_enrollment,
+            Some(handled_scalar_signals),
+        )
+    }
+
+    pub(crate) fn apply_prepared_scalar_timeline_transaction_with_execution(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
+        handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_prepared_semantic_transaction_with_execution_contract(
+            prepared,
+            execution_prefix,
+            effective,
+            purpose,
+            None,
+            Some(handled_scalar_signals),
+        )
+    }
+
+    fn apply_prepared_semantic_transaction_with_execution_contract(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
+        reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
+        handled_scalar_signals: Option<std::collections::HashSet<SemanticNodeId>>,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
@@ -214,12 +254,21 @@ impl ExecutionSession {
             return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
         }
         self.require_published_store(prepared.store())?;
-        let publication = prepare_semantic_publication(
-            &prepared,
-            &self.execution_index,
-            &self.reachability,
-            self.painter_order.tail(),
-        )
+        let publication = match handled_scalar_signals.as_ref() {
+            Some(signals) => prepare_semantic_publication_with_scalar_timeline(
+                &prepared,
+                &self.execution_index,
+                &self.reachability,
+                self.painter_order.tail(),
+                signals,
+            ),
+            None => prepare_semantic_publication(
+                &prepared,
+                &self.execution_index,
+                &self.reachability,
+                self.painter_order.tail(),
+            ),
+        }
         .map_err(ExecutionSessionPublicationError::Lowering)?;
         let preparation_stats = publication.stats();
         let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) = execution_prefix

@@ -2217,6 +2217,10 @@ impl ExecutionSession {
                     .execution_signal_id(signal)
                     .or_else(|| prepared_execution_signals.get(&signal).copied())
             })?;
+        let handled_scalar_signals = scalar_timeline_entries
+            .iter()
+            .map(noon_compile::CompiledScalarSignalTimelineEntry::semantic_signal)
+            .collect::<HashSet<_>>();
         let final_scalar_targets = schedule
             .scalar_leaves()
             .iter()
@@ -2352,6 +2356,7 @@ impl ExecutionSession {
                 None,
                 publication::SemanticPublicationPurpose::AuthoredMutation,
                 reactive_enrollment,
+                handled_scalar_signals,
             )
             .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
         self.signal_timeline.commit_append(scalar_timeline);
