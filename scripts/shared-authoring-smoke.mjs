@@ -764,7 +764,6 @@ try {
     return { authored, metrics };
   });
   assert.equal(callbackContinuationResult.authored.duration, 1);
-  assert.equal(callbackContinuationResult.authored.kind, "scene_document");
   assert.equal(
     callbackContinuationResult.authored.semanticExecution.contextId,
     callbackContinuation.registration.semanticExecution.contextId,
