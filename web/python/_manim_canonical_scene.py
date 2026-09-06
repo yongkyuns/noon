@@ -1108,85 +1108,6 @@ def _play_canonical_create(
     return self
 
 
-def _canonical_create_parallel_candidate(
-    scene: _base.Scene, args: tuple[object, ...], kwargs: dict[str, object]
-) -> tuple[object, list[tuple[_base.Mobject, object, _TypedBindingReservation]]] | None:
-    """Build one inert flat parallel Create candidate without binding Python wrappers."""
-    if len(args) < 2:
-        return None
-    classified = [_canonical_create_animation(scene, animation) for animation in args]
-    if any(target is None for target in classified):
-        return None
-    play = _canonical_affine_options(args[0], kwargs, builder_args={})
-    if play is None:
-        return None
-
-    children: list[tuple[_base.Mobject, object]] = []
-    for animation, target in zip(args, classified, strict=True):
-        child = _canonical_create_options(animation, kwargs)
-        if child is None:
-            return None
-        children.append((target, child))
-
-    # Scene.play options apply to each child through shared option resolution.
-    # The implicit parallel root is linear, so the curve is applied only once.
-    context = _context(scene)
-    play_run_time = kwargs.get("run_time", kwargs.get("duration"))
-    candidate = context.beginOrdinaryCreateParallel(
-        None if play_run_time is None else float(play_run_time), "linear"
-    )
-    next_object_id = scene._next_object_id
-    reservations = []
-    for target, child in children:
-        handle = getattr(target, "_semantic_handle")
-        reservation = _reserve_typed_binding(
-            target, scene, handle, None, object_id=next_object_id
-        )
-        if not reservation.reuse_existing_identity:
-            next_object_id += 1
-        candidate.appendCreate(
-            str(reservation.object.id),
-            handle,
-            float(child.run_time),
-            str(child.rate_func),
-        )
-        reservations.append((target, handle, reservation))
-    return candidate, reservations
-
-
-def _play_canonical_create_parallel(
-    self: _base.Scene,
-    candidate: object,
-    reservations: list[tuple[_base.Mobject, object, _TypedBindingReservation]],
-) -> _base.Scene | _SemanticContinuationAwaitable:
-    if _legacy_authored_time(self) != 0.0:
-        raise NotImplementedError(
-            "canonical ordinary Create cannot follow legacy Scene timing"
-        )
-    _start_default_synchronous_continuation(self)
-    context = _context(self)
-    try:
-        _require_semantic_continuation_active(self)
-        method = (
-            context.beginOrdinaryCreateParallelSegment
-            if _semantic_continuation_active(self)
-            else context.ordinaryPlayCreateParallel
-        )
-        method(candidate)
-    except Exception as error:
-        raise ValueError(str(error)) from None
-    for target, handle, reservation in reservations:
-        _commit_typed_binding(target, self, reservation, handle)
-        register = getattr(self, "_register_top_level", None)
-        if register is not None:
-            register(target)
-    if _async_continuation_active(self):
-        return _continuation_awaitable(self)
-    if _synchronous_continuation_active(self):
-        return _synchronous_continuation_wait(self)
-    return self
-
-
 def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> object | None:
     """Keep endpoint motion/layout requests out of the basic lifecycle subset."""
     shift = getattr(animation, "_fade_shift_vector", None)
@@ -1596,29 +1517,27 @@ def _play(self, *args, **kwargs):
     # Grow/Spin/Shrink are shared Rust lifecycle operations even while an
     # explicit export document is being authored. Only the other compatibility
     # animations use the document codec below.
-    canonical_lifecycles = [
-        classified
-        for argument in args
-        if (classified := _canonical_affine_lifecycle_animation(self, argument)) is not None
-    ]
-    if canonical_lifecycles:
-        if len(canonical_lifecycles) != 1 or len(args) != 1:
-            raise NotImplementedError(
-                "canonical ordinary affine lifecycle currently supports one leaf per play"
-            )
-        target, animation = canonical_lifecycles[0]
-        return _play_canonical_affine_lifecycle(
-            self,
-            target,
-            animation,
-            duration=kwargs.pop("duration", None),
-            run_time=kwargs.pop("run_time", None),
-            start_time=kwargs.pop("start_time", None),
-            easing=kwargs.pop("easing", None),
-            rate_func=kwargs.pop("rate_func", None),
-            lag_ratio=kwargs.pop("lag_ratio", None),
-            kwargs=kwargs,
-        )
+    # Grow/Spin retain an export-friendly single-leaf route. Mixed and
+    # grouped lifecycle requests are classified by the shared composition
+    # builder below so sibling order and admission stay in one transaction.
+    if len(args) == 1:
+        growing = sys.modules.get("_manim_growing")
+        if growing is not None and isinstance(args[0], growing.GrowFromPoint):
+            classified = _canonical_affine_lifecycle_animation(self, args[0])
+            if classified is not None:
+                target, animation = classified
+                return _play_canonical_affine_lifecycle(
+                    self,
+                    target,
+                    animation,
+                    duration=kwargs.pop("duration", None),
+                    run_time=kwargs.pop("run_time", None),
+                    start_time=kwargs.pop("start_time", None),
+                    easing=kwargs.pop("easing", None),
+                    rate_func=kwargs.pop("rate_func", None),
+                    lag_ratio=kwargs.pop("lag_ratio", None),
+                    kwargs=kwargs,
+                )
     # An explicit document request authors tracks for its external artifact.
     # Completing a live segment here would discard the exported animation and
     # mix runtime completion with the codec's authored-time cursor.
@@ -1635,6 +1554,32 @@ def _play(self, *args, **kwargs):
                 "realtime construct supports only canonical affine Scene.play and Scene.wait"
             )
         return _play_legacy_compatibility(self, *args, **kwargs)
+
+    # Classify every recursive composition before the single-leaf classifiers:
+    # multiple arguments and grouped children must share one Rust admission
+    # transaction, including mixed Create/Fade/lifecycle/Wait siblings.
+    if (shape := _canonical_composition_shape(self, args)) is not None:
+        kind, animations, group = shape
+        try:
+            candidate = _build_canonical_composition_candidate(
+                self, kind, animations, group, kwargs
+            )
+        except NotImplementedError:
+            context = getattr(self, "_canonical_authoring_context", None)
+            ownership = getattr(context, "liveExecutionOwnership", None)
+            if callable(ownership) and str(ownership()) != "none":
+                raise
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        if candidate is False:
+            context = _context(self)
+            if str(context.liveExecutionOwnership()) != "none":
+                raise NotImplementedError(
+                    "active canonical execution cannot fall back to the legacy composition scheduler"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        if candidate is not None:
+            candidate, reservations, removals = candidate
+            return _play_canonical_composition(self, candidate, reservations, removals)
 
     canonical_uncreates = [
         target
@@ -1664,10 +1609,6 @@ def _play(self, *args, **kwargs):
         if (target := _canonical_create_animation(self, argument)) is not None
     ]
     if canonical_creates:
-        if len(args) > 1 and len(canonical_creates) == len(args):
-            candidate = _canonical_create_parallel_candidate(self, args, kwargs)
-            if candidate is not None:
-                return _play_canonical_create_parallel(self, *candidate)
         if len(canonical_creates) != 1 or len(args) != 1:
             if _semantic_continuation_active(self):
                 raise NotImplementedError(
@@ -1725,28 +1666,31 @@ def _play(self, *args, **kwargs):
             kwargs=kwargs,
         )
 
-    if (shape := _canonical_composition_shape(self, args)) is not None:
-        kind, animations, group = shape
-        try:
-            candidate = _build_canonical_composition_candidate(
-                self, kind, animations, group, kwargs
-            )
-        except NotImplementedError:
-            context = getattr(self, "_canonical_authoring_context", None)
-            ownership = getattr(context, "liveExecutionOwnership", None)
-            if callable(ownership) and str(ownership()) != "none":
-                raise
-            return _play_legacy_compatibility(self, *args, **kwargs)
-        if candidate is False:
-            context = _context(self)
-            if str(context.liveExecutionOwnership()) != "none":
+    canonical_lifecycles = [
+        classified
+        for argument in args
+        if (classified := _canonical_affine_lifecycle_animation(self, argument)) is not None
+    ]
+    if canonical_lifecycles:
+        if len(canonical_lifecycles) != 1 or len(args) != 1:
+            if _semantic_continuation_active(self):
                 raise NotImplementedError(
-                    "active canonical execution cannot fall back to the legacy composition scheduler"
+                    "canonical ordinary affine lifecycle currently supports one leaf per play"
                 )
             return _play_legacy_compatibility(self, *args, **kwargs)
-        if candidate is not None:
-            candidate, reservations, removals = candidate
-            return _play_canonical_composition(self, candidate, reservations, removals)
+        target, animation = canonical_lifecycles[0]
+        return _play_canonical_affine_lifecycle(
+            self,
+            target,
+            animation,
+            duration=kwargs.pop("duration", None),
+            run_time=kwargs.pop("run_time", None),
+            start_time=kwargs.pop("start_time", None),
+            easing=kwargs.pop("easing", None),
+            rate_func=kwargs.pop("rate_func", None),
+            lag_ratio=kwargs.pop("lag_ratio", None),
+            kwargs=kwargs,
+        )
 
     canonical_affine = [
         classified
