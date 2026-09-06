@@ -39,7 +39,6 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
       NOON_SKIP_WEB_PREFLIGHT: "1"
       NOON_SKIP_PLAYGROUND_TEST: "1"
       NOON_WASM_PROFILE: "release"
@@ -79,10 +78,15 @@ jobs:
 
       - name: Build baseline production package
         working-directory: baseline
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target/baseline
         run: bash scripts/build-web-demo.sh
 
       - name: Build candidate production package
         working-directory: candidate
+        env:
+          # Separate checkout mtimes must not reuse baseline workspace artifacts.
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target/candidate
         run: bash scripts/build-web-demo.sh
 
       - name: Cache Playwright Chromium

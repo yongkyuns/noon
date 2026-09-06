@@ -553,8 +553,8 @@ async function directOrdinaryCallbackSparseReadsProof(expectedBackend) {
   const initialVacatedLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
 
   renderer.advanceDirectRealtime(250);
-  const trackStart = JSON.parse(renderer.directWakeDirectiveJson(250));
-  if (trackStart.presentNow) await settleDirectPublication(renderer, 250);
+  let trackStart = JSON.parse(renderer.directWakeDirectiveJson(250));
+  if (trackStart.presentNow) trackStart = await settleDirectPublication(renderer, 250);
   if (trackStart.cadence !== "animation-frame") {
     throw new Error(`direct sparse reads did not begin its scalar track: ${JSON.stringify(trackStart)}`);
   }
