@@ -555,21 +555,26 @@ async function ensureRuntimeReady({
           ? "authoring-engine-render-workers"
           : "python-semantic-engine-render-worker";
       status.dataset.runtimeStartup = "started-on-demand";
-      playbackControls = new PlaygroundPlaybackControls(
-        nextPlayer,
-        document.querySelector(".preview-pane"),
-        {
-          durationSeconds: loopDurationSeconds,
-          onError: showPlaybackError,
-        },
-      );
+      const sourceOwnsExecution = semanticExecution?.continuationGeneration != null;
+      if (!sourceOwnsExecution) {
+        playbackControls = new PlaygroundPlaybackControls(
+          nextPlayer,
+          document.querySelector(".preview-pane"),
+          {
+            durationSeconds: loopDurationSeconds,
+            onError: showPlaybackError,
+          },
+        );
+      }
 
       patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
-      playbackControls.sync({
-        time: initialState.time,
-        playing: initialState.playing,
-        durationSeconds: loopDurationSeconds,
-      });
+      if (playbackControls !== null) {
+        playbackControls.sync({
+          time: initialState.time,
+          playing: initialState.playing,
+          durationSeconds: loopDurationSeconds,
+        });
+      }
       startMetricsPolling();
       return {
         ...initialState,
@@ -873,6 +878,11 @@ async function runScene() {
       const sceneSpecJson = runtimeSceneSpec === null ? null : JSON.stringify(runtimeSceneSpec);
       const startRetained = semanticExecution === null && sceneSpecJson !== null;
       const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
+
+      if (semanticExecution?.continuationGeneration != null) {
+        playbackControls?.destroy();
+        playbackControls = null;
+      }
 
       await runPlaygroundTestHook("beforeReconcile", {
         exampleId: example.id,
