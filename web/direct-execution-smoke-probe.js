@@ -548,7 +548,7 @@ async function directLineMatchProof(expectedBackend) {
   const renderer = await createDirectLineMatchSmokeRenderer(canvas);
   renderer.resize(canvas.width, canvas.height);
   renderer.directWakeDirectiveJson(0);
-  await advanceDirectCallbackFrame(renderer, 0);
+  await presentDirectFrame(renderer);
   const middle = await sampleRenderedColor(canvas, 1.25, 0);
   if (renderer.rendererBackend() !== expectedBackend || middle.red < 100 ||
       middle.green > 120 || middle.blue > 120) {

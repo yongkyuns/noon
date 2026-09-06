@@ -12,4 +12,6 @@ class LiveLineMatchCallback(Scene):
         line.add_updater(
             lambda current: current.match_points(Line(left.get_center(), right.get_center()))
         )
-        self.live_execution()
+        # A zero-time source barrier keeps arbitrary callback reads on the
+        # ordinary suspended-source path without advancing authored time.
+        self.wait(0.0)

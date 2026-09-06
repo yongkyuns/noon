@@ -1899,7 +1899,6 @@ result = scene
   );
   const lineResult = await page.evaluate(async (source) => {
     const harness = window.sharedAuthoringSmoke;
-    const authored = await harness.authoring.run(source, {});
     const canvas = document.createElement("canvas");
     canvas.id = "scene-line-match";
     canvas.width = 640;
@@ -1907,12 +1906,25 @@ result = scene
     document.body.append(canvas);
     const execution = new harness.AuthoringExecutionClient(canvas);
     harness.lineExecution = execution;
-    await execution.startSemanticExecution(authored.semanticExecution, {
-      authoringClient: harness.authoring,
-      transportMode: "transferable",
-      initiallyPaused: true,
+    let resolveAttached, rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
     });
-    await execution.advanceTo(0);
+    const authored = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(registration) {
+        await execution.startSemanticExecution(registration.semanticExecution, {
+          authoringClient: harness.authoring,
+          transportMode: "transferable",
+          pacing: "external_samples",
+        });
+        resolveAttached();
+      },
+    });
+    authored.catch(rejectAttached);
+    await attached;
+    await execution.sampleToAuthoredTime(0);
+    await authored;
     return { canvasId: canvas.id, metrics: (await execution.metrics()).metrics };
   }, lineSource);
   assert.equal(lineResult.metrics.objectCount, 3);
