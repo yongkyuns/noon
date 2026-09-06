@@ -513,6 +513,13 @@ try {
       expectedFinalCenter: [5, -1],
     },
     {
+      filename: "manim_parity_create_circle.py",
+      objectCount: 1,
+      expectedDuration: 1,
+      endpointTime: null,
+      expectedFinalCenter: [0, 0],
+    },
+    {
       filename: "manim_example_move_to_target.py",
       objectCount: 1,
       expectedDuration: 1,

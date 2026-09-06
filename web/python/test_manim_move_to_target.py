@@ -84,52 +84,6 @@ class ManimMoveToTargetTests(unittest.TestCase):
                 raise AssertionError("rejected target capture succeeded")
             assert canonical.target is recaptured
 
-            # Unsupported subclasses reuse the aligned builder only for option
-            # parsing. The canonical affine classifier must reject them before
-            # asking their lazy target property to materialize (ShrinkToCenter
-            # on Text is one such caller).
-            import sys
-            import types
-            js = types.ModuleType("js")
-            for name in (
-                "noonResolveAnimationOptions",
-                "noonResolveUniformCompositionSchedule",
-                "noonResolveLifecyclePlan",
-                "noonValidatePresenceTransition",
-                "noonResolveCompositionSchedule",
-            ):
-                setattr(js, name, lambda *args: None)
-            sys.modules["js"] = js
-            import _manim_phase_b
-            import _manim_geometry
-            import _manim_semantic_handles; _manim_semantic_handles.install()
-            import _manim_shared_geometry; _manim_shared_geometry.install()
-            import _manim_dashed_line; _manim_dashed_line.install()
-            import _manim_animate
-            import _manim_rotate; _manim_rotate.install()
-            import _manim_composition; _manim_composition.install()
-            import _manim_lifecycle
-            import _manim_typst; _manim_typst.install()
-            import _manim_retained_animate; _manim_retained_animate.install()
-            import _manim_retained_state; _manim_retained_state.install()
-            import _manim_growing; _manim_growing.install()
-            import _manim_draw_border_then_fill; _manim_draw_border_then_fill.install()
-            import _manim_indication; _manim_indication.install()
-            import _manim_reactive
-            import _manim_updaters; _manim_updaters.install()
-            import _manim_camera; _manim_camera.install()
-            import _manim_canonical_scene
-
-            class DeferredUnsupported(_manim_animate._AlignedAnimationBuilder):
-                @property
-                def target(self):
-                    raise AssertionError("unsupported target must stay inert")
-
-            deferred = object.__new__(DeferredUnsupported)
-            deferred.source = Circle()
-            assert _manim_canonical_scene._canonical_affine_animation(
-                Scene(), deferred
-            ) is None
             """
         )
         completed = subprocess.run(

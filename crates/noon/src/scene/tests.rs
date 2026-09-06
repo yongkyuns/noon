@@ -16,6 +16,14 @@ fn ordinary_transform_preflight_is_read_only_and_shares_affine_payload_validatio
         .can_ordinary_transform_to(&circle, &affine_target, options)
         .unwrap());
     assert_eq!(scene.store().borrow().scene_revision(), revision);
+    for rate_func in [None, Some(RateFunction::Smooth)] {
+        let mut smooth = options;
+        smooth.rate_func = rate_func;
+        assert!(scene
+            .can_ordinary_transform_to(&circle, &affine_target, smooth)
+            .unwrap());
+        assert_eq!(scene.store().borrow().scene_revision(), revision);
+    }
 
     let mut style_target = circle.target_editor().unwrap();
     style_target.set_fill_opacity(0.5).unwrap();

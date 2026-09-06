@@ -122,7 +122,12 @@ impl Scene {
             Err(error) if error.is_unsupported_payload() => return Ok(false),
             Err(error) => return Err(error.to_string()),
         }
-        if options.rate_func != Some(RateFunction::Linear) {
+        // The ordinary path uses the shared track timing for both linear and
+        // Manim's default smooth curve. Other endpoint policies remain explicit.
+        if !matches!(
+            options.rate_func,
+            None | Some(RateFunction::Linear | RateFunction::Smooth)
+        ) {
             return Ok(false);
         }
         Ok(true)

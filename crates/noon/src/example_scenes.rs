@@ -1115,7 +1115,7 @@ impl LiveContinuation for OrdinaryCreateContinuation {
                     &self.circle,
                     AnimationOptions::new()
                         .run_time(1.0)
-                        .rate_func(RateFunction::Linear),
+                        .rate_func(RateFunction::Smooth),
                 )
                 .map(crate::ContinuationStep::Await)
                 .map_err(|error| error.to_string())
@@ -1144,9 +1144,9 @@ impl LiveContinuation for OrdinaryCreateContinuation {
 pub fn ordinary_create_continuation_program(
 ) -> Result<LiveProgram<OrdinaryCreateContinuation>, String> {
     let scene = Scene::new();
-    let mut circle = scene.circle(0.8).map_err(|error| error.to_string())?;
+    let mut circle = scene.circle(1.0).map_err(|error| error.to_string())?;
     circle
-        .set_fill(1.0, 0.1, 0.5, 0.5)
+        .set_fill(209.0 / 255.0, 71.0 / 255.0, 189.0 / 255.0, 0.5)
         .map_err(|error| error.to_string())?;
     let semantic_id = circle.node_id();
     let authored_style = circle.state().map_err(|error| error.to_string())?.style;

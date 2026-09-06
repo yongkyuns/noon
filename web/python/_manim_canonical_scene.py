@@ -784,7 +784,7 @@ def _play_canonical_affine(
     )
     if resolved.lag_ratio != 0.0 or resolved.path_arc != 0.0 or resolved.reverse_rate_function:
         raise NotImplementedError(
-            "canonical ordinary Scene.play currently supports one linear affine transform"
+            "canonical ordinary Scene.play currently supports one affine transform without path or lag options"
         )
     _start_default_synchronous_continuation(self)
     context = _context(self)
@@ -1222,6 +1222,11 @@ def _play_canonical_composition(
 
 
 def _play(self, *args, **kwargs):
+    # An explicit document request authors tracks for its external artifact.
+    # Completing a live segment here would discard the exported animation and
+    # mix runtime completion with the codec's authored-time cursor.
+    if getattr(self, _EXPORT_DOCUMENT_CONSTRUCT, False):
+        return _play_legacy_compatibility(self, *args, **kwargs)
     # Once an unsupported compatibility animation has selected the explicit
     # #959 export/materialization boundary, its timing and lowering remain on
     # that path.  Typed handles deliberately survive materialization for

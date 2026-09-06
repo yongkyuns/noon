@@ -13,6 +13,7 @@ const {
   createDirectOrdinaryValueTrackerContinuationSmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryFadePlaySmokeRenderer,
+  createDirectOrdinaryCreatePlaySmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
 } = await import("./pkg/noon_web.js");
@@ -541,6 +542,37 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     throw new Error(`direct callback continuation pixels or lifecycle are invalid ${JSON.stringify(metrics)}`);
   }
   return metrics;
+}
+
+async function directOrdinaryCreateProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryCreatePlaySmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    await settleDirectPublication(renderer, 0);
+    const initial = await sampleRenderedColor(canvas, 0, 0);
+    renderer.advanceDirectRealtime(500);
+    await settleDirectPublication(renderer, 500);
+    const midpoint = await sampleRenderedColor(canvas, 0, 0);
+    renderer.advanceDirectRealtime(1000);
+    await settleDirectPublication(renderer, 1000);
+    const endpoint = await sampleRenderedColor(canvas, 0, 0);
+    const directive = JSON.parse(renderer.directWakeDirectiveJson(1000));
+    const metrics = { initial, midpoint, endpoint, time: renderer.time(), cadence: directive.cadence };
+    if (renderer.rendererBackend() !== expectedBackend || metrics.time !== 1 ||
+        metrics.cadence !== "idle" || initial.red > 20 || endpoint.red < 90 ||
+        endpoint.blue < 70 || endpoint.green > endpoint.red - 30 ||
+        midpoint.red > endpoint.red + 3) {
+      throw new Error(`direct Create reveal/fill or completion failed: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
 }
 
 async function directLineMatchProof(expectedBackend) {
@@ -1083,6 +1115,7 @@ async function start() {
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.callbackPaint = await directCallbackPaintProof(expectedBackend);
   metrics.lineMatch = await directLineMatchProof(expectedBackend);
+  metrics.ordinaryCreate = await directOrdinaryCreateProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
