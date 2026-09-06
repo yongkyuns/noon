@@ -1568,6 +1568,32 @@ def _play_canonical_composition(
 
 
 def _play(self, *args, **kwargs):
+    # Grow/Spin/Shrink are shared Rust lifecycle operations even while an
+    # explicit export document is being authored. Only the other compatibility
+    # animations use the document codec below.
+    canonical_lifecycles = [
+        classified
+        for argument in args
+        if (classified := _canonical_affine_lifecycle_animation(self, argument)) is not None
+    ]
+    if canonical_lifecycles:
+        if len(canonical_lifecycles) != 1 or len(args) != 1:
+            raise NotImplementedError(
+                "canonical ordinary affine lifecycle currently supports one leaf per play"
+            )
+        target, animation = canonical_lifecycles[0]
+        return _play_canonical_affine_lifecycle(
+            self,
+            target,
+            animation,
+            duration=kwargs.pop("duration", None),
+            run_time=kwargs.pop("run_time", None),
+            start_time=kwargs.pop("start_time", None),
+            easing=kwargs.pop("easing", None),
+            rate_func=kwargs.pop("rate_func", None),
+            lag_ratio=kwargs.pop("lag_ratio", None),
+            kwargs=kwargs,
+        )
     # An explicit document request authors tracks for its external artifact.
     # Completing a live segment here would discard the exported animation and
     # mix runtime completion with the codec's authored-time cursor.
@@ -1696,30 +1722,6 @@ def _play(self, *args, **kwargs):
         if candidate is not None:
             candidate, reservations = candidate
             return _play_canonical_composition(self, candidate, reservations)
-
-    canonical_lifecycles = [
-        classified
-        for argument in args
-        if (classified := _canonical_affine_lifecycle_animation(self, argument)) is not None
-    ]
-    if canonical_lifecycles:
-        if len(canonical_lifecycles) != 1 or len(args) != 1:
-            raise NotImplementedError(
-                "canonical ordinary affine lifecycle currently supports one leaf per play"
-            )
-        target, animation = canonical_lifecycles[0]
-        return _play_canonical_affine_lifecycle(
-            self,
-            target,
-            animation,
-            duration=kwargs.pop("duration", None),
-            run_time=kwargs.pop("run_time", None),
-            start_time=kwargs.pop("start_time", None),
-            easing=kwargs.pop("easing", None),
-            rate_func=kwargs.pop("rate_func", None),
-            lag_ratio=kwargs.pop("lag_ratio", None),
-            kwargs=kwargs,
-        )
 
     canonical_affine = [
         classified
