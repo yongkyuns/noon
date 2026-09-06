@@ -230,6 +230,29 @@ test("initially paused startup rejects a source-owned continuation before attach
   client.terminate();
 });
 
+test("external sample pacing reaches the continuation endpoint as an absolute sample", async () => {
+  FakeWorker.instances.length = 0;
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new AuthoringExecutionClient(new FakeCanvas());
+  const render = await prepare(client);
+  const started = client.startSemanticExecution(
+    { contextId: "semantic-sampled", continuationGeneration: 8 },
+    { authoringClient: authoring, loopDurationSeconds: 2, pacing: "external_samples" },
+  );
+  await Promise.resolve();
+  replyRender(render, "start_engine", "engine_started", { mode: "legacy" });
+  await started;
+
+  assert.equal(authoring.attachments[0].options.pacing, "external_samples");
+  const sampled = await client.sampleToAuthoredTime(1.25);
+  assert.equal(sampled.time, 0);
+  const request = authoring.attachments[0].controlPort.peer.messages.findLast(
+    (message) => message.type === "sample_to_authored_time",
+  );
+  assert.equal(request.time, 1.25);
+  client.terminate();
+});
+
 test("semantic startup preserves shared mailbox transport options", async () => {
   FakeWorker.instances.length = 0;
   globalThis.crossOriginIsolated = true;

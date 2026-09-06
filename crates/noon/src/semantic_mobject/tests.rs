@@ -157,3 +157,52 @@ fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
     assert_eq!(scene.store().borrow().len(), nodes);
     assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
 }
+
+#[test]
+fn analytic_line_match_preserves_source_content_and_paint() {
+    let scene = Scene::new();
+    let mut source = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+    source.set_stroke_color(1.0, 0.0, 0.0, 1.0).unwrap();
+    let target = scene.line((2.0, 3.0), (4.0, 5.0)).unwrap();
+    let before = source.state().unwrap();
+
+    source.match_line_handle(&target).unwrap();
+
+    let after = source.state().unwrap();
+    assert_eq!(after.content, before.content);
+    assert_eq!(after.style, before.style);
+    let StoredGeometry::Line { start, end } = after.content.geometry().unwrap() else {
+        panic!("source remains an analytic Line")
+    };
+    let transform = Transform2D {
+        translation: after.transform.translation.lower_xy_f32().unwrap(),
+        rotation: after.transform.rotation_z as f32,
+        scale: after.transform.scale.lower_xy_f32().unwrap(),
+    };
+    let matched_start = transform.transform_point(start);
+    let matched_end = transform.transform_point(end);
+    assert!((matched_start.x - 2.0).abs() < 1.0e-6);
+    assert!((matched_start.y - 3.0).abs() < 1.0e-6);
+    assert!((matched_end.x - 4.0).abs() < 1.0e-6);
+    assert!((matched_end.y - 5.0).abs() < 1.0e-6);
+    assert_eq!(transform.scale.x, transform.scale.y);
+}
+
+#[test]
+fn analytic_line_match_rejects_invalid_operands_before_mutation() {
+    let scene = Scene::new();
+    let mut source = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+    let before = source.state().unwrap();
+    let circle = scene.circle(1.0).unwrap();
+    assert!(source.match_line_handle(&circle).is_err());
+    assert_eq!(source.state().unwrap(), before);
+
+    let degenerate = scene.line((2.0, 3.0), (2.0, 3.0)).unwrap();
+    assert!(source.match_line_handle(&degenerate).is_err());
+    assert_eq!(source.state().unwrap(), before);
+
+    let mut nonuniform = scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    nonuniform.set_scale(2.0, 1.0).unwrap();
+    assert!(source.match_line_handle(&nonuniform).is_err());
+    assert_eq!(source.state().unwrap(), before);
+}

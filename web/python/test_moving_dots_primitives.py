@@ -48,45 +48,16 @@ class MovingDotsPrimitiveTests(unittest.TestCase):
                 reactive._leave_callback_signal_values()
             assert tracker.get_value() == 0.0
 
-            # ManimCE v0.21 MovingDots relies on match_points replacing geometry and
-            # placement without copying the temporary Line's default style.
+            # Raw geometry replacement is no longer a callback compatibility path.
+            # The canonical opaque-handle proof lives in test_canonical_line_match.
             source_line = manim.Line((-1.0, 0.0), (1.0, 0.0)).set_color(api.RED)
             target_line = manim.Line((2.0, 3.0), (4.0, 5.0))
-            source_line.match_points(target_line)
-            assert source_line.geometry == target_line.geometry
-            assert source_line.transform == target_line.transform
-            assert source_line.style["stroke"] == api.RED.to_ir()
-
-            # The arbitrary-updater bridge returns one atomic geometry patch batch.
-            callback_scene = manim.Scene()
-            line = manim.Line((-1.0, 0.0), (1.0, 0.0)).set_color(api.RED)
-            callback_scene.add(line)
-            line.add_updater(
-                lambda mob: mob.match_points(manim.Line((0.0, 0.0), (2.0, 1.0)))
-            )
-            registration = updaters.register_scene(callback_scene)
-            assert registration is not None
-            frame = {
-                "time": 0.5,
-                "delta_time": 0.5,
-                "signals": [],
-                "objects": [
-                    {
-                        "object": line.id,
-                        "transform": line.transform,
-                        "style": line.style,
-                        "presence": True,
-                        "appearance": 1.0,
-                        "reveal": 1.0,
-                        "morph": 0.0,
-                    }
-                ],
-                "invocations": [{"callback": 0, "object_indices": [0]}],
-            }
-            batch = json.loads(
-                updaters.run_callback_phase(registration["session_id"], frame, 0)
-            )
-            assert "set_geometry" in batch["patches"][0]
+            try:
+                source_line.match_points(target_line)
+            except NotImplementedError as error:
+                assert "opaque shared semantic Line handles" in str(error)
+            else:
+                raise AssertionError("raw Line geometry matching must not remain available")
             """
         )
 

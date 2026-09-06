@@ -110,6 +110,19 @@ pub async fn create_direct_callback_paint_smoke_renderer(
     .await
 }
 
+/// The native Line callback example, executed in one typed Rust/WASM context.
+#[wasm_bindgen(js_name = createDirectLineMatchSmokeRenderer)]
+pub async fn create_direct_line_match_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (session, callbacks) =
+        noon::example_scenes::live_line_match_callback().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session_with_callbacks(
+        canvas, session, callbacks,
+    )
+    .await
+}
+
 /// Browser proof that the target-neutral Rust completion example preserves its
 /// authored endpoint and renders through the direct single-context WASM path.
 #[wasm_bindgen(js_name = createDirectAffineCompletionSmokeRenderer)]

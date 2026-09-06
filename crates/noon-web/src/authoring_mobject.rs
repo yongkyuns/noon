@@ -1666,6 +1666,15 @@ mod wasm {
             self.clone_handle()
         }
 
+        /// Analytic Line-to-Line point matching. Rust validates both operands and
+        /// commits only the source transform, preserving its content and paint.
+        #[wasm_bindgen(js_name = matchLine)]
+        pub fn match_line(&mut self, target: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
+            self.handle
+                .match_line_handle(&target.handle)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = snapshotJson)]
         pub fn snapshot_json(&self) -> Result<String, JsValue> {
             self.handle.validate().map_err(js_error)?;

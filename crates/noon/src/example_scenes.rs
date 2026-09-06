@@ -19,6 +19,8 @@ const ROTATE_LINE_BACKWARD: HostCallbackId = HostCallbackId::new(6);
 const FOLLOW_SPARSE_READS: HostCallbackId = HostCallbackId::new(7);
 const RECOLOR_PAINT: HostCallbackId = HostCallbackId::new(8);
 const FILL_AND_COMPOSITE_OPACITY: HostCallbackId = HostCallbackId::new(9);
+const MOVE_MATCH_DOT: HostCallbackId = HostCallbackId::new(10);
+const MATCH_LINE_ENDPOINTS: HostCallbackId = HostCallbackId::new(11);
 
 fn ordered_affine_callbacks() -> Result<RustHostCallbackTable, Box<dyn Error>> {
     let mut callbacks = RustHostCallbackTable::new();
@@ -217,6 +219,69 @@ pub fn live_line_callback_rotation(
         close_windows.apply(&mut store)?;
     }
 
+    Ok((scene.execution_session()?, callbacks))
+}
+
+/// Rust-authored counterpart of MovingDots' analytic Line callback.
+///
+/// The first callback moves one dot. The later callback observes that ordered
+/// overlay write, derives the red Line transform from its immutable local
+/// endpoints, and stages only that transform in the same phase.
+pub fn live_line_match_callback(
+) -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut left = scene.circle(0.08)?;
+    left.set_translation(-0.5, 0.0)?;
+    let mut right = scene.circle(0.08)?;
+    right.set_translation(0.5, 0.0)?;
+    let mut line = scene.line((-0.5, 0.0), (0.5, 0.0))?;
+    let red = Color::RED;
+    line.set_color(
+        red.red.into(),
+        red.green.into(),
+        red.blue.into(),
+        red.alpha.into(),
+    )?;
+    scene.add(&left)?;
+    scene.add(&right)?;
+    scene.add(&line)?;
+
+    let left_id = left.node_id();
+    let right_id = right.node_id();
+    let line_source = line.clone();
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks.insert(MOVE_MATCH_DOT, |context| {
+        let mut transform = context.target_state().transform;
+        transform.translation.x = 2.0;
+        context.set_target_transform(transform)
+    })?;
+    callbacks.insert(MATCH_LINE_ENDPOINTS, move |context| {
+        let left = context
+            .read_object(left_id)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let right = context
+            .read_object(right_id)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let start = left
+            .bounds
+            .ok_or_else(|| std::io::Error::other("left dot has no callback bounds"))?
+            .center();
+        let end = right
+            .bounds
+            .ok_or_else(|| std::io::Error::other("right dot has no callback bounds"))?
+            .center();
+        let transform = line_source
+            .line_match_transform(start, end)
+            .map_err(std::io::Error::other)?;
+        context
+            .set_target_transform(transform)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    })?;
+    {
+        let mut store = scene.store().borrow_mut();
+        callbacks.add_updater(&mut store, left_id, MOVE_MATCH_DOT, 0.0, None)?;
+        callbacks.add_updater(&mut store, line.node_id(), MATCH_LINE_ENDPOINTS, 0.0, None)?;
+    }
     Ok((scene.execution_session()?, callbacks))
 }
 
@@ -1683,5 +1748,19 @@ mod line_callback_tests {
             [0, 1, 3].map(|index| session.frame().objects[index].transform),
             siblings
         );
+    }
+
+    #[test]
+    fn line_match_callback_observes_prior_dot_overlay_and_preserves_red_paint() {
+        let (mut session, mut callbacks) = live_line_match_callback().unwrap();
+        callbacks.advance_to(&mut session, 0.0).unwrap();
+        let frame = session.frame();
+        assert_eq!(frame.objects[0].transform.translation.x, 2.0);
+        let line = &frame.objects[2];
+        let start = line.transform.transform_point(Vec2::new(-0.5, 0.0));
+        let end = line.transform.transform_point(Vec2::new(0.5, 0.0));
+        assert!((start.x - 2.0).abs() < 1.0e-6 && start.y.abs() < 1.0e-6);
+        assert!((end.x - 0.5).abs() < 1.0e-6 && end.y.abs() < 1.0e-6);
+        assert_eq!(line.style.stroke, Some(Color::RED));
     }
 }

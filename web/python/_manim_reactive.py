@@ -9,6 +9,7 @@ runtime state.
 from __future__ import annotations
 
 import math
+from contextvars import ContextVar
 from typing import Any
 
 import noon as _base
@@ -20,6 +21,22 @@ _ORIGINAL_SCENE_INIT = _ir.Scene.__init__
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
 _ORIGINAL_SCENE_PLAY = _base.Scene.play
 _ACTIVE_CALLBACK_SIGNAL_VALUES: dict[int, dict[str, Any]] | None = None
+# Python invocation ownership only; scalar values and identity remain in Rust.
+_AUTHORING_SCENE: ContextVar[object | None] = ContextVar(
+    "noon_authoring_scene", default=None
+)
+
+
+def _current_authoring_scene() -> object | None:
+    return _AUTHORING_SCENE.get()
+
+
+def _enter_authoring_scene(scene: object | None):
+    return _AUTHORING_SCENE.set(scene)
+
+
+def _leave_authoring_scene(token) -> None:
+    _AUTHORING_SCENE.reset(token)
 
 
 def _finite_scalar(name: str, value: object) -> float:
@@ -97,7 +114,15 @@ class ValueTracker:
     """Declarative scalar input compatible with Manim's common tracker vocabulary."""
 
     def __init__(self, value: float = 0.0) -> None:
-        self._value = _finite_scalar("value", value)
+        value = _finite_scalar("value", value)
+        scene = _current_authoring_scene()
+        if scene is not None:
+            canonical = scene.value_tracker(value)
+            self._scene = scene
+            self._canonical_context = canonical._canonical_context
+            self._canonical_handle = canonical._canonical_handle
+            return
+        self._value = value
         self._scene: _ir.Scene | None = None
         self._signal_id: int | None = None
 

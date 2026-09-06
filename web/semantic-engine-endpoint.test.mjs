@@ -34,6 +34,7 @@ function fixture(
   const callbackReads = [];
   const nativeInputs = [];
   const continuationDriveTimes = [];
+  const authoredSampleTimes = [];
   const executionWakeTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
@@ -79,6 +80,12 @@ function fixture(
       time = 1;
       return { callbackPhaseJson: null, reachedEndpoint: true };
     },
+    driveLiveSegmentToAuthoredTime: (value) => {
+      authoredSampleTimes.push(value);
+      if (!Number.isFinite(value) || value < time) throw new Error("invalid external sample");
+      time = value;
+      return { callbackPhaseJson: null, reachedEndpoint: false };
+    },
     completeLiveSegment: () => { completedSegments += 1; },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
     time: () => time, isPlaying: () => playing,
@@ -93,6 +100,7 @@ function fixture(
   return { control, render, player, stats: () => ({
     returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
     initialSnapshots, resourceBundles, continuationDriveTimes, executionWakeTimes,
+    authoredSampleTimes,
     drained, committedPhases,
     callbackReads,
   }),
@@ -480,6 +488,146 @@ test("semantic continuation services Rust callback barriers before endpoint publ
       f.stats().continuationDriveTimes[1],
       "every phase retry preserves the one captured wall timestamp",
     );
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("external sample pacing ignores render ticks and resolves after exact presentation", async () => {
+  const f = fixture("transferable", null, {
+    generation: 31, onComplete: () => {}, onError: (_generation, error) => { throw error; },
+  }, { pacing: "external_samples" });
+  let endpoint;
+  try {
+    f.player.drainDeltaJson = () => f.player.seekDeltaJson(f.player.time());
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence,
+    });
+    f.render.port2.postMessage({
+      type: "execution_presented", session: initialDelta.session, sequence: initialDelta.sequence,
+    });
+
+    f.render.port2.postMessage({ type: "tick", timestamp: 100 });
+    await turn();
+    assert.deepEqual(f.stats().continuationDriveTimes, []);
+    assert.deepEqual(f.stats().authoredSampleTimes, []);
+
+    const publication = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta" && message.sequence !== initialDelta.sequence,
+    );
+    const sampled = request(f.control.port2, "sample_to_authored_time", 61, { time: 0.5 });
+    const delta = await publication;
+    let settled = false;
+    sampled.then(() => { settled = true; });
+    f.render.port2.postMessage({
+      type: "execution_ack", session: delta.session, sequence: delta.sequence,
+    });
+    await turn();
+    assert.equal(settled, false);
+    f.render.port2.postMessage({
+      type: "execution_presented", session: delta.session, sequence: delta.sequence,
+    });
+    assert.equal((await sampled).time, 0.5);
+    assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
+
+    const backward = await request(
+      f.control.port2, "sample_to_authored_time", 62, { time: 0.25 },
+    );
+    assert.equal(backward.type, "error");
+    assert.match(backward.message, /must be monotonic/);
+    assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("one external sample crosses continuation segments with the returned player", async () => {
+  let endpoint;
+  let stage = 0;
+  const f = fixture("transferable", null, {
+    generation: 32,
+    onComplete: () => {
+      stage += 1;
+      setImmediate(() => endpoint.startContinuation(32));
+    },
+    onError: (_generation, error) => { throw error; },
+  }, { pacing: "external_samples" });
+  const acknowledge = (publication) => {
+    f.render.port2.postMessage({
+      type: "execution_ack", session: publication.session, sequence: publication.sequence,
+    });
+    f.render.port2.postMessage({
+      type: "execution_presented", session: publication.session, sequence: publication.sequence,
+    });
+  };
+  const delta = () => nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+  try {
+    f.player.driveLiveSegmentToAuthoredTime = (target) => {
+      f.stats().authoredSampleTimes.push(target);
+      if (stage === 0) {
+        f.player.seekDeltaJson(1.0);
+        return { callbackPhaseJson: null, reachedEndpoint: true };
+      }
+      f.player.seekDeltaJson(target);
+      return { callbackPhaseJson: null, reachedEndpoint: false };
+    };
+    f.player.drainDeltaJson = () => f.player.seekDeltaJson(f.player.time());
+    const ready = next(f.control.port2);
+    const initial = delta();
+    endpoint = await f.attach();
+    await ready;
+    acknowledge(await initial);
+
+    const sampled = request(f.control.port2, "sample_to_authored_time", 63, { time: 1.5 });
+    acknowledge(await delta()); // first segment endpoint
+    acknowledge(await delta()); // first segment completion
+    acknowledge(await delta()); // next segment authored/resume publication
+    acknowledge(await delta()); // requested frame in the next segment
+    assert.equal((await sampled).time, 1.5);
+    assert.deepEqual(f.stats().authoredSampleTimes, [1.5, 1.5]);
+    assert.equal(f.stats().created, 1);
+    assert.equal(f.stats().resumed, 1);
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().resourceBundles, 1);
+    assert.equal(f.stats().completedSegments, 1);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("external sampling acknowledges source completion after a clean segment boundary", { timeout: 2_000 }, async () => {
+  let endpoint;
+  let stage = 0;
+  const f = fixture("transferable", null, {
+    generation: 33,
+    onComplete: () => {
+      stage += 1;
+      if (stage === 1) endpoint.startContinuation(33);
+      else void endpoint.publishContinuationResult(33);
+    },
+  }, { pacing: "external_samples" });
+  f.render.port2.on("message", (message) => {
+    if (message.type !== "execution_delta") return;
+    for (const type of ["execution_ack", "execution_presented"]) {
+      f.render.port2.postMessage({ type, session: message.session, sequence: message.sequence });
+    }
+  });
+  f.player.driveLiveSegmentToAuthoredTime = () => {
+    f.player.seekDeltaJson(stage + 1);
+    return { callbackPhaseJson: null, reachedEndpoint: true };
+  };
+  // No visual change at the continuation boundary is valid and is not EOF.
+  f.player.drainDeltaJson = () => null;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const result = await request(f.control.port2, "sample_to_authored_time", 64, { time: 2 });
+    assert.equal(result.type, "sample_to_authored_time");
+    assert.equal(result.time, 2);
+    assert.equal(result.playing, false);
+    assert.equal(f.stats().completedSegments, 2);
+    assert.equal(f.stats().resumed, 1);
   } finally { endpoint?.stop(); f.close(); }
 });
 

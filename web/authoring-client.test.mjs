@@ -290,6 +290,7 @@ test("routes an early semantic continuation registration without settling the ru
       loopDurationSeconds: 2,
       session: 1,
       continuationGeneration: registrations[0].generation,
+      pacing: "external_samples",
     },
   );
   await Promise.resolve();
@@ -298,6 +299,7 @@ test("routes an early semantic continuation registration without settling the ru
   );
   assert.equal(attachment.continuationGeneration, 7);
   assert.equal(attachment.continuationRunRequestId, 0);
+  assert.equal(attachment.pacing, "external_samples");
   worker.emit("message", workerMessage("semantic_execution_attached", {
     requestId: attachment.requestId,
   }));

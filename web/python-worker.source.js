@@ -1066,6 +1066,12 @@ function validateRequest(request) {
     if (request.initiallyPaused && request.continuationGeneration !== undefined) {
       throw new Error("source-owned semantic continuations cannot start paused");
     }
+    if (request.pacing !== "realtime" && request.pacing !== "external_samples") {
+      throw new Error("semantic attachment has invalid pacing");
+    }
+    if (request.pacing === "external_samples" && request.continuationGeneration === undefined) {
+      throw new Error("external sample pacing requires a source-owned semantic continuation");
+    }
     if (request.continuationGeneration !== undefined &&
         (!Number.isSafeInteger(request.continuationRunRequestId) ||
          request.continuationRunRequestId < 0)) {

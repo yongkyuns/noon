@@ -203,8 +203,13 @@ async function renderManimReferences() {
   return results;
 }
 
-function noonSourceFor(fixture) {
+function noonSourceFor(fixture, { semantic = false } = {}) {
   const adapted = fixtureSourceFor(fixture).replace("from manim import *", "from noon import *");
+  if (semantic) {
+    // Leave construction to the normal async authoring runner. Class metadata
+    // selects the fixture without rewriting its construct method or callbacks.
+    return `${adapted}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${fixture.scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
+  }
   return `${adapted}\n\nresult = ${fixture.scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
 }
 
@@ -333,19 +338,19 @@ async function captureHostFixture(
   backend,
 ) {
   const loaded = await page.evaluate(
-    ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
+    ({ source, loopDuration, mode }) => window.noonHostRaster.load(source, loopDuration, { mode }),
     {
-      source: noonSourceFor(fixture),
+      source: noonSourceFor(fixture, { semantic: authored.hasCallbacks }),
       loopDuration: Math.max(1, fixture.expected_duration + 1),
+      mode: authored.hasCallbacks ? "semantic" : "document",
     },
   );
-  assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
-  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);
   if (authored.hasCallbacks) {
-    assert.ok(loaded.callbackSlots > 0, `${fixture.id}: host callback slots`);
+    assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: canonical callback execution`);
   } else {
-    assert.equal(loaded.callbackSlots, 0, `${fixture.id}: deterministic host callback slots`);
+    assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
   }
+  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);
   assert.equal(loaded.rendererBackend, expectedBackend, `${backend}: host renderer backend`);
 
   const captures = [];

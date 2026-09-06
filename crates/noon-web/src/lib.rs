@@ -23,7 +23,6 @@ mod family_write_authoring;
 mod gpu_diagnostics;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod gpu_timestamps;
-mod host_player;
 mod legacy;
 mod lifecycle;
 mod manim_dashed_line_bridge;
@@ -82,7 +81,6 @@ pub use family_animation_authoring::*;
 pub use family_bounds::*;
 #[cfg(target_arch = "wasm32")]
 pub use family_write_authoring::*;
-pub use host_player::*;
 pub use legacy::{PlayerError, ReconcileOutcome};
 pub use lifecycle::*;
 pub use manim_dashed_line_bridge::*;

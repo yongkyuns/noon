@@ -1092,6 +1092,29 @@ impl SemanticExecutionPlayer {
         self.live_drive_segment_to(segment, requested_time)
     }
 
+    /// Drive the active continuation segment toward one externally supplied
+    /// authored-time sample.
+    ///
+    /// The caller supplies an absolute sample from an external reference grid.
+    /// Segment clamping, callback barriers, and runtime advancement remain owned
+    /// by the execution session. Rejecting a backward sample before constructing
+    /// the presentation clock or entering the session keeps the frame unchanged.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_drive_segment_to_authored_time(
+        &mut self,
+        requested_time: f64,
+    ) -> Result<WasmLiveSegmentDrive, String> {
+        self.require_callback_progression_available()?;
+        let current = self.session.frame().time;
+        if !requested_time.is_finite() || requested_time < current {
+            return Err(format!(
+                "external continuation sample requires time at or after {current}, got {requested_time}"
+            ));
+        }
+        let segment = self.live_segment()?;
+        self.live_drive_segment_to(segment, requested_time)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_drive_segment_to(
         &mut self,
@@ -1705,6 +1728,17 @@ impl SemanticExecutionPlayer {
         self.live_drive_segment_from_wall_time(wall_time_ms)
     }
 
+    /// Advance one active continuation segment toward an absolute authored-time
+    /// sample without involving a browser clock.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentToAuthoredTime))]
+    pub fn drive_live_segment_to_authored_time_wasm(
+        &mut self,
+        requested_time: f64,
+    ) -> Result<WasmLiveSegmentDrive, String> {
+        self.live_drive_segment_to_authored_time(requested_time)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment))]
     pub fn complete_live_segment_wasm(&mut self) -> Result<(), String> {
@@ -2193,6 +2227,64 @@ mod tests {
             .unwrap()
             .reached_endpoint());
         player.live_complete_segment().unwrap();
+        assert_eq!(player.time(), 3.0);
+    }
+
+    #[test]
+    fn external_authored_samples_are_monotonic_and_reuse_the_live_player() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(0.4).unwrap();
+        scene.add(&circle).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(2.0, 0.0).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            4.0,
+            67,
+        )
+        .unwrap();
+
+        player
+            .live_declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let midpoint = player.live_drive_segment_to_authored_time(1.25).unwrap();
+        assert!(midpoint.callback_phase_json().is_none());
+        assert!(!midpoint.reached_endpoint());
+        assert_eq!(player.time(), 1.25);
+
+        let frame = player.session.frame().clone();
+        assert!(player
+            .live_drive_segment_to_authored_time(1.0)
+            .unwrap_err()
+            .contains("time at or after 1.25"));
+        assert_eq!(player.session.frame(), &frame);
+
+        assert!(player
+            .live_drive_segment_to_authored_time(3.0)
+            .unwrap()
+            .reached_endpoint());
+        assert_eq!(
+            player.time(),
+            2.0,
+            "Rust clamps the external sample at the segment boundary"
+        );
+        player.live_complete_segment().unwrap();
+        assert!(player.live_drive_segment_to_authored_time(3.0).is_err());
+
+        player.live_wait(1.0).unwrap();
+        assert!(player
+            .live_drive_segment_to_authored_time(3.0)
+            .unwrap()
+            .reached_endpoint());
         assert_eq!(player.time(), 3.0);
     }
 

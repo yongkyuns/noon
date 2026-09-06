@@ -129,6 +129,7 @@ export class PythonAuthoringClient {
       callbackSessionId = null,
       continuationGeneration = null,
       initiallyPaused = false,
+      pacing = "realtime",
     },
   ) {
     validateSemanticExecutionContextId(contextId);
@@ -161,6 +162,12 @@ export class PythonAuthoringClient {
     if (initiallyPaused && continuationGeneration !== null) {
       throw new Error("source-owned semantic continuations cannot start paused");
     }
+    if (pacing !== "realtime" && pacing !== "external_samples") {
+      throw new TypeError(`unsupported semantic execution pacing ${pacing}`);
+    }
+    if (pacing === "external_samples" && continuationGeneration === null) {
+      throw new Error("external sample pacing requires a source-owned semantic continuation");
+    }
     const continuation = continuationGeneration === null
       ? null
       : this.#matchingContinuation(contextId, continuationGeneration);
@@ -177,6 +184,7 @@ export class PythonAuthoringClient {
       loopDurationSeconds,
       session,
       initiallyPaused,
+      pacing,
     };
     if (callbackSessionId !== null) payload.callbackSessionId = callbackSessionId;
     if (continuationGeneration !== null) {

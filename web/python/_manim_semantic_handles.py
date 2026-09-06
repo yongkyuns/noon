@@ -531,11 +531,36 @@ def _line_init(
     color: _base.Color | None = None,
     **kwargs: Any,
 ) -> None:
+    start_value = _base.LEFT if start is None else _compat._as_vec2(start)
+    end_value = _base.RIGHT if end is None else _compat._as_vec2(end)
+    # A temporary Line created inside a canonical callback is an operand, not a
+    # new authored object. Ask the active Rust callback context for an opaque,
+    # identity-free endpoint value before touching the shared authoring store.
+    try:
+        from _manim_updaters import callback_line_target
+
+        callback_target = callback_line_target(start_value, end_value)
+    except ImportError:
+        callback_target = None
+    if callback_target is not None:
+        if color is not None or kwargs:
+            raise NotImplementedError(
+                "callback-local Line supports endpoint matching only"
+            )
+        self._raw = None
+        self._scene = None
+        self._object = None
+        self._semantic_handle = None
+        self._semantic_handle_fresh = False
+        callback_context, operand = callback_target
+        self._callback_line_context = callback_context
+        self._callback_line_target = operand
+        self.start = start_value
+        self.end = end_value
+        return
     if _create_line_handle is None:
         _ORIGINAL_LINE_INIT(self, start, end, color=color, **kwargs)
         return
-    start_value = _base.LEFT if start is None else _compat._as_vec2(start)
-    end_value = _base.RIGHT if end is None else _compat._as_vec2(end)
     _attach_shared_handle(
         self,
         _create_line_handle(start_value.x, start_value.y, end_value.x, end_value.y),
@@ -568,6 +593,10 @@ def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
 
 
 def _current_raw(self: _base.Mobject) -> _ir.Mobject:
+    if getattr(self, "_callback_line_target", None) is not None:
+        raise RuntimeError(
+            "callback-local Line operands cannot escape into scene, layout, or animation APIs"
+        )
     handle = (_handle_for(self) if not getattr(self._scene, "_legacy_geometry_materialized", False)
               else _detached_handle_for(self))
     if handle is not None:

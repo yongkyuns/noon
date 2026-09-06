@@ -14,6 +14,8 @@ const WORKER_OWNERS = Object.freeze(["engine", "render"]);
 const EXECUTION_MODE_LEGACY = "legacy";
 const EXECUTION_MODE_RETAINED = "retained";
 const EXECUTION_MODE_SEMANTIC = "semantic";
+const SEMANTIC_PACING_REALTIME = "realtime";
+const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 const SCENE_SPEC_VERSION = 1;
 const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 const LIFECYCLE_CANCELLED_MESSAGE =
@@ -52,6 +54,7 @@ export class ExecutionWorkerClient {
   #semanticAuthoringClient = null;
   #semanticContextId = null;
   #semanticCallbackSessionId = null;
+  #semanticPacing = SEMANTIC_PACING_REALTIME;
   #fatalOwner = null;
   #lifecycleGeneration = 0;
   #staleWorkerEvents = { engine: 0, render: 0 };
@@ -200,8 +203,12 @@ export class ExecutionWorkerClient {
       options.continuationGeneration,
     );
     const initiallyPaused = validateInitiallyPaused(options.initiallyPaused);
+    const pacing = validateSemanticPacing(options.pacing);
     if (initiallyPaused && continuationGeneration !== null) {
       throw new Error("source-owned semantic continuations cannot start paused");
+    }
+    if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuationGeneration === null) {
+      throw new Error("external sample pacing requires a source-owned semantic continuation");
     }
     if (this.#renderWorker === null) {
       await this.prepare({ transportMode, sharedSlotCapacity });
@@ -219,6 +226,7 @@ export class ExecutionWorkerClient {
       callbackSessionId,
       continuationGeneration,
       initiallyPaused,
+      pacing,
     );
   }
 
@@ -229,6 +237,7 @@ export class ExecutionWorkerClient {
     callbackSessionId,
     continuationGeneration,
     initiallyPaused,
+    pacing,
   ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
@@ -271,6 +280,7 @@ export class ExecutionWorkerClient {
           callbackSessionId,
           continuationGeneration,
           initiallyPaused,
+          pacing,
         ),
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
@@ -286,6 +296,7 @@ export class ExecutionWorkerClient {
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
+      this.#semanticPacing = pacing;
       this.#hostAuthoringClient = null;
       this.#hostCallbacks = null;
       this.#playing = !initiallyPaused;
@@ -519,6 +530,7 @@ export class ExecutionWorkerClient {
     callbackSessionId = null,
     continuationGeneration = null,
     initiallyPaused = false,
+    pacing = SEMANTIC_PACING_REALTIME,
   ) {
     const options = {
       transportMode: this.#transportMode,
@@ -526,6 +538,7 @@ export class ExecutionWorkerClient {
       loopDurationSeconds,
       session,
       initiallyPaused,
+      pacing,
     };
     if (callbackSessionId !== null) options.callbackSessionId = callbackSessionId;
     if (continuationGeneration !== null) {
@@ -987,6 +1000,17 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async sampleToAuthoredTime(timeSeconds) {
+    this.#requireSemanticMode("external authored-time sampling");
+    if (this.#semanticPacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES) {
+      throw new Error("external authored-time sampling requires external sample pacing");
+    }
+    const time = validateAuthoredSampleTime(timeSeconds);
+    const result = await this.#requestEngine("sample_to_authored_time", { time });
+    this.#rememberPlaying(result);
+    return result;
+  }
+
   // Opt into one callback-publication renderer observation at this exact
   // authored time. The semantic and render workers produce and match the
   // publication metadata; this client retains no scene or renderer mirror.
@@ -1277,6 +1301,7 @@ export class ExecutionWorkerClient {
       this.#semanticAuthoringClient = null;
       this.#semanticContextId = null;
       this.#semanticCallbackSessionId = null;
+      this.#semanticPacing = SEMANTIC_PACING_REALTIME;
     }
     this.#fatalOwner = null;
   }
@@ -1821,6 +1846,21 @@ function validateInitiallyPaused(initiallyPaused) {
     throw new TypeError("initiallyPaused must be a boolean");
   }
   return initiallyPaused;
+}
+
+function validateSemanticPacing(pacing) {
+  if (pacing === null || pacing === undefined) return SEMANTIC_PACING_REALTIME;
+  if (pacing !== SEMANTIC_PACING_REALTIME && pacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES) {
+    throw new TypeError(`unsupported semantic execution pacing ${pacing}`);
+  }
+  return pacing;
+}
+
+function validateAuthoredSampleTime(timeSeconds) {
+  if (!Number.isFinite(timeSeconds) || timeSeconds < 0) {
+    throw new TypeError("external authored-time sample must be finite and non-negative");
+  }
+  return timeSeconds;
 }
 
 function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {
