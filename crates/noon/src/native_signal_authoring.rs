@@ -241,6 +241,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stale_scene_rejects_native_input_creation_without_allocating_a_signal() {
+        let scene = Scene::new();
+        scene
+            .store()
+            .borrow_mut()
+            .remove_node(scene.root())
+            .unwrap();
+        let before = {
+            let store = scene.store().borrow();
+            (store.len(), store.scene_revision())
+        };
+        assert!(scene.control_signal("gain", 1.0).is_err());
+        let store = scene.store().borrow();
+        assert_eq!((store.len(), store.scene_revision()), before);
+    }
+
+    #[test]
     fn canonical_native_declarations_and_bindings_drive_one_execution_session() {
         let mut scene = Scene::new();
         let square = scene.square(0.9).unwrap();
