@@ -207,6 +207,7 @@ impl SemanticReactiveProjection {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticReactiveLoweringError {
+    UnknownExecutionRoot(SemanticNodeId),
     Signal(SemanticSignalError),
     Reactive(ReactiveError),
     NonFiniteSignalValue {
@@ -321,6 +322,7 @@ impl From<ReactiveError> for SemanticReactiveLoweringError {
 impl std::fmt::Display for SemanticReactiveLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnknownExecutionRoot(root) => write!(formatter, "unknown execution root {}:{}", root.slot(), root.generation()),
             Self::Signal(error) => error.fmt(formatter),
             Self::Reactive(error) => error.fmt(formatter),
             Self::NonFiniteSignalValue { signal } => write!(
@@ -399,10 +401,12 @@ pub fn lower_semantic_reactive_projection_for_roots(
     }
 
     for root in roots {
-        for signal in store
-            .semantic_scoped_signals(*root)
-            .expect("execution lowering roots were validated as live families")
-        {
+        // Store-wide execution can have object roots as well as Scene families.
+        // Non-family roots have no scope edges; their bindings were lowered above.
+        let node = store
+            .node(*root)
+            .ok_or(SemanticReactiveLoweringError::UnknownExecutionRoot(*root))?;
+        for signal in node.scoped_signals() {
             lowerer.lower_signal(*signal)?;
         }
     }

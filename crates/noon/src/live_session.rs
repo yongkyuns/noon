@@ -75,7 +75,13 @@ fn target_style_from_effective(
         fill_opacity: 1.0,
         stroke: effective.stroke.map(noon_core::SemanticPaint::Solid),
         stroke_opacity: 1.0,
-        stroke_width: f64::from(effective.stroke_width),
+        // Retain authored precision when runtime lowering did not change width.
+        // An f32 round trip must not invent a structural style change.
+        stroke_width: if authored.stroke_width as f32 == effective.stroke_width {
+            authored.stroke_width
+        } else {
+            f64::from(effective.stroke_width)
+        },
         stroke_width_mode: effective.stroke_width_mode,
         stroke_join: effective.stroke_join,
         stroke_cap: effective.stroke_cap,
@@ -1003,7 +1009,7 @@ mod tests {
                 fill_opacity: 1.0,
                 stroke: style.stroke.map(SemanticPaint::Solid),
                 stroke_opacity: 1.0,
-                stroke_width: f64::from(style.stroke_width),
+                stroke_width: live.authored(&circle).unwrap().style.stroke_width,
                 stroke_width_mode: style.stroke_width_mode,
                 stroke_join: style.stroke_join,
                 stroke_cap: style.stroke_cap,
