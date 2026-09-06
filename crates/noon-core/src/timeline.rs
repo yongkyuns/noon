@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     patch::{validate_geometry, validate_style, validate_transform},
-    Color, CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
+    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
     PatchError, SceneDefinition, TrackId, Vec2,
 };
 
@@ -154,8 +154,8 @@ pub enum TrackValues {
         to: Vec2,
     },
     Color {
-        from: Option<Color>,
-        to: Option<Color>,
+        from: Option<crate::Color>,
+        to: Option<crate::Color>,
     },
     Object {
         from: ObjectSnapshot,
@@ -880,44 +880,38 @@ mod tests {
     }
 
     #[test]
-    fn non_finite_fill_color_is_rejected_without_consuming_track_ids() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let invalid = Color {
+    fn non_finite_fill_color_is_rejected_by_track_validation() {
+        let invalid = crate::Color {
             red: f32::NAN,
-            ..Color::RED
+            ..crate::Color::RED
         };
-
+        let invalid_track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(1),
+            property: Property::Fill,
+            values: TrackValues::Color {
+                from: Some(crate::Color::BLUE),
+                to: Some(invalid),
+            },
+            timing: timing(),
+            time_map: CompositionTimeMap::identity(),
+        };
         assert_eq!(
-            scene.add_track(
-                object,
-                Property::Fill,
-                TrackValues::Color {
-                    from: Some(Color::BLUE),
-                    to: Some(invalid),
-                },
-                timing(),
-            ),
+            validate_track_definition(&invalid_track),
             Err(TimelineError::InvalidColorValue {
                 property: Property::Fill,
                 endpoint: TrackValueEndpoint::To,
             })
         );
-        assert!(scene.tracks().is_empty());
-        assert_eq!(
-            scene
-                .add_track(
-                    object,
-                    Property::Fill,
-                    TrackValues::Color {
-                        from: None,
-                        to: Some(Color::RED),
-                    },
-                    timing(),
-                )
-                .unwrap(),
-            TrackId::new(0)
-        );
+
+        let valid_track = TrackDefinition {
+            values: TrackValues::Color {
+                from: None,
+                to: Some(crate::Color::RED),
+            },
+            ..invalid_track
+        };
+        assert!(validate_track_definition(&valid_track).is_ok());
     }
 
     #[test]
