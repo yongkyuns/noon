@@ -807,7 +807,10 @@ try {
       assert.ok(result.metrics.drawCalls > 0, `${filename}: no draw calls`);
     }
     if (expectedDuration !== null) {
-      assert.equal(result.duration, expectedDuration, `${filename}: canonical live duration`);
+      assert.ok(
+        Math.abs(result.duration - expectedDuration) < 1e-9,
+        `${filename}: canonical live duration ${result.duration}, expected ${expectedDuration}`,
+      );
     }
     if (endpointTime !== null) {
       assert.ok(
