@@ -132,8 +132,10 @@ export async function attachSemanticEngine(
       timerAfterMilliseconds: timerAfterMilliseconds ?? null,
     });
   };
-  const observeContinuationWake = (wallTime, force = false, emit = true) => {
-    const wake = player.liveSegmentWake(wallTime);
+  const observeContinuationWake = (wallTime, force = false, emit = true, reanchor = false) => {
+    const wake = reanchor
+      ? player.reanchorLiveSegmentWake(wallTime)
+      : player.liveSegmentWake(wallTime);
     const cadence = wake.cadence;
     const timerAfterMilliseconds = wake.timerAfterMilliseconds;
     wake.free?.();
@@ -238,6 +240,38 @@ export async function attachSemanticEngine(
     return null;
   }
 
+  function applyNativeInput(message) {
+    if (message.type === "native_state_input") {
+      player.setNativeStateInputJson(JSON.stringify({
+        source: message.source,
+        value: message.value,
+      }));
+    } else if (message.type === "native_event") {
+      player.emitNativeEventJson(JSON.stringify({ source: message.source }));
+    } else {
+      throw new Error(`unsupported continuation input ${message.type}`);
+    }
+  }
+
+  async function settleContinuationPublication(publication) {
+    while (!stopped && player !== null && continuationActive) {
+      await awaitPresentation(publication);
+      if (stopped || player === null || !continuationActive) return false;
+      if (controls.length === 0) return true;
+      // Input admitted while presentation was pending belongs to this lease.
+      // Apply its bounded ordered queue at the same authored time, then wait
+      // for the resulting coherent publication before completion or return.
+      for (const message of controls.splice(0)) {
+        try {
+          applyNativeInput(message);
+          post({ requestId: message.requestId, ...state(message.type) });
+        } catch (error) { fail(error, message.requestId); }
+      }
+      publication = send(player.drainDeltaJson());
+    }
+    return false;
+  }
+
   async function driveContinuation(wallTime) {
     if (!continuationActive || player === null) return;
     const { cadence, timerAfterMilliseconds } = observeContinuationWake(wallTime, false, false);
@@ -278,19 +312,21 @@ export async function attachSemanticEngine(
         continue;
       }
       if (!reachedEndpoint) {
-        observeContinuationWake(wallTime, true);
+        // A required callback stalls simulation; exclude its wall latency from
+        // the next Rust wake anchor after all same-timestamp retries finish.
+        observeContinuationWake(
+          phaseCount > 0 ? performance.now() : wallTime, true, true, phaseCount > 0,
+        );
         return;
       }
 
       const endpointPublication = send(player.drainDeltaJson());
 
       emitContinuationWake("idle", null, true);
-      await awaitPresentation(endpointPublication);
-      if (stopped || player === null || !continuationActive) return;
+      if (!await settleContinuationPublication(endpointPublication)) return;
       player.completeLiveSegment();
       const completionPublication = send(player.drainDeltaJson());
-      await awaitPresentation(completionPublication);
-      if (stopped || player === null || !continuationActive) return;
+      if (!await settleContinuationPublication(completionPublication)) return;
       const completedPlayer = player;
       player = null;
       continuationActive = false;
@@ -327,14 +363,8 @@ export async function attachSemanticEngine(
             break;
           }
           case "native_state_input":
-            player.setNativeStateInputJson(JSON.stringify({
-              source: message.source,
-              value: message.value,
-            }));
-            send(player.drainDeltaJson());
-            break;
           case "native_event":
-            player.emitNativeEventJson(JSON.stringify({ source: message.source }));
+            applyNativeInput(message);
             send(player.drainDeltaJson());
             break;
           default: throw new Error(`unsupported semantic execution command ${message.type}`);

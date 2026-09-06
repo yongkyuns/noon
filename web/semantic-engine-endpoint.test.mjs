@@ -238,6 +238,108 @@ test("semantic continuation services Rust callback barriers before endpoint publ
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("continuation presents admitted native input before completing and returning its lease", async () => {
+  const completions = [];
+  const f = fixture("transferable", null, {
+    generation: 23,
+    onComplete: (generation) => completions.push(generation),
+    onError: (_generation, error) => { throw error; },
+  });
+  let endpoint;
+  const delta = () => nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+  const acknowledge = (publication) => {
+    f.render.port2.postMessage({ type: "execution_ack", session: publication.session, sequence: publication.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: publication.session, sequence: publication.sequence });
+  };
+  try {
+    // Every effective input changes the coherent frame in this fixture.
+    f.player.drainDeltaJson = () => f.player.seekDeltaJson(f.player.time());
+    const ready = next(f.control.port2);
+    const initial = delta();
+    endpoint = await f.attach();
+    await ready;
+    acknowledge(await initial);
+    const endpointDelta = delta();
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    const atEndpoint = await endpointDelta;
+    const stateReply = request(f.control.port2, "native_state_input", 51, { source: 2, value: 0.75 });
+    await turn();
+    await turn();
+    assert.equal(f.stats().nativeInputs.length, 0, "input waits for the coherent endpoint");
+    assert.equal(f.stats().completedSegments, 0);
+    const stateDelta = delta();
+    acknowledge(atEndpoint);
+    const statePublication = await stateDelta;
+    assert.equal((await stateReply).type, "native_state_input");
+    assert.equal(f.stats().completedSegments, 0, "completion waits for accepted input presentation");
+
+    const completionDelta = delta();
+    acknowledge(statePublication);
+    const completed = await completionDelta;
+    assert.equal(f.stats().completedSegments, 1);
+    assert.equal(f.stats().returned, 0);
+    const eventReply = request(f.control.port2, "native_event", 52, { source: 3 });
+    await turn();
+    await turn();
+    const eventDelta = delta();
+    acknowledge(completed);
+    const eventPublication = await eventDelta;
+    assert.equal((await eventReply).type, "native_event");
+    assert.equal(f.stats().returned, 0, "input admitted during completion still owns the lease");
+    assert.deepEqual(f.stats().nativeInputs, [
+      { type: "state", value: { source: 2, value: 0.75 } },
+      { type: "event", value: { source: 3 } },
+    ]);
+    assert.equal(f.player.time(), 1, "input does not advance authored time");
+    acknowledge(eventPublication);
+    await turn();
+    await turn();
+    assert.deepEqual(completions, [23]);
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().returnedPlayer, f.player);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("continuation reanchors Rust wake after callback completion but preserves phase retry time", async () => {
+  const f = fixture("transferable", async (phase) => {
+    await turn();
+    return JSON.stringify({ token: phase.token, writes: [] });
+  }, { generation: 24, onComplete: () => {}, onError: (_generation, error) => { throw error; } });
+  let endpoint;
+  const drives = [];
+  const anchors = [];
+  try {
+    f.player.driveLiveSegmentFromWallTime = (wallTime) => {
+      drives.push(wallTime);
+      return {
+        callbackPhaseJson: drives.length === 1 ? JSON.stringify({ token: { sequence: 1 } }) : null,
+        reachedEndpoint: false,
+      };
+    };
+    f.player.reanchorLiveSegmentWake = (wallTime) => {
+      anchors.push(wallTime);
+      return { cadence: "animation_frame", timerAfterMilliseconds: undefined };
+    };
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const resumedWake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    await resumedWake;
+    await turn();
+    await turn();
+    assert.equal(drives.length, 2);
+    assert.equal(drives[0], drives[1]);
+    assert.equal(anchors.length, 1);
+    assert.ok(anchors[0] >= drives[1]);
+    f.render.port2.postMessage({ type: "tick", timestamp: 2 });
+    await turn();
+    await turn();
+    assert.equal(drives.length, 3);
+    assert.equal(anchors.length, 1, "callback-free drive keeps its original wake anchor");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("semantic continuation drives a pure wait only when its Rust deadline is due", async () => {
   const completions = [];
   const f = fixture("transferable", null, {
