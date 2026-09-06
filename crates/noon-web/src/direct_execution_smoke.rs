@@ -97,6 +97,19 @@ pub async fn create_direct_affine_callback_smoke_renderer(
     .await
 }
 
+/// Browser proof that shared callback paint operations use the same typed Rust
+/// scene and effective-style batch as the paired native example.
+#[wasm_bindgen(js_name = createDirectCallbackPaintSmokeRenderer)]
+pub async fn create_direct_callback_paint_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (session, callbacks) = noon::example_scenes::live_callback_paint().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session_with_callbacks(
+        canvas, session, callbacks,
+    )
+    .await
+}
+
 /// Browser proof that the target-neutral Rust completion example preserves its
 /// authored endpoint and renders through the direct single-context WASM path.
 #[wasm_bindgen(js_name = createDirectAffineCompletionSmokeRenderer)]

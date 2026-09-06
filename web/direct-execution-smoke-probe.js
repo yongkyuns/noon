@@ -1,5 +1,6 @@
 const {
   createDirectAffineCallbackSmokeRenderer,
+  createDirectCallbackPaintSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
   createDirectNativeSignalsSmokeRenderer,
@@ -541,6 +542,27 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
   return metrics;
 }
 
+async function directCallbackPaintProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectCallbackPaintSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+  renderer.directWakeDirectiveJson(0);
+  await presentDirectFrame(renderer);
+  await advanceDirectCallbackFrame(renderer, 500);
+  const midpoint = await sampleRenderedColor(canvas, 1, 0);
+  await advanceDirectCallbackFrame(renderer, 1000);
+  const endpoint = await sampleRenderedColor(canvas, 2, 0);
+  for (const color of [midpoint, endpoint]) {
+    if (Math.abs(color.red - 41) > 12 || Math.abs(color.green - 20) > 12 || color.blue > 25) {
+      throw new Error(`callback paint did not preserve fill/composite opacity: ${JSON.stringify(color)}`);
+    }
+  }
+  if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 1) {
+    throw new Error("callback paint used an unexpected backend or authored time");
+  }
+  return { midpoint, endpoint };
+}
+
 async function directOrdinaryCallbackSparseReadsProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinaryCallbackSparseReadsSmokeRenderer(canvas);
@@ -1035,6 +1057,7 @@ async function start() {
   }
 
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
+  metrics.callbackPaint = await directCallbackPaintProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);
