@@ -540,20 +540,16 @@ pub(super) fn validate_affine_payload(
 impl From<TransformPayloadValidationIssue> for AffinePayloadIssue {
     fn from(value: TransformPayloadValidationIssue) -> Self {
         match value {
-            TransformPayloadValidationIssue::UnsupportedContentChange => {
-                Self::UnsupportedContentChange
-            }
-            TransformPayloadValidationIssue::UnsupportedStyleChange => Self::UnsupportedStyleChange,
-            TransformPayloadValidationIssue::UnsupportedPainterOrderChange => {
+            TransformPayloadValidationIssue::ContentChange => Self::UnsupportedContentChange,
+            TransformPayloadValidationIssue::StyleChange => Self::UnsupportedStyleChange,
+            TransformPayloadValidationIssue::PainterOrderChange => {
                 Self::UnsupportedPainterOrderChange
             }
-            TransformPayloadValidationIssue::UnsupportedBindingChange => {
-                Self::UnsupportedBindingChange
-            }
-            TransformPayloadValidationIssue::UnsupportedDepthChange(field) => {
+            TransformPayloadValidationIssue::BindingChange => Self::UnsupportedBindingChange,
+            TransformPayloadValidationIssue::DepthChange(field) => {
                 Self::UnsupportedDepthChange(field)
             }
-            TransformPayloadValidationIssue::UnsupportedLifecycle {
+            TransformPayloadValidationIssue::Lifecycle {
                 remover,
                 introducer,
             } => Self::UnsupportedLifecycle {

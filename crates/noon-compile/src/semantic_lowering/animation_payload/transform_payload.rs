@@ -24,12 +24,12 @@ impl std::fmt::Display for SemanticAffineAnimationField {
 /// Structural payload cases outside the supported ordinary 2D transform subset.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum TransformPayloadValidationIssue {
-    UnsupportedContentChange,
-    UnsupportedStyleChange,
-    UnsupportedPainterOrderChange,
-    UnsupportedBindingChange,
-    UnsupportedDepthChange(SemanticAffineAnimationField),
-    UnsupportedLifecycle { remover: bool, introducer: bool },
+    ContentChange,
+    StyleChange,
+    PainterOrderChange,
+    BindingChange,
+    DepthChange(SemanticAffineAnimationField),
+    Lifecycle { remover: bool, introducer: bool },
 }
 
 /// Read-only validation failure for a TransformTo payload.
@@ -85,20 +85,16 @@ impl SemanticTransformToPayloadError {
 impl From<TransformPayloadValidationIssue> for SemanticTransformToPayloadError {
     fn from(value: TransformPayloadValidationIssue) -> Self {
         match value {
-            TransformPayloadValidationIssue::UnsupportedContentChange => {
-                Self::UnsupportedContentChange
-            }
-            TransformPayloadValidationIssue::UnsupportedStyleChange => Self::UnsupportedStyleChange,
-            TransformPayloadValidationIssue::UnsupportedPainterOrderChange => {
+            TransformPayloadValidationIssue::ContentChange => Self::UnsupportedContentChange,
+            TransformPayloadValidationIssue::StyleChange => Self::UnsupportedStyleChange,
+            TransformPayloadValidationIssue::PainterOrderChange => {
                 Self::UnsupportedPainterOrderChange
             }
-            TransformPayloadValidationIssue::UnsupportedBindingChange => {
-                Self::UnsupportedBindingChange
-            }
-            TransformPayloadValidationIssue::UnsupportedDepthChange(field) => {
+            TransformPayloadValidationIssue::BindingChange => Self::UnsupportedBindingChange,
+            TransformPayloadValidationIssue::DepthChange(field) => {
                 Self::UnsupportedDepthChange(field)
             }
-            TransformPayloadValidationIssue::UnsupportedLifecycle {
+            TransformPayloadValidationIssue::Lifecycle {
                 remover,
                 introducer,
             } => Self::UnsupportedLifecycle {
@@ -141,34 +137,34 @@ pub(super) fn validate_transform_payload_shape(
     options: ResolvedAnimationOptions,
 ) -> Result<(), TransformPayloadValidationIssue> {
     if options.remover || options.introducer {
-        return Err(TransformPayloadValidationIssue::UnsupportedLifecycle {
+        return Err(TransformPayloadValidationIssue::Lifecycle {
             remover: options.remover,
             introducer: options.introducer,
         });
     }
     if source.content != target.content {
-        return Err(TransformPayloadValidationIssue::UnsupportedContentChange);
+        return Err(TransformPayloadValidationIssue::ContentChange);
     }
     if source.style.stroke_width != target.style.stroke_width
         || source.style.stroke_width_mode != target.style.stroke_width_mode
         || source.style.stroke_join != target.style.stroke_join
         || source.style.stroke_cap != target.style.stroke_cap
     {
-        return Err(TransformPayloadValidationIssue::UnsupportedStyleChange);
+        return Err(TransformPayloadValidationIssue::StyleChange);
     }
     if source.z_index() != target.z_index() {
-        return Err(TransformPayloadValidationIssue::UnsupportedPainterOrderChange);
+        return Err(TransformPayloadValidationIssue::PainterOrderChange);
     }
     if source.signal_bindings() != target.signal_bindings() {
-        return Err(TransformPayloadValidationIssue::UnsupportedBindingChange);
+        return Err(TransformPayloadValidationIssue::BindingChange);
     }
     if source.transform.translation.z != target.transform.translation.z {
-        return Err(TransformPayloadValidationIssue::UnsupportedDepthChange(
+        return Err(TransformPayloadValidationIssue::DepthChange(
             SemanticAffineAnimationField::Translation,
         ));
     }
     if source.transform.scale.z != target.transform.scale.z {
-        return Err(TransformPayloadValidationIssue::UnsupportedDepthChange(
+        return Err(TransformPayloadValidationIssue::DepthChange(
             SemanticAffineAnimationField::Scale,
         ));
     }
