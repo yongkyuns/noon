@@ -1370,11 +1370,6 @@ def _canonical_play_options(kwargs: dict[str, object]) -> float | None:
         raise NotImplementedError(
             "canonical ordinary composition does not yet support a Scene.play lag_ratio override"
         )
-    rate_id = None
-    if easing is not None:
-        rate_id = str(easing)
-    elif rate_func is not None:
-        rate_id = _compat._easing_from_rate_func(rate_func)
     value = run_time if run_time is not None else duration
     return None if value is None else float(value)
 
@@ -1412,7 +1407,7 @@ def _build_canonical_composition_candidate(
     composition_run_time = None if group is None else group.run_time
     composition_lag_ratio = 0.0 if group is None else float(group.lag_ratio)
     context = _context(self)
-    candidate = context.beginOrdinaryTransformComposition(
+    candidate = context.beginOrdinaryCompositionBuilder(
         kind, composition_run_time, composition_lag_ratio, play_run_time,
     )
     candidate.setCompositionRateFunction(
@@ -1529,7 +1524,7 @@ def _build_canonical_composition_candidate(
 
     def build(root_kind: str, root_animations: tuple[object, ...], root_group: object | None, root_kwargs: dict[str, object]):
         # Recursion uses a fresh inert builder while one reservation accumulator is shared.
-        nested = context.beginOrdinaryTransformComposition(
+        nested = context.beginOrdinaryCompositionBuilder(
             root_kind,
             None if root_group is None else root_group.run_time,
             0.0 if root_group is None else float(root_group.lag_ratio),

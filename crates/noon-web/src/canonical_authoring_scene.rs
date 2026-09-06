@@ -3669,8 +3669,8 @@ mod wasm {
             self.inner.begin_ordinary_wait(duration).map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = beginOrdinaryTransformComposition)]
-        pub fn begin_ordinary_transform_composition(
+        #[wasm_bindgen(js_name = beginOrdinaryCompositionBuilder)]
+        pub fn begin_ordinary_composition_builder(
             &self,
             kind: &str,
             composition_run_time: Option<f64>,

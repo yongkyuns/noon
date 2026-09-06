@@ -1180,6 +1180,9 @@ try {
       [0.5, [true, true, false]],
       [0.6, [true, true, false]],
       [0.8, [true, true, true]],
+      [1.8, [false, true, true]],
+      [2.0, [false, false, true]],
+      [2.25, [true, false, false]],
     ]) {
       await page.evaluate((time) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(time), time);
       const screenshot = await canvas.screenshot();
@@ -1191,11 +1194,11 @@ try {
     }
     const result = await page.evaluate(async () => {
       const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
-      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(1.25), authored]);
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(2.5), authored]);
       return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
     });
-    assert.equal(result.duration, 1.25);
-    assert.equal(result.metrics.objectCount, 3);
+    assert.equal(result.duration, 2.5);
+    assert.equal(result.metrics.objectCount, 1);
   } finally {
     await stopSampledSource(page);
   }

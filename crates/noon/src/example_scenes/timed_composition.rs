@@ -5,7 +5,7 @@ use std::rc::Rc;
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
     LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
-    SemanticAnimationCompositionKind as Kind,
+    SemanticAnimationCompositionKind as Kind, SemanticFadeDirection,
 };
 
 pub struct TimedComposition {
@@ -67,6 +67,43 @@ impl LiveContinuation for TimedComposition {
             }
             2 => {
                 self.stage = 3;
+                let request = Request::Composition {
+                    kind: Kind::Parallel,
+                    children: self
+                        .squares
+                        .iter()
+                        .map(|target| Request::Fade {
+                            target,
+                            direction: SemanticFadeDirection::Out,
+                            options: AnimationOptions::new()
+                                .run_time(1.0)
+                                .rate_func(RateFunction::Linear),
+                        })
+                        .collect(),
+                    options: AnimationOptions::new()
+                        .run_time(1.0)
+                        .lag_ratio(0.5)
+                        .rate_func(RateFunction::Linear),
+                };
+                live.declare_and_activate_composition(&request, AnimationOptions::new())
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            3 => {
+                for square in &self.squares {
+                    if live.contains(square).map_err(|error| error.to_string())? {
+                        return Err("composed FadeOut did not remove its semantic target".into());
+                    }
+                }
+                live.add(&self.squares[0])
+                    .map_err(|error| error.to_string())?;
+                self.stage = 4;
+                live.wait_segment(0.25)
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            4 => {
+                self.stage = 5;
                 Ok(ContinuationStep::Finished)
             }
             _ => Err("timed composition resumed after completion".into()),

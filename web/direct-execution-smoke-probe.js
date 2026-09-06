@@ -923,6 +923,10 @@ async function directTimedCompositionProof(expectedBackend) {
       [800, [true, true, true]],
       [1000, [true, true, true]],
       [1250, [true, true, true]],
+      [1800, [false, true, true]],
+      [2000, [false, false, true]],
+      [2250, [true, false, false]],
+      [2500, [true, false, false]],
     ]) {
       renderer.advanceDirectRealtime(time);
       await settleDirectPublication(renderer, time);
@@ -934,9 +938,9 @@ async function directTimedCompositionProof(expectedBackend) {
       }
       samples.push({ time, visible });
     }
-    const wake = JSON.parse(renderer.directWakeDirectiveJson(1250));
-    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 1.25 ||
-        renderer.objectCount() !== 3 || wake.cadence !== "idle") {
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(2500));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 2.5 ||
+        renderer.objectCount() !== 1 || wake.cadence !== "idle") {
       throw new Error("direct timed composition did not complete its shared continuation");
     }
     return samples;
