@@ -2173,8 +2173,10 @@ impl SemanticPainterOrderIndex {
     }
 
     fn insert(&mut self, node: SemanticNodeId, key: (i32, u64)) {
-        debug_assert!(self.keys.insert(node, key).is_none());
-        debug_assert!(self.ordered.insert(key, node).is_none());
+        let previous_key = self.keys.insert(node, key);
+        let previous_node = self.ordered.insert(key, node);
+        debug_assert!(previous_key.is_none());
+        debug_assert!(previous_node.is_none());
     }
 
     fn remove(&mut self, node: SemanticNodeId) {
