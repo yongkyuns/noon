@@ -68,14 +68,13 @@ async function snapshot(page) {
   });
 }
 
-async function startDeferredRuntime(page) {
-  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
-  const deferred = await snapshot(page);
-  assert.equal(deferred.runtimeStartup, "deferred", "stress playground must defer startup until Run");
-  assert.equal(deferred.rendererBackend, "", "deferred stress playground must not own a renderer");
-  assert.equal(deferred.presentedFrames, 0, "deferred stress playground must not present frames");
-
-  await page.locator("#replace-scene").click();
+async function waitForPreloadedRuntime(page) {
+  const deferred = await page.evaluate(() => window.__noonStressInitialDeferred ?? null);
+  assert.deepEqual(
+    deferred,
+    { runtimeStartup: "deferred", rendererBackend: "", presentedFrames: 0 },
+    "stress playground must be deferred before its first source-owned Run",
+  );
   await page.waitForFunction(
     () => {
       const status = document.querySelector("#status");
@@ -95,7 +94,7 @@ async function startDeferredRuntime(page) {
   assert.equal(
     state.runtimeStartup,
     "started-on-demand",
-    "stress playground must start its execution owner from explicit Run",
+    "stress playground must start its execution owner from the first source-owned Run",
   );
   assert.equal(state.liveAuthoring, "ready");
   assert.ok(state.presentedFrames > 0, "stress Run must present a frame");
@@ -163,6 +162,27 @@ try {
   });
   diagnostics.browser = await browser.version();
 
+  await page.addInitScript(() => {
+    window.addEventListener("DOMContentLoaded", () => {
+      const status = document.querySelector("#status");
+      if (!status) return;
+      const capture = () => {
+        if (status.dataset.runtimeStartup !== "deferred") return false;
+        window.__noonStressInitialDeferred = {
+          runtimeStartup: status.dataset.runtimeStartup,
+          rendererBackend: status.dataset.rendererBackend ?? "",
+          presentedFrames: Number(status.dataset.presentedFrames ?? "0"),
+        };
+        return true;
+      };
+      if (capture()) return;
+      const observer = new MutationObserver(() => {
+        if (capture()) observer.disconnect();
+      });
+      observer.observe(status, { attributes: true });
+    }, { once: true });
+  });
+
   await page.goto(`${baseUrl}/web/index.html?example=manim-parity-stress-grid`, {
     waitUntil: "load",
   });
@@ -197,7 +217,7 @@ try {
     `focusing CodeMirror must not expand the editor pane (${diagnostics.snapshots.loaded.editorHeight} -> ${focused.editorHeight})`,
   );
 
-  diagnostics.snapshots.baseline = await startDeferredRuntime(page);
+  diagnostics.snapshots.baseline = await waitForPreloadedRuntime(page);
   assert.equal(diagnostics.snapshots.baseline.exampleId, "manim-parity-stress-grid");
   assert.equal(diagnostics.snapshots.baseline.executionMode, "retained");
   assert.match(diagnostics.snapshots.baseline.patchText, /Scene rebuilt atomically/);
