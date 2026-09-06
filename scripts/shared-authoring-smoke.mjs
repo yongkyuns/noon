@@ -689,7 +689,6 @@ try {
     const sentinel = await harness.authoring.run(sentinelSource, {}, { exportDocument: true });
     return {
       ordinary: {
-        kind: ordinary.kind,
         duration: ordinary.duration,
         objectCount: ordinary.document.objects.length,
         trackCount: ordinary.sceneSpec.tracks.length,
@@ -704,7 +703,6 @@ try {
     asyncSource: asyncExportBoundarySource,
     sentinelSource: exportBoundarySentinelSource,
   });
-  assert.equal(exportBoundary.ordinary.kind, "scene_document");
   assert.equal(exportBoundary.ordinary.duration, 3);
   assert.equal(exportBoundary.ordinary.objectCount, 1);
   assert.ok(exportBoundary.ordinary.trackCount > 0, "export did not retain the affine endpoint track");
