@@ -1,10 +1,10 @@
 use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
-    validate_track_definition, ObjectId, Property, ResolvedAnimationOptions,
-    SemanticAnimationError, SemanticAnimationIntent, SemanticLoweringError, SemanticNodeId,
-    SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue, SemanticStore, Style,
-    TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
+    validate_track_definition, ObjectId, Property, SemanticAnimationError, SemanticAnimationIntent,
+    SemanticLoweringError, SemanticNodeId, SemanticObjectProperty, SemanticSceneOperationError,
+    SemanticSignalValue, SemanticStore, Style, TimelineError, TrackDefinition, TrackId,
+    TrackValues, Transform2D,
 };
 
 use super::super::{
@@ -13,6 +13,9 @@ use super::super::{
         SemanticLoweringError as StyleLoweringError,
     },
     SemanticAnimationScheduleProjection, SemanticScheduledAnimationLeaf,
+};
+use super::transform_payload::{
+    validate_transform_payload_shape, SemanticAffineAnimationField, TransformPayloadValidationIssue,
 };
 
 /// The activation-time effective domains consumed by the shared animation lowerer.
@@ -93,23 +96,6 @@ impl SemanticAffineAnimationTrackProjection {
 
     pub fn is_empty(&self) -> bool {
         self.tracks.is_empty()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SemanticAffineAnimationField {
-    Translation,
-    Scale,
-    RotationZ,
-}
-
-impl std::fmt::Display for SemanticAffineAnimationField {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Translation => "translation",
-            Self::Scale => "scale",
-            Self::RotationZ => "rotation_z",
-        })
     }
 }
 
@@ -546,41 +532,36 @@ pub(super) enum AffinePayloadIssue {
 pub(super) fn validate_affine_payload(
     source: &noon_core::SemanticObjectState,
     target: &noon_core::SemanticObjectState,
-    options: ResolvedAnimationOptions,
+    options: noon_core::ResolvedAnimationOptions,
 ) -> Result<(), AffinePayloadIssue> {
-    if options.remover || options.introducer {
-        return Err(AffinePayloadIssue::UnsupportedLifecycle {
-            remover: options.remover,
-            introducer: options.introducer,
-        });
+    validate_transform_payload_shape(source, target, options).map_err(Into::into)
+}
+
+impl From<TransformPayloadValidationIssue> for AffinePayloadIssue {
+    fn from(value: TransformPayloadValidationIssue) -> Self {
+        match value {
+            TransformPayloadValidationIssue::UnsupportedContentChange => {
+                Self::UnsupportedContentChange
+            }
+            TransformPayloadValidationIssue::UnsupportedStyleChange => Self::UnsupportedStyleChange,
+            TransformPayloadValidationIssue::UnsupportedPainterOrderChange => {
+                Self::UnsupportedPainterOrderChange
+            }
+            TransformPayloadValidationIssue::UnsupportedBindingChange => {
+                Self::UnsupportedBindingChange
+            }
+            TransformPayloadValidationIssue::UnsupportedDepthChange(field) => {
+                Self::UnsupportedDepthChange(field)
+            }
+            TransformPayloadValidationIssue::UnsupportedLifecycle {
+                remover,
+                introducer,
+            } => Self::UnsupportedLifecycle {
+                remover,
+                introducer,
+            },
+        }
     }
-    if source.content != target.content {
-        return Err(AffinePayloadIssue::UnsupportedContentChange);
-    }
-    if source.style.stroke_width != target.style.stroke_width
-        || source.style.stroke_width_mode != target.style.stroke_width_mode
-        || source.style.stroke_join != target.style.stroke_join
-        || source.style.stroke_cap != target.style.stroke_cap
-    {
-        return Err(AffinePayloadIssue::UnsupportedStyleChange);
-    }
-    if source.z_index() != target.z_index() {
-        return Err(AffinePayloadIssue::UnsupportedPainterOrderChange);
-    }
-    if source.signal_bindings() != target.signal_bindings() {
-        return Err(AffinePayloadIssue::UnsupportedBindingChange);
-    }
-    if source.transform.translation.z != target.transform.translation.z {
-        return Err(AffinePayloadIssue::UnsupportedDepthChange(
-            SemanticAffineAnimationField::Translation,
-        ));
-    }
-    if source.transform.scale.z != target.transform.scale.z {
-        return Err(AffinePayloadIssue::UnsupportedDepthChange(
-            SemanticAffineAnimationField::Scale,
-        ));
-    }
-    Ok(())
 }
 
 pub(super) fn lower_affine_channels(
@@ -1182,23 +1163,11 @@ mod tests {
             .unwrap();
             assert_eq!(existing.len(), 1);
             assert_eq!(existing.tracks()[0].property, Property::Position);
-            let prepared = crate::lower_prepared_semantic_transform_to(
-                &store,
-                &index,
-                object,
-                target,
-                AnimationOptions::new(),
-                0.0,
-                |_| Some(current),
-            )
-            .unwrap();
-            assert_eq!(prepared.tracks().len(), 1);
-            assert_eq!(prepared.tracks()[0].property, Property::Position);
         }
     }
 
     #[test]
-    fn unchanged_bound_stroke_remains_reactive_for_predeclared_and_prepared_transform() {
+    fn unchanged_bound_stroke_remains_reactive_for_predeclared_transform() {
         let mut store = SemanticStore::new();
         let object = visible_object(&mut store);
         let signal = store.insert_semantic_input_signal(0.65_f64).unwrap();
@@ -1231,19 +1200,6 @@ mod tests {
         .unwrap();
         assert_eq!(predeclared.len(), 1);
         assert_eq!(predeclared.tracks()[0].property, Property::Position);
-
-        let prepared = crate::lower_prepared_semantic_transform_to(
-            &store,
-            &index,
-            object,
-            target,
-            AnimationOptions::new(),
-            0.0,
-            |_| Some(current),
-        )
-        .unwrap();
-        assert_eq!(prepared.tracks().len(), 1);
-        assert_eq!(prepared.tracks()[0].property, Property::Position);
     }
 
     #[test]

@@ -558,6 +558,105 @@ mod tests {
     }
 
     #[test]
+    fn prepared_single_leaf_captures_once_and_preserves_bound_style_domains() {
+        for property in [
+            SemanticObjectProperty::FillOpacity,
+            SemanticObjectProperty::StrokeOpacity,
+            SemanticObjectProperty::ObjectOpacity,
+        ] {
+            let mut store = noon_core::SemanticStore::new();
+            let source = visible_circle(&mut store);
+            let signal = store.insert_semantic_input_signal(0.65_f64).unwrap();
+            store
+                .bind_semantic_signal(signal, source, property)
+                .unwrap();
+            let mut target_state = store.semantic_object_state_checked(source).unwrap().clone();
+            target_state.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
+            let mut index = SemanticExecutionIndex::new();
+            index.lower_scene(&store).unwrap();
+
+            let mut transaction = SemanticMutationTransaction::new();
+            let target = transaction.create_node(SemanticNodeCreation::object(target_state));
+            let animation =
+                transaction.create_transform_animation(source, target, AnimationOptions::new());
+            let prepared = transaction.prepare(&mut store).unwrap();
+            let mut captures = 0;
+            let mut current = effective(Vec2::ZERO);
+            match property {
+                SemanticObjectProperty::FillOpacity => {
+                    current.style.fill.as_mut().unwrap().alpha = 0.65;
+                }
+                SemanticObjectProperty::StrokeOpacity => {
+                    current.style.stroke = Some(noon_core::Color {
+                        alpha: 0.65,
+                        ..noon_core::Color::WHITE
+                    });
+                }
+                SemanticObjectProperty::ObjectOpacity => current.style.opacity = 0.65,
+                _ => unreachable!(),
+            }
+            let activation = lower_prepared_semantic_animation_composition(
+                &prepared,
+                &index,
+                animation,
+                0.0,
+                AnimationOptions::new(),
+                |_| {
+                    captures += 1;
+                    Some(current)
+                },
+            )
+            .unwrap();
+
+            assert_eq!(captures, 1, "each leaf captures its target exactly once");
+            assert_eq!(activation.len(), 1);
+            assert_eq!(activation.tracks()[0].property, Property::Position);
+        }
+    }
+
+    #[test]
+    fn unsupported_prepared_leaf_fails_before_effective_capture_or_commit() {
+        let mut store = noon_core::SemanticStore::new();
+        let source = visible_circle(&mut store);
+        let mut target_state = store.semantic_object_state_checked(source).unwrap().clone();
+        target_state.style.stroke_width = 2.0;
+        let mut index = SemanticExecutionIndex::new();
+        index.lower_scene(&store).unwrap();
+        let before_revision = store.scene_revision();
+        let before_len = store.len();
+
+        let mut transaction = SemanticMutationTransaction::new();
+        let target = transaction.create_node(SemanticNodeCreation::object(target_state));
+        let animation =
+            transaction.create_transform_animation(source, target, AnimationOptions::new());
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let mut captures = 0;
+        let result = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            animation,
+            0.0,
+            AnimationOptions::new(),
+            |_| {
+                captures += 1;
+                Some(effective(Vec2::ZERO))
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(PreparedSemanticAnimationLoweringError::UnsupportedStyleChange {
+                animation: actual,
+                ..
+            }) if actual == animation.into()
+        ));
+        assert_eq!(captures, 0);
+        drop(prepared);
+        assert_eq!(store.scene_revision(), before_revision);
+        assert_eq!(store.len(), before_len);
+    }
+
+    #[test]
     fn late_unsupported_leaf_does_not_allocate_pending_identities() {
         let mut store = noon_core::SemanticStore::new();
         let first_source = visible_circle(&mut store);
