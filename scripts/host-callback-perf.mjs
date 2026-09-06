@@ -27,7 +27,18 @@ server.stderr.on("data", (chunk) => (serverOutput += chunk));
 let browser = null;
 try {
   await waitForServer();
-  browser = await chromium.launch({ channel: "chromium", headless: true, args: ["--disable-dev-shm-usage"] });
+  browser = await chromium.launch({
+    channel: "chromium",
+    headless: true,
+    args: [
+      "--disable-features=WebGPU",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+  });
   const results = [];
   for (const testCase of cases) {
     const page = await browser.newPage();
@@ -50,6 +61,8 @@ try {
     assert.equal(report.schemaVersion, 2);
     assert.equal(report.workload.objects, testCase.objects);
     assert.equal(report.workload.active, testCase.active);
+    assert.equal(report.native.rendererBackend, "WebGL2");
+    assert.equal(report.host.rendererBackend, "WebGL2");
     assert.equal(report.native.locality.lastPublication.objectCount, testCase.objects);
     assert.equal(report.host.locality.lastPublication.objectCount, testCase.objects);
     assert.equal(report.native.finalState.playing, false);
@@ -69,7 +82,7 @@ try {
     generatedAt: new Date().toISOString(),
     commit: commit.status === 0 ? commit.stdout.trim() : null,
     host: { platform: os.platform(), release: os.release(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? null },
-    configuration: { cases, frames, warmup },
+    configuration: { cases, frames, warmup, rendererBackend: "WebGL2 (SwiftShader)" },
     results,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });

@@ -49,6 +49,8 @@ try {
       measuredFrames,
       authoredSampleRateHz: SAMPLE_RATE_HZ,
       semantics: "the first active objects translate right at 0.1 authored units per second",
+      layout:
+        "all objects remain coincident and visible, matching the previous benchmark workload",
     },
     environment: {
       userAgent: navigator.userAgent,
@@ -127,7 +129,7 @@ async function measureWorkload(authored, workloadDurationSeconds) {
     for (let frame = 0; frame < warmupFrames; frame += 1) {
       await execution.advanceTo(sampleTime(frame));
     }
-    const metricsBefore = await execution.metrics();
+    const metricsBefore = rendererMetrics(await execution.metrics());
     const cadence = new FrameMetrics({ targetHz: SAMPLE_RATE_HZ });
     const roundTrip = new SampleWindow(measuredFrames);
     const jank = new BrowserJankMonitor();
@@ -147,7 +149,7 @@ async function measureWorkload(authored, workloadDurationSeconds) {
     }
     const end = performance.now();
     jank.stop();
-    const metricsAfter = await execution.metrics();
+    const metricsAfter = rendererMetrics(await execution.metrics());
     const finalState = await execution.state();
     const frame = cadence.summary();
     return {
@@ -206,6 +208,18 @@ function localitySummary(before, after) {
       needsPresent: Boolean(after.needsPresent),
     },
   };
+}
+
+function rendererMetrics(report) {
+  if (
+    report === null ||
+    typeof report !== "object" ||
+    report.metrics === null ||
+    typeof report.metrics !== "object"
+  ) {
+    throw new Error("canonical execution returned an invalid renderer metrics envelope");
+  }
+  return report.metrics;
 }
 
 function nativeSource(objects, active, duration) {
