@@ -10,17 +10,18 @@ mod canonical_retained_engine_player;
 mod clock;
 mod composition;
 mod determinism;
-#[cfg(all(target_arch = "wasm32", debug_assertions))]
+#[cfg(all(feature = "renderer", target_arch = "wasm32", debug_assertions))]
 mod direct_execution_smoke;
+#[cfg(feature = "renderer")]
 mod execution_canvas;
 mod execution_transport;
 mod execution_wake;
 mod family_animation_authoring;
 mod family_bounds;
 mod family_write_authoring;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 mod gpu_diagnostics;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod gpu_timestamps;
 mod host_player;
 mod legacy;
@@ -42,6 +43,7 @@ mod retained_authoring_scene;
 mod retained_authoring_scene_spec;
 mod retained_authoring_tracks;
 mod retained_authoring_wire_scene;
+#[cfg(feature = "renderer")]
 mod retained_execution_canvas;
 mod retained_execution_resources;
 mod retained_execution_transport;
@@ -54,6 +56,7 @@ mod retained_resource_mutation_transport;
 mod retained_resource_transport;
 mod retained_scene_spec_runtime;
 mod retained_text_family_transport;
+#[cfg(feature = "renderer")]
 mod retained_typst_canvas;
 mod semantic_execution_player;
 mod semantic_snapshot;
@@ -68,9 +71,9 @@ pub use canonical_retained_engine_player::*;
 pub use clock::{ClockError, PlaybackClock};
 pub use composition::*;
 pub use determinism::*;
-#[cfg(all(target_arch = "wasm32", debug_assertions))]
+#[cfg(all(feature = "renderer", target_arch = "wasm32", debug_assertions))]
 pub use direct_execution_smoke::*;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use execution_wake::*;
@@ -94,7 +97,7 @@ pub use retained_authoring_player::*;
 pub use retained_authoring_scene_spec::*;
 pub use retained_authoring_tracks::*;
 pub use retained_authoring_wire_scene::*;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_execution_canvas::*;
 pub use retained_execution_resources::*;
 pub use retained_execution_transport::*;
@@ -106,7 +109,7 @@ pub use retained_resource_mutation_encoder::*;
 pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;
 pub use retained_text_family_transport::*;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_typst_canvas::*;
 pub use semantic_execution_player::*;
 pub use semantic_snapshot::*;

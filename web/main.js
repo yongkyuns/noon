@@ -1079,11 +1079,10 @@ paritySelect.addEventListener("change", refreshGalleryFilters);
 previousGalleryPage.addEventListener("click", () => moveGalleryPage(-1));
 nextGalleryPage.addEventListener("click", () => moveGalleryPage(1));
 sceneButton.addEventListener("click", runScene);
-resetButton.addEventListener("click", async () => {
+resetButton.addEventListener("click", () => {
   const example = currentExample();
   if (!example) return;
   drafts.delete(example.id);
-  canonicalSource = await loadDemoAuthoringSource(example.path);
   sceneSourceEditor.value = canonicalSource;
   resetButton.disabled = true;
   patchStatus.value = `${example.title} reset to canonical source`;

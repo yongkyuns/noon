@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 
-import { coldStartMilestones, summarizeWorkers } from "../web/playground-cold-start-metrics.js";
+import {
+  classifyWorkerUrl,
+  preloadedColdStartMilestones,
+  summarizeAuthoringStartup,
+  summarizeResourceFootprint,
+  summarizeWorkers,
+} from "../web/playground-cold-start-metrics.js";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +30,9 @@ const artifactPath = path.resolve(
   repoRoot,
   process.env.NOON_COLD_START_ARTIFACT ?? `perf-artifacts/playground-cold-start-${backend}.json`,
 );
+const noonWasmPath = path.join(repoRoot, "web", "pkg", "noon_web_bg.wasm");
+const noonWasmPackageBytes = (await stat(noonWasmPath)).size;
+assert.ok(noonWasmPackageBytes > 0, "built Noon WASM package must be non-empty");
 
 const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
 const commitSha = commit.status === 0 ? commit.stdout.trim() : null;
@@ -49,9 +58,25 @@ try {
       const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
       const failures = [];
       const workers = [];
+      const workerHandles = [];
+      const workerRoleCounts = { authoring: 0, engine: 0, render: 0, other: 0 };
+      let authoringWorker = null;
       const origin = monotonicNow();
       page.on("worker", (worker) => {
-        workers.push({ url: worker.url(), atMs: monotonicNow() - origin });
+        const event = { url: worker.url(), atMs: monotonicNow() - origin };
+        const role = classifyWorkerUrl(event.url);
+        const roleIndex = workerRoleCounts[role];
+        workerRoleCounts[role] += 1;
+        workers.push(event);
+        workerHandles.push({
+          worker,
+          name: `${role}-${roleIndex}`,
+          role,
+          url: event.url,
+        });
+        if (role === "authoring") {
+          authoringWorker = worker;
+        }
       });
       page.on("pageerror", (error) => failures.push(`pageerror: ${error}`));
       page.on("console", (message) => {
@@ -62,25 +87,18 @@ try {
       await page.goto(`${baseUrl}/web/?example=${encodeURIComponent(example.id)}`, {
         waitUntil: "load",
       });
+      const pageReady = monotonicNow();
       await page.waitForFunction(
-        () => document.querySelector("#status")?.dataset.runtimeStartup === "deferred",
-        null,
+        (expectedId) => window.__noonExampleGallery?.selectedExampleId === expectedId,
+        example.id,
         { timeout: 60_000 },
       );
-      const pageReady = monotonicNow();
-      assert.equal(
-        await page.evaluate(() => window.__noonExampleGallery?.selectedExampleId),
-        example.id,
-      );
 
-      const runRequested = monotonicNow();
-      await page.click("#replace-scene");
       await page.waitForFunction(
         () => document.querySelector("#status")?.dataset.runtimeStartup === "started-on-demand",
         null,
         { timeout: 240_000 },
       );
-      const runtimeStarted = monotonicNow();
       await page.waitForFunction(
         () => {
           const draws = Number(document.querySelector("#metric-draws")?.value);
@@ -92,6 +110,40 @@ try {
       );
       const firstMetrics = monotonicNow();
       if (failures.length > 0) throw new Error(failures.join("\n"));
+
+      assert.ok(authoringWorker !== null, "automatic preload must create the Python authoring worker");
+      const authoringStartup = summarizeAuthoringStartup(
+        await authoringWorker.evaluate(
+          () => globalThis.__noonAuthoringStartupMetrics ?? null,
+        ),
+      );
+      const workerSummary = summarizeWorkers(workers);
+      assert.equal(
+        workerSummary.byRole.authoring,
+        1,
+        "cold preload must retain exactly one Python authoring worker",
+      );
+      const authoringWorkerEvent = workerSummary.workers.find(({ role }) => role === "authoring");
+      assert.ok(authoringWorkerEvent, "cold preload must record Python worker creation");
+      const preloadStarted = origin + authoringWorkerEvent.atMs;
+
+      const resourceContexts = [
+        {
+          name: "page",
+          role: "page",
+          entries: await page.evaluate(resourceTimingSnapshot),
+        },
+      ];
+      for (const handle of workerHandles) {
+        resourceContexts.push({
+          name: handle.name,
+          role: handle.role,
+          entries: await handle.worker.evaluate(resourceTimingSnapshot),
+        });
+      }
+      const resourceFootprint = summarizeResourceFootprint(resourceContexts, {
+        noonWasmPackageBytes,
+      });
 
       const status = await page.locator("#status").evaluate((node) => ({
         ...node.dataset,
@@ -105,21 +157,28 @@ try {
       const report = {
         label: example.label,
         exampleId: example.id,
-        milestones: coldStartMilestones({
+        milestones: preloadedColdStartMilestones({
           navigationStart,
           pageReady,
-          runRequested,
-          runtimeStarted,
+          preloadStarted,
           firstMetrics,
         }),
-        workers: summarizeWorkers(workers),
+        authoringStartup,
+        resourceFootprint,
+        workers: workerSummary,
         status,
         metrics,
       };
       cases.push(report);
       console.log(
-        `${example.label}: run→runtime ${format(report.milestones.runToRuntimeMs)} ms, ` +
-          `run→metrics ${format(report.milestones.runToFirstMetricsMs)} ms, ` +
+        `${example.label}: preload→metrics ${format(report.milestones.preloadToFirstMetricsMs)} ms, ` +
+          `Python worker ${format(authoringStartup.totalMs)} ms ` +
+          `(module graph ${format(authoringStartup.moduleGraphLoadMs)} ms, ` +
+          `critical ${authoringStartup.criticalResource} ${format(authoringStartup.criticalResourceMs)} ms, ` +
+          `imports ${format(authoringStartup.compatibilityImportInstallMs)} ms), ` +
+          `Noon WASM ${formatBytes(resourceFootprint.noonWasm.packageBytes)} × ` +
+          `${resourceFootprint.noonWasm.observedOwnerCount} observed owners = ` +
+          `${formatBytes(resourceFootprint.noonWasm.packageBytesAcrossObservedOwners)} package footprint, ` +
           `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)})`,
       );
     } finally {
@@ -128,8 +187,8 @@ try {
   }
 
   const artifact = {
-    schemaVersion: 1,
-    benchmark: "Noon public playground cold first-run topology",
+    schemaVersion: 3,
+    benchmark: "Noon public playground preloaded cold-start topology",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
     host: {
@@ -141,9 +200,18 @@ try {
       totalMemoryBytes: os.totalmem(),
       node: process.version,
     },
-    configuration: { backend, examples, freshBrowserProcessPerCase: true },
+    package: {
+      noonWasmPath: path.relative(repoRoot, noonWasmPath),
+      noonWasmPackageBytes,
+    },
+    configuration: {
+      backend,
+      examples,
+      freshBrowserProcessPerCase: true,
+      automaticPreload: true,
+    },
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness. resourceFootprint is collected from PerformanceResourceTiming on the page and every observed live worker after first metrics. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -166,6 +234,17 @@ async function waitForServer() {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`cold-start server did not start: ${lastError}\n${serverOutput}`);
+}
+
+function resourceTimingSnapshot() {
+  return performance.getEntriesByType("resource").map((entry) => ({
+    name: entry.name,
+    initiatorType: entry.initiatorType,
+    transferSize: entry.transferSize,
+    encodedBodySize: entry.encodedBodySize,
+    decodedBodySize: entry.decodedBodySize,
+    duration: Number.isFinite(entry.duration) && entry.duration >= 0 ? entry.duration : 0,
+  }));
 }
 
 function parseExamples(value) {
@@ -216,4 +295,12 @@ function positiveInteger(value, name) {
 
 function format(value) {
   return Number(value).toFixed(2);
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "n/a";
+  if (bytes < 1024) return `${bytes.toFixed(0)} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
 }
