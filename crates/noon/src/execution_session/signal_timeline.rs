@@ -153,6 +153,13 @@ impl SignalTimelineSchedule {
         self.owned_signals.contains(&signal)
     }
 
+    /// Whether this signal has any authored timeline meaning. Raw execution
+    /// input must never override such a signal, including after a Hold releases
+    /// ordinary authoring ownership or while the runtime is seeking history.
+    pub(super) fn has_history(&self, signal: SemanticNodeId) -> bool {
+        self.group_by_signal.contains_key(&signal)
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.groups.is_empty()
     }

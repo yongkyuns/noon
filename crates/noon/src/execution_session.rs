@@ -1366,7 +1366,7 @@ impl ExecutionSession {
         value: impl Into<ReactiveValue>,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
-        if self.signal_timeline.owns(signal) {
+        if self.signal_timeline.has_history(signal) {
             return Err(ExecutionSessionInputError::TimelineOwnedSignal { signal });
         }
         if self.reactive_projection.is_native_owned(signal) {
@@ -2372,6 +2372,10 @@ mod tests {
         assert_eq!(
             session.effective_signal_value(tracker),
             Some(&ReactiveValue::Scalar(1.0))
+        );
+        assert_eq!(
+            session.set_reactive_input(tracker, 9.0_f32),
+            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal: tracker })
         );
         session.advance_to(2.5).unwrap();
         assert_eq!(
