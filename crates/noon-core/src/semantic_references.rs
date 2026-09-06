@@ -57,6 +57,20 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
+    /// Whether this signal participates in any scene execution scope.
+    ///
+    /// Work is proportional to the signal's direct incoming references; scene
+    /// roots and unrelated semantic nodes are never scanned.
+    pub fn has_semantic_signal_scope(&self, signal: SemanticNodeId) -> bool {
+        self.incoming_references
+            .get(&signal)
+            .is_some_and(|incoming| {
+                incoming
+                    .iter()
+                    .any(|reference| matches!(reference.kind, SemanticReferenceKind::ScopedSignal))
+            })
+    }
+
     /// Whether one exact live signal-to-family scope edge is indexed.
     ///
     /// Stale identities and nodes of another kind have no such edge and return

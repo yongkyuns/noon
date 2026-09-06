@@ -453,6 +453,18 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    /// Associate one store-owned detached tracker with this Scene.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn associate_value_tracker(&mut self, tracker: &noon::ValueTracker) -> Result<(), String> {
+        if self.live_player_transferred {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.live_player.as_mut() {
+            Some(player) => player.live_associate_value_tracker(tracker),
+            None => self.scene.associate_value_tracker(tracker),
+        }
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn pointer_position_signal(&self) -> Result<noon::NativeVectorSignal, String> {
         self.require_pre_execution_signal_authoring()?;
@@ -1814,6 +1826,16 @@ mod wasm {
         pub fn semantic_generation(&self) -> u32 {
             self.tracker.node_id().generation()
         }
+
+        #[wasm_bindgen(js_name = detachedValue)]
+        pub fn detached_value(&self) -> Result<f64, JsValue> {
+            self.tracker.detached_value().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setDetachedValue)]
+        pub fn set_detached_value(&self, value: f64) -> Result<(), JsValue> {
+            self.tracker.set_detached_value(value).map_err(js_error)
+        }
     }
 
     impl WasmDeclaredAnimationHandle {
@@ -1831,6 +1853,13 @@ mod wasm {
     }
 
     impl WasmValueTrackerHandle {
+        pub(crate) fn from_tracker(
+            tracker: noon::ValueTracker,
+            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Self {
+            Self { tracker, store }
+        }
+
         fn tracker_in(
             &self,
             store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -2137,10 +2166,21 @@ mod wasm {
             initial: f64,
         ) -> Result<WasmValueTrackerHandle, JsValue> {
             let tracker = self.inner.create_value_tracker(initial).map_err(js_error)?;
-            Ok(WasmValueTrackerHandle {
+            Ok(WasmValueTrackerHandle::from_tracker(
                 tracker,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
-            })
+                std::rc::Rc::clone(self.inner.scene.store()),
+            ))
+        }
+
+        #[wasm_bindgen(js_name = associateValueTracker)]
+        pub fn associate_value_tracker(
+            &mut self,
+            tracker: &WasmValueTrackerHandle,
+        ) -> Result<(), JsValue> {
+            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            self.inner
+                .associate_value_tracker(tracker)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = pointerPositionSignal)]
@@ -4567,6 +4607,35 @@ mod tests {
         context.return_execution_player(leased).unwrap();
         let returned_tracker = context.create_value_tracker(2.0).unwrap();
         assert_eq!(context.tracker_value(&returned_tracker).unwrap(), 2.0);
+    }
+
+    #[test]
+    fn detached_tracker_association_uses_authored_and_live_publication_paths() {
+        let mut context = CanonicalAuthoringScene::default();
+        let tracker =
+            noon::ValueTracker::detached(std::rc::Rc::clone(context.scene.store()), 1.25).unwrap();
+        context.associate_value_tracker(&tracker).unwrap();
+        assert_eq!(context.tracker_value(&tracker).unwrap(), 1.25);
+
+        context.live_player(1.0).unwrap();
+        let live_tracker =
+            noon::ValueTracker::detached(std::rc::Rc::clone(context.scene.store()), 2.5).unwrap();
+        context.associate_value_tracker(&live_tracker).unwrap();
+        assert_eq!(context.tracker_value(&live_tracker).unwrap(), 2.5);
+
+        let invalid =
+            noon::ValueTracker::detached(std::rc::Rc::clone(context.scene.store()), f64::MAX)
+                .unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context.associate_value_tracker(&invalid).is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(invalid.detached_value().unwrap(), f64::MAX);
+
+        let foreign = CanonicalAuthoringScene::default();
+        let foreign_tracker =
+            noon::ValueTracker::detached(std::rc::Rc::clone(foreign.scene.store()), 3.0).unwrap();
+        assert!(context.associate_value_tracker(&foreign_tracker).is_err());
+        assert_eq!(foreign_tracker.detached_value().unwrap(), 3.0);
     }
 
     #[test]

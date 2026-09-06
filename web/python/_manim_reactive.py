@@ -16,6 +16,11 @@ import noon as _base
 import _noon_ir as _ir
 import _manim_animation_options as _options
 
+try:
+    from js import noonCreateAuthoringValueTrackerHandle as _create_tracker_handle
+except ImportError:  # Explicit document fixtures and native CPython have no browser store.
+    _create_tracker_handle = None
+
 _INSTALLED = False
 _ORIGINAL_SCENE_INIT = _ir.Scene.__init__
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
@@ -122,6 +127,11 @@ class ValueTracker:
             self._canonical_context = canonical._canonical_context
             self._canonical_handle = canonical._canonical_handle
             return
+        if _create_tracker_handle is not None:
+            self._scene = None
+            self._canonical_context = None
+            self._canonical_handle = _create_tracker_handle(value)
+            return
         self._value = value
         self._scene: _ir.Scene | None = None
         self._signal_id: int | None = None
@@ -149,6 +159,31 @@ class ValueTracker:
             return None
         return context, handle
 
+    def _detached_canonical_handle(self) -> object | None:
+        if getattr(self, "_canonical_context", None) is not None:
+            return None
+        return getattr(self, "_canonical_handle", None)
+
+    def _associate_canonical(self, scene: _base.Scene, context: object) -> None:
+        """Adopt a detached shared tracker after Rust commits its Scene scope."""
+
+        if self._scene is scene:
+            if getattr(self, "_canonical_context", None) is not context:
+                raise ValueError("ValueTracker belongs to another canonical Scene context")
+            return
+        if self._scene is not None:
+            raise ValueError("ValueTracker already belongs to another Scene")
+        handle = self._detached_canonical_handle()
+        if handle is None:
+            raise ValueError("ValueTracker has no detached shared semantic handle")
+        try:
+            context.associateValueTracker(handle)
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        # Wrapper ownership changes only after the shared transaction publishes.
+        self._scene = scene
+        self._canonical_context = context
+
     def get_value(self) -> float:
         canonical = self._canonical_context_handle()
         if _ACTIVE_CALLBACK_SIGNAL_VALUES is not None and canonical is not None:
@@ -161,8 +196,15 @@ class ValueTracker:
         if canonical is not None:
             context, handle = canonical
             return float(context.valueTrackerValue(handle))
-        if self._signal_id is not None and _ACTIVE_CALLBACK_SIGNAL_VALUES is not None:
-            payload = _ACTIVE_CALLBACK_SIGNAL_VALUES.get(self._signal_id)
+        detached = self._detached_canonical_handle()
+        if detached is not None:
+            try:
+                return float(detached.detachedValue())
+            except Exception as error:
+                raise ValueError(str(error)) from None
+        signal_id = getattr(self, "_signal_id", None)
+        if signal_id is not None and _ACTIVE_CALLBACK_SIGNAL_VALUES is not None:
+            payload = _ACTIVE_CALLBACK_SIGNAL_VALUES.get(signal_id)
             if payload is None:
                 raise NotImplementedError(
                     "canonical callback signal reads require a Rust-published signal read set"
@@ -186,20 +228,28 @@ class ValueTracker:
             except Exception as error:
                 raise ValueError(str(error)) from None
             return self
-        if self._scene is not None and self._signal_id is not None:
-            if _native_drives_signal(self._scene, self._signal_id):
+        detached = self._detached_canonical_handle()
+        if detached is not None:
+            try:
+                detached.setDetachedValue(value)
+            except Exception as error:
+                raise ValueError(str(error)) from None
+            return self
+        signal_id = getattr(self, "_signal_id", None)
+        if self._scene is not None and signal_id is not None:
+            if _native_drives_signal(self._scene, signal_id):
                 raise ValueError(
                     "native input-owned ValueTracker cannot be set directly after authoring"
                 )
             if any(
-                track["signal"] == self._signal_id
+                track["signal"] == signal_id
                 for track in getattr(self._scene, "_reactive_signal_tracks", [])
             ):
                 raise ValueError(
                     "direct ValueTracker.set_value after timeline animation is ambiguous; "
                     "use tracker.animate.set_value(...) for subsequent authored changes"
                 )
-            self._scene._reactive_signals[self._signal_id]["source"]["input"][
+            self._scene._reactive_signals[signal_id]["source"]["input"][
                 "scalar"
             ] = value
         self._value = value
@@ -214,9 +264,10 @@ class ValueTracker:
             raise AttributeError(
                 "canonical ValueTracker identity belongs to the shared Rust semantic store"
             )
-        if self._signal_id is None:
+        signal_id = getattr(self, "_signal_id", None)
+        if signal_id is None:
             raise AttributeError("ValueTracker has no signal id until attached to a Scene")
-        return self._signal_id
+        return signal_id
 
     @property
     def animate(self) -> _ValueAnimationBuilder:
@@ -306,7 +357,7 @@ def _attach_tracker(scene: _ir.Scene, tracker: ValueTracker) -> int:
         raise TypeError("expected a ValueTracker")
     if tracker._scene is not None and tracker._scene is not scene:
         raise ValueError("ValueTracker already belongs to another Scene")
-    if tracker._signal_id is None:
+    if getattr(tracker, "_signal_id", None) is None:
         tracker._signal_id = _append_input(scene, {"scalar": tracker.get_value()})
         tracker._scene = scene
     return tracker._signal_id
@@ -394,6 +445,16 @@ def _initial_scalar(scene: _ir.Scene, signal_id: int) -> float:
     return float(source["input"]["scalar"])
 
 
+def _set_legacy_authored_value(tracker: ValueTracker, value: float) -> None:
+    """Keep an explicit document export's endpoint in its existing owner."""
+
+    detached = tracker._detached_canonical_handle()
+    if detached is not None:
+        detached.setDetachedValue(value)
+    else:
+        tracker._value = value
+
+
 def _schedule_value_builder(
     scene: _base.Scene,
     builder: _ValueAnimationBuilder,
@@ -434,7 +495,7 @@ def _schedule_value_builder(
             },
         }
     )
-    builder.tracker._value = builder.target_value
+    _set_legacy_authored_value(builder.tracker, builder.target_value)
 
 
 def _scene_play(
@@ -486,7 +547,7 @@ def _scene_play(
     checkpoint = self._authoring_checkpoint()
     signal_track_count = len(self._reactive_signal_tracks)
     cursor_before = self._cursor
-    tracker_values = [(builder.tracker, builder.tracker._value) for builder in value_builders]
+    tracker_values = [(builder.tracker, builder.tracker.get_value()) for builder in value_builders]
     max_end = base_start
     try:
         if ordinary:
@@ -525,7 +586,7 @@ def _scene_play(
         del self._reactive_signal_tracks[signal_track_count:]
         self._cursor = cursor_before
         for tracker, value in tracker_values:
-            tracker._value = value
+            _set_legacy_authored_value(tracker, value)
         raise
 
 

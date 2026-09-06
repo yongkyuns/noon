@@ -69,6 +69,8 @@ async function initializePyodide() {
   const authoringStore = new WasmAuthoringStore();
   self.noonCreateCanonicalAuthoringSceneContext = () =>
     authoringStore.createSceneContext();
+  self.noonCreateAuthoringValueTrackerHandle = (initial) =>
+    authoringStore.createValueTracker(initial);
   self.noonRegisterSemanticExecution = (context) => {
     const continuation = activeAuthoringRun?.continuation;
     if (continuation?.context === context) return continuation.contextId;

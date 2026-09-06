@@ -543,6 +543,19 @@ mod wasm {
             crate::CanonicalAuthoringSceneContext::with_store(Rc::clone(&self.semantics))
         }
 
+        #[wasm_bindgen(js_name = createValueTracker)]
+        pub fn create_value_tracker(
+            &self,
+            initial: f64,
+        ) -> Result<crate::WasmValueTrackerHandle, JsValue> {
+            let tracker = noon::ValueTracker::detached(Rc::clone(&self.semantics), initial)
+                .map_err(js_error)?;
+            Ok(crate::WasmValueTrackerHandle::from_tracker(
+                tracker,
+                Rc::clone(&self.semantics),
+            ))
+        }
+
         #[wasm_bindgen(js_name = createMobject)]
         pub fn create_mobject(
             &self,

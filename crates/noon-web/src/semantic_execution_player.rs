@@ -921,6 +921,27 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    /// Associate and sparsely enroll one pre-existing tracker in this live root.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_associate_value_tracker(
+        &mut self,
+        tracker: &noon::ValueTracker,
+    ) -> Result<(), String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .associate_value_tracker(tracker)
+        .map_err(|error| error.to_string())
+    }
+
     /// Create a detached target through the retained session so its semantic
     /// publication remains coherent with this runtime. Detached target rows do
     /// not create execution objects or frame work.

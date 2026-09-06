@@ -25,6 +25,19 @@ pub struct ValueTracker {
 }
 
 impl ValueTracker {
+    /// Create a scalar input in `store` without associating it with a Scene.
+    ///
+    /// This is the shared constructor for host-language values that can be
+    /// created before their eventual Scene. The semantic store allocates the
+    /// only identity and owns the scalar from construction onward.
+    pub fn detached(store: Rc<RefCell<SemanticStore>>, initial: f64) -> Result<Self, String> {
+        let node = store
+            .borrow_mut()
+            .insert_semantic_input_signal(initial)
+            .map_err(|error| error.to_string())?;
+        Ok(Self { store, node })
+    }
+
     pub(crate) fn from_semantic_node(
         store: Rc<RefCell<SemanticStore>>,
         node: SemanticNodeId,
@@ -52,6 +65,31 @@ impl ValueTracker {
             .semantic_signal_state(self.node)
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    /// Read a tracker before it is associated with a Scene.
+    pub fn detached_value(&self) -> Result<f64, String> {
+        self.require_detached()?;
+        tracker_track_endpoint(self)
+    }
+
+    /// Mutate a tracker before it is associated with a Scene.
+    pub fn set_detached_value(&self, value: f64) -> Result<(), String> {
+        self.require_detached()?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_signal(self.node, value);
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn require_detached(&self) -> Result<(), String> {
+        self.require_store(&self.store)?;
+        if self.store.borrow().has_semantic_signal_scope(self.node) {
+            return Err("ValueTracker is already associated with a Scene".into());
+        }
+        Ok(())
     }
 }
 
@@ -397,6 +435,35 @@ mod tests {
             session.effective_signal_value(detached),
             Some(&noon_core::ReactiveValue::Scalar(4.0))
         );
+    }
+
+    #[test]
+    fn detached_tracker_value_stays_store_owned_before_scene_association() {
+        let scene = Scene::new();
+        let tracker = ValueTracker::detached(Rc::clone(scene.store()), 1.25).unwrap();
+
+        assert_eq!(tracker.detached_value().unwrap(), 1.25);
+        tracker.set_detached_value(2.5).unwrap();
+        assert_eq!(tracker.detached_value().unwrap(), 2.5);
+
+        scene.associate_value_tracker(&tracker).unwrap();
+        assert!(tracker.detached_value().is_err());
+        assert!(tracker.set_detached_value(3.0).is_err());
+        assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 2.5);
+    }
+
+    #[test]
+    fn foreign_scene_rejects_detached_tracker_without_scoping_it() {
+        let scene = Scene::new();
+        let foreign = Scene::new();
+        let tracker = ValueTracker::detached(Rc::clone(scene.store()), 1.0).unwrap();
+
+        assert!(foreign.associate_value_tracker(&tracker).is_err());
+        assert_eq!(tracker.detached_value().unwrap(), 1.0);
+        assert!(!scene
+            .store()
+            .borrow()
+            .is_semantic_signal_scoped(scene.root(), tracker.node_id()));
     }
 
     #[test]

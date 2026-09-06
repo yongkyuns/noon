@@ -1,6 +1,6 @@
 //! Target-neutral scene builders shared by executable Rust examples.
 
-use std::error::Error;
+use std::{error::Error, rc::Rc};
 
 use crate::{
     AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
@@ -533,6 +533,8 @@ impl LiveContinuation for OrdinaryValueTrackerContinuation {
         match self.stage {
             0 => {
                 self.stage = 1;
+                live.associate_value_tracker(&self.tracker)
+                    .map_err(|error| error.to_string())?;
                 live.declare_and_activate_value_tracker(
                     &self.tracker,
                     2.0,
@@ -587,9 +589,10 @@ pub fn ordinary_value_tracker_continuation_program(
         .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
 
-    let tracker = scene
-        .value_tracker(0.0)
-        .map_err(|error| error.to_string())?;
+    // Model a host-language tracker constructed before its eventual Scene body:
+    // the shared store owns its identity/value while it is detached. The first
+    // continuation step enrolls this same handle through LiveSession.
+    let tracker = ValueTracker::detached(Rc::clone(scene.store()), 0.0)?;
     let position = scene
         .position_from_tracker(
             &tracker,

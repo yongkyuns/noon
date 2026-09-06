@@ -203,8 +203,20 @@ def materialize_legacy_geometry(scene):
 def _canonical_tracker_builder(builder: object) -> bool:
     return (
         isinstance(builder, _reactive._ValueAnimationBuilder)
-        and builder.tracker._canonical_context_handle() is not None
+        and (
+            builder.tracker._canonical_context_handle() is not None
+            or builder.tracker._detached_canonical_handle() is not None
+        )
     )
+
+
+def _associate_tracker(scene: _base.Scene, tracker: _reactive.ValueTracker) -> None:
+    if tracker._canonical_context_handle() is not None:
+        return
+    handle = tracker._detached_canonical_handle()
+    if handle is None:
+        return
+    tracker._associate_canonical(scene, _context(scene))
 
 
 def _rust_authored_time(scene: _base.Scene) -> float | None:
@@ -557,9 +569,6 @@ def _play_canonical_tracker(
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
     if builder.target_value is None:
         raise ValueError("ValueTracker.animate must call set_value or increment_value")
-    if builder.tracker._scene is not self:
-        raise ValueError("ValueTracker belongs to another Scene")
-
     resolved = _options.resolve(
         builder_args=_options.builder_args(builder),
         default_lag_ratio=0.0,
@@ -572,9 +581,6 @@ def _play_canonical_tracker(
         raise NotImplementedError(
             "canonical ValueTracker.play currently supports one scalar track at a time"
         )
-    context, handle = builder.tracker._canonical_context_handle()
-    if context is not _context(self):
-        raise ValueError("ValueTracker belongs to another canonical Scene context")
     authority, _ = _timing_authority(self)
     if authority != "canonical" and _legacy_authored_time(self) != 0.0:
         raise NotImplementedError(
@@ -583,6 +589,12 @@ def _play_canonical_tracker(
     try:
         _start_default_synchronous_continuation(self)
         _require_semantic_continuation_active(self)
+        _associate_tracker(self, builder.tracker)
+        if builder.tracker._scene is not self:
+            raise ValueError("ValueTracker belongs to another Scene")
+        context, handle = builder.tracker._canonical_context_handle()
+        if context is not _context(self):
+            raise ValueError("ValueTracker belongs to another canonical Scene context")
         if _semantic_continuation_active(self):
             _prepare_semantic_continuation_callbacks(self, context)
         method = (
@@ -1219,7 +1231,11 @@ def _play(self, *args, **kwargs):
             lag_ratio=kwargs.pop("lag_ratio", None),
             kwargs=kwargs,
         )
-    canonical_builders = [argument for argument in args if _canonical_tracker_builder(argument)]
+    canonical_builders = (
+        []
+        if getattr(self, _EXPORT_DOCUMENT_CONSTRUCT, False)
+        else [argument for argument in args if _canonical_tracker_builder(argument)]
+    )
     if canonical_builders:
         if len(canonical_builders) != 1 or len(args) != 1:
             raise NotImplementedError(
@@ -1354,6 +1370,8 @@ def _canonical_signal_handle(
 ) -> tuple[object, object]:
     if not isinstance(signal, expected):
         raise TypeError(f"{operation} expects a {expected.__name__}")
+    if isinstance(signal, _reactive.ValueTracker):
+        _associate_tracker(scene, signal)
     canonical = signal._canonical_context_handle()
     if canonical is None:
         if _is_canonical_scene(scene):
@@ -1373,8 +1391,8 @@ def _canonical_bind_signal(
     operation: str,
     method: str,
 ) -> _base.Scene:
-    context, signal_handle = _canonical_signal_handle(self, signal, expected, operation)
     handle = _canonical_bound_mobject(self, mobject, operation)
+    context, signal_handle = _canonical_signal_handle(self, signal, expected, operation)
     try:
         getattr(context, method)(handle, signal_handle)
     except Exception as error:
@@ -1428,7 +1446,10 @@ def _canonical_gesture_events(self: _base.Scene, name: str) -> _reactive.ValueTr
 def _canonical_bind_rotation_dispatch(
     self: _base.Scene, mobject: object, tracker: object
 ) -> _base.Scene:
-    if isinstance(tracker, _reactive.ValueTracker) and tracker._canonical_context_handle() is not None:
+    if isinstance(tracker, _reactive.ValueTracker) and (
+        tracker._canonical_context_handle() is not None
+        or tracker._detached_canonical_handle() is not None
+    ):
         return _canonical_bind_signal(
             self, mobject, tracker, _reactive.ValueTracker, "bind_rotation", "bindRotation"
         )
@@ -1439,7 +1460,10 @@ def _canonical_bind_rotation_dispatch(
 def _canonical_bind_opacity_dispatch(
     self: _base.Scene, mobject: object, tracker: object
 ) -> _base.Scene:
-    if isinstance(tracker, _reactive.ValueTracker) and tracker._canonical_context_handle() is not None:
+    if isinstance(tracker, _reactive.ValueTracker) and (
+        tracker._canonical_context_handle() is not None
+        or tracker._detached_canonical_handle() is not None
+    ):
         return _canonical_bind_signal(
             self, mobject, tracker, _reactive.ValueTracker, "bind_opacity", "bindOpacity"
         )
@@ -1513,20 +1537,21 @@ def _canonical_bind_position(
     if not isinstance(tracker, _reactive.ValueTracker):
         _unsupported_canonical_native(self, "bind_position")
         return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
-    canonical = tracker._canonical_context_handle()
-    if canonical is None:
-        _unsupported_canonical_native(self, "bind_position")
-        return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
     if not isinstance(mobject, _base.Mobject) or mobject._scene is not self:
         raise ValueError("bind_position target must belong to this Scene")
-    context, tracker_handle = canonical
-    if context is not _context(self):
-        raise ValueError("ValueTracker belongs to another canonical Scene context")
     handle = getattr(mobject, "_semantic_handle", None)
     if handle is None:
         raise ValueError("canonical ValueTracker binding requires a typed semantic Mobject")
     direction_ir = _reactive._vec2_ir(_base.RIGHT if direction is None else direction)
     offset_ir = _reactive._vec2_ir(_base.ORIGIN if offset is None else offset)
+    _associate_tracker(self, tracker)
+    canonical = tracker._canonical_context_handle()
+    if canonical is None:
+        _unsupported_canonical_native(self, "bind_position")
+        return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
+    context, tracker_handle = canonical
+    if context is not _context(self):
+        raise ValueError("ValueTracker belongs to another canonical Scene context")
     position = context.trackerPosition(
         tracker_handle,
         float(direction_ir["x"]),
