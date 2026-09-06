@@ -90,7 +90,7 @@ try {
 
 async function author(source) {
   const result = await authoring.run(source);
-  if (result.kind !== "scene_document" || result.semanticExecution === null) {
+  if (typeof result.semanticExecution?.contextId !== "string") {
     throw new Error("performance source did not return canonical semantic execution");
   }
   return result;
