@@ -11,7 +11,7 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use std::mem;
+    use std::{cell::Cell, mem, rc::Rc};
 
     use noon::{
         ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RendererPublication,
@@ -27,7 +27,7 @@ mod wasm {
     use noon_runtime::{FrameChanges, FrameState};
     use noon_text_render_wgpu::TextDeviceMetrics;
     use serde::Serialize;
-    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::{prelude::*, JsCast};
     use web_sys::OffscreenCanvas;
 
     use crate::{
@@ -426,6 +426,11 @@ mod wasm {
         last_geometry_cache_misses: usize,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
+        webgl_context_lost: Rc<Cell<bool>>,
+        webgl_recovery_pending: Rc<Cell<bool>>,
+        webgl_loss_listener: Option<Closure<dyn FnMut(web_sys::Event)>>,
+        webgl_restore_listener: Option<Closure<dyn FnMut(web_sys::Event)>>,
+        gpu_recovery_frame_pending: bool,
     }
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
@@ -478,13 +483,82 @@ mod wasm {
             }
         }
 
+        /// Recreate the complete WebGL wgpu stack after the browser restores its
+        /// context. wgpu-hal's GL device and queue retain context-created VAOs,
+        /// framebuffers, and buffers, so rebuilding only renderer pipelines cannot
+        /// make the old stack valid again.
+        #[wasm_bindgen(js_name = recoverWebGlContext)]
+        pub async fn recover_webgl_context(&mut self) -> Result<bool, JsValue> {
+            if self.backend != wgpu::Backend::Gl || !self.webgl_recovery_pending.get() {
+                return Ok(false);
+            }
+            let next_generation = self
+                .gpu_generation
+                .checked_add(1)
+                .ok_or_else(|| js_message("GPU recovery generation exhausted"))?;
+            let profiling_enabled = self.timestamp_profiler.is_some();
+            let InitializedGpu {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                config,
+                timestamp_query_supported,
+            } = initialize_gpu(&self.canvas, self.config.width, self.config.height).await?;
+            if backend != wgpu::Backend::Gl {
+                return Err(js_message(
+                    "WebGL context recovery unexpectedly selected a different GPU backend",
+                ));
+            }
+            install_wgpu_error_handler(
+                &device,
+                next_generation,
+                backend,
+                self.gpu_diagnostics.clone(),
+            );
+            let renderer = GpuRenderer::new(&device, config.format);
+            let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
+
+            self.instance = instance;
+            self.surface = surface;
+            self.device = device;
+            self.queue = queue;
+            self.backend = backend;
+            self.config = config;
+            self.timestamp_query_supported = timestamp_query_supported;
+            self.renderer = renderer;
+            self.direct_text_gpu = direct_text_gpu;
+            self.preparer = FramePreparer::new();
+            self.direct_preparer = RetainedFramePreparer::new();
+            self.timestamp_profiler =
+                profiling_enabled.then(|| GpuTimestampProfiler::new(&self.device, &self.queue));
+            self.gpu_generation = next_generation;
+            self.pending_changes = FrameChanges::all();
+            self.gpu_recovery_frame_pending = true;
+            self.last_draw_calls = 0;
+            self.last_text_draw_calls = 0;
+            self.last_instances_drawn = 0;
+            self.last_bytes_uploaded = 0;
+            self.last_geometry_cache_misses = 0;
+            self.update_camera()?;
+            self.webgl_recovery_pending.set(false);
+            Ok(true)
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
+            if self.webgl_context_lost.get() {
+                return Ok(false);
+            }
+            if self.webgl_recovery_pending.get() {
+                return Ok(false);
+            }
             let changes_pending = match &self.source {
                 CanvasExecutionSource::Transport(_) => !self.pending_changes.is_empty(),
                 CanvasExecutionSource::Direct(direct) => {
                     direct.session().wake_state().frame_pending()
                 }
-            };
+            } || self.gpu_recovery_frame_pending;
             if !self.drawable || !changes_pending {
                 return Ok(false);
             }
@@ -500,8 +574,12 @@ mod wasm {
                         return Ok(false);
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
-                        self.surface = create_surface(&self.instance, &self.canvas)?;
-                        self.surface.configure(&self.device, &self.config);
+                        if self.backend == wgpu::Backend::Gl {
+                            self.webgl_recovery_pending.set(true);
+                        } else {
+                            self.surface = create_surface(&self.instance, &self.canvas)?;
+                            self.surface.configure(&self.device, &self.config);
+                        }
                         return Ok(false);
                     }
                     // The device error callback owns validation diagnostics. Keep
@@ -511,7 +589,11 @@ mod wasm {
                 };
 
             if self.source.direct().is_some() {
-                return self.render_direct(surface_texture, reconfigure_after_present);
+                let rendered = self.render_direct(surface_texture, reconfigure_after_present)?;
+                if rendered {
+                    self.gpu_recovery_frame_pending = false;
+                }
+                return Ok(rendered);
             }
 
             let changes = mem::take(&mut self.pending_changes);
@@ -570,6 +652,7 @@ mod wasm {
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
+            self.gpu_recovery_frame_pending = false;
             Ok(true)
         }
 
@@ -1141,6 +1224,12 @@ mod wasm {
             install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
             let renderer = GpuRenderer::new(&device, config.format);
             let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
+            let (
+                webgl_context_lost,
+                webgl_recovery_pending,
+                webgl_loss_listener,
+                webgl_restore_listener,
+            ) = install_webgl_context_recovery_listeners(&canvas, backend)?;
 
             let mut result = Self {
                 instance,
@@ -1170,6 +1259,11 @@ mod wasm {
                 last_geometry_cache_misses: 0,
                 gpu_generation,
                 gpu_diagnostics,
+                webgl_context_lost,
+                webgl_recovery_pending,
+                webgl_loss_listener,
+                webgl_restore_listener,
+                gpu_recovery_frame_pending: false,
             };
             result.update_camera()?;
             Ok(result)
@@ -1300,6 +1394,76 @@ mod wasm {
             self.renderer.set_camera(&self.queue, camera);
             Ok(())
         }
+    }
+
+    impl Drop for WasmExecutionCanvasRenderer {
+        fn drop(&mut self) {
+            if let Some(listener) = self.webgl_loss_listener.as_ref() {
+                let _ = self.canvas.remove_event_listener_with_callback(
+                    "webglcontextlost",
+                    listener.as_ref().unchecked_ref(),
+                );
+            }
+            if let Some(listener) = self.webgl_restore_listener.as_ref() {
+                let _ = self.canvas.remove_event_listener_with_callback(
+                    "webglcontextrestored",
+                    listener.as_ref().unchecked_ref(),
+                );
+            }
+        }
+    }
+
+    type WebGlContextRecoveryListeners = (
+        Rc<Cell<bool>>,
+        Rc<Cell<bool>>,
+        Option<Closure<dyn FnMut(web_sys::Event)>>,
+        Option<Closure<dyn FnMut(web_sys::Event)>>,
+    );
+
+    fn install_webgl_context_recovery_listeners(
+        canvas: &OffscreenCanvas,
+        backend: wgpu::Backend,
+    ) -> Result<WebGlContextRecoveryListeners, JsValue> {
+        let context_lost = Rc::new(Cell::new(false));
+        let recovery_pending = Rc::new(Cell::new(false));
+        if backend != wgpu::Backend::Gl {
+            return Ok((context_lost, recovery_pending, None, None));
+        }
+
+        let lost_state = Rc::clone(&context_lost);
+        let loss_listener = Closure::wrap(Box::new(move |event: web_sys::Event| {
+            event.prevent_default();
+            lost_state.set(true);
+        }) as Box<dyn FnMut(web_sys::Event)>);
+        canvas.add_event_listener_with_callback(
+            "webglcontextlost",
+            loss_listener.as_ref().unchecked_ref(),
+        )?;
+
+        let restored_lost_state = Rc::clone(&context_lost);
+        let restored_pending = Rc::clone(&recovery_pending);
+        let restore_listener = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+            if restored_lost_state.replace(false) {
+                restored_pending.set(true);
+            }
+        }) as Box<dyn FnMut(web_sys::Event)>);
+        if let Err(error) = canvas.add_event_listener_with_callback(
+            "webglcontextrestored",
+            restore_listener.as_ref().unchecked_ref(),
+        ) {
+            let _ = canvas.remove_event_listener_with_callback(
+                "webglcontextlost",
+                loss_listener.as_ref().unchecked_ref(),
+            );
+            return Err(error);
+        }
+
+        Ok((
+            context_lost,
+            recovery_pending,
+            Some(loss_listener),
+            Some(restore_listener),
+        ))
     }
 
     async fn initialize_gpu(

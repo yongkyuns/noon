@@ -56,6 +56,7 @@ let scheduleTicket = 0;
 let presentedFrames = 0;
 let modeSwitches = 0;
 let rendererRebuilds = 0;
+let webglRecoveryPromise = null;
 
 self.addEventListener("message", (event) => {
   void handleMainMessage(event.data);
@@ -64,6 +65,7 @@ self.addEventListener("message", (event) => {
 async function handleMainMessage(message) {
   try {
     validateMainMessage(message);
+    if (webglRecoveryPromise !== null) await webglRecoveryPromise;
     switch (message.type) {
       case "init":
         await initialize(message);
@@ -132,6 +134,38 @@ async function prepareSurface(message, operation) {
   height = normalizedDimension(message.height ?? canvas.height);
   transportMode = message.transportMode;
   await init();
+  canvas.addEventListener("webglcontextrestored", wakeAfterWebGlContextRestored);
+}
+
+function wakeAfterWebGlContextRestored() {
+  // Rust records context restoration synchronously. Defer the platform wake
+  // until every restore listener has run, then rebuild before presenting even
+  // when the execution owner has settled to idle.
+  queueMicrotask(() => void recoverAndPresentWebGlContext());
+}
+
+async function recoverAndPresentWebGlContext() {
+  const restoringRenderer = renderer;
+  if (stopped || restoringRenderer === null || webglRecoveryPromise !== null) return;
+  const recovery = Promise.resolve(restoringRenderer.recoverWebGlContext?.());
+  webglRecoveryPromise = recovery;
+  try {
+    await recovery;
+    if (stopped || renderer !== restoringRenderer) return;
+    webglRecoveryPromise = null;
+    renderer.resize(width, height);
+    if (!drainGpuDiagnostics()) return;
+    needsPresent = true;
+    if (tryPresent()) {
+      flushBootstrapQueue();
+      drainTransport();
+    }
+    scheduleFrame();
+  } catch (error) {
+    fail(error, null);
+  } finally {
+    if (webglRecoveryPromise === recovery) webglRecoveryPromise = null;
+  }
 }
 
 function startEngine(message) {
@@ -240,6 +274,10 @@ function resize(message) {
   width = nextWidth;
   height = nextHeight;
   if (renderer === null) {
+    return;
+  }
+  if (webglRecoveryPromise !== null) {
+    needsPresent = true;
     return;
   }
   renderer.resize(width, height);
@@ -432,6 +470,10 @@ function consumeDelta(json, publication = null) {
     return true;
   }
 
+  if (webglRecoveryPromise !== null) {
+    return false;
+  }
+
   if (mode === MODE_RETAINED && reconnectResourceBundlePending) {
     throw new Error("retained authoring reconnect snapshot arrived before its resource bundle");
   }
@@ -567,7 +609,12 @@ async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = 
 }
 
 function tryPresent() {
-  if (renderer === null || !needsPresent || !drainGpuDiagnostics()) {
+  if (
+    renderer === null ||
+    webglRecoveryPromise !== null ||
+    !needsPresent ||
+    !drainGpuDiagnostics()
+  ) {
     return false;
   }
   if (!renderer.render()) {
@@ -733,7 +780,7 @@ function cancelScheduledFrame() {
 
 function scheduleFrame(generation = frameLoopGeneration) {
   cancelScheduledFrame();
-  if (!running) return;
+  if (!running || webglRecoveryPromise !== null) return;
   const needsAnimationFrame = needsPresent || engineWake === null ||
     engineWake.cadence === "animation_frame";
   if (!needsAnimationFrame && engineWake.cadence === "idle") return;
@@ -753,9 +800,9 @@ function scheduleFrame(generation = frameLoopGeneration) {
 }
 
 function frame(timestamp, generation, ticket) {
-  if (ticket !== scheduleTicket || generation !== frameLoopGeneration ||
-      !running || !drainGpuDiagnostics()) return;
+  if (ticket !== scheduleTicket || generation !== frameLoopGeneration || !running) return;
   scheduledFrame = null;
+  if (webglRecoveryPromise !== null || !drainGpuDiagnostics()) return;
   lastFrameTimestamp = timestamp;
   if (needsPresent && tryPresent()) {
     flushBootstrapQueue();

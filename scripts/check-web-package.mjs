@@ -403,6 +403,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
+    "recoverWebGlContext(): Promise<boolean>",
     "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",

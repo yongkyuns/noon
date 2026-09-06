@@ -69,7 +69,15 @@ async function waitForHarness(page) {
   const metrics = await page.evaluate(() => window.noonSmoke.metrics());
   assert.equal(metrics.error, null, `renderer failed to initialize: ${metrics.error}`);
   assert.equal(metrics.rendererBackend, "WebGL2", `expected WebGL2, got ${metrics.rendererBackend}`);
-  return metrics;
+  const loaded = await page.evaluate(async () => {
+    const wasm = await import("./pkg/noon_web.js");
+    const { createExplicitTransportSceneJson } = await import(
+      "../scripts/explicit-transport-scene-fixture.js"
+    );
+    return window.noonSmoke.loadScene(createExplicitTransportSceneJson(wasm));
+  });
+  assert.equal(loaded.objectCount, 4, "context-loss fixture must contain visible geometry");
+  return page.evaluate(() => window.noonSmoke.metrics());
 }
 
 async function renderAndCapture(page, name) {
@@ -134,35 +142,8 @@ try {
   const baseline = await renderAndCapture(page, "baseline");
 
   const injection = await page.evaluate(() => {
-    const canvas = document.querySelector("#scene");
-    const gl = canvas?.getContext("webgl2");
-    const extension = gl?.getExtension("WEBGL_lose_context");
-    if (!canvas || !gl || !extension) {
-      return {
-        available: false,
-        hasCanvas: Boolean(canvas),
-        hasWebgl2: Boolean(gl),
-        hasLoseContextExtension: Boolean(extension),
-      };
-    }
-    window.__noonContextRecovery = {
-      lost: 0,
-      restored: 0,
-      extension,
-    };
-    canvas.addEventListener("webglcontextlost", (event) => {
-      event.preventDefault();
-      window.__noonContextRecovery.lost += 1;
-    });
-    canvas.addEventListener("webglcontextrestored", () => {
-      window.__noonContextRecovery.restored += 1;
-    });
-    return {
-      available: true,
-      hasCanvas: true,
-      hasWebgl2: true,
-      hasLoseContextExtension: true,
-    };
+    window.__noonContextRecovery = window.noonSmoke.webglContextControl();
+    return { available: window.__noonContextRecovery !== null };
   });
   assert.equal(
     injection.available,
@@ -170,26 +151,39 @@ try {
     `WEBGL_lose_context is unavailable: ${JSON.stringify(injection)}`,
   );
 
-  await page.evaluate(() => window.__noonContextRecovery.extension.loseContext());
-  await page.waitForFunction(() => window.__noonContextRecovery?.lost === 1, null, {
+  await page.evaluate(() => window.__noonContextRecovery.lose());
+  await page.waitForFunction(() => window.__noonContextRecovery?.state.lost === 1, null, {
     timeout: 10_000,
   });
 
   const duringLoss = await page.evaluate(() => ({
     metrics: window.noonSmoke.metrics(),
     context: {
-      lost: window.__noonContextRecovery.lost,
-      restored: window.__noonContextRecovery.restored,
+      lost: window.__noonContextRecovery.state.lost,
+      restored: window.__noonContextRecovery.state.restored,
     },
   }));
   assert.equal(duringLoss.metrics.rendererBackend, "WebGL2", "context loss changed semantic backend identity");
   assert.equal(duringLoss.metrics.revision, baseline.metrics.revision, "context loss reset scene revision");
   assert.equal(duringLoss.metrics.objectCount, baseline.metrics.objectCount, "context loss reset scene objects");
 
-  await page.evaluate(() => window.__noonContextRecovery.extension.restoreContext());
-  await page.waitForFunction(() => window.__noonContextRecovery?.restored === 1, null, {
-    timeout: 10_000,
-  });
+  await page.evaluate(() => window.__noonContextRecovery.restore());
+  await page.waitForFunction(
+    () =>
+      window.__noonContextRecovery?.state.restored === 1 &&
+      window.__noonContextRecovery?.state.recovery !== "pending",
+    null,
+    { timeout: 10_000 },
+  );
+  const recoveryState = await page.evaluate(() => ({
+    recovery: window.__noonContextRecovery.state.recovery,
+    error: window.noonSmoke.metrics().error,
+  }));
+  assert.equal(
+    recoveryState.recovery,
+    "ready",
+    `WebGL GPU stack reconstruction failed: ${recoveryState.error ?? "unknown error"}`,
+  );
 
   let recovered = null;
   let lastRecoveryError = null;
@@ -207,6 +201,7 @@ try {
   assert.ok(recovered, `WebGL context did not recover: ${lastRecoveryError ?? "no frame presented"}`);
   assert.equal(recovered.error, null, "recovered renderer reported an error");
   assert.equal(recovered.rendererBackend, "WebGL2", "recovered renderer changed backend");
+  assert.equal(recovered.gpuGeneration, baseline.metrics.gpuGeneration + 1, "recovery must replace the GPU generation once");
   assert.equal(recovered.revision, baseline.metrics.revision, "recovery reset scene revision");
   assert.equal(recovered.objectCount, baseline.metrics.objectCount, "recovery reset object count");
   assert.ok(Math.abs(recovered.time - sampleTime) < 1e-6, "recovery changed semantic playhead time");
@@ -242,8 +237,8 @@ try {
   assert.deepEqual(freshErrors.consoleErrors, [], "fresh comparison renderer emitted console errors");
 
   const contextState = await page.evaluate(() => ({
-    lost: window.__noonContextRecovery.lost,
-    restored: window.__noonContextRecovery.restored,
+    lost: window.__noonContextRecovery.state.lost,
+    restored: window.__noonContextRecovery.state.restored,
   }));
   await writeDiagnostics("context-loss-recovery", {
     browserVersion: browser.version(),
