@@ -1235,6 +1235,68 @@ pub fn ordinary_create_continuation_program(
         .map_err(|error| error.to_string())
 }
 
+/// Literal `Uncreate(Square())` continuation shared by native and direct Rust/WASM hosts.
+pub struct OrdinaryUncreateContinuation {
+    square: Mobject,
+    semantic_id: SemanticNodeId,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryUncreateContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                if live
+                    .contains(&self.square)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err("Uncreate example target must begin detached".into());
+                }
+                self.stage = 1;
+                live.declare_and_activate_uncreate(
+                    &self.square,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Smooth),
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            1 => {
+                if self.square.node_id() != self.semantic_id
+                    || live
+                        .contains(&self.square)
+                        .map_err(|error| error.to_string())?
+                {
+                    return Err("Uncreate did not remove its exact shared target".into());
+                }
+                self.stage = 2;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary Uncreate continuation resumed after it finished".into()),
+        }
+    }
+}
+
+pub fn ordinary_uncreate_continuation_program(
+) -> Result<LiveProgram<OrdinaryUncreateContinuation>, String> {
+    let scene = Scene::new();
+    let square = scene.square(2.0).map_err(|error| error.to_string())?;
+    let semantic_id = square.node_id();
+    scene
+        .into_live_program(OrdinaryUncreateContinuation {
+            square,
+            semantic_id,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
 /// Ordinary flat Parallel Create continuation shared by native and direct Rust/WASM hosts.
 ///
 /// This is the target-neutral counterpart of `manim_parity_square_and_circle.py`:
@@ -2036,6 +2098,36 @@ mod continuation_tests {
         let publication = program.take_renderer_publication().context();
         program.admit_publication(publication).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[test]
+    fn ordinary_uncreate_admits_reverses_and_removes_one_detached_square() {
+        let mut program = ordinary_uncreate_continuation_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(program.session().frame().is_present(0));
+        assert_eq!(program.session().frame().reveal(0), 1.0);
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!((program.session().frame().reveal(0) - 0.5).abs() < 1e-6);
+        program.take_renderer_publication();
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.0).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        assert_eq!(program.session().frame().reveal(0), 0.0);
+        let publication = program.take_renderer_publication().context();
+        program.admit_publication(publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert!(!program.session().frame().is_present(0));
     }
 
     #[test]

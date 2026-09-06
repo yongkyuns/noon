@@ -328,11 +328,15 @@ where
                         },
                     );
                 }
+                let remove = leaf.options.remover;
                 super::affine::LoweredAffineChannel {
                     property: Property::Reveal,
                     conflict_property: SemanticObjectProperty::Presence,
-                    completion: SemanticAnimationCompletion::Create,
-                    values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+                    completion: SemanticAnimationCompletion::RevealLifecycle { remove },
+                    values: TrackValues::Scalar {
+                        from: if remove { 1.0 } else { 0.0 },
+                        to: if remove { 0.0 } else { 1.0 },
+                    },
                 }
             }
         };

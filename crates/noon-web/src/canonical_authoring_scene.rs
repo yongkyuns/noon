@@ -797,6 +797,23 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
     }
 
+    /// Run one ordinary single-leaf Uncreate through the retained live session.
+    #[cfg(target_arch = "wasm32")]
+    fn ordinary_play_uncreate(
+        &mut self,
+        id: ObjectId,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        let end_time = self.begin_ordinary_uncreate(id, target, options)?;
+        let player = self.active_live_player()?;
+        player.live_advance_segment_to(end_time)?;
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
     /// Atomically bind, introduce, and activate one detached leaf's Create reveal.
     #[cfg(any(target_arch = "wasm32", test))]
     fn begin_ordinary_create(
@@ -830,6 +847,45 @@ impl CanonicalAuthoringScene {
         } else {
             self.active_live_player()?
                 .live_declare_and_activate_create(target, options)?
+        };
+        self.bindings.insert(id, node);
+        self.identities.insert(node, id);
+        Ok(end_time)
+    }
+
+    /// Atomically bind, admit, and activate one detached leaf's reverse reveal.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_uncreate(
+        &mut self,
+        id: ObjectId,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+            return Err("ordinary Uncreate mobject belongs to another authoring store".into());
+        }
+        target.validate()?;
+        let node = target.node_id();
+        if self.bindings.contains_key(&id) || self.identities.contains_key(&node) {
+            return Err(format!("canonical object {} is already bound", id.get()));
+        }
+        if self.live_player.is_none() && self.scene.time() != 0.0 {
+            return Err("ordinary Uncreate cannot follow pre-execution canonical timing".into());
+        }
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(options.run_time.unwrap_or(1.0));
+        let end_time = if self.live_player.is_none() {
+            self.prepare_local_player_for_run()?;
+            let mut player = self.build_live_player(bootstrap_duration, 0)?;
+            let end_time = player.live_declare_and_activate_uncreate(target, options)?;
+            self.live_player = Some(player);
+            self.live_player_returned = false;
+            end_time
+        } else {
+            self.active_live_player()?
+                .live_declare_and_activate_uncreate(target, options)?
         };
         self.bindings.insert(id, node);
         self.identities.insert(node, id);
@@ -3046,6 +3102,56 @@ mod wasm {
                 .rate_func(rate_function);
             self.inner
                 .begin_ordinary_create(id, target.semantic_mobject(), options)
+                .map_err(js_error)
+        }
+
+        /// Atomically declare, activate, run, and complete one single-leaf Uncreate.
+        #[wasm_bindgen(js_name = ordinaryPlayUncreate)]
+        pub fn ordinary_play_uncreate(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            target.id_in_store(self.inner.scene.store(), "ordinary Uncreate animation")?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .ordinary_play_uncreate(id, target.semantic_mobject(), options)
+                .map_err(js_error)
+        }
+
+        /// Begin one Uncreate for the existing async/synchronous continuation player.
+        #[wasm_bindgen(js_name = beginOrdinaryUncreate)]
+        pub fn begin_ordinary_uncreate(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            target.id_in_store(self.inner.scene.store(), "ordinary Uncreate animation")?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .begin_ordinary_uncreate(id, target.semantic_mobject(), options)
                 .map_err(js_error)
         }
 

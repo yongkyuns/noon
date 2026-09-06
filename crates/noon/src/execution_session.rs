@@ -1392,6 +1392,30 @@ impl ExecutionSession {
         )
     }
 
+    /// Atomically admit one detached leaf, reverse its reveal, and remove it at completion.
+    pub fn declare_and_activate_uncreate(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        self.require_create_root(root, target)?;
+        self.require_create_target(store, target)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        declaration.add_member(root, target);
+        let animation = declaration
+            .create_create_animation(target, options.remover(true).reverse_rate_function(false));
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            animation,
+            AnimationOptions::new(),
+            Some(PreparedAnimationLifecycle::Introduce(root)),
+        )
+    }
+
     /// Atomically introduce flat parallel detached leaves with one shared reveal segment.
     ///
     /// Membership admission, all leaf declarations, the Parallel root, reveal tracks, and

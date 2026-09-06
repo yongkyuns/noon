@@ -285,7 +285,7 @@ impl ExecutionSession {
                 &entry.completion,
                 SemanticAnimationCompletion::Fade {
                     direction: SemanticFadeDirection::Out
-                }
+                } | SemanticAnimationCompletion::RevealLifecycle { remove: true }
             ) {
                 let root = lifecycle_root.ok_or(
                     ExecutionSegmentCompletionError::MissingLifecycleRoot(entry.semantic_object),
@@ -354,7 +354,7 @@ impl ExecutionSession {
                 SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::Fade { .. }
-                | SemanticAnimationCompletion::Create => {}
+                | SemanticAnimationCompletion::RevealLifecycle { .. } => {}
             }
             release.push(ExecutionPatch::ReconcileTrack {
                 track: entry.track,

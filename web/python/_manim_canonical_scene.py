@@ -858,6 +858,24 @@ def _canonical_create_animation(
     return target
 
 
+def _canonical_uncreate_animation(
+    scene: _base.Scene, animation: object
+) -> _base.Mobject | None:
+    """Classify the literal detached single-leaf Uncreate subset."""
+    if type(animation) is not _base.Uncreate:
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary Uncreate target must be a Mobject")
+    if getattr(target, "_semantic_handle", None) is None:
+        return None
+    if target._scene is not None:
+        if target._scene is scene:
+            raise NotImplementedError("canonical Uncreate requires a detached Mobject")
+        raise ValueError("Uncreate target already belongs to another Scene")
+    return target
+
+
 def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> object | None:
     args = dict(getattr(animation, "anim_args", {}))
     if "introducer" in args and args.pop("introducer") is not True:
@@ -867,10 +885,20 @@ def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> o
     return _canonical_affine_options(animation, kwargs, builder_args=args)
 
 
+def _canonical_uncreate_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    if getattr(animation, "reverse_rate_function", None) is not True:
+        return None
+    if getattr(animation, "remover", None) is not True:
+        return None
+    return _canonical_affine_options(animation, kwargs, builder_args={})
+
+
 def _play_canonical_create(
     self: _base.Scene,
     target: _base.Mobject,
     animation: object,
+    *,
+    remove: bool = False,
     **kwargs: object,
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     duration = kwargs.pop("duration", None)
@@ -890,16 +918,18 @@ def _play_canonical_create(
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
     if _legacy_authored_time(self) != 0.0:
         raise NotImplementedError("canonical ordinary Create cannot follow legacy Scene timing")
-    resolved = _canonical_create_options(
-        animation,
-        {
-            "duration": duration,
-            "run_time": run_time,
-            "start_time": start_time,
-            "easing": easing,
-            "rate_func": rate_func,
-            "lag_ratio": lag_ratio,
-        },
+    option_kwargs = {
+        "duration": duration,
+        "run_time": run_time,
+        "start_time": start_time,
+        "easing": easing,
+        "rate_func": rate_func,
+        "lag_ratio": lag_ratio,
+    }
+    resolved = (
+        _canonical_uncreate_options(animation, option_kwargs)
+        if remove
+        else _canonical_create_options(animation, option_kwargs)
     )
     if resolved is None:
         raise NotImplementedError(
@@ -912,9 +942,9 @@ def _play_canonical_create(
     try:
         _require_semantic_continuation_active(self)
         method = (
-            context.beginOrdinaryCreate
+            (context.beginOrdinaryUncreate if remove else context.beginOrdinaryCreate)
             if _semantic_continuation_active(self)
-            else context.ordinaryPlayCreate
+            else (context.ordinaryPlayUncreate if remove else context.ordinaryPlayCreate)
         )
         method(
             str(reservation.object.id),
@@ -928,10 +958,18 @@ def _play_canonical_create(
     register = getattr(self, "_register_top_level", None)
     if register is not None:
         register(target)
+
+    def completed() -> None:
+        if remove:
+            _reconcile_fade_membership(self, target, "out")
+
     if _async_continuation_active(self):
-        return _continuation_awaitable(self)
+        return _continuation_awaitable(self, completed)
     if _synchronous_continuation_active(self):
-        return _synchronous_continuation_wait(self)
+        _synchronous_continuation_wait(self)
+        completed()
+        return self
+    completed()
     return self
 
 
@@ -1307,6 +1345,28 @@ def _play(self, *args, **kwargs):
                 "realtime construct supports only canonical affine Scene.play and Scene.wait"
             )
         return _play_legacy_compatibility(self, *args, **kwargs)
+
+    canonical_uncreates = [
+        target
+        for argument in args
+        if (target := _canonical_uncreate_animation(self, argument)) is not None
+    ]
+    if canonical_uncreates:
+        if len(canonical_uncreates) != 1 or len(args) != 1:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError(
+                    "realtime construct supports one canonical Uncreate per play"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        if _canonical_uncreate_options(args[0], kwargs) is None:
+            if _semantic_continuation_active(self):
+                raise NotImplementedError(
+                    "realtime construct Uncreate is outside the canonical leaf subset"
+                )
+            return _play_legacy_compatibility(self, *args, **kwargs)
+        return _play_canonical_create(
+            self, canonical_uncreates[0], args[0], remove=True, **kwargs
+        )
 
     canonical_creates = [
         target

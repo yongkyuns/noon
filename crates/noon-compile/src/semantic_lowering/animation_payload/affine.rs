@@ -45,8 +45,8 @@ pub enum SemanticAnimationCompletion {
     },
     /// Execution-only lifecycle completion. Appearance is not authored object state.
     Fade { direction: SemanticFadeDirection },
-    /// Execution-only Create completion. Reveal is not authored object state.
-    Create,
+    /// Execution-only reveal lifecycle completion. Reveal is not authored object state.
+    RevealLifecycle { remove: bool },
     /// Exact authored endpoint for the bounded shared analytic content morph.
     ContentMorph { content: SemanticObjectContent },
 }
