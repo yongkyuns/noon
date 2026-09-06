@@ -436,7 +436,13 @@ impl ExecutionSession {
                 )
             })?;
 
-        self.apply_semantic_transaction_with_execution(store, semantic, release, Some(effective))?;
+        self.apply_semantic_transaction_with_execution(
+            store,
+            semantic,
+            release,
+            Some(effective),
+            super::publication::SemanticPublicationPurpose::SegmentCompletion,
+        )?;
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
         self.last_callback_receipt = None;

@@ -2141,7 +2141,12 @@ impl ExecutionSession {
             .map(ExecutionPatch::AddTrack)
             .collect();
         let result = self
-            .apply_prepared_semantic_transaction_with_execution(prepared, execution_prefix, None)
+            .apply_prepared_semantic_transaction_with_execution(
+                prepared,
+                execution_prefix,
+                None,
+                publication::SemanticPublicationPurpose::AuthoredMutation,
+            )
             .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
         debug_assert!(result.resolve(root).is_some());
         let activation_scene_revision = self.publication_context().scene_revision();
