@@ -655,9 +655,10 @@ def _canonical_fade_animation(
     if not isinstance(target, _base.Mobject):
         raise NotImplementedError("canonical ordinary Fade target must be a Mobject")
     if getattr(target, "_semantic_handle", None) is None:
-        raise NotImplementedError(
-            "canonical ordinary Fade requires a typed semantic Mobject handle"
-        )
+        # Group/retained targets still belong to the existing #959 migration
+        # consumer. The leaf classifier must not claim their lifecycle; the
+        # shared play boundary rejects fallback once canonical execution starts.
+        return None
     if direction == "in":
         if target._scene is not None and target._scene is not scene:
             raise ValueError("FadeIn target already belongs to another Scene")
