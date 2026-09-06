@@ -1435,6 +1435,10 @@ mod wasm {
     }
 
     impl WasmAuthoringFamilyHandle {
+        pub(crate) fn semantic_family(&self) -> Result<noon::MobjectFamily, JsValue> {
+            noon::MobjectFamily::from_node(Rc::clone(&self.semantics), self.id).map_err(js_error)
+        }
+
         fn object_member_id(
             &self,
             member: &WasmAuthoringMobjectHandle,

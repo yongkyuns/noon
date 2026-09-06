@@ -157,12 +157,10 @@ class ManimScaleInPlaceTests(unittest.TestCase):
             assert abs(retained_target["scale"]["x"] - 2.0 * retained_start["scale"]["x"]) < 1e-12
             assert abs(retained_target["scale"]["y"] - 2.0 * retained_start["scale"]["y"]) < 1e-12
 
-            try:
-                ScaleInPlace(VGroup(Square(), Square()), 2.0)
-            except NotImplementedError:
-                pass
-            else:
-                raise AssertionError("retained family ScaleInPlace must stay explicit")
+            family = VGroup(Square(), Square())
+            family_animation = ScaleInPlace(family, 2.0)
+            assert family_animation.source is family
+            assert family_animation.scale_factor == 2.0
 
             try:
                 ScaleInPlace(Square(), float("nan"))

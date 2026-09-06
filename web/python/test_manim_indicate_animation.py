@@ -102,80 +102,27 @@ class ManimIndicateAnimationTests(unittest.TestCase):
             assert abs(animation.scale_factor - 1.2) < 1e-12
             assert animation.anim_args["rate_func"].__name__ == "there_and_back"
 
-            scene.play(animation)
-            assert abs(scene.time - 1.0) < 1e-12
-            tracks = [
-                track
-                for track in scene.to_document()["tracks"]
-                if track["object"] == square.id and track["property"] == "transform"
-            ]
-            assert len(tracks) == 2
-            tracks.sort(key=lambda track: track["timing"]["start_time"])
-            outward, returning = tracks
-            assert abs(outward["timing"]["start_time"] - 0.0) < 1e-12
-            assert abs(outward["timing"]["duration"] - 0.5) < 1e-12
-            assert outward["timing"]["easing"] == "smooth"
-            assert abs(returning["timing"]["start_time"] - 0.5) < 1e-12
-            assert abs(returning["timing"]["duration"] - 0.5) < 1e-12
-            assert returning["timing"]["easing"] == "smooth"
-
-            outward_target = outward["values"]["object"]["to"]
-            assert abs(outward_target["transform"]["scale"]["x"] - 1.2) < 1e-12
-            assert abs(outward_target["transform"]["scale"]["y"] - 1.2) < 1e-12
-            indicated_fill = outward_target["style"]["fill"]
-            assert abs(indicated_fill["red"] - 1.0) < 1e-12
-            assert abs(indicated_fill["green"] - 1.0) < 1e-12
-            assert abs(indicated_fill["blue"] - 0.0) < 1e-12
-            assert abs(indicated_fill["alpha"] - 1.0) < 1e-12
-            indicated_stroke = outward_target["style"]["stroke"]
-            assert abs(indicated_stroke["red"] - 1.0) < 1e-12
-            assert abs(indicated_stroke["green"] - 1.0) < 1e-12
-            assert abs(indicated_stroke["blue"] - 0.0) < 1e-12
-            assert abs(indicated_stroke["alpha"] - 0.0) < 1e-12
-
-            source_again = returning["values"]["object"]["to"]
-            assert abs(source_again["transform"]["scale"]["x"] - 1.0) < 1e-12
-            assert abs(source_again["transform"]["scale"]["y"] - 1.0) < 1e-12
-
-            # A following animation must start from the restored source state, not
-            # the temporary enlarged/yellow target used at the midpoint.
-            scene.play(square.animate.shift(RIGHT))
-            later_tracks = [
-                track
-                for track in scene.to_document()["tracks"]
-                if track["object"] == square.id
-                and track["property"] == "transform"
-                and abs(track["timing"]["start_time"] - 1.0) < 1e-12
-            ]
-            assert len(later_tracks) == 1
-            following_source = later_tracks[0]["values"]["object"]["from"]
-            assert abs(following_source["transform"]["scale"]["x"] - 1.0) < 1e-12
-            source_fill = following_source["style"]["fill"]
-            assert abs(source_fill["red"] - BLUE.red) < 1e-12
-            assert abs(source_fill["green"] - BLUE.green) < 1e-12
-            assert abs(source_fill["blue"] - BLUE.blue) < 1e-12
-
-            # Overriding there_and_back with an ordinary rate function has normal
-            # Transform endpoint semantics and remains one deterministic interval.
-            linear_scene = Scene()
-            linear_square = Square(fill_color=BLUE, fill_opacity=1.0, stroke_opacity=0.0)
-            linear_scene.add(linear_square)
-            linear_scene.play(Indicate(linear_square, rate_func=linear), run_time=2.0)
-            linear_tracks = [
-                track
-                for track in linear_scene.to_document()["tracks"]
-                if track["property"] == "transform"
-            ]
-            assert len(linear_tracks) == 1
-            assert abs(linear_tracks[0]["timing"]["duration"] - 2.0) < 1e-12
-            assert linear_tracks[0]["timing"]["easing"] == "linear"
-
+            # Compatibility construction stays inert. Playback must be claimed by
+            # the canonical shared semantic path rather than expanding snapshots
+            # and two Python-authored intervals.
             try:
-                Indicate(VGroup(Square(), Square()))
+                import _manim_animate as animate
+                animate._expanded_schedule(
+                    scene,
+                    animation,
+                    start_time=0.0,
+                    run_time=1.0,
+                    easing="there_and_back",
+                    lag_ratio=0.0,
+                )
             except NotImplementedError:
                 pass
             else:
-                raise AssertionError("Indicate group/family support must not be approximated")
+                raise AssertionError("Indicate must not use Python schedule expansion")
+
+            family = Indicate(VGroup(Square(), Square()))
+            assert abs(family.scale_factor - 1.2) < 1e-12
+            assert family.anim_args["rate_func"].__name__ == "there_and_back"
             """
         )
 

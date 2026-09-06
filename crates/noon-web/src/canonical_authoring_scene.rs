@@ -28,6 +28,21 @@ enum OrdinaryCompositionChild {
         interpolation: noon_core::SemanticTransformInterpolation,
         options: noon_core::AnimationOptions,
     },
+    FamilyTransformTo {
+        source: noon::MobjectFamily,
+        target_state: noon::MobjectFamily,
+        options: noon_core::AnimationOptions,
+    },
+    Indicate {
+        target: noon::Mobject,
+        indication: noon::IndicateOptions,
+        options: noon_core::AnimationOptions,
+    },
+    FamilyIndicate {
+        target: noon::MobjectFamily,
+        indication: noon::IndicateOptions,
+        options: noon_core::AnimationOptions,
+    },
     Rotate {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1352,6 +1367,33 @@ impl CanonicalAuthoringScene {
                     };
                     noon::AnimationCompositionRequest::TransformTo(request)
                 }
+                OrdinaryCompositionChild::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => noon::AnimationCompositionRequest::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::Indicate {
+                    target,
+                    indication,
+                    options,
+                } => noon::AnimationCompositionRequest::Indicate {
+                    target,
+                    indication: *indication,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::FamilyIndicate {
+                    target,
+                    indication,
+                    options,
+                } => noon::AnimationCompositionRequest::FamilyIndicate {
+                    target,
+                    indication: *indication,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
@@ -1489,6 +1531,9 @@ impl CanonicalAuthoringScene {
                 } => output.push((*entering_id, target)),
                 OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
+                OrdinaryCompositionChild::FamilyTransformTo { .. }
+                | OrdinaryCompositionChild::Indicate { .. }
+                | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
                     for child in children {
                         bindings(child, output);
@@ -1598,6 +1643,45 @@ impl CanonicalAuthoringScene {
                     .map_err(|error| error.to_string())?;
                     continue;
                 }
+                OrdinaryCompositionChild::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
+                        || !std::rc::Rc::ptr_eq(self.scene.store(), target_state.store())
+                    {
+                        return Err(
+                            "ordinary family Transform belongs to another authoring store".into(),
+                        );
+                    }
+                    source.validate()?;
+                    target_state.validate()?;
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
+                OrdinaryCompositionChild::FamilyIndicate {
+                    target, options, ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                        return Err(
+                            "ordinary family Indicate belongs to another authoring store".into(),
+                        );
+                    }
+                    target.validate()?;
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
                 OrdinaryCompositionChild::Composition {
                     kind: _,
                     children,
@@ -1630,6 +1714,9 @@ impl CanonicalAuthoringScene {
                     }
                     (*entering_id, source, *options)
                 }
+                OrdinaryCompositionChild::Indicate {
+                    target, options, ..
+                } => (None, target, *options),
                 OrdinaryCompositionChild::Rotate {
                     entering_id,
                     target,
@@ -2622,6 +2709,18 @@ mod wasm {
             Ok(options)
         }
 
+        fn family_options(
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<noon_core::AnimationOptions, JsValue> {
+            let mut options = Self::optional_options(child_run_time, rate_function)?;
+            if let Some(lag_ratio) = lag_ratio {
+                options = options.lag_ratio(lag_ratio);
+            }
+            Ok(options)
+        }
+
         fn push_target(
             &mut self,
             object_id: &str,
@@ -2977,6 +3076,85 @@ mod wasm {
                 target,
                 options: Self::optional_options(child_run_time, rate_function)?,
             });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyTransformTo)]
+        pub fn append_family_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            self.children
+                .push(OrdinaryCompositionChild::FamilyTransformTo {
+                    source: source.semantic_family()?,
+                    target_state: target_state.semantic_family()?,
+                    options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendIndicateMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_indicate_mobject(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            scale_factor: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = callback_color(
+                "indication color",
+                Some(red),
+                Some(green),
+                Some(blue),
+                Some(alpha),
+            )?
+            .expect("all indication color channels were supplied");
+            self.children.push(OrdinaryCompositionChild::Indicate {
+                target: target.semantic_mobject().clone(),
+                indication: noon::IndicateOptions::new(scale_factor, color),
+                options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendIndicateFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_indicate_family(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            scale_factor: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = callback_color(
+                "indication color",
+                Some(red),
+                Some(green),
+                Some(blue),
+                Some(alpha),
+            )?
+            .expect("all indication color channels were supplied");
+            self.children
+                .push(OrdinaryCompositionChild::FamilyIndicate {
+                    target: target.semantic_family()?,
+                    indication: noon::IndicateOptions::new(scale_factor, color),
+                    options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+                });
             Ok(())
         }
 
@@ -5674,6 +5852,86 @@ mod tests {
             )
             .is_err());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+    }
+
+    #[test]
+    fn canonical_family_transform_and_indicate_use_one_recursive_candidate() {
+        let mut context = CanonicalAuthoringScene::default();
+        let left = context.scene.square(0.5).unwrap();
+        let right = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &left).unwrap();
+        context.bind_mobject(ObjectId::new(1), &right).unwrap();
+        let source = context.scene.family(&[&left, &right]).unwrap();
+        let mut left_target = left.target_editor().unwrap();
+        left_target.set_translation(-2.0, 1.0).unwrap();
+        let mut right_target = right.target_editor().unwrap();
+        right_target.set_translation(2.0, -1.0).unwrap();
+        let target = context
+            .scene
+            .family(&[&left_target, &right_target])
+            .unwrap();
+        let invalid_target = context.scene.family(&[&left_target]).unwrap();
+        let transform_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .lag_ratio(0.25);
+        let indicate_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::ThereAndBack);
+        let invalid = [OrdinaryCompositionChild::FamilyTransformTo {
+            source: source.clone(),
+            target_state: invalid_target,
+            options: transform_options,
+        }];
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &invalid,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let children = [
+            OrdinaryCompositionChild::FamilyTransformTo {
+                source: source.clone(),
+                target_state: target,
+                options: transform_options,
+            },
+            OrdinaryCompositionChild::Indicate {
+                target: left.clone(),
+                indication: noon::IndicateOptions::default(),
+                options: indicate_options,
+            },
+            OrdinaryCompositionChild::FamilyIndicate {
+                target: source,
+                indication: noon::IndicateOptions::default(),
+                options: indicate_options,
+            },
+        ];
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Sequence,
+                    &children,
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            3.0
+        );
+        let player = context.active_live_player().unwrap();
+        assert_eq!(
+            player.live_effective(&left).unwrap().transform.translation,
+            Vec2::new(-2.0, 1.0)
+        );
+        assert_eq!(
+            player.live_effective(&right).unwrap().transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
     }
 
     #[test]
