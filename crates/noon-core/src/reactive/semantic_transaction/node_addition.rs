@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use crate::{
-    SemanticNodeId, SemanticObjectState, SemanticStore, SemanticStoreError, SourceIdentity,
+    SemanticNodeId, SemanticObjectState, SemanticSignalError, SemanticSignalState,
+    SemanticSignalValue, SemanticStore, SemanticStoreError, SourceIdentity,
 };
 
 use super::{validate_object_content_resource, SemanticMutationTransactionError};
@@ -10,8 +11,8 @@ use super::{validate_object_content_resource, SemanticMutationTransactionError};
 /// mutation transaction.
 ///
 /// Nodes created here start detached. Animation declarations keep their dedicated
-/// `AddAnimation` mutation, while signal declarations keep the typed signal
-/// authoring APIs; this creation payload owns only scene object/family identity.
+/// `AddAnimation` mutation. Input signals share this creation vocabulary so a
+/// signal and its root scope can publish in one transaction.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticNodeCreation {
     Object {
@@ -20,6 +21,9 @@ pub enum SemanticNodeCreation {
     },
     Family {
         source_identity: Option<SourceIdentity>,
+    },
+    Signal {
+        state: SemanticSignalState,
     },
 }
 
@@ -37,6 +41,23 @@ impl SemanticNodeCreation {
         }
     }
 
+    pub fn input_signal(
+        value: impl Into<SemanticSignalValue>,
+    ) -> Result<Self, SemanticSignalError> {
+        Ok(Self::Signal {
+            state: SemanticSignalState::input(value.into())?,
+        })
+    }
+
+    pub fn native_input_signal(
+        value: impl Into<SemanticSignalValue>,
+        source: crate::SemanticNativeInputSource,
+    ) -> Result<Self, SemanticSignalError> {
+        Ok(Self::Signal {
+            state: SemanticSignalState::input_with_native_source(value.into(), source)?,
+        })
+    }
+
     pub fn with_source_identity(mut self, source_identity: SourceIdentity) -> Self {
         match &mut self {
             Self::Object {
@@ -46,6 +67,7 @@ impl SemanticNodeCreation {
             | Self::Family {
                 source_identity: source,
             } => *source = Some(source_identity),
+            Self::Signal { .. } => {}
         }
         self
     }
@@ -56,6 +78,7 @@ impl SemanticNodeCreation {
                 source_identity, ..
             }
             | Self::Family { source_identity } => source_identity.as_ref(),
+            Self::Signal { .. } => None,
         }
     }
 }
@@ -142,5 +165,6 @@ pub(super) fn commit_add_node(
         SemanticNodeCreation::Family { source_identity } => {
             (store.insert_family(), source_identity)
         }
+        SemanticNodeCreation::Signal { state } => (store.insert_semantic_signal_state(state), None),
     }
 }

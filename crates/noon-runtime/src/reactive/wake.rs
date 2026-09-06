@@ -78,6 +78,16 @@ impl TimelineEventScheduler {
 }
 
 impl SceneInstance {
+    /// Whether the current execution projection retains any authored timeline channel.
+    ///
+    /// This is an O(1) derived query over the scheduler's existing channel index. It is
+    /// useful to looping hosts after the final channel has settled: a quiescent scheduler
+    /// may still need one wake at the loop boundary so that deterministic history can be
+    /// replayed. The runtime remains the owner of the channels and their event cursor.
+    pub fn has_timeline_channels(&self) -> bool {
+        self.timeline_scheduler.live_group_count() != 0
+    }
+
     /// Current runtime-owned dirty/deadline/completion state for platform hosts.
     pub fn wake_state(&self) -> RuntimeWakeState {
         RuntimeWakeState {
@@ -134,5 +144,24 @@ mod tests {
         let mut scheduler = TimelineEventScheduler::new(&[]);
         scheduler.seek(0.0);
         assert_eq!(scheduler.wake_state(), TimelineWakeState::Quiescent);
+    }
+
+    #[test]
+    fn settled_lifecycle_history_remains_indexed_for_loop_replay() {
+        let mut lifecycle = position_track(1.0, 0.0);
+        lifecycle.property = Property::Presence;
+        lifecycle.values = TrackValues::Bool {
+            from: true,
+            to: false,
+        };
+        let mut scheduler = TimelineEventScheduler::new(&[lifecycle]);
+        assert_eq!(scheduler.live_group_count(), 1);
+        scheduler.seek(2.0);
+        assert_eq!(scheduler.wake_state(), TimelineWakeState::Quiescent);
+        assert_eq!(
+            scheduler.live_group_count(),
+            1,
+            "settling a presence event must not erase deterministic loop history"
+        );
     }
 }

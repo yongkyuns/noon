@@ -217,6 +217,22 @@ impl SceneInstance {
         Some(row.properties(bounds, bounds_basis))
     }
 
+    /// Read one reactive value through the same unpublished phase evaluation.
+    pub fn prepared_reactive_value(
+        &self,
+        prepared: &PreparedFrameEvaluation,
+        signal: noon_core::SignalId,
+    ) -> Option<noon_core::ReactiveValue> {
+        if prepared.runtime != self.identity {
+            return None;
+        }
+        let reactive = self.reactive.as_ref()?;
+        match prepared.reactive.as_ref() {
+            Some(update) => reactive.prepared_value(update, signal),
+            None => reactive.state_value(signal).cloned(),
+        }
+    }
+
     /// Prepare a forward timeline/native evaluation without changing the current
     /// coherent frame, scheduler, cursors, dirty sets, or publication context.
     pub fn prepare_advance_to(

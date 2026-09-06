@@ -31,8 +31,10 @@ function fixture(
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
   let created = 0, resumed = 0, completedSegments = 0, drained = 0, committedPhases = 0;
   let initialSnapshots = 0, resourceBundles = 0;
+  const callbackReads = [];
   const nativeInputs = [];
   const continuationDriveTimes = [];
+  const executionWakeTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
@@ -49,9 +51,21 @@ function fixture(
     drainRendererObservationPublicationJson: () => {
       throw new Error("fixture did not configure a renderer observation publication");
     },
+    requiredCallbackReadJson: (token, request) => {
+      callbackReads.push({ token, request });
+      return JSON.stringify({ kind: "scalar", value: 3 });
+    },
     failCallbackPhaseJson: () => {},
     callbackTerminationJson: () => null,
     tickDeltaJson: () => null,
+    executionWake: (wallTime) => {
+      executionWakeTimes.push(wallTime);
+      return {
+        presentNow: false,
+        cadence: playing ? "animation_frame" : "idle",
+        timerAfterMilliseconds: undefined,
+      };
+    },
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setNativeStateInputJson: (value) => { nativeInputs.push({ type: "state", value: JSON.parse(value) }); },
     emitNativeEventJson: (value) => { nativeInputs.push({ type: "event", value: JSON.parse(value) }); },
@@ -78,7 +92,9 @@ function fixture(
   };
   return { control, render, player, stats: () => ({
     returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
-    initialSnapshots, resourceBundles, continuationDriveTimes, drained, committedPhases,
+    initialSnapshots, resourceBundles, continuationDriveTimes, executionWakeTimes,
+    drained, committedPhases,
+    callbackReads,
   }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
@@ -240,6 +256,53 @@ test("initially paused semantic execution presents time zero without automatic a
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("playing static execution obeys Rust idle cadence instead of polling isPlaying", async () => {
+  const f = fixture();
+  let endpoint;
+  let tickCalls = 0;
+  try {
+    f.player.executionWake = () => ({
+      presentNow: false,
+      cadence: "idle",
+      timerAfterMilliseconds: undefined,
+    });
+    f.player.tickCallbackPhaseJson = () => { tickCalls += 1; return null; };
+    const ready = next(f.control.port2);
+    const wake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
+    endpoint = await f.attach();
+    await ready;
+    assert.equal(f.player.isPlaying(), true);
+    assert.deepEqual(await wake, {
+      type: "execution_wake",
+      cadence: "idle",
+      timerAfterMilliseconds: null,
+    });
+    await turn();
+    assert.equal(tickCalls, 0, "a clean static player receives no synthetic engine tick");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("renderer timestamps admit generic ticks without becoming the playback clock", async () => {
+  const f = fixture();
+  let endpoint;
+  const driven = [];
+  try {
+    f.player.tickCallbackPhaseJson = (wallTime) => { driven.push(wallTime); return null; };
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    const foreignRendererTime = 9_000_000_000;
+    f.render.port2.postMessage({ type: "tick", timestamp: foreignRendererTime });
+    await turn();
+    await turn();
+    assert.equal(driven.length, 1);
+    assert.notEqual(driven[0], foreignRendererTime);
+    const wakeTimes = f.stats().executionWakeTimes;
+    assert.ok(wakeTimes.length >= 2);
+    assert.ok(Math.abs(wakeTimes.at(-1) - driven[0]) < 1_000);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("semantic continuation returns one completed player before resuming and retakes it later", async () => {
   const completions = [];
   const failures = [];
@@ -310,6 +373,58 @@ test("semantic continuation returns one completed player before resuming and ret
     assert.equal(f.stats().returned, 2);
     assert.equal(wakes.at(-1), "idle");
     assert.throws(() => endpoint.startContinuation(8), /stale semantic continuation generation/);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("callback sparse reads are pinned to the pending phase and never publish it", async () => {
+  let resolveCallback;
+  let readPhase = null;
+  const phase = {
+    token: { runtime: 3, publication: { scene: 1, execution: 2, frame: 3 }, sequence: 4 },
+    invocations: [{ callback_id: 9 }],
+  };
+  const f = fixture("transferable", () => new Promise((resolve) => { resolveCallback = resolve; }), {
+    generation: 41,
+    onComplete: () => {},
+    onError: (_generation, error) => { throw error; },
+    onCallbackReadAvailable: (read) => { readPhase = read; },
+  });
+  let endpoint;
+  try {
+    f.player.initialCallbackPhaseJson = () => JSON.stringify(phase);
+    const attaching = f.attach().then((value) => { endpoint = value; return value; });
+    await turn();
+    assert.equal(typeof readPhase, "function", "read service is available before the initial callback runs");
+    const token = JSON.stringify(phase.token);
+    const result = readPhase(token, {
+      request_id: 11,
+      kind: "scalar_signal",
+      node: { slot: 8, generation: 2 },
+    });
+    assert.equal(result, JSON.stringify({ kind: "scalar", value: 3 }));
+    assert.deepEqual(f.stats().callbackReads, [{
+      token,
+      request: JSON.stringify({ kind: "scalar_signal", node: { slot: 8, generation: 2 } }),
+    }]);
+    assert.equal(f.stats().committedPhases, 0);
+    assert.equal(f.stats().drained, 0, "a sparse read cannot drain a renderer delta");
+
+    assert.throws(
+      () => readPhase(JSON.stringify({ ...phase.token, sequence: 5 }), {
+        request_id: 12, kind: "scalar_signal", node: { slot: 8, generation: 2 },
+      }),
+      /token is stale/,
+    );
+    resolveCallback(JSON.stringify({ token: phase.token, writes: [] }));
+    await attaching;
+    assert.equal(f.stats().committedPhases, 1);
+    assert.throws(
+      () => readPhase(token, {
+        request_id: 13, kind: "object", node: { slot: 8, generation: 2 },
+      }),
+      /no pending live phase/,
+    );
+    endpoint.stop();
   } finally { endpoint?.stop(); f.close(); }
 });
 
@@ -578,16 +693,19 @@ test("native state and event controls reach the leased player in accepted order"
     const ready = next(f.control.port2);
     endpoint = await f.attach();
     await ready;
+    const initialWakeObservations = f.stats().executionWakeTimes.length;
 
     const state = await request(f.control.port2, "native_state_input", 20, {
       source: { kind: "control", name: "opacity" },
       value: { kind: "scalar", value: 0.75 },
     });
     assert.equal(state.type, "native_state_input");
+    assert.equal(f.stats().executionWakeTimes.length, initialWakeObservations + 1);
     const event = await request(f.control.port2, "native_event", 21, {
       source: { kind: "pointer_down", button: 0 },
     });
     assert.equal(event.type, "native_event");
+    assert.equal(f.stats().executionWakeTimes.length, initialWakeObservations + 2);
     assert.deepEqual(f.stats().nativeInputs, [
       {
         type: "state",
@@ -607,6 +725,11 @@ test("native state and event controls reach the leased player in accepted order"
     assert.equal(rejected.type, "error");
     assert.match(rejected.message, /native value rejected/);
     assert.equal(f.stats().nativeInputs.length, 2);
+    assert.equal(
+      f.stats().executionWakeTimes.length,
+      initialWakeObservations + 2,
+      "failed input does not publish or replace the current Rust wake",
+    );
   } finally { endpoint?.stop(); f.close(); }
 });
 

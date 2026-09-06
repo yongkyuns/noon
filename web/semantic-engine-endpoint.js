@@ -202,6 +202,20 @@ export async function attachSemanticEngine(
       timerAfterMilliseconds: timerAfterMilliseconds ?? null,
     });
   };
+  const observeExecutionWake = (wallTime, force = false) => {
+    const wake = player.executionWake(wallTime);
+    const cadence = wake.cadence;
+    const timerAfterMilliseconds = wake.timerAfterMilliseconds;
+    wake.free?.();
+    if (cadence !== "animation_frame" && cadence !== "timer" && cadence !== "idle") {
+      throw new Error(`unknown semantic execution wake cadence ${cadence}`);
+    }
+    if (cadence === "timer" &&
+        (!Number.isFinite(timerAfterMilliseconds) || timerAfterMilliseconds < 0)) {
+      throw new Error("semantic execution timer wake has an invalid delay");
+    }
+    emitExecutionWake(cadence, timerAfterMilliseconds, force);
+  };
   const observeContinuationWake = (wallTime, force = false, emit = true, reanchor = false) => {
     const wake = reanchor
       ? player.reanchorLiveSegmentWake(wallTime)
@@ -317,6 +331,41 @@ export async function attachSemanticEngine(
       rendererObservation,
       interrupted: false,
     };
+  }
+
+  function callbackReadRequestJson(request) {
+    if (!request || typeof request !== "object" ||
+        !["scalar_signal", "object"].includes(request.kind) ||
+        !request.node || typeof request.node !== "object" ||
+        !Number.isSafeInteger(request.node.slot) || request.node.slot < 0 || request.node.slot > 0xffffffff ||
+        !Number.isSafeInteger(request.node.generation) || request.node.generation < 0 || request.node.generation > 0xffffffff) {
+      throw new Error("canonical callback read request is invalid");
+    }
+    return JSON.stringify({ kind: request.kind, node: request.node });
+  }
+
+  function readCallbackPhase(tokenJson, request) {
+    if (stopped || player === null || pendingPhaseJson === null || callbackFault !== null) {
+      throw new Error("canonical callback read has no pending live phase");
+    }
+    if (typeof tokenJson !== "string") {
+      throw new TypeError("canonical callback read token must be JSON");
+    }
+    let pendingToken;
+    try {
+      pendingToken = JSON.stringify(JSON.parse(pendingPhaseJson)?.token);
+    } catch (error) {
+      throw new Error(`pending canonical callback phase has invalid token: ${error}`);
+    }
+    if (pendingToken === undefined || pendingToken !== tokenJson) {
+      throw new Error("canonical callback read token is stale");
+    }
+    if (typeof player.requiredCallbackReadJson !== "function") {
+      throw new Error("canonical callback sparse reads are unavailable for this player");
+    }
+    // This is a revision-pinned phase query only. It neither drains a delta nor
+    // advances, commits, or presents the pending callback phase.
+    return player.requiredCallbackReadJson(tokenJson, callbackReadRequestJson(request));
   }
 
   async function advanceToAuthoredTime(time, observeRenderer) {
@@ -474,15 +523,26 @@ export async function attachSemanticEngine(
         switch (message.type) {
           case "pause":
             player.pause();
-            emitExecutionWake("idle", null, true);
+            observeExecutionWake(performance.now(), true);
             break;
           case "resume":
             player.resume();
-            emitExecutionWake("animation_frame", null, true);
+            observeExecutionWake(performance.now(), true);
             break;
-          case "set_loop_duration": player.setLoopDuration(message.loopDurationSeconds); break;
-          case "seek": latestTick = null; send(player.seekDeltaJson(message.time)); break;
-          case "restart_playback": latestTick = null; send(player.seekDeltaJson(0)); break;
+          case "set_loop_duration":
+            player.setLoopDuration(message.loopDurationSeconds);
+            observeExecutionWake(performance.now());
+            break;
+          case "seek":
+            latestTick = null;
+            send(player.seekDeltaJson(message.time));
+            observeExecutionWake(performance.now());
+            break;
+          case "restart_playback":
+            latestTick = null;
+            send(player.seekDeltaJson(0));
+            observeExecutionWake(performance.now());
+            break;
           case "advance_to": {
             if (callbackFault !== null) throw callbackFault;
             if (player.isPlaying()) {
@@ -501,12 +561,14 @@ export async function attachSemanticEngine(
               awaitPresentation(advanced?.publication ?? null),
               observation,
             ]);
+            observeExecutionWake(performance.now());
             break;
           }
           case "native_state_input":
           case "native_event":
             applyNativeInput(message);
             send(player.drainDeltaJson());
+            observeExecutionWake(performance.now());
             break;
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
@@ -519,7 +581,6 @@ export async function attachSemanticEngine(
       } catch (error) { fail(error, message.requestId); }
       }
       if (!controls.length && latestTick !== null && writable()) {
-        const timestamp = latestTick;
         latestTick = null;
         // An opaque callback failure/interruption is terminal in the retained
         // session. Do not emit repeated errors or retry its externally visible
@@ -532,11 +593,11 @@ export async function attachSemanticEngine(
               // anchored to this authoring worker's monotonic clock.
               await driveContinuation(performance.now());
             } else if (player !== null) {
-              await publishCallbackPhase(player.tickCallbackPhaseJson(timestamp));
-              emitExecutionWake(
-                player.isPlaying() ? "animation_frame" : "idle",
-                null,
-              );
+              // Renderer timestamps may use another worker's time origin. They
+              // admit one drive only; the player samples this engine context's
+              // monotonic clock for authored-time conversion and wake projection.
+              await publishCallbackPhase(player.tickCallbackPhaseJson(performance.now()));
+              observeExecutionWake(performance.now());
             }
           } catch (error) {
             // Session progression errors are terminal for opaque callbacks too:
@@ -565,6 +626,7 @@ export async function attachSemanticEngine(
   function stop() {
     if (stopped) return;
     stopped = true;
+    continuation?.onCallbackReadAvailable?.(null);
     callbackGeneration += 1;
     rejectPendingPresentation(new Error("semantic execution stopped before renderer publication"));
     rejectPendingRendererObservation(
@@ -604,6 +666,7 @@ export async function attachSemanticEngine(
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
     if (initiallyPaused) player.pause();
+    continuation?.onCallbackReadAvailable?.(readCallbackPhase);
     if (typeof player.resourceBundleBytes !== "function") {
       throw new Error("semantic execution requires retained resource bundle support");
     }
@@ -683,11 +746,7 @@ export async function attachSemanticEngine(
     if (continuationActive) {
       observeContinuationWake(performance.now(), true);
     } else {
-      emitExecutionWake(
-        player.isPlaying() ? "animation_frame" : "idle",
-        null,
-        true,
-      );
+      observeExecutionWake(performance.now(), true);
     }
     post({ type: "ready", transportMode });
   } catch (error) { stop(); throw error; }

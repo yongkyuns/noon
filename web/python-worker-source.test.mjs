@@ -49,6 +49,27 @@ test("semantic continuation delivers required callback work to its suspended sou
   assert.match(source, /continuationOnly\s*\?\s*\(frame\)\s*=>\s*requestContinuationCallback/);
 });
 
+test("suspended callback reads stay token-pinned and cannot settle after cancellation", () => {
+  assert.match(source, /noonReadSemanticContinuationCallback/);
+  assert.match(source, /function\s+readContinuationCallback\s*\(/);
+  assert.match(source, /continuationCallbackRequest\(context, tokenJson\)/);
+  assert.match(source, /callback\.read !== null/);
+  assert.match(source, /continuation\.callbackRead\(tokenJson, request\)/);
+  assert.match(source, /if \(callback\.read !== null\) callback\.read\.reject\(failure\)/);
+  assert.match(source, /semantic continuation callback cannot complete while a callback read is pending/);
+});
+
+test("sparse callback proof keeps scalar and inactive-object reads in its updater", async () => {
+  const example = await readFile(
+    new URL("./python/examples/ordinary_callback_sparse_reads.py", import.meta.url),
+    "utf8",
+  );
+  assert.match(example, /anchor\.get_center\(\)/);
+  assert.match(example, /tracker\.get_value\(\)/);
+  assert.match(example, /await self\.wait\(0\.25\)/);
+  assert.match(example, /phase_counts\[phase_time\].*== 1/);
+});
+
 test("worker delegates every Scene construct lifecycle to the canonical adapter", () => {
   const authoring = source.slice(
     source.indexOf("async function runAuthoringSource"),

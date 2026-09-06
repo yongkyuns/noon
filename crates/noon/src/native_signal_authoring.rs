@@ -6,8 +6,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    NativeEventSource, NativeStateSource, SemanticNativeInputSource, SemanticNodeId,
-    SemanticObjectProperty, SemanticSignalValue, SemanticStore, SemanticVec3,
+    NativeEventSource, NativeStateSource, SemanticMutationTransaction, SemanticNativeInputSource,
+    SemanticNodeId, SemanticObjectProperty, SemanticSignalValue, SemanticStore, SemanticVec3,
 };
 
 use crate::{Mobject, Scene, ValueTracker};
@@ -196,14 +196,17 @@ impl Scene {
         source: SemanticNativeInputSource,
     ) -> Result<(Rc<RefCell<SemanticStore>>, SemanticNodeId), String> {
         let store = Rc::clone(self.store());
-        let mut semantic = store.borrow_mut();
-        let node = semantic
-            .insert_semantic_input_signal(initial)
+        let creation = noon_core::SemanticNodeCreation::native_input_signal(initial, source)
             .map_err(|error| error.to_string())?;
-        semantic
-            .set_semantic_native_input(node, Some(source))
-            .expect("fresh type-matched input accepts one native owner");
-        drop(semantic);
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(creation);
+        transaction.scope_signal(self.root(), pending);
+        let result = transaction
+            .apply(&mut store.borrow_mut())
+            .map_err(|error| error.to_string())?;
+        let node = result
+            .resolve(pending)
+            .expect("committed native input resolves its transaction-local identity");
         Ok((store, node))
     }
 
@@ -236,6 +239,23 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn stale_scene_rejects_native_input_creation_without_allocating_a_signal() {
+        let scene = Scene::new();
+        scene
+            .store()
+            .borrow_mut()
+            .remove_node(scene.root())
+            .unwrap();
+        let before = {
+            let store = scene.store().borrow();
+            (store.len(), store.scene_revision())
+        };
+        assert!(scene.control_signal("gain", 1.0).is_err());
+        let store = scene.store().borrow();
+        assert_eq!((store.len(), store.scene_revision()), before);
+    }
 
     #[test]
     fn canonical_native_declarations_and_bindings_drive_one_execution_session() {

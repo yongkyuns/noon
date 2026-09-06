@@ -301,6 +301,37 @@ def _live_mutation_context(value: object):
     return context if ownership in {"active", "transferred", "returned"} else None
 
 
+def _canonical_target_editor_source(value: object):
+    """Return the opaque source/context pair for the narrow callback-safe copy path.
+
+    Bound callback objects intentionally have no ordinary handle access because raw
+    geometry remains unavailable. Outside a callback phase, a leaf copy can still
+    enter Rust's existing target-editor boundary, which derives its basis from the
+    coherent live row and creates a detached semantic target.
+    """
+    if not isinstance(value, _base.Mobject):
+        return None
+    handle = getattr(value, "_semantic_handle", None)
+    if handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    if _has_unmirrored_tracks(value):
+        return None
+    context = getattr(value, "_canonical_live_target_context", None)
+    if context is None:
+        scene = getattr(value, "_scene", None)
+        context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None:
+        return None
+
+    from _manim_updaters import _canonical_phase_context
+
+    if _canonical_phase_context(value) is not None:
+        raise NotImplementedError(
+            "canonical callback copies are unsupported while a callback phase is active"
+        )
+    return context, handle
+
+
 def _has_shared_layout_queries(handle: object) -> bool:
     return handle is not None and all(
         hasattr(handle, name)
@@ -569,30 +600,45 @@ def _clone_mobject(
     clone = object.__new__(type(self))
     handle = _handle_for(self)
     live_context = _live_mutation_context(self)
+    target_context = None
+    if handle is None:
+        target_source = _canonical_target_editor_source(self)
+        if target_source is not None:
+            target_context, handle = target_source
     if handle is not None:
         clone._raw = None
         clone._scene = None
         clone._object = None
+        context = live_context or target_context
         clone._semantic_handle = (
-            live_context.liveTargetEditor(handle)
-            if live_context is not None
+            context.liveTargetEditor(handle)
+            if context is not None
             else handle.targetEditor() if target_state else handle.cloneHandle()
         )
         clone._semantic_handle_fresh = True
-        if live_context is not None:
-            clone._canonical_live_target_context = live_context
+        if context is not None:
+            clone._canonical_live_target_context = context
     else:
         _init(clone, self._current_raw())
 
+    excluded = {
+        "_raw",
+        "_scene",
+        "_object",
+        "_semantic_handle",
+        "_semantic_handle_fresh",
+        "_canonical_live_target_context",
+    }
+    # A callback registry belongs to its source occurrence. The detached target
+    # carries only its opaque semantic handle, never copied callback ownership.
+    if target_context is not None:
+        excluded.update({
+            "_noon_updaters",
+            "_noon_updater_registrations",
+            "_noon_updater_registration_history",
+        })
     for name, value in self.__dict__.items():
-        if name not in {
-            "_raw",
-            "_scene",
-            "_object",
-            "_semantic_handle",
-            "_semantic_handle_fresh",
-            "_canonical_live_target_context",
-        }:
+        if name not in excluded:
             if isinstance(value, _base.Mobject):
                 setattr(clone, name, value.copy())
             else:

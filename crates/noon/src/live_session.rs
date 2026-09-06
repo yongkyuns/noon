@@ -50,6 +50,45 @@ pub struct EffectiveMobjectLayout {
     pub publication: PublicationContext,
 }
 
+/// Reconstruct the supported authored target style directly from one effective
+/// runtime row. Runtime colors already contain the evaluated paint opacity, so
+/// the detached target stores them as solid paints with unit paint opacity and
+/// preserves the row's object opacity separately. Resource paints are not
+/// represented by `Style` and must remain explicitly unavailable here.
+fn target_style_from_effective(
+    authored: &SemanticStyle,
+    effective: Style,
+) -> Result<SemanticStyle, LiveSessionError> {
+    if matches!(
+        authored.fill.as_ref(),
+        Some(noon_core::SemanticPaint::Resource(_))
+    ) || matches!(
+        authored.stroke.as_ref(),
+        Some(noon_core::SemanticPaint::Resource(_))
+    ) {
+        return Err(LiveSessionError::Mobject(
+            "target editor cannot capture a runtime style backed by a paint resource".into(),
+        ));
+    }
+    Ok(SemanticStyle {
+        fill: effective.fill.map(noon_core::SemanticPaint::Solid),
+        fill_opacity: 1.0,
+        stroke: effective.stroke.map(noon_core::SemanticPaint::Solid),
+        stroke_opacity: 1.0,
+        // Retain authored precision when runtime lowering did not change width.
+        // An f32 round trip must not invent a structural style change.
+        stroke_width: if authored.stroke_width as f32 == effective.stroke_width {
+            authored.stroke_width
+        } else {
+            f64::from(effective.stroke_width)
+        },
+        stroke_width_mode: effective.stroke_width_mode,
+        stroke_join: effective.stroke_join,
+        stroke_cap: effective.stroke_cap,
+        object_opacity: f64::from(effective.opacity),
+    })
+}
+
 /// One borrowed TransformTo leaf in an atomic live composition request.
 ///
 /// This value contains no schedule or runtime state. The shared Rust compiler resolves all child
@@ -150,6 +189,32 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
+    /// Create and sparsely enroll one scalar tracker in this already-live Scene.
+    pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        let node = self
+            .session
+            .create_scoped_value_tracker(&mut store, self.root, initial)?;
+        Ok(ValueTracker::from_semantic_node(
+            Rc::clone(self.store),
+            node,
+        ))
+    }
+
+    /// Associate one existing detached tracker with this live Scene root.
+    pub fn associate_value_tracker(
+        &mut self,
+        tracker: &ValueTracker,
+    ) -> Result<(), LiveSessionError> {
+        tracker
+            .require_store(self.store)
+            .map_err(LiveSessionError::Animation)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .associate_value_tracker(&mut store, self.root, tracker.node_id())
+            .map_err(Into::into)
+    }
+
     /// Bind a facade to the supplied store and existing execution session.
     /// Provenance and revision are checked by every publish/query operation.
     pub fn new(
@@ -236,7 +301,51 @@ impl<'a> LiveSession<'a> {
     /// without resetting or relowering the active runtime.
     pub fn target_editor(&mut self, source: &Mobject) -> Result<Mobject, LiveSessionError> {
         self.require_mobject(source)?;
-        let state = source.state().map_err(LiveSessionError::Mobject)?;
+        if self.session.pending_callback_token().is_some() {
+            return Err(LiveSessionError::Mobject(
+                "cannot create a target while a required callback phase is pending".into(),
+            ));
+        }
+        if self.session.callback_termination().is_some() {
+            return Err(LiveSessionError::Mobject(
+                "cannot create a target from a terminated callback session".into(),
+            ));
+        }
+
+        // A target created after bootstrap must start from the coherent effective row,
+        // rather than the authored base that an active driver or callback may have
+        // superseded. Immutable content remains authored. This subset intentionally
+        // rejects render-content and appearance overrides because SemanticObjectState
+        // has no exact authored representation for them.
+        let mut state = source.state().map_err(LiveSessionError::Mobject)?;
+        if !state.signal_bindings().is_empty() {
+            return Err(LiveSessionError::Mobject(
+                "target editor cannot capture a reactive binding into a detached target".into(),
+            ));
+        }
+        let store = self.store.borrow();
+        let observed = self
+            .session
+            .effective_semantic_object(&store, source.node_id())?;
+        if !observed.authored_content_layout_applicable() {
+            return Err(LiveSessionError::Mobject(
+                "target editor requires effective authored content without reveal or morph overrides"
+                    .into(),
+            ));
+        }
+        if observed.object.appearance != 1.0 {
+            return Err(LiveSessionError::Mobject(
+                "target editor cannot represent a non-unit effective appearance".into(),
+            ));
+        }
+        state.transform.translation.x = f64::from(observed.object.transform.translation.x);
+        state.transform.translation.y = f64::from(observed.object.transform.translation.y);
+        state.transform.scale.x = f64::from(observed.object.transform.scale.x);
+        state.transform.scale.y = f64::from(observed.object.transform.scale.y);
+        state.transform.rotation_z = f64::from(observed.object.transform.rotation);
+        state.style = target_style_from_effective(&state.style, observed.object.style)?;
+        drop(store);
+
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(noon_core::SemanticNodeCreation::object(state));
         let result = self.apply(transaction)?;
@@ -379,6 +488,15 @@ impl<'a> LiveSession<'a> {
         tracker
             .require_store(self.store)
             .map_err(LiveSessionError::Animation)?;
+        if !self
+            .store
+            .borrow()
+            .is_semantic_signal_scoped(self.root, tracker.node_id())
+        {
+            return Err(LiveSessionError::Animation(
+                "ValueTracker is not associated with this Scene".into(),
+            ));
+        }
         let mut store = self.store.borrow_mut();
         self.session
             .declare_and_activate_value_tracker(
@@ -739,8 +857,19 @@ impl<'a> LiveSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Scene;
-    use noon_core::{AnimationOptions, Color, RateFunction, SemanticPaint, SemanticVec3};
+    use crate::{CallbackAdvance, Scene};
+    use noon_core::{
+        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
+    };
+
+    #[test]
+    fn target_style_capture_rejects_resource_paint_without_a_legacy_conversion() {
+        let authored = SemanticStyle {
+            fill: Some(SemanticPaint::Resource(7)),
+            ..SemanticStyle::default()
+        };
+        assert!(target_style_from_effective(&authored, Style::default()).is_err());
+    }
 
     #[test]
     fn live_property_edits_publish_once_and_queries_are_effective_not_authored_aliases() {
@@ -819,6 +948,80 @@ mod tests {
         assert_eq!(style.fill_opacity, 0.5);
         assert_eq!(style.stroke_opacity, 0.5);
         assert_eq!(style.object_opacity, 0.5);
+    }
+
+    #[test]
+    fn target_editor_captures_a_committed_callback_effective_row_without_frame_work() {
+        let mut scene = Scene::new();
+        let mut circle = scene.circle(1.0).unwrap();
+        circle.set_fill(0.0, 0.4, 1.0, 1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(circle.node_id(), HostCallbackId::new(9), 0.0, None);
+        callbacks.apply(&mut scene.store().borrow_mut()).unwrap();
+
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let revision = live.session.publication_context().scene_revision();
+        let mut overlay = match live.session.advance_to_callback_barrier(0.0).unwrap() {
+            CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            CallbackAdvance::Ready(_) => panic!("time-zero callback phase must be required"),
+        };
+        assert!(matches!(
+            live.target_editor(&circle),
+            Err(LiveSessionError::Mobject(_))
+        ));
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            revision
+        );
+
+        let mut transform = overlay.object(circle.node_id()).unwrap().transform;
+        transform.translation.x = 2.0;
+        transform.translation.y = -1.0;
+        transform.scale.x = 1.5;
+        transform.rotation = 0.25;
+        overlay.set_transform(circle.node_id(), transform).unwrap();
+        let mut style = overlay.object(circle.node_id()).unwrap().style;
+        style.fill = Some(Color::rgb(1.0, 0.0, 0.0));
+        style.opacity = 0.5;
+        overlay.set_style(circle.node_id(), style).unwrap();
+        live.session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+
+        live.session.take_frame_changes();
+        let target = live.target_editor(&circle).unwrap();
+        let target_state = live.authored(&target).unwrap();
+        assert_eq!(
+            target_state.transform.translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+        assert_eq!(
+            target_state.transform.scale,
+            SemanticVec3::new(1.5, 1.0, 1.0)
+        );
+        assert_eq!(target_state.transform.rotation_z, 0.25);
+        assert_eq!(
+            target_state.style,
+            SemanticStyle {
+                fill: style.fill.map(SemanticPaint::Solid),
+                fill_opacity: 1.0,
+                stroke: style.stroke.map(SemanticPaint::Solid),
+                stroke_opacity: 1.0,
+                stroke_width: live.authored(&circle).unwrap().style.stroke_width,
+                stroke_width_mode: style.stroke_width_mode,
+                stroke_join: style.stroke_join,
+                stroke_cap: style.stroke_cap,
+                object_opacity: f64::from(style.opacity),
+            }
+        );
+        assert!(live.session.take_frame_changes().is_empty());
+        // The source's authored base remains distinct from the callback effect.
+        assert_eq!(
+            live.authored(&circle).unwrap().transform.translation,
+            SemanticVec3::default()
+        );
     }
 
     #[test]

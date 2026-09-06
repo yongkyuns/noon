@@ -68,6 +68,7 @@ pub enum SemanticPendingNodeKind {
     Family,
     AuthoringNode,
     Animation,
+    Signal,
 }
 
 #[derive(Clone, Copy)]
@@ -264,6 +265,34 @@ impl<'a> TransactionNodeCatalog<'a> {
         Ok(())
     }
 
+    pub(super) fn ensure_signal(
+        &self,
+        node: SemanticTransactionNodeRef,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => {
+                self.store
+                    .semantic_signal_state(node)
+                    .map_err(|error| SemanticMutationTransactionError::Signal { index, error })?;
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_pending(node, index)?;
+                if !matches!(
+                    self.pending[&token],
+                    PendingSemanticNode::Creation(SemanticNodeCreation::Signal { .. })
+                ) {
+                    return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
+                        index,
+                        token,
+                        expected: SemanticPendingNodeKind::Signal,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn ensure_animation_target(
         &self,
         node: SemanticTransactionNodeRef,
@@ -359,7 +388,9 @@ impl<'a> TransactionNodeCatalog<'a> {
                     PendingSemanticNode::Creation(SemanticNodeCreation::Object {
                         state, ..
                     }) => (**state).clone(),
-                    PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. })
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Family { .. } | SemanticNodeCreation::Signal { .. },
+                    )
                     | PendingSemanticNode::Animation(_) => {
                         return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
                             index,

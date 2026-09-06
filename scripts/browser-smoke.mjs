@@ -415,6 +415,24 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM callback continuation did not render its ordered midpoint and endpoint",
   );
   assert.equal(
+    direct.metrics.ordinaryCallbackSparseReads?.backend,
+    expectedBackend,
+    "direct Rust/WASM sparse callback reads did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryCallbackSparseReads?.authoredTime,
+    1.5,
+    "direct Rust/WASM sparse callback reads did not preserve the shared session time",
+  );
+  assert.ok(
+    direct.metrics.ordinaryCallbackSparseReads?.initialRead.blue >= 180 &&
+      direct.metrics.ordinaryCallbackSparseReads?.initialVacatedLuma <= 60 &&
+      direct.metrics.ordinaryCallbackSparseReads?.midpoint.blue >= 180 &&
+      direct.metrics.ordinaryCallbackSparseReads?.persistentHold.blue >= 180 &&
+      direct.metrics.ordinaryCallbackSparseReads?.anchor.blue >= 180,
+    "direct Rust/WASM sparse callback reads did not render initial, midpoint, Hold, and anchor states",
+  );
+  assert.equal(
     direct.metrics.ordinaryCompositionPlay?.backend,
     expectedBackend,
     "direct Rust/WASM ordinary composition did not use the selected renderer backend",

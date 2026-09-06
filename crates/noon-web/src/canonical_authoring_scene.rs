@@ -443,9 +443,14 @@ impl CanonicalAuthoringScene {
 
     /// Create one scalar signal in this context's shared semantic store.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn create_value_tracker(&self, initial: f64) -> Result<noon::ValueTracker, String> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene.value_tracker(initial)
+    fn create_value_tracker(&mut self, initial: f64) -> Result<noon::ValueTracker, String> {
+        if self.live_player_transferred {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.live_player.as_mut() {
+            Some(player) => player.live_value_tracker(initial),
+            None => self.scene.value_tracker(initial),
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1087,7 +1092,12 @@ impl CanonicalAuthoringScene {
             return Err("mobject belongs to another authoring store".into());
         }
         source.validate()?;
-        self.active_live_player()?.live_target_editor(source)
+        match self.live_execution_ownership() {
+            "none" => source.target_editor(),
+            "active" | "returned" => self.active_live_player()?.live_target_editor(source),
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1671,6 +1681,19 @@ mod wasm {
                     .run_time(child_run_time)
                     .rate_func(noon_core::RateFunction::Linear),
             ));
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmValueTrackerHandle {
+        #[wasm_bindgen(getter, js_name = semanticSlot)]
+        pub fn semantic_slot(&self) -> u32 {
+            self.tracker.node_id().slot()
+        }
+
+        #[wasm_bindgen(getter, js_name = semanticGeneration)]
+        pub fn semantic_generation(&self) -> u32 {
+            self.tracker.node_id().generation()
         }
     }
 
@@ -3316,6 +3339,49 @@ mod tests {
     }
 
     #[test]
+    fn callback_registration_keeps_target_editor_authored_before_player_bootstrap() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context
+            .add_updater(&circle, HostCallbackId::new(9), 0.0, None)
+            .unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+
+        let mut target = context.live_target_editor(&circle).unwrap();
+        target.set_translation(2.0, -1.0).unwrap();
+
+        assert!(context.live_player.is_none());
+        assert!(
+            context.scene.store().borrow().scene_revision().get() > revision.get(),
+            "the detached authored target must be published without bootstrapping a player"
+        );
+        assert_eq!(
+            target.state().unwrap().transform.translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn target_editor_rejects_a_transferred_player_without_authored_fallback() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context.live_player(1.0).unwrap();
+        let player = context.take_execution_player(1.0, 17).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+
+        assert!(context.live_target_editor(&circle).is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(context.live_execution_ownership(), "transferred");
+
+        context.return_execution_player(player).unwrap();
+        let target = context.live_target_editor(&circle).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
+        assert!(target.validate().is_ok());
+    }
+
+    #[test]
     fn ordinary_affine_barriers_reuse_the_runtime_and_accept_a_late_detached_target() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
@@ -4179,6 +4245,31 @@ mod tests {
             Vec2::new(2.0, 0.0)
         );
         assert!(player.live_set_signal(&tracker, 3.0).is_err());
+    }
+
+    #[test]
+    fn scalar_tracker_creation_uses_the_owned_live_session() {
+        let mut context = CanonicalAuthoringScene::default();
+        context.live_player(1.0).unwrap();
+
+        let tracker = context.create_value_tracker(1.25).unwrap();
+        assert_eq!(context.tracker_value(&tracker).unwrap(), 1.25);
+        assert!(context
+            .scene
+            .store()
+            .borrow()
+            .is_semantic_signal_scoped(context.scene.root(), tracker.node_id()));
+
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context.create_value_tracker(f64::MAX).is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(context.tracker_value(&tracker).unwrap(), 1.25);
+
+        let leased = context.take_execution_player(1.0, 91).unwrap();
+        assert!(context.create_value_tracker(2.0).is_err());
+        context.return_execution_player(leased).unwrap();
+        let returned_tracker = context.create_value_tracker(2.0).unwrap();
+        assert_eq!(context.tracker_value(&returned_tracker).unwrap(), 2.0);
     }
 
     #[test]

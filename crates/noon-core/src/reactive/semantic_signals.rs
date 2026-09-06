@@ -332,6 +332,27 @@ impl SemanticSignalState {
         }
     }
 
+    pub(crate) fn input(value: SemanticSignalValue) -> Result<Self, SemanticSignalError> {
+        let value_kind = validate_value(&value)?;
+        Ok(Self::new(SemanticSignalSource::Input(value), value_kind))
+    }
+
+    pub(crate) fn input_with_native_source(
+        value: SemanticSignalValue,
+        source: SemanticNativeInputSource,
+    ) -> Result<Self, SemanticSignalError> {
+        let mut state = Self::input(value)?;
+        let expected = native_input_signal_kind(&source);
+        if state.value_kind != expected {
+            return Err(SemanticSignalError::InvalidNativeInputInitialValue {
+                expected,
+                actual: state.value_kind,
+            });
+        }
+        state.native_input = Some(source);
+        Ok(state)
+    }
+
     pub const fn source(&self) -> &SemanticSignalSource {
         &self.source
     }
@@ -351,6 +372,10 @@ impl SemanticSignalState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SemanticSignalError {
+    InvalidNativeInputInitialValue {
+        expected: SemanticSignalValueKind,
+        actual: SemanticSignalValueKind,
+    },
     UnknownSignal(SemanticNodeId),
     NotSignal(SemanticNodeId),
     NonFiniteValue,
@@ -388,6 +413,9 @@ pub enum SemanticSignalError {
 impl std::fmt::Display for SemanticSignalError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidNativeInputInitialValue { expected, actual } => write!(
+                formatter, "native input requires {expected}, but initial value is {actual}"
+            ),
             Self::UnknownSignal(id) => write!(
                 formatter,
                 "unknown semantic signal {}:{}",
@@ -473,11 +501,7 @@ impl SemanticStore {
     ) -> Result<SemanticNodeId, SemanticSignalError> {
         self.set_last_mutation_writes(0);
         let value = value.into();
-        let value_kind = validate_value(&value)?;
-        Ok(self.insert_semantic_signal_state(SemanticSignalState::new(
-            SemanticSignalSource::Input(value),
-            value_kind,
-        )))
+        Ok(self.insert_semantic_signal_state(SemanticSignalState::input(value)?))
     }
 
     /// Insert one authored derived signal after validating its referenced closure.
