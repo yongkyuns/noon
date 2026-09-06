@@ -816,26 +816,30 @@ try {
     return { canvasId: canvas.id };
   }, fadeContinuationSource);
 
-  async function pauseFadeDuring(start, end, label) {
+  async function observeFadeDuring(start, end, label) {
     return page.evaluate(async ({ startTime, endTime, phaseLabel }) => {
       const { execution } = window.sharedAuthoringSmoke.ordinaryFadeContinuation;
+      let latest = null;
       for (let attempt = 0; attempt < 200; attempt += 1) {
         try {
           const state = await execution.state();
+          latest = state;
           if (state.time >= startTime && state.time <= endTime) {
-            const paused = await execution.pause();
-            if (paused.time >= startTime && paused.time <= endTime) return paused;
+            return state;
           }
         } catch {
           // The exact player is briefly returned between continuation segments.
         }
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      throw new Error(`fade ${phaseLabel} did not reach its observable interval`);
+      throw new Error(
+        `fade ${phaseLabel} did not reach its observable interval: ` +
+        JSON.stringify({ latest }),
+      );
     }, { startTime: start, endTime: end, phaseLabel: label });
   }
 
-  const fadeInMidpoint = await pauseFadeDuring(0.3, 0.7, "FadeIn midpoint");
+  const fadeInMidpoint = await observeFadeDuring(0.3, 0.5, "FadeIn midpoint");
   const fadeInPixel = renderedWorldPixel(
     await page.locator(`#${fadeContinuation.canvasId}`).screenshot(), 0, 0,
   );
@@ -844,9 +848,7 @@ try {
       fadeInPixel.green > 15 && fadeInPixel.green < 100,
     `FadeIn midpoint did not present partial appearance: ${JSON.stringify({ fadeInMidpoint, fadeInPixel })}`,
   );
-  await page.evaluate(() => window.sharedAuthoringSmoke.ordinaryFadeContinuation.execution.resume());
-
-  const fadeOutMidpoint = await pauseFadeDuring(1.3, 1.7, "FadeOut midpoint");
+  const fadeOutMidpoint = await observeFadeDuring(1.3, 1.5, "FadeOut midpoint");
   const fadeOutPixel = renderedWorldPixel(
     await page.locator(`#${fadeContinuation.canvasId}`).screenshot(), 0, 0,
   );
@@ -855,9 +857,7 @@ try {
       fadeOutPixel.green > 15 && fadeOutPixel.green < 100,
     `FadeOut midpoint did not present partial appearance: ${JSON.stringify({ fadeOutMidpoint, fadeOutPixel })}`,
   );
-  await page.evaluate(() => window.sharedAuthoringSmoke.ordinaryFadeContinuation.execution.resume());
-
-  const fadeAbsent = await pauseFadeDuring(2.05, 2.2, "detached wait");
+  const fadeAbsent = await observeFadeDuring(2.05, 2.1, "detached wait");
   const absentPixels = visiblePixelStats(
     await page.locator(`#${fadeContinuation.canvasId}`).screenshot(),
     (red, green, blue) => blue > 35 && blue > red + 20 && blue > green + 10,
@@ -867,8 +867,6 @@ try {
     0,
     `FadeOut endpoint remained visible before re-add: ${JSON.stringify({ fadeAbsent, absentPixels })}`,
   );
-  await page.evaluate(() => window.sharedAuthoringSmoke.ordinaryFadeContinuation.execution.resume());
-
   const fadeFinal = await page.evaluate(async () => {
     const continuation = window.sharedAuthoringSmoke.ordinaryFadeContinuation;
     const authored = await continuation.authoredPromise;
