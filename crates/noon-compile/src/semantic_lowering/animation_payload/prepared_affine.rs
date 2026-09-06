@@ -203,7 +203,7 @@ where
             execution_object_id,
         },
     )?;
-    let channels = lower_affine_channels(target_state, source, target_object, from)
+    let channels = lower_affine_channels(source, target_object, from)
         .map_err(|issue| prepared_payload_error(target, issue))?;
     let timing = TrackTiming::new(start_time, options.run_time, options.rate_func);
     let tracks = channels
@@ -267,7 +267,7 @@ fn prepared_payload_error(
             PreparedSemanticTransformToError::TargetValueOutOfRange(field)
         }
         AffinePayloadIssue::InvalidTargetStyle(error) => {
-            PreparedSemanticTransformToError::InvalidTargetStyle(error)
+            PreparedSemanticTransformToError::InvalidTargetStyle(error.with_node(target))
         }
     }
 }

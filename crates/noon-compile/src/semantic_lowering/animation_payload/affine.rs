@@ -8,7 +8,10 @@ use noon_core::{
 };
 
 use super::super::{
-    projection::{lower_semantic_style, SemanticLoweringError as StyleLoweringError},
+    projection::{
+        lower_semantic_style_value, SemanticExecutionValueError,
+        SemanticLoweringError as StyleLoweringError,
+    },
     SemanticAnimationScheduleProjection, SemanticScheduledAnimationLeaf,
 };
 
@@ -446,7 +449,7 @@ where
             captures.insert(leaf.execution_object_id, captured);
             captured
         };
-        let channels = lower_affine_channels(leaf.target_state, source, target, from)
+        let channels = lower_affine_channels(source, target, from)
             .map_err(|issue| existing_payload_error(leaf, issue))?;
         for channel in channels {
             match driven.entry(driver_key(leaf.execution_object_id, channel.property)) {
@@ -537,7 +540,7 @@ pub(super) enum AffinePayloadIssue {
         error: SemanticLoweringError,
     },
     TargetValueOutOfRange(SemanticAffineAnimationField),
-    InvalidTargetStyle(StyleLoweringError),
+    InvalidTargetStyle(SemanticExecutionValueError),
 }
 
 pub(super) fn validate_affine_payload(
@@ -581,7 +584,6 @@ pub(super) fn validate_affine_payload(
 }
 
 pub(super) fn lower_affine_channels(
-    target_state: SemanticNodeId,
     source: &noon_core::SemanticObjectState,
     target: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
@@ -617,8 +619,8 @@ pub(super) fn lower_affine_channels(
         rotation: rotation as f32,
         scale,
     };
-    let target_style = lower_semantic_style(target_state, target)
-        .map_err(AffinePayloadIssue::InvalidTargetStyle)?;
+    let target_style =
+        lower_semantic_style_value(target).map_err(AffinePayloadIssue::InvalidTargetStyle)?;
     let mut channels = Vec::with_capacity(6);
     push_affine_channel(
         source,
@@ -847,13 +849,13 @@ fn existing_payload_error(
             SemanticAffineAnimationTrackError::InvalidTargetStyle {
                 animation: leaf.animation,
                 target_state: leaf.target_state,
-                error,
+                error: error.with_node(leaf.target_state),
             }
         }
     }
 }
 
-fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
+pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
     let slot = match property {
         Property::Position => 0,
         Property::Rotation => 1,
