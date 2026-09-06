@@ -724,7 +724,7 @@ try {
       ordinary: {
         duration: ordinary.duration,
         objectCount: ordinary.document.objects.length,
-        trackCount: ordinary.sceneSpec.tracks.length,
+        translation: ordinary.document.objects[0].transform.translation,
         hasSemanticExecution: Object.hasOwn(ordinary, "semanticExecution"),
       },
       continuationRegistrations,
@@ -738,7 +738,7 @@ try {
   });
   assert.equal(exportBoundary.ordinary.duration, 3);
   assert.equal(exportBoundary.ordinary.objectCount, 1);
-  assert.ok(exportBoundary.ordinary.trackCount > 0, "export did not retain the affine endpoint track");
+  assert.deepEqual(exportBoundary.ordinary.translation, { x: 2, y: 0 });
   assert.equal(exportBoundary.ordinary.hasSemanticExecution, false);
   assert.equal(exportBoundary.continuationRegistrations, 0);
   assert.match(
