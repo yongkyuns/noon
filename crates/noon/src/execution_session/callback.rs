@@ -4,8 +4,8 @@ use noon_compile::{CompilePatchError, SemanticHostCallbackEventKind, SemanticHos
 use noon_core::{HostCallbackId, PublicationContext, SemanticNodeId, Style, Transform2D};
 use noon_runtime::{
     EffectiveObjectProperties, EffectivePropertyWrite as RuntimeEffectivePropertyWrite,
-    EvaluationError, FrameState, PreparedFrameCommitError, PreparedFrameEvaluation,
-    RuntimeIdentity,
+    EvaluationError, ExecutionSlotId, FrameState, PreparedFrameCommitError,
+    PreparedFrameEvaluation, RuntimeIdentity,
 };
 
 use super::signal_timeline::SignalTimelinePreview;
@@ -16,9 +16,103 @@ pub(super) const CALLBACK_STYLE_DOMAIN: u8 = 2;
 
 #[derive(Clone, Debug)]
 pub(super) struct CallbackPublicationReceipt {
+    token: CallbackPhaseToken,
     time: f64,
     publication: PublicationContext,
     domains: BTreeMap<SemanticNodeId, u8>,
+}
+
+/// Renderer-facing dirty state for one callback-published runtime row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallbackRendererDirtyClassification {
+    All,
+    Added,
+    Updated,
+    Removed,
+    Unchanged,
+}
+
+/// One small committed runtime observation pinned to an exact callback phase.
+///
+/// The execution slot is derived from the canonical session's durable slot table.
+/// This value carries no mutable runtime authority and is intended only to be paired
+/// with renderer preparation/upload/presentation evidence at a real host boundary.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CommittedCallbackRendererObservation {
+    token: CallbackPhaseToken,
+    publication: PublicationContext,
+    target: SemanticNodeId,
+    execution_object: noon_core::ObjectId,
+    execution_slot: ExecutionSlotId,
+    frame_index: usize,
+    time: f64,
+    transform: Transform2D,
+    style: Style,
+    presence: bool,
+    dirty: CallbackRendererDirtyClassification,
+}
+
+impl CommittedCallbackRendererObservation {
+    pub const fn token(self) -> CallbackPhaseToken {
+        self.token
+    }
+
+    pub const fn publication(self) -> PublicationContext {
+        self.publication
+    }
+
+    pub const fn target(self) -> SemanticNodeId {
+        self.target
+    }
+
+    pub const fn execution_object(self) -> noon_core::ObjectId {
+        self.execution_object
+    }
+
+    pub const fn execution_slot(self) -> ExecutionSlotId {
+        self.execution_slot
+    }
+
+    pub const fn frame_index(self) -> usize {
+        self.frame_index
+    }
+
+    pub const fn time(self) -> f64 {
+        self.time
+    }
+
+    pub const fn transform(self) -> Transform2D {
+        self.transform
+    }
+
+    pub const fn style(self) -> Style {
+        self.style
+    }
+
+    pub const fn presence(self) -> bool {
+        self.presence
+    }
+
+    pub const fn dirty(self) -> CallbackRendererDirtyClassification {
+        self.dirty
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CallbackRendererObservationOutcome {
+    Committed(CommittedCallbackRendererObservation),
+    StaleCallback {
+        requested: CallbackPhaseToken,
+        committed: Option<CallbackPhaseToken>,
+    },
+    StalePublication {
+        requested: PublicationContext,
+        applied: PublicationContext,
+    },
+    Absent {
+        token: CallbackPhaseToken,
+        target: SemanticNodeId,
+    },
 }
 
 impl CallbackPublicationReceipt {
@@ -537,6 +631,85 @@ impl ExecutionSession {
         !self.callback_schedule.is_empty()
     }
 
+    /// Resolve one callback-published target through the session's indexed
+    /// semantic/execution/slot mappings.
+    ///
+    /// The exact phase token and resulting publication must still be current.
+    /// This method borrows only one lightweight runtime row; it neither consumes
+    /// renderer changes nor copies object content.
+    pub fn committed_callback_renderer_observation(
+        &self,
+        token: CallbackPhaseToken,
+        target: SemanticNodeId,
+    ) -> CallbackRendererObservationOutcome {
+        let Some(receipt) = self.last_callback_receipt.as_ref() else {
+            return CallbackRendererObservationOutcome::StaleCallback {
+                requested: token,
+                committed: None,
+            };
+        };
+        if receipt.token != token || token.runtime() != self.runtime.runtime_identity() {
+            return CallbackRendererObservationOutcome::StaleCallback {
+                requested: token,
+                committed: Some(receipt.token),
+            };
+        }
+        let publication = self.publication_context();
+        if receipt.publication != publication {
+            return CallbackRendererObservationOutcome::StalePublication {
+                requested: receipt.publication,
+                applied: publication,
+            };
+        }
+        let Some(execution_object) = self.execution_index.execution_object_id(target) else {
+            return CallbackRendererObservationOutcome::Absent { token, target };
+        };
+        let Some(frame_index) = self
+            .runtime
+            .frame_index_for_object(execution_object)
+            .filter(|index| self.runtime.object_slot_is_live(*index))
+        else {
+            return CallbackRendererObservationOutcome::Absent { token, target };
+        };
+        let Some(execution_slot) = self.slots.slot_for_object(execution_object) else {
+            return CallbackRendererObservationOutcome::Absent { token, target };
+        };
+        let frame = self.runtime.frame();
+        let Some(object) = frame.objects.get(frame_index) else {
+            return CallbackRendererObservationOutcome::Absent { token, target };
+        };
+        let changes = self.runtime.frame_changes();
+        let dirty = if changes.is_all() {
+            CallbackRendererDirtyClassification::All
+        } else if changes
+            .removed_indices()
+            .binary_search(&frame_index)
+            .is_ok()
+            || !frame.is_present(frame_index)
+        {
+            CallbackRendererDirtyClassification::Removed
+        } else if changes.added_indices().binary_search(&frame_index).is_ok() {
+            CallbackRendererDirtyClassification::Added
+        } else if changes.object_indices().binary_search(&frame_index).is_ok() {
+            CallbackRendererDirtyClassification::Updated
+        } else {
+            CallbackRendererDirtyClassification::Unchanged
+        };
+        CallbackRendererObservationOutcome::Committed(CommittedCallbackRendererObservation {
+            token,
+            publication,
+            target,
+            execution_object,
+            execution_slot,
+            frame_index,
+            time: frame.time,
+            transform: object.transform,
+            style: object.style,
+            presence: frame.is_present(frame_index),
+            dirty,
+        })
+    }
+
     /// Advance through the compiler-owned callback schedule. A large time jump
     /// stops at the first newly active occurrence boundary so a bounded updater
     /// interval cannot be skipped by host tick coalescing.
@@ -731,6 +904,7 @@ impl ExecutionSession {
                 actual: batch.token,
             });
         }
+        let token = batch.token;
 
         let receipt_time = pending.prepared.time();
         let mut receipt_domains = BTreeMap::new();
@@ -781,6 +955,7 @@ impl ExecutionSession {
             }
         }
         self.last_callback_receipt = Some(CallbackPublicationReceipt {
+            token,
             time: receipt_time,
             publication: self.runtime.publication_context(),
             domains: receipt_domains,
@@ -901,6 +1076,7 @@ mod tests {
             Vec2::new(3.0, 0.0)
         );
 
+        let token = overlay.token();
         session
             .commit_required_callback_phase(overlay.finish())
             .unwrap();
@@ -910,6 +1086,20 @@ mod tests {
         assert_eq!(
             session.publication_context().frame_epoch(),
             publication.frame_epoch().checked_next().unwrap()
+        );
+        let CallbackRendererObservationOutcome::Committed(observation) =
+            session.committed_callback_renderer_observation(token, object)
+        else {
+            panic!("the exact committed callback target must remain observable");
+        };
+        assert_eq!(observation.token(), token);
+        assert_eq!(observation.target(), object);
+        assert_eq!(observation.execution_slot(), ExecutionSlotId::new(0, 0));
+        assert_eq!(observation.frame_index(), 0);
+        assert_eq!(observation.transform(), second);
+        assert_eq!(
+            observation.dirty(),
+            CallbackRendererDirtyClassification::Updated
         );
         assert_eq!(session.take_frame_changes().object_indices(), &[0]);
 
@@ -936,6 +1126,10 @@ mod tests {
             session.frame().objects[0].transform.translation,
             Vec2::new(4.0, 0.0)
         );
+        assert!(matches!(
+            session.committed_callback_renderer_observation(token, object),
+            CallbackRendererObservationOutcome::StaleCallback { .. }
+        ));
     }
 
     #[test]

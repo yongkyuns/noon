@@ -480,6 +480,20 @@ impl RetainedExecutionFrameMirror {
         self.frame.as_ref()
     }
 
+    pub const fn session(&self) -> Option<u32> {
+        self.session
+    }
+
+    /// Sequence of the currently applied retained publication.
+    pub fn applied_sequence(&self) -> Option<u64> {
+        self.session.and_then(|_| self.next_sequence.checked_sub(1))
+    }
+
+    /// Resolve one durable transport slot without searching the frame.
+    pub fn frame_index_for_slot(&self, slot: TransportSlotId) -> Option<usize> {
+        self.slot_indices.get(&slot).copied()
+    }
+
     pub const fn camera(&self) -> Camera2DState {
         self.camera
     }

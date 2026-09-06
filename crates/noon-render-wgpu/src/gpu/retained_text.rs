@@ -140,6 +140,37 @@ pub struct PreparedRetainedGpuFrame<'a> {
     pub text: PreparedRetainedTextSnapshot<'a>,
     pub render_items: &'a [RetainedRenderItem],
     pub stats: RetainedPrepareStats,
+    source_geometry_slots: Option<&'a [Option<usize>]>,
+    render_item_ranges: Option<&'a HashMap<ObjectId, std::ops::Range<usize>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetainedPreparedObjectKind {
+    Geometry,
+    Text,
+    Mixed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RetainedPreparedObjectObservation {
+    pub object: ObjectId,
+    pub kind: RetainedPreparedObjectKind,
+    pub geometry: Option<crate::PreparedGeometryObjectObservation>,
+    pub render_item_start: Option<usize>,
+    pub render_item_end: Option<usize>,
+    pub render_item_count: usize,
+    pub glyph_item_count: usize,
+    pub submission_membership: bool,
+    pub full_rebuilds: usize,
+    pub instances_repacked: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetainedPreparedObjectOutcome {
+    Absent,
+    Unsupported(ObjectId),
+    VisibilityProjectionUnavailable,
+    FamilyProjectionUnavailable,
 }
 
 impl PreparedRetainedGpuFrame<'_> {
@@ -157,6 +188,109 @@ impl PreparedRetainedGpuFrame<'_> {
     /// This exposes only renderer-derived batch order, never private scratch IDs.
     pub fn geometry_render_batches(&self) -> &[OrderedRenderBatch] {
         self.geometry.render_batches
+    }
+
+    /// Observe one retained prepared object without scanning unrelated draw items.
+    ///
+    /// The source frame index is translated through the existing mixed scratch-slot
+    /// table, while painter membership comes from the existing per-object item range.
+    /// Visibility-projected frames report an explicit unavailable result because the
+    /// canonical full-order range does not prove projected submission membership.
+    pub fn observe_object(
+        &self,
+        frame_index: usize,
+        object: ObjectId,
+    ) -> Result<RetainedPreparedObjectObservation, RetainedPreparedObjectOutcome> {
+        if self.geometry_only {
+            let geometry = self
+                .geometry
+                .observe_object(frame_index)
+                .map_err(|outcome| match outcome {
+                    crate::PreparedGeometryObjectOutcome::Absent => {
+                        RetainedPreparedObjectOutcome::Absent
+                    }
+                    crate::PreparedGeometryObjectOutcome::Unsupported(object) => {
+                        RetainedPreparedObjectOutcome::Unsupported(object)
+                    }
+                })?;
+            if geometry.object != object {
+                return Err(RetainedPreparedObjectOutcome::Absent);
+            }
+            let Some(submission_membership) = geometry.submission_membership else {
+                return Err(RetainedPreparedObjectOutcome::VisibilityProjectionUnavailable);
+            };
+            return Ok(RetainedPreparedObjectObservation {
+                object,
+                kind: RetainedPreparedObjectKind::Geometry,
+                geometry: Some(geometry),
+                render_item_start: None,
+                render_item_end: None,
+                render_item_count: usize::from(submission_membership),
+                glyph_item_count: 0,
+                submission_membership,
+                full_rebuilds: self.geometry.stats.full_rebuilds,
+                instances_repacked: self.geometry.stats.instances_repacked,
+            });
+        }
+
+        if self.source_geometry_slots.is_none() {
+            return Err(RetainedPreparedObjectOutcome::FamilyProjectionUnavailable);
+        }
+        let Some(ranges) = self.render_item_ranges else {
+            return Err(RetainedPreparedObjectOutcome::VisibilityProjectionUnavailable);
+        };
+        let range = ranges.get(&object).cloned().unwrap_or(0..0);
+        let items = self
+            .render_items
+            .get(range.clone())
+            .ok_or(RetainedPreparedObjectOutcome::Absent)?;
+        let glyph_item_count = items
+            .iter()
+            .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
+            .count();
+        let geometry_item_count = items.len().saturating_sub(glyph_item_count);
+        let geometry = self
+            .source_geometry_slots
+            .and_then(|slots| slots.get(frame_index))
+            .copied()
+            .flatten()
+            .map(|scratch_index| self.geometry.observe_object(scratch_index))
+            .transpose()
+            .map_err(|outcome| match outcome {
+                crate::PreparedGeometryObjectOutcome::Absent => {
+                    RetainedPreparedObjectOutcome::Absent
+                }
+                crate::PreparedGeometryObjectOutcome::Unsupported(object) => {
+                    RetainedPreparedObjectOutcome::Unsupported(object)
+                }
+            })?;
+        if geometry
+            .as_ref()
+            .is_some_and(|prepared| prepared.object != object)
+        {
+            return Err(RetainedPreparedObjectOutcome::Absent);
+        }
+        if items.is_empty() && geometry.is_none() {
+            return Err(RetainedPreparedObjectOutcome::Absent);
+        }
+        let kind = match (geometry_item_count > 0, glyph_item_count > 0) {
+            (true, true) => RetainedPreparedObjectKind::Mixed,
+            (true, false) => RetainedPreparedObjectKind::Geometry,
+            (false, true) => RetainedPreparedObjectKind::Text,
+            (false, false) => return Err(RetainedPreparedObjectOutcome::Absent),
+        };
+        Ok(RetainedPreparedObjectObservation {
+            object,
+            kind,
+            geometry,
+            render_item_start: Some(range.start),
+            render_item_end: Some(range.end),
+            render_item_count: items.len(),
+            glyph_item_count,
+            submission_membership: !items.is_empty(),
+            full_rebuilds: self.geometry.stats.full_rebuilds,
+            instances_repacked: self.geometry.stats.instances_repacked,
+        })
     }
 }
 
@@ -967,6 +1101,10 @@ impl RetainedFramePreparer {
                     &self.render_items
                 },
                 stats: self.snapshot_prepare_stats,
+                source_geometry_slots: Some(&self.scratch_slots),
+                render_item_ranges: visible_object_indices
+                    .is_none()
+                    .then_some(&self.render_item_ranges),
             });
         }
 
@@ -1020,6 +1158,10 @@ impl RetainedFramePreparer {
                     &self.render_items
                 },
                 stats: self.snapshot_prepare_stats,
+                source_geometry_slots: Some(&self.scratch_slots),
+                render_item_ranges: visible_object_indices
+                    .is_none()
+                    .then_some(&self.render_item_ranges),
             });
         }
 
@@ -1130,6 +1272,10 @@ impl RetainedFramePreparer {
                 &self.render_items
             },
             stats,
+            source_geometry_slots: Some(&self.scratch_slots),
+            render_item_ranges: visible_object_indices
+                .is_none()
+                .then_some(&self.render_item_ranges),
         })
     }
 
@@ -1267,6 +1413,8 @@ impl RetainedFramePreparer {
             text,
             render_items: &[],
             stats,
+            source_geometry_slots: None,
+            render_item_ranges: None,
         })
     }
 
@@ -1393,6 +1541,10 @@ impl RetainedFramePreparer {
                 &self.render_items
             },
             stats: self.snapshot_prepare_stats,
+            source_geometry_slots: Some(&self.scratch_slots),
+            render_item_ranges: visible_object_indices
+                .is_none()
+                .then_some(&self.render_item_ranges),
         })
     }
 
@@ -2207,7 +2359,37 @@ impl GpuRenderer {
         prepared: &PreparedRetainedGpuFrame<'_>,
         text_state: &mut RetainedTextGpuState,
     ) -> RetainedUploadStats {
-        let geometry = self.upload(device, queue, &prepared.geometry);
+        self.upload_retained_inner(device, queue, prepared, text_state, None)
+    }
+
+    /// Upload a retained frame while recording exact geometry-buffer writes.
+    ///
+    /// The caller owns the opt-in trace allocation. Text retains its existing
+    /// aggregate upload statistics until the glyph renderer exposes typed ranges.
+    pub fn upload_retained_with_trace(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedRetainedGpuFrame<'_>,
+        text_state: &mut RetainedTextGpuState,
+        geometry_writes: &mut Vec<crate::UploadWrite>,
+    ) -> RetainedUploadStats {
+        self.upload_retained_inner(device, queue, prepared, text_state, Some(geometry_writes))
+    }
+
+    fn upload_retained_inner(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedRetainedGpuFrame<'_>,
+        text_state: &mut RetainedTextGpuState,
+        geometry_writes: Option<&mut Vec<crate::UploadWrite>>,
+    ) -> RetainedUploadStats {
+        let geometry = if let Some(writes) = geometry_writes {
+            self.upload_with_trace(device, queue, &prepared.geometry, writes)
+        } else {
+            self.upload(device, queue, &prepared.geometry)
+        };
         text_state
             .glyphs
             .set_camera(queue, text_camera(self.camera));
