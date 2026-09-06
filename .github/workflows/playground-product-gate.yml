@@ -22,6 +22,7 @@ on:
       - "scripts/playground-product-compare.mjs"
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/square-to-circle-start-regression.mjs"
       - "web/**"
 
 permissions:
@@ -104,6 +105,10 @@ jobs:
       - name: Recheck executable tutorial corpus
         working-directory: candidate
         run: node scripts/manim-tutorial-smoke.mjs
+
+      - name: Check SquareToCircle starts from square
+        working-directory: candidate
+        run: node scripts/square-to-circle-start-regression.mjs
 
       - name: Recheck retained Text animation
         working-directory: candidate
