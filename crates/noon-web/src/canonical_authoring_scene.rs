@@ -1551,7 +1551,7 @@ impl CanonicalAuthoringScene {
                     continue;
                 }
                 OrdinaryCompositionChild::Composition {
-                    kind,
+                    kind: _,
                     children,
                     options,
                 } => {
