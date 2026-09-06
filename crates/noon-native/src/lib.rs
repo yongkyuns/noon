@@ -1538,48 +1538,66 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[test]
-    #[ignore = "requires an X11 display and a working native wgpu adapter"]
-    fn native_surface_smoke_presents_affine_continuation_endpoint() {
-        use noon::example_scenes::ordinary_affine_continuation_program;
+    fn present_continuation_endpoint(
+        source: Box<dyn NativeExecutionSource>,
+        endpoint: f64,
+    ) -> NativeApp {
         use winit::platform::x11::EventLoopBuilderExtX11;
 
-        let program = ordinary_affine_continuation_program().unwrap();
-        let source =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
         let mut event_loop_builder = EventLoop::builder();
         event_loop_builder.with_any_thread(true);
         let event_loop = event_loop_builder.build().unwrap();
         event_loop.set_control_flow(ControlFlow::Wait);
-
         let mut app = NativeApp::from_source(
-            Box::new(source),
+            source,
             NativeViewportConfig {
-                title: "Noon native affine continuation smoke".to_owned(),
+                title: "Noon native continuation smoke".to_owned(),
                 width: 320,
                 height: 180,
             },
         );
-        app.exit_after_present = Some(4.0);
+        app.exit_after_present = Some(endpoint);
         event_loop.run_app(&mut app).unwrap();
-
         if let Some(error) = app.error.take() {
             panic!("native continuation surface smoke failed before its endpoint: {error}");
         }
-        assert_eq!(
-            app.presented_frame_time,
-            Some(4.0),
-            "native continuation must present its final authored endpoint"
+        assert_eq!(app.presented_frame_time, Some(endpoint));
+        assert_eq!(app.session().frame().time, endpoint);
+        assert!(
+            app.last_geometry_draw_calls > 0,
+            "native continuation endpoint emitted no geometry draw calls"
         );
-        assert_eq!(app.session().frame().time, 4.0);
+        app
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an X11 display and a working native wgpu adapter"]
+    fn native_surface_smoke_presents_affine_continuation_endpoint() {
+        let program = noon::example_scenes::ordinary_affine_continuation_program().unwrap();
+        let source =
+            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let app = present_continuation_endpoint(Box::new(source), 4.0);
         assert_eq!(
             app.session().frame().render_transform(0).translation,
             Vec2::new(5.0, -1.0),
             "native continuation must expose its final effective geometry state"
         );
-        assert!(
-            app.last_geometry_draw_calls > 0,
-            "native continuation endpoint emitted no geometry draw calls"
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an X11 display and a working native wgpu adapter"]
+    fn native_surface_smoke_presents_callback_continuation_endpoint() {
+        let (program, callbacks) =
+            noon::example_scenes::ordinary_callback_continuation_program().unwrap();
+        let source = LiveProgramExecutionSource::new(program, callbacks).unwrap();
+        let app = present_continuation_endpoint(Box::new(source), 1.0);
+        assert_eq!(
+            app.session().frame().render_transform(0).translation,
+            Vec2::new(2.0, 1.0),
+            "ordered callback writes must reach the presented native endpoint"
         );
+        assert_eq!(app.session().frame().objects[0].style.opacity, 0.5);
     }
 }
