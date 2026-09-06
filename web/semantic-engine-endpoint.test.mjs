@@ -148,10 +148,14 @@ test("forward authored-time control commits its callback phase before its matchi
     });
     f.player.pause();
     const advanceForward = f.player.advanceForwardToCallbackPhaseJson;
+    let advances = 0;
     f.player.advanceForwardToCallbackPhaseJson = (time) => {
       assert.equal(time, 1.0);
       advanceForward(time);
-      return JSON.stringify({ token: { sequence: "1" }, time });
+      if (advances++ === 0) {
+        return JSON.stringify({ token: { sequence: "1" }, time });
+      }
+      return null;
     };
     f.player.commitCallbackPhaseJson = (batch) => {
       assert.equal(batch, '{"token":{"sequence":"1"},"writes":[]}');
@@ -176,6 +180,61 @@ test("forward authored-time control commits its callback phase before its matchi
       sequence: delta.sequence,
     });
     assert.equal((await advance).time, 1.0);
+    endpoint.stop();
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("forward authored-time control crosses every required barrier before publishing its requested frame", async () => {
+  const callbackTimes = [];
+  const committedTokens = [];
+  const f = fixture("transferable", async (phase) => {
+    callbackTimes.push(phase.time);
+    return JSON.stringify({ token: phase.token, writes: [] });
+  });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({
+      type: "execution_ack",
+      session: initialDelta.session,
+      sequence: initialDelta.sequence,
+    });
+    f.player.pause();
+    const advanceForward = f.player.advanceForwardToCallbackPhaseJson;
+    const barriers = [1, 2];
+    f.player.advanceForwardToCallbackPhaseJson = (requested) => {
+      const barrier = barriers.shift();
+      advanceForward(barrier ?? requested);
+      return barrier === undefined
+        ? null
+        : JSON.stringify({ token: { sequence: String(barrier) }, time: barrier });
+    };
+    f.player.commitCallbackPhaseJson = (batch) => {
+      committedTokens.push(JSON.parse(batch).token.sequence);
+    };
+    f.player.drainDeltaJson = () => f.player.initialDeltaJson();
+    const finalDelta = nextMatching(
+      f.render.port2,
+      (message) => message.type === "execution_delta" && message.sequence !== initialDelta.sequence,
+    );
+    const advanced = request(f.control.port2, "advance_to", 33, { time: 3 });
+    const delta = await finalDelta;
+    let settled = false;
+    advanced.then(() => { settled = true; });
+    await turn();
+    assert.deepEqual(callbackTimes, [1, 2]);
+    assert.deepEqual(committedTokens, ["1", "2"]);
+    assert.equal(settled, false, "must not resolve at an earlier callback barrier");
+    f.render.port2.postMessage({
+      type: "execution_presented",
+      session: delta.session,
+      sequence: delta.sequence,
+    });
+    assert.equal((await advanced).time, 3);
     endpoint.stop();
   } finally { endpoint?.stop(); f.close(); }
 });
