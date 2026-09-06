@@ -151,9 +151,8 @@ function assertDurationContract(entry, result) {
   );
 }
 
-function authoredObjectCount(entry, result) {
+function authoredObjectCount(entry, result, retained) {
   const geometryCount = result.document.objects.length;
-  const retained = result.retainedDocument ?? null;
   const expectsRetainedText = entry.features?.includes("retained-text") ?? false;
 
   if (expectsRetainedText) {
@@ -184,13 +183,12 @@ function authoredObjectCount(entry, result) {
   return geometryCount + retained.objects.length;
 }
 
-function assertRetainedShrinkTrack(result) {
+function assertRetainedShrinkTrack(result, retained) {
   assert.equal(
     result.document.objects.length,
     0,
     `${retainedTextAnimationId}: animated retained Text must emit zero legacy geometry`,
   );
-  const retained = result.retainedDocument;
   assert.ok(retained, `${retainedTextAnimationId}: retained sidecar is required`);
   assert.equal(retained.channel, "noon.authoring.retained");
   assert.equal(retained.protocol_version, 2);
@@ -242,10 +240,14 @@ try {
       source,
     );
     assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
-    assert.ok(authoredObjectCount(entry, result) > 0, `${entry.id}: expected scene objects`);
+    const retained = await page.evaluate(
+      ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
+      { result, label: entry.id },
+    );
+    assert.ok(authoredObjectCount(entry, result, retained) > 0, `${entry.id}: expected scene objects`);
     assertDurationContract(entry, result);
     if (entry.id === retainedTextAnimationId) {
-      assertRetainedShrinkTrack(result);
+      assertRetainedShrinkTrack(result, retained);
     }
     console.log(`[PASS] ${entry.id}`);
   }

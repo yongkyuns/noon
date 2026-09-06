@@ -1,0 +1,163 @@
+name: Playground Product Gate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/playground-product-gate.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/noon/**"
+      - "crates/noon-core/**"
+      - "crates/noon-compile/**"
+      - "crates/noon-ir/**"
+      - "crates/noon-runtime/**"
+      - "crates/noon-web/**"
+      - "crates/noon-render-wgpu/**"
+      - "crates/noon-text-*/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/build-python-worker.mjs"
+      - "scripts/manim-tutorial-smoke.mjs"
+      - "scripts/playground-layout-smoke.mjs"
+      - "scripts/playground-product-e2e.mjs"
+      - "scripts/playground-product-compare.mjs"
+      - "scripts/renderer-init-failure-smoke.mjs"
+      - "scripts/retained-text-animation-smoke.mjs"
+      - "web/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: playground-product-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Runtime, visual, latency, and FPS regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+      NOON_SKIP_PLAYGROUND_TEST: "1"
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "1"
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+        with:
+          path: candidate
+
+      - name: Checkout PR base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+
+      - name: Use stable Rust and WASM target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build baseline production package
+        working-directory: baseline
+        run: bash scripts/build-web-demo.sh
+
+      - name: Build candidate production package
+        working-directory: candidate
+        run: bash scripts/build-web-demo.sh
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install browser measurement dependencies
+        working-directory: candidate
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Recheck executable tutorial corpus
+        working-directory: candidate
+        run: node scripts/manim-tutorial-smoke.mjs
+
+      - name: Recheck retained Text animation
+        working-directory: candidate
+        run: node scripts/retained-text-animation-smoke.mjs
+
+      - name: Recheck playground layout and Reset
+        working-directory: candidate
+        run: node scripts/playground-layout-smoke.mjs
+
+      - name: Recheck release renderer initialization
+        working-directory: candidate
+        env:
+          NOON_RENDERER_FAILURE_ARTIFACTS: browser-smoke-artifacts/product-gate/renderer-init
+        run: node scripts/renderer-init-failure-smoke.mjs
+
+      - name: Measure baseline playground
+        id: baseline-product
+        continue-on-error: true
+        working-directory: candidate
+        env:
+          NOON_PRODUCT_SITE_ROOT: ${{ github.workspace }}/baseline
+          NOON_PRODUCT_PORT: "4205"
+          NOON_PRODUCT_LABEL: baseline
+          NOON_PRODUCT_ARTIFACT_DIR: ${{ github.workspace }}/candidate/browser-smoke-artifacts/product-gate/baseline
+        run: node scripts/playground-product-e2e.mjs
+
+      - name: Measure candidate playground
+        working-directory: candidate
+        env:
+          NOON_PRODUCT_SITE_ROOT: ${{ github.workspace }}/candidate
+          NOON_PRODUCT_PORT: "4206"
+          NOON_PRODUCT_LABEL: candidate
+          NOON_PRODUCT_ARTIFACT_DIR: ${{ github.workspace }}/candidate/browser-smoke-artifacts/product-gate/candidate
+        run: node scripts/playground-product-e2e.mjs
+
+      - name: Compare product behavior
+        if: steps.baseline-product.outcome == 'success'
+        working-directory: candidate
+        env:
+          NOON_PRODUCT_MAX_LATENCY_RATIO: "1.25"
+          NOON_PRODUCT_LATENCY_SLACK_MS: "350"
+          NOON_PRODUCT_MIN_FPS_RATIO: "0.80"
+          NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO: "0.015"
+        run: |
+          node scripts/playground-product-compare.mjs \
+            browser-smoke-artifacts/product-gate/baseline \
+            browser-smoke-artifacts/product-gate/candidate
+
+      - name: Explain unavailable baseline comparison
+        if: steps.baseline-product.outcome != 'success'
+        run: |
+          echo "::notice title=Product baseline unavailable::The current PR base does not complete the product E2E flow. Candidate functionality is still required; relative visual/latency/FPS comparison will begin once this repair reaches master."
+
+      - name: Upload product regression evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playground-product-${{ github.event.pull_request.number }}
+          path: candidate/browser-smoke-artifacts/product-gate
+          if-no-files-found: error
+          retention-days: 14

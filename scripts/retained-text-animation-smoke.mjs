@@ -134,11 +134,15 @@ try {
     0,
     "retained Text.animate must not create legacy placeholder geometry",
   );
-  assert.ok(result.retainedDocument, "retained animation must emit a retained authoring document");
-  assert.equal(result.retainedDocument.objects.length, 1);
-  assert.equal(result.retainedDocument.objects[0].text.source, "Animate");
+  const retained = await page.evaluate(
+    ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
+    { result, label: "retained animation" },
+  );
+  assert.ok(retained, "retained animation must emit canonical text content");
+  assert.equal(retained.objects.length, 1);
+  assert.equal(retained.objects[0].text.source, "Animate");
 
-  const tracks = result.retainedDocument.tracks ?? [];
+  const tracks = retained.tracks ?? [];
   const scaleTracks = tracks.filter((track) => track.property === "scale");
   const positionTracks = tracks.filter((track) => track.property === "position");
   const rotationTracks = tracks.filter((track) => track.property === "rotation");
@@ -229,19 +233,23 @@ try {
     0,
     "retained Text fades must not create legacy placeholder geometry",
   );
-  assert.ok(fadeResult.retainedDocument, "retained fade must emit a retained authoring document");
-  assert.equal(fadeResult.retainedDocument.objects.length, 1);
-  assert.equal(fadeResult.retainedDocument.objects[0].text.source, "Fade");
-  assert.deepEqual(fadeResult.retainedDocument.objects[0].text.transform.translation, {
+  const fadeRetained = await page.evaluate(
+    ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
+    { result: fadeResult, label: "retained fade" },
+  );
+  assert.ok(fadeRetained, "retained fade must emit canonical text content");
+  assert.equal(fadeRetained.objects.length, 1);
+  assert.equal(fadeRetained.objects[0].text.source, "Fade");
+  assert.deepEqual(fadeRetained.objects[0].text.transform.translation, {
     x: -1,
     y: 0,
   });
-  assert.deepEqual(fadeResult.retainedDocument.objects[0].text.transform.scale, {
+  assert.deepEqual(fadeRetained.objects[0].text.transform.scale, {
     x: 1,
     y: 1,
   });
 
-  const fadeTracks = fadeResult.retainedDocument.tracks ?? [];
+  const fadeTracks = fadeRetained.tracks ?? [];
   const fadePresence = fadeTracks.filter((track) => track.property === "presence");
   const fadeAppearance = fadeTracks.filter((track) => track.property === "appearance");
   const fadePosition = fadeTracks.filter((track) => track.property === "position");
@@ -355,8 +363,8 @@ try {
 
   assert.equal(fadeResult.duration, 4);
 
-  const wire = JSON.stringify(result.retainedDocument);
-  const fadeWire = JSON.stringify(fadeResult.retainedDocument);
+  const wire = JSON.stringify(retained);
+  const fadeWire = JSON.stringify(fadeRetained);
   for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
     assert.ok(!wire.includes(forbidden), `retained animation wire must not contain ${forbidden}`);
     assert.ok(!fadeWire.includes(forbidden), `retained fade wire must not contain ${forbidden}`);
