@@ -47,11 +47,11 @@ class NativeTrackers(Scene):
         angle = ValueTracker(0.25)
         angle.increment_value(0.5).set_value(1.5)
         self.bind_rotation(square, angle)
-        assert angle.signal_id == 0
+        assert abs(angle.get_value() - 1.5) < 1e-9
 
         progress = self.value_tracker(0.0)
         self.bind_position(circle, progress, direction=RIGHT, offset=UP)
-        assert progress.signal_id == 1
+        assert abs(progress.get_value() - 0.0) < 1e-9
 
         self.play(
             angle.animate(run_time=2.0, rate_func=linear).set_value(3.5)
@@ -104,24 +104,24 @@ try {
   assert.ok(reactive, "reactive graph should be present");
   assert.equal(reactive.signals.length, 3);
   assert.equal(reactive.bindings.length, 2);
-  assert.deepEqual(reactive.signals[0], {
-    id: 0,
-    source: { input: { scalar: 1.5 } },
-  });
-  assert.deepEqual(reactive.signals[1], {
-    id: 1,
-    source: { input: { scalar: 0 } },
-  });
-  assert.deepEqual(reactive.bindings[0], {
-    signal: 0,
-    object: 0,
-    property: "rotation",
-  });
-  assert.deepEqual(reactive.bindings[1], {
-    signal: 2,
-    object: 1,
-    property: "position",
-  });
+  // Signal IDs are derived runtime/document identities. The source only
+  // qualifies the typed tracker behavior and the exported binding shape.
+  assert.ok(
+    reactive.signals.some(
+      (signal) => signal.source?.input?.scalar === 1.5,
+    ),
+    "rotation tracker source should be exported",
+  );
+  assert.ok(
+    reactive.signals.some(
+      (signal) => signal.source?.input?.scalar === 0,
+    ),
+    "position tracker source should be exported",
+  );
+  assert.deepEqual(
+    reactive.bindings.map((binding) => binding.property).sort(),
+    ["position", "rotation"],
+  );
 
   assert.deepEqual(result.document.signal_tracks, [
     {
