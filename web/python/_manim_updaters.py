@@ -636,6 +636,7 @@ class _CanonicalCallbackContext:
     """
 
     def __init__(self, frame: dict[str, Any]) -> None:
+        self.time = float(frame["time"])
         self.delta_time = float(frame["delta_time"])
         self.token = frame["token"]
         self._frame_items = {
@@ -687,6 +688,14 @@ class _CanonicalCallbackContext:
 
     def effective_batch(self) -> dict[str, Any]:
         return {"token": self.token, "writes": self._writes}
+
+
+def _canonical_callback_time(mobject: _base.Mobject) -> float:
+    """Read Rust's prepared time from the active callback phase."""
+    context = _canonical_phase_context(mobject)
+    if context is None:
+        raise RuntimeError("canonical callback time is available only during a callback phase")
+    return context.time
 
 
 def _phase_number(name: str, value: object) -> float:

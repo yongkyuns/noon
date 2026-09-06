@@ -98,6 +98,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
         )()
         frame = {
+            "time": 0.5,
             "delta_time": 0.25,
             "token": {"runtime": 4, "publication": {}, "sequence": 8},
             "objects": [
@@ -135,6 +136,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         scene, mobject, context = self._mobject_and_context()
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         try:
+            self.assertEqual(updaters._canonical_callback_time(mobject), 0.5)
             self.assertEqual(mobject.get_center(), updaters._base.Vec2(2.0, -1.0))
             mobject.move_to((4.0, 3.0))
             mobject.set_opacity(0.5)
@@ -145,6 +147,9 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             writes = context.effective_batch()["writes"]
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+        with self.assertRaises(RuntimeError):
+            updaters._canonical_callback_time(mobject)
 
         self.assertIs(compat.VMobject.set_opacity, updaters._canonical_vmobject_set_opacity)
         self.assertEqual(
