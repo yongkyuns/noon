@@ -268,11 +268,13 @@ mod wasm {
                 };
 
             let renderer_backend = renderer_backend_label(self.backend);
-            let observation_target = self
-                .pending_renderer_observation
-                .as_ref()
-                .cloned()
-                .map(|request| resolve_renderer_observation_target(request, &self.mirror));
+            let observation_target =
+                self.pending_renderer_observation
+                    .as_ref()
+                    .cloned()
+                    .map(|request| {
+                        resolve_renderer_observation_target(request, self.mirror.transport_mirror())
+                    });
             let resolved_observation_target = observation_target
                 .as_ref()
                 .and_then(|target| target.as_ref().ok());

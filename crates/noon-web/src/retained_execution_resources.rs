@@ -43,6 +43,12 @@ impl InstalledRetainedExecutionMirror {
         &self.resources
     }
 
+    /// Borrow the indexed transport publication behind this installed renderer view.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn transport_mirror(&self) -> &RetainedExecutionFrameMirror {
+        &self.wire
+    }
+
     pub fn frame(&self) -> Option<&FrameState> {
         self.resolved.as_ref()
     }
