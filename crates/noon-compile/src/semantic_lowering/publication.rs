@@ -24,6 +24,8 @@ pub enum SemanticPublicationLoweringError {
     UnsupportedReactiveMembership {
         object: SemanticTransactionNodeRef,
     },
+    /// A transaction-local text object has no stable semantic identity through
+    /// which its pre-owned resource dependencies can be attributed.
     UnsupportedTextMembership {
         object: SemanticTransactionNodeRef,
     },
@@ -67,7 +69,7 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
             ),
             Self::UnsupportedTextMembership { object } => write!(
                 f,
-                "semantic text object {object:?} requires incremental compiled-resource publication"
+                "transaction-local text object {object:?} requires a pre-owned semantic resource scope"
             ),
             Self::UnsupportedCameraMembership { object } => write!(
                 f,
@@ -267,7 +269,8 @@ pub fn prepare_semantic_publication(
     live_painter_tail: Option<(i32, u64)>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations())?;
-    let (values, resource_additions) = lower_semantic_publication(prepared, index, reachability)?;
+    let (values, mut resource_additions) =
+        lower_semantic_publication(prepared, index, reachability)?;
     let mut possible_entry_refs = Vec::new();
     let mut seen_entries = HashSet::new();
     let mut possible_exit_nodes = Vec::new();
@@ -335,7 +338,7 @@ pub fn prepare_semantic_publication(
 
     let mut entries = possible_entry_refs
         .into_iter()
-        .map(|object| lower_prepared_entry(prepared, object))
+        .map(|object| lower_prepared_entry(prepared, object, &mut resource_additions))
         .collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.presentation.order_key());
     if let (Some(tail), Some(entry)) = (live_painter_tail, entries.first()) {
@@ -445,6 +448,7 @@ fn collect_existing_exit_leaves(
 fn lower_prepared_entry(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     object: SemanticTransactionNodeRef,
+    resource_additions: &mut CompiledResources,
 ) -> Result<PreparedEntry, SemanticPublicationLoweringError> {
     let state = prepared.proposed_object_state(object)?;
     if matches!(state.role(), noon_core::SemanticObjectRole::Camera2D) {
@@ -453,23 +457,38 @@ fn lower_prepared_entry(
     if !state.signal_bindings().is_empty() {
         return Err(SemanticPublicationLoweringError::UnsupportedReactiveMembership { object });
     }
-    let geometry = match state.content {
-        SemanticObjectContent::Geometry(geometry) => {
-            lower_semantic_geometry_value(geometry, Some(prepared.store())).map_err(|error| {
-                SemanticPublicationLoweringError::PreparedGeometry { object, error }
-            })?
-        }
-        SemanticObjectContent::Text(_) => {
-            return Err(SemanticPublicationLoweringError::UnsupportedTextMembership { object });
+    let (content, text_bounds) = match state.content {
+        SemanticObjectContent::Geometry(geometry) => (
+            lower_semantic_geometry_value(geometry, Some(prepared.store()))
+                .map_err(|error| SemanticPublicationLoweringError::PreparedGeometry {
+                    object,
+                    error,
+                })?
+                .into(),
+            None,
+        ),
+        SemanticObjectContent::Text(text) => {
+            let node = object
+                .existing()
+                .ok_or(SemanticPublicationLoweringError::UnsupportedTextMembership { object })?;
+            lower_content(
+                node,
+                SemanticObjectContent::Text(text),
+                Some(prepared.store()),
+                resource_additions,
+            )
+            .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?
         }
     };
     let transform = lower_semantic_transform_value(&state)
         .map_err(|error| SemanticPublicationLoweringError::PreparedValue { object, error })?;
     let style = lower_semantic_style_value(&state)
         .map_err(|error| SemanticPublicationLoweringError::PreparedValue { object, error })?;
+    let mut compiled = CompiledObject::new(ObjectId::new(0), content, transform, style);
+    compiled.text_bounds = text_bounds;
     Ok(PreparedEntry {
         object,
-        compiled: CompiledObject::new(ObjectId::new(0), geometry, transform, style),
+        compiled,
         presentation: state.presentation(),
     })
 }
