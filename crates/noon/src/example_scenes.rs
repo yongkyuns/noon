@@ -3,8 +3,8 @@
 use std::error::Error;
 
 use crate::{
-    AnimationOptions, ExecutionSession, ExecutionSessionInputError, HostCallbackId, RateFunction,
-    ReactiveValue, RustHostCallbackTable, Scene, SemanticVec3, Vec2,
+    AnimationOptions, Color, ExecutionSession, ExecutionSessionInputError, HostCallbackId,
+    RateFunction, ReactiveValue, RustHostCallbackTable, Scene, SemanticPaint, SemanticVec3, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -208,6 +208,65 @@ pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
         assert_eq!((authored.x, authored.y), (5.0, -1.0));
     }
     assert_eq!(session.frame().time, 4.0);
+    Ok(session)
+}
+
+/// Execute one ordinary style play and a following authored style edit.
+///
+/// The animation's fill and object-opacity channels share one runtime segment.
+/// Completion reconciles their exact semantic endpoint before the ordinary green
+/// edit publishes through the same live session.
+pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.4)?;
+    circle.set_fill(0.0, 0.4, 1.0, 1.0)?;
+    circle.set_object_opacity(1.0)?;
+    scene.add(&circle)?;
+
+    let mut session = scene.execution_session()?;
+    {
+        let mut live = scene.live(&mut session);
+        let target = live.target_editor(&circle)?;
+        let mut target_style = live.authored(&target)?.style;
+        target_style.fill = Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)));
+        target_style.fill_opacity = 0.4;
+        target_style.object_opacity = 0.5;
+        live.replace_style(&target, target_style.clone())?;
+
+        let segment = live.declare_and_activate_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )?;
+        live.advance_segment_to(segment, 1.0)?;
+        let midpoint = live.effective(&circle)?.style;
+        let midpoint_fill = midpoint.fill.expect("the style play retains its fill");
+        assert!((midpoint_fill.red - 0.5).abs() < 1e-6);
+        assert!((midpoint_fill.green - 0.2).abs() < 1e-6);
+        assert!((midpoint_fill.blue - 0.5).abs() < 1e-6);
+        assert!((midpoint_fill.alpha - 0.7).abs() < 1e-6);
+        assert!((midpoint.opacity - 0.75).abs() < 1e-6);
+
+        live.advance_segment_to(segment, segment.end_time())?;
+        let endpoint = live.effective(&circle)?.style;
+        assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.4)));
+        assert!((endpoint.opacity - 0.5).abs() < 1e-6);
+        live.complete_segment(segment)?;
+        assert_eq!(live.authored(&circle)?.style, target_style);
+
+        let mut final_style = target_style;
+        final_style.fill = Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)));
+        final_style.fill_opacity = 1.0;
+        final_style.object_opacity = 1.0;
+        live.replace_style(&circle, final_style.clone())?;
+        assert_eq!(live.authored(&circle)?.style, final_style);
+        let effective = live.effective(&circle)?.style;
+        assert_eq!(effective.fill, Some(Color::rgb(0.0, 1.0, 0.0)));
+        assert_eq!(effective.opacity, 1.0);
+    }
+    assert_eq!(session.frame().time, 2.0);
     Ok(session)
 }
 

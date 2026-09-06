@@ -158,6 +158,7 @@ function visiblePixelStats(
   let minY = png.height;
   let maxY = -1;
   let red = 0;
+  let green = 0;
   let blue = 0;
   for (let offset = 0; offset < png.data.length; offset += 4) {
     const pixelRed = png.data[offset];
@@ -173,6 +174,7 @@ function visiblePixelStats(
     minY = Math.min(minY, y);
     maxY = Math.max(maxY, y);
     red += pixelRed;
+    green += pixelGreen;
     blue += pixelBlue;
   }
   return {
@@ -182,6 +184,7 @@ function visiblePixelStats(
     centerX: maxX >= minX ? (minX + maxX) / 2 : 0,
     centerY: maxY >= minY ? (minY + maxY) / 2 : 0,
     meanRed: count === 0 ? 0 : red / count,
+    meanGreen: count === 0 ? 0 : green / count,
     meanBlue: count === 0 ? 0 : blue / count,
   };
 }
@@ -402,6 +405,7 @@ try {
     endpointTime,
     expectText = false,
     expectedFinalCenter = null,
+    expectedFinalColor = null,
   } of [
     {
       filename: "live_semantic_scene.py",
@@ -428,6 +432,14 @@ try {
       expectedDuration: 4,
       endpointTime: null,
       expectedFinalCenter: [5, -1],
+    },
+    {
+      filename: "ordinary_style_play.py",
+      objectCount: 1,
+      expectedDuration: 2,
+      endpointTime: null,
+      expectedFinalCenter: [0, 0],
+      expectedFinalColor: "green",
     },
     {
       filename: "live_value_tracker.py",
@@ -531,6 +543,13 @@ try {
       assert.ok(finalPixels.count > 100, `${filename}: completed circle was not visible`);
       assert.ok(Math.abs(finalPixels.centerX - expectedX) < 4, `${filename}: completed x endpoint expected ${expectedX}; pixels ${JSON.stringify(finalPixels)}`);
       assert.ok(Math.abs(finalPixels.centerY - expectedY) < 4, `${filename}: completed y endpoint expected ${expectedY}; pixels ${JSON.stringify(finalPixels)}`);
+      if (expectedFinalColor === "green") {
+        assert.ok(
+          finalPixels.meanGreen > finalPixels.meanRed + 30 &&
+            finalPixels.meanGreen > finalPixels.meanBlue + 30,
+          `${filename}: post-completion green style edit was not rendered: ${JSON.stringify(finalPixels)}`,
+        );
+      }
     }
     if (expectText) {
       const pixels = textPixelStats(await page.locator(`#${result.canvasId}`).screenshot());

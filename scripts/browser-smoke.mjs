@@ -347,6 +347,29 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM ordinary affine play retained an earlier barrier position",
   );
   assert.equal(
+    direct.metrics.ordinaryStylePlay?.backend,
+    expectedBackend,
+    "direct Rust/WASM ordinary style play did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.ordinaryStylePlay?.authoredTime,
+    2,
+    "direct Rust/WASM ordinary style play did not preserve the shared session time",
+  );
+  assert.equal(
+    direct.metrics.ordinaryStylePlay?.objectCount,
+    1,
+    "direct Rust/WASM ordinary style scene did not retain its Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.ordinaryStylePlay?.endpointColor.green >= 180 &&
+      direct.metrics.ordinaryStylePlay?.endpointColor.green >=
+        direct.metrics.ordinaryStylePlay?.endpointColor.red + 100 &&
+      direct.metrics.ordinaryStylePlay?.endpointColor.green >=
+        direct.metrics.ordinaryStylePlay?.endpointColor.blue + 100,
+    "direct Rust/WASM ordinary style play did not render its post-completion green edit",
+  );
+  assert.equal(
     direct.metrics.valueTracker?.backend,
     expectedBackend,
     "direct Rust/WASM ValueTracker did not use the selected renderer backend",

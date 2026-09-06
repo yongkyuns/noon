@@ -14,6 +14,7 @@ Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `r
 | Direct Rust/WASM qualification | Shared Rust builder | Browser-owned input |
 | --- | --- | --- |
 | Sequential ordinary affine play | `noon::example_scenes::ordinary_affine_play()` | None; the typed Rust session owns both plays, the wait, and the authored edit |
+| Ordinary style play | `noon::example_scenes::ordinary_style_play()` | None; the typed Rust session owns fill/object-opacity interpolation, completion, and the following authored style edit |
 | Native signals | `noon::example_scenes::live_native_signals()` | Typed pointer, Space-key, opacity-control, and ordered pointer-down occurrences; no scene JSON or semantic IDs |
 
 ## Curated examples

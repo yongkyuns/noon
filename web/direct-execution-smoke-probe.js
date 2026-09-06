@@ -4,6 +4,7 @@ import {
   createDirectExecutionSmokeRenderer,
   createDirectNativeSignalsSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
+  createDirectOrdinaryStylePlaySmokeRenderer,
   createDirectValueTrackerSmokeRenderer,
 } from "./pkg/noon_web.js";
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
@@ -85,6 +86,24 @@ async function sampleRenderedPixel(canvas, worldX, worldY) {
   const y = Math.round(((worldHeight / 2 - worldY) / worldHeight) * (canvas.height - 1));
   const data = context.getImageData(x, y, 1, 1).data;
   return data[0] + data[1] + data[2];
+}
+
+async function sampleRenderedColor(canvas, worldX, worldY) {
+  const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
+  const pixels = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = pixels.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("direct Rust/WASM proof could not create its pixel reader");
+  }
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const worldHeight = 8;
+  const worldWidth = worldHeight * (canvas.width / canvas.height);
+  const x = Math.round(((worldX + worldWidth / 2) / worldWidth) * (canvas.width - 1));
+  const y = Math.round(((worldHeight / 2 - worldY) / worldHeight) * (canvas.height - 1));
+  const [red, green, blue, alpha] = context.getImageData(x, y, 1, 1).data;
+  return { red, green, blue, alpha };
 }
 
 async function sampleRenderedNeighborhood(canvas, worldX, worldY, radius = 4) {
@@ -259,6 +278,49 @@ async function directOrdinaryAffinePlayProof(expectedBackend) {
   }
   if (endpointLuma < 250 || firstEndpointLuma > 60 || shiftedLuma > 60) {
     throw new Error(`direct ordinary affine did not render its x=5 endpoint ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
+async function directOrdinaryStylePlayProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryStylePlaySmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow) {
+    throw new Error("direct ordinary style session did not expose its settled publication");
+  }
+  await presentDirectFrame(renderer);
+
+  // The shared Rust builder verifies the interpolated and completed style. The
+  // final green pixel proves the post-completion authored edit reached this same
+  // runtime and renderer.
+  const endpointColor = await sampleRenderedColor(canvas, 0, 0);
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    endpointColor,
+  };
+  if (metrics.backend !== expectedBackend) {
+    throw new Error(
+      `direct ordinary style renderer selected ${metrics.backend}; expected ${expectedBackend}`,
+    );
+  }
+  if (metrics.authoredTime !== 2) {
+    throw new Error(`direct ordinary style authored time is ${metrics.authoredTime}; expected 2`);
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
+    throw new Error(`direct ordinary style produced invalid metrics ${JSON.stringify(metrics)}`);
+  }
+  if (
+    endpointColor.green < 180 ||
+    endpointColor.green < endpointColor.red + 100 ||
+    endpointColor.green < endpointColor.blue + 100
+  ) {
+    throw new Error(`direct ordinary style did not render its green authored edit ${JSON.stringify(metrics)}`);
   }
   return metrics;
 }
@@ -451,6 +513,7 @@ async function start() {
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
+  metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.valueTracker = await directValueTrackerProof(expectedBackend);
   metrics.nativeSignals = await directNativeSignalsProof(expectedBackend);
 
