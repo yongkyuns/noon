@@ -1,8 +1,9 @@
 //! Direct authoring scope over one family in the shared semantic store.
 use crate::{ExecutionSession, LiveSession, Mobject};
 use noon_core::{
-    GeometryRef, SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
+    AnimationOptions, GeometryRef, RateFunction, SemanticMutationImpact,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticStore,
+    SemanticStyle, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -100,6 +101,30 @@ impl Scene {
             return Err("mobject belongs to another scene store".into());
         }
         object.validate()
+    }
+    /// Validate the bounded ordinary leaf-affine operation without creating a
+    /// declaration, session, track, or runtime identity.
+    pub fn can_ordinary_transform_to(
+        &self,
+        source: &Mobject,
+        target: &Mobject,
+        options: AnimationOptions,
+    ) -> Result<(), String> {
+        self.require_object(source)?;
+        self.require_object(target)?;
+        noon_compile::validate_semantic_transform_to_payload(
+            &self.store.borrow(),
+            source.node_id(),
+            target.node_id(),
+            options,
+        )
+        .map_err(|error| error.to_string())?;
+        if options.rate_func != Some(RateFunction::Linear) {
+            return Err(
+                "ordinary canonical Transform currently requires a linear rate function".into(),
+            );
+        }
+        Ok(())
     }
     pub fn execution_session(
         &self,

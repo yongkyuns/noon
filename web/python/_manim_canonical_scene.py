@@ -321,46 +321,10 @@ def _canonical_affine_animation(
     return source, target, animation
 
 
-def _canonical_affine_style_is_supported(
-    source: _base.Mobject, target: _base.Mobject
-) -> bool:
-    """Keep style-changing compatibility Transforms at the explicit #959 boundary.
-
-    The ordinary session currently owns affine transform channels only.  Read the
-    existing typed handle projection directly to choose that supported subset;
-    this does not snapshot, export, or duplicate either Mobject's style.
-    """
-    source_handle = getattr(source, "_semantic_handle")
-    target_handle = getattr(target, "_semantic_handle")
-    required = ("wireHasFill", "wireHasStroke", "wireStrokeWidth", "wireObjectOpacity")
-    if not all(
-        hasattr(source_handle, field) and hasattr(target_handle, field) for field in required
-    ):
-        return False
-    if bool(source_handle.wireHasFill) != bool(target_handle.wireHasFill):
-        return False
-    if bool(source_handle.wireHasFill) and any(
-        getattr(source_handle, field) != getattr(target_handle, field)
-        for field in ("wireFillRed", "wireFillGreen", "wireFillBlue", "wireFillAlpha")
-    ):
-        return False
-    if bool(source_handle.wireHasStroke) != bool(target_handle.wireHasStroke):
-        return False
-    if bool(source_handle.wireHasStroke) and any(
-        getattr(source_handle, field) != getattr(target_handle, field)
-        for field in ("wireStrokeRed", "wireStrokeGreen", "wireStrokeBlue", "wireStrokeAlpha")
-    ):
-        return False
-    return (
-        source_handle.wireStrokeWidth == target_handle.wireStrokeWidth
-        and source_handle.wireObjectOpacity == target_handle.wireObjectOpacity
-    )
-
-
-def _canonical_affine_options_are_supported(
+def _canonical_affine_options(
     animation: object, kwargs: dict[str, object]
-) -> bool:
-    """Select the currently supported linear leaf-affine option subset."""
+) -> object | None:
+    """Resolve the existing Python play ergonomics before typed Rust preflight."""
     duration = kwargs.get("duration")
     run_time = kwargs.get("run_time")
     easing = kwargs.get("easing")
@@ -369,11 +333,11 @@ def _canonical_affine_options_are_supported(
     if (
         duration is not None and run_time is not None
     ) or (easing is not None and rate_func is not None):
-        return False
+        return None
     if kwargs.keys() - {"duration", "run_time", "start_time", "easing", "rate_func", "lag_ratio"}:
-        return False
+        return None
     if kwargs.get("start_time") is not None:
-        return False
+        return None
     try:
         resolved = _options.resolve(
             builder_args=_options.builder_args(animation),
@@ -384,13 +348,31 @@ def _canonical_affine_options_are_supported(
             play_lag_ratio=lag_ratio,
         )
     except (TypeError, ValueError, NotImplementedError):
+        return None
+    return resolved
+
+
+def _canonical_affine_payload_is_supported(
+    scene: _base.Scene,
+    source: _base.Mobject,
+    target: _base.Mobject,
+    animation: object,
+    kwargs: dict[str, object],
+) -> bool:
+    """Ask the shared compiler whether this inert payload can enter live execution."""
+    resolved = _canonical_affine_options(animation, kwargs)
+    if resolved is None:
         return False
-    return (
-        resolved.rate_func == "linear"
-        and resolved.lag_ratio == 0.0
-        and resolved.path_arc == 0.0
-        and not resolved.reverse_rate_function
-    )
+    try:
+        _context(scene).ordinaryCanPlayTransformTo(
+            getattr(source, "_semantic_handle"),
+            getattr(target, "_semantic_handle"),
+            float(resolved.run_time),
+            str(resolved.rate_func),
+        )
+    except Exception:
+        return False
+    return True
 
 
 def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):
@@ -490,9 +472,8 @@ def _play(self, *args, **kwargs):
         if len(canonical_affine) != 1 or len(args) != 1:
             return _play_legacy_compatibility(self, *args, **kwargs)
         source, target, animation = canonical_affine[0]
-        if not (
-            _canonical_affine_style_is_supported(source, target)
-            and _canonical_affine_options_are_supported(animation, kwargs)
+        if not _canonical_affine_payload_is_supported(
+            self, source, target, animation, kwargs
         ):
             return _play_legacy_compatibility(self, *args, **kwargs)
         return _play_canonical_affine(

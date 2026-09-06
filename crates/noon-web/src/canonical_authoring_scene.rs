@@ -658,28 +658,7 @@ impl CanonicalAuthoringScene {
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
-            || !std::rc::Rc::ptr_eq(self.scene.store(), target.store())
-        {
-            return Err(
-                "ordinary affine animation mobjects belong to another authoring store".into(),
-            );
-        }
-        source.validate()?;
-        target.validate()?;
-        if !self.identities.contains_key(&source.node_id()) {
-            return Err(
-                "ordinary affine animation source is not bound to this canonical Scene".into(),
-            );
-        }
-        if self.identities.contains_key(&target.node_id()) {
-            return Err("ordinary affine animation target must be a detached Mobject".into());
-        }
-        if self.live_player.is_none() && self.scene.time() != 0.0 {
-            return Err(
-                "ordinary affine animation cannot follow pre-execution canonical timing".into(),
-            );
-        }
+        self.validate_ordinary_transform_to(source, target, options)?;
 
         // `live_player` needs a valid presentation extent before activation. The
         // player replaces it with the exact returned segment endpoint below.
@@ -702,6 +681,38 @@ impl CanonicalAuthoringScene {
         player
             .live_handoff_duration()
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn validate_ordinary_transform_to(
+        &self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<(), String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
+            || !std::rc::Rc::ptr_eq(self.scene.store(), target.store())
+        {
+            return Err(
+                "ordinary affine animation mobjects belong to another authoring store".into(),
+            );
+        }
+        source.validate()?;
+        target.validate()?;
+        if !self.identities.contains_key(&source.node_id()) {
+            return Err(
+                "ordinary affine animation source is not bound to this canonical Scene".into(),
+            );
+        }
+        if self.identities.contains_key(&target.node_id()) {
+            return Err("ordinary affine animation target must be a detached Mobject".into());
+        }
+        if self.live_player.is_none() && self.scene.time() != 0.0 {
+            return Err(
+                "ordinary affine animation cannot follow pre-execution canonical timing".into(),
+            );
+        }
+        self.scene.can_ordinary_transform_to(source, target, options)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1687,6 +1698,34 @@ mod wasm {
                 .rate_func(rate_function);
             self.inner
                 .ordinary_play_transform_to(
+                    source.semantic_mobject(),
+                    target.semantic_mobject(),
+                    options,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ordinaryCanPlayTransformTo)]
+        pub fn ordinary_can_play_transform_to(
+            &self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            source.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
+            target.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .validate_ordinary_transform_to(
                     source.semantic_mobject(),
                     target.semantic_mobject(),
                     options,

@@ -1,4 +1,31 @@
 use super::*;
+use noon_core::{AnimationOptions, RateFunction};
+
+#[test]
+fn ordinary_transform_preflight_is_read_only_and_shares_affine_payload_validation() {
+    let mut scene = Scene::new();
+    let circle = scene.circle(1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let mut affine_target = circle.target_editor().unwrap();
+    affine_target.set_translation(2.0, 0.0).unwrap();
+    let options = AnimationOptions::new()
+        .run_time(1.0)
+        .rate_func(RateFunction::Linear);
+    let revision = scene.store().borrow().scene_revision();
+    scene
+        .can_ordinary_transform_to(&circle, &affine_target, options)
+        .unwrap();
+    assert_eq!(scene.store().borrow().scene_revision(), revision);
+
+    let mut style_target = circle.target_editor().unwrap();
+    style_target.set_fill_opacity(0.5).unwrap();
+    let revision = scene.store().borrow().scene_revision();
+    assert!(scene
+        .can_ordinary_transform_to(&circle, &style_target, options)
+        .is_err());
+    assert_eq!(scene.store().borrow().scene_revision(), revision);
+}
+
 #[test]
 fn membership_preserves_identity_isolates_roots_and_rejects_foreign_stores() {
     let store = Rc::new(RefCell::new(SemanticStore::new()));

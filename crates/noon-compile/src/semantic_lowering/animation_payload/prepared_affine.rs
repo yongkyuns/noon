@@ -106,6 +106,36 @@ impl std::fmt::Display for PreparedSemanticTransformToError {
 
 impl std::error::Error for PreparedSemanticTransformToError {}
 
+/// Validate an inert TransformTo payload before any declaration, runtime, or
+/// execution identity is created.
+///
+/// This is the shared capability check for language facades deciding whether a
+/// typed ordinary transform can enter the canonical session. It deliberately
+/// reads only the two store-owned semantic object states and resolved options.
+pub fn validate_semantic_transform_to_payload(
+    store: &SemanticStore,
+    target: SemanticNodeId,
+    target_state: SemanticNodeId,
+    options: AnimationOptions,
+) -> Result<(), PreparedSemanticTransformToError> {
+    let source = store
+        .semantic_object_state_checked(target)
+        .map_err(|error| PreparedSemanticTransformToError::Target {
+            node: target,
+            error,
+        })?;
+    let target_object = store
+        .semantic_object_state_checked(target_state)
+        .map_err(|error| PreparedSemanticTransformToError::Target {
+            node: target_state,
+            error,
+        })?;
+    let options = resolve_animation_options(AnimationDefaults::MANIM, options, options)
+        .map_err(PreparedSemanticTransformToError::Options)?;
+    validate_affine_payload(source, target_object, options)
+        .map_err(|issue| prepared_payload_error(target, issue))
+}
+
 /// Lower one not-yet-committed affine declaration without reserving semantic identity.
 ///
 /// The result is inert until the session publishes it together with the semantic declaration.
