@@ -1207,6 +1207,12 @@ mod wasm {
         height: f64,
     }
 
+    /// Pure derived result of one shared callback property operation.
+    #[wasm_bindgen]
+    pub struct WasmCallbackTransform {
+        transform: Transform2D,
+    }
+
     /// Opaque JS/Python wrapper over a replayable shared semantic declaration.
     #[wasm_bindgen]
     pub struct WasmDeclaredAnimationHandle {
@@ -1286,6 +1292,34 @@ mod wasm {
         #[wasm_bindgen(getter)]
         pub fn height(&self) -> f64 {
             self.height
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmCallbackTransform {
+        #[wasm_bindgen(getter, js_name = translationX)]
+        pub fn translation_x(&self) -> f64 {
+            f64::from(self.transform.translation.x)
+        }
+
+        #[wasm_bindgen(getter, js_name = translationY)]
+        pub fn translation_y(&self) -> f64 {
+            f64::from(self.transform.translation.y)
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn rotation(&self) -> f64 {
+            f64::from(self.transform.rotation)
+        }
+
+        #[wasm_bindgen(getter, js_name = scaleX)]
+        pub fn scale_x(&self) -> f64 {
+            f64::from(self.transform.scale.x)
+        }
+
+        #[wasm_bindgen(getter, js_name = scaleY)]
+        pub fn scale_y(&self) -> f64 {
+            f64::from(self.transform.scale.y)
         }
     }
 
@@ -1406,6 +1440,33 @@ mod wasm {
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
+        /// Evaluate one callback-local rotation without mutating authored scene state.
+        #[wasm_bindgen(js_name = callbackRotateTransformAboutPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_rotate_transform_about_point(
+            &self,
+            translation_x: f64,
+            translation_y: f64,
+            rotation: f64,
+            scale_x: f64,
+            scale_y: f64,
+            angle: f64,
+            pivot_x: f64,
+            pivot_y: f64,
+        ) -> Result<WasmCallbackTransform, JsValue> {
+            let transform = noon::rotate_effective_transform_about_point(
+                Transform2D {
+                    translation: Vec2::new(translation_x as f32, translation_y as f32),
+                    rotation: rotation as f32,
+                    scale: Vec2::new(scale_x as f32, scale_y as f32),
+                },
+                angle,
+                Vec2::new(pivot_x as f32, pivot_y as f32),
+            )
+            .map_err(js_error)?;
+            Ok(WasmCallbackTransform { transform })
+        }
+
         #[wasm_bindgen(js_name = bindMobject)]
         pub fn bind_mobject(
             &mut self,

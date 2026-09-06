@@ -5,13 +5,15 @@ use std::error::Error;
 use crate::{
     AnimationOptions, Color, ExecutionSession, ExecutionSessionInputError, HostCallbackId,
     RateFunction, ReactiveValue, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind,
-    SemanticPaint, SemanticVec3, TransformToRequest, Vec2,
+    SemanticMutationTransaction, SemanticPaint, SemanticVec3, TransformToRequest, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
 const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
 const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
 const ACCUMULATE_TEXT_DT: HostCallbackId = HostCallbackId::new(4);
+const ROTATE_LINE_FORWARD: HostCallbackId = HostCallbackId::new(5);
+const ROTATE_LINE_BACKWARD: HostCallbackId = HostCallbackId::new(6);
 
 /// Build the paired affine callback example without selecting a platform host.
 ///
@@ -80,6 +82,64 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
         live.play_animation(&animation)?;
     }
     Ok((session, callbacks))
+}
+
+/// Build the paired Line callback example used by renderer-observation proofs.
+///
+/// The compiler owns the adjacent forward and reverse callback windows. Circle,
+/// reference-Line, and Text siblings stay resident while only the moving Line's
+/// one effective transform changes.
+pub fn live_line_callback_rotation(
+) -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut marker = scene.circle(0.35)?;
+    marker.set_fill(0.1, 0.4, 1.0, 1.0)?;
+    marker.set_translation(-3.0, 0.0)?;
+    let mut reference = scene.line((0.0, 0.0), (-1.0, 0.0))?;
+    reference.set_color(1.0, 1.0, 1.0, 1.0)?;
+    let mut moving = scene.line((0.0, 0.0), (-1.0, 0.0))?;
+    moving.set_color(1.0, 0.8, 0.0, 1.0)?;
+    let mut label = scene.text("Noon")?;
+    label.set_translation(0.0, -2.0)?;
+    scene.add(&marker)?;
+    scene.add(&reference)?;
+    scene.add(&moving)?;
+    scene.add(&label)?;
+
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks.insert(ROTATE_LINE_FORWARD, |context| {
+        let transform = context
+            .target_transform_rotated_about_point(context.delta_time(), Vec2::ZERO)
+            .map_err(std::io::Error::other)?;
+        context
+            .set_target_transform(transform)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    })?;
+    callbacks.insert(ROTATE_LINE_BACKWARD, |context| {
+        let transform = context
+            .target_transform_rotated_about_point(-context.delta_time(), Vec2::ZERO)
+            .map_err(std::io::Error::other)?;
+        context
+            .set_target_transform(transform)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    })?;
+    {
+        let mut store = scene.store().borrow_mut();
+        callbacks.add_updater(&mut store, moving.node_id(), ROTATE_LINE_FORWARD, 0.0, None)?;
+        callbacks.add_updater(
+            &mut store,
+            moving.node_id(),
+            ROTATE_LINE_BACKWARD,
+            2.0,
+            None,
+        )?;
+        let mut close_windows = SemanticMutationTransaction::new();
+        close_windows.remove_updater(moving.node_id(), ROTATE_LINE_FORWARD, 2.0);
+        close_windows.remove_updater(moving.node_id(), ROTATE_LINE_BACKWARD, 4.0);
+        close_windows.apply(&mut store)?;
+    }
+
+    Ok((scene.execution_session()?, callbacks))
 }
 
 /// Execute the paired affine-completion example and return its settled session.
@@ -567,4 +627,30 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
     let _ = scene.control_commit_events("opacity")?;
 
     Ok(scene.execution_session()?)
+}
+
+#[cfg(test)]
+mod line_callback_tests {
+    use super::*;
+
+    #[test]
+    fn line_callback_windows_reverse_one_local_effective_transform() {
+        let (mut session, mut callbacks) = live_line_callback_rotation().unwrap();
+        callbacks.advance_to(&mut session, 0.0).unwrap();
+        session.take_frame_changes();
+
+        callbacks.advance_to(&mut session, 1.0).unwrap();
+        assert!((session.frame().objects[2].transform.rotation - 1.0).abs() < 1.0e-6);
+        assert_eq!(session.take_frame_changes().object_indices(), &[2]);
+
+        callbacks.advance_to(&mut session, 3.0).unwrap();
+        assert!((session.frame().objects[2].transform.rotation + 1.0).abs() < 1.0e-6);
+        assert_eq!(session.take_frame_changes().object_indices(), &[2]);
+        assert_eq!(session.frame().objects[0].transform, Transform2D::IDENTITY);
+        assert_eq!(session.frame().objects[1].transform, Transform2D::IDENTITY);
+        assert_eq!(
+            session.frame().objects[3].transform.translation,
+            Vec2::new(0.0, -2.0)
+        );
+    }
 }

@@ -1,3 +1,4 @@
+import math
 import unittest
 from types import SimpleNamespace
 
@@ -148,7 +149,22 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 }
             ],
         }
-        return scene, mobject, updaters._CanonicalCallbackContext(frame)
+        class CallbackOperations:
+            def __init__(self) -> None:
+                self.rotations: list[tuple[float, ...]] = []
+
+            def callbackRotateTransformAboutPoint(self, *values: float):
+                self.rotations.append(values)
+                return SimpleNamespace(
+                    translationX=1.0,
+                    translationY=2.0,
+                    rotation=math.pi / 2.0,
+                    scaleX=1.0,
+                    scaleY=1.0,
+                )
+
+        operations = CallbackOperations()
+        return scene, mobject, updaters._CanonicalCallbackContext(frame, operations)
 
     def test_translation_only_row_preserves_ordered_property_writes(self) -> None:
         scene, mobject, context = self._mobject_and_context()
@@ -193,6 +209,30 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 mobject.copy()
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_explicit_pivot_rotation_dispatches_to_shared_rust_operation(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            updaters._canonical_rotate(
+                mobject,
+                math.pi / 2.0,
+                (0.0, 0.0, 1.0),
+                about_point=(0.0, 0.0, 0.0),
+            )
+            writes = context.effective_batch()["writes"]
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+        self.assertEqual(len(context._operations.rotations), 1)
+        self.assertEqual(
+            context._operations.rotations[0],
+            (2.0, -1.0, 0.0, 1.0, 1.0, math.pi / 2.0, 0.0, 0.0),
+        )
+        self.assertEqual([write["kind"] for write in writes], ["transform"])
+        self.assertEqual(writes[0]["transform"]["translation"], {"x": 1.0, "y": 2.0})
+        self.assertAlmostEqual(writes[0]["transform"]["rotation"], math.pi / 2.0)
+        self.assertFalse(next(iter(context._rows.values())).bounds_translation_only)
 
     def test_native_text_uses_the_same_effective_overlay_without_authored_writes(self) -> None:
         scene, _, context = self._mobject_and_context()

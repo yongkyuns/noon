@@ -648,9 +648,10 @@ class _CanonicalCallbackContext:
     They intentionally cannot carry geometry, identity, membership, or authored state.
     """
 
-    def __init__(self, frame: dict[str, Any]) -> None:
+    def __init__(self, frame: dict[str, Any], operations: object) -> None:
         self.delta_time = float(frame["delta_time"])
         self.token = frame["token"]
+        self._operations = operations
         self._frame_items = {
             _phase_node_key(item["node"]): item for item in frame["objects"]
         }
@@ -685,6 +686,30 @@ class _CanonicalCallbackContext:
                     "transform": row.transform.to_wire(),
                 }
             )
+
+    def rotate_transform_about_point(
+        self,
+        transform: _PhaseTransform,
+        angle: float,
+        pivot: _base.Vec2,
+    ) -> _PhaseTransform:
+        result = self._operations.callbackRotateTransformAboutPoint(
+            transform.translation_x,
+            transform.translation_y,
+            transform.rotation,
+            transform.scale_x,
+            transform.scale_y,
+            angle,
+            pivot.x,
+            pivot.y,
+        )
+        return _PhaseTransform(
+            _phase_number("rotation result.translation.x", result.translationX),
+            _phase_number("rotation result.translation.y", result.translationY),
+            _phase_number("rotation result.rotation", result.rotation),
+            _phase_number("rotation result.scale.x", result.scaleX),
+            _phase_number("rotation result.scale.y", result.scaleY),
+        )
 
     def style_changed(
         self, key: tuple[int, int], before: _PhaseStyle, row: _PhasePropertyRow
@@ -843,11 +868,36 @@ def _canonical_scale(self: _base.Mobject, *args: object, **kwargs: object) -> _b
 
 
 def _canonical_rotate(self: _base.Mobject, *args: object, **kwargs: object) -> _base.Mobject:
-    if _canonical_phase_context(self) is not None:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_ROTATE(self, *args, **kwargs)
+    context, key, row = value
+    if not args or len(args) > 2:
+        raise TypeError("canonical callback rotate expects angle and optional axis")
+    options = dict(kwargs)
+    if len(args) == 2 and "axis" in options:
+        raise TypeError("canonical callback rotate received axis twice")
+    axis = args[1] if len(args) == 2 else options.pop("axis", (0.0, 0.0, 1.0))
+    about_point = options.pop("about_point", None)
+    about_edge = options.pop("about_edge", None)
+    if options:
+        unsupported = ", ".join(sorted(options))
         raise NotImplementedError(
-            "canonical callback rotation is not supported; use shared semantic operations"
+            f"unsupported canonical callback rotate option(s): {unsupported}"
         )
-    return _ORIGINAL_ROTATE(self, *args, **kwargs)
+    if about_point is None or about_edge is not None:
+        raise NotImplementedError(
+            "canonical callback rotation currently requires one explicit about_point"
+        )
+    import _manim_compat as compat
+
+    angle = compat._rotation_angle_2d(args[0], axis)
+    pivot = compat._as_vec2(about_point)
+    before = row.transform
+    row.transform = context.rotate_transform_about_point(before, angle, pivot)
+    row.invalidate_bounds()
+    context.transform_changed(key, before, row)
+    return self
 
 def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
     value = _canonical_row(self)
@@ -1097,7 +1147,7 @@ def run_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> str:
     except KeyError as error:
         raise ValueError(f"unknown canonical Noon updater session {session_id}") from error
 
-    context = _CanonicalCallbackContext(frame)
+    context = _CanonicalCallbackContext(frame, session.context)
     scene_key = id(session.scene)
     if scene_key in _ACTIVE_CONTEXTS:
         raise RuntimeError("nested Noon callback phases are not supported")

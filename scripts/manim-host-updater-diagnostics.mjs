@@ -26,6 +26,10 @@ const source = await readFile(
   path.join(repoRoot, "web/python/examples/renderer_observation_callbacks.py"),
   "utf8",
 );
+const lineSource = await readFile(
+  path.join(repoRoot, "web/python/examples/renderer_observation_line_callbacks.py"),
+  "utf8",
+);
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
@@ -99,12 +103,12 @@ function assertTargetWrite(write, buffer, label) {
   assert.ok(write.payload_hash > 0);
 }
 
-function assertCommonObservation(observation, backend, label) {
+function assertCommonObservation(observation, backend, label, expectedTime = targetTime) {
   assert.equal(observation.schema_version, 1);
   assert.equal(observation.backend, backend === "webgl" ? "WebGL2" : "WebGPU");
   assert.ok(Number.isSafeInteger(observation.publication.session));
   assert.ok(Number.isSafeInteger(observation.publication.sequence));
-  assert.equal(observation.committed.time, targetTime);
+  assert.equal(observation.committed.time, expectedTime);
   assert.equal(observation.committed.dirty, "updated");
   assert.equal(observation.committed.presence, true);
   assert.equal(observation.mirrored.object, observation.committed.object);
@@ -125,6 +129,29 @@ function assertCommonObservation(observation, backend, label) {
   assert.ok(observation.presentation.presentation_sequence > 0);
   assert.equal(observation.presentation.submit_called, true);
   assert.equal(observation.presentation.present_called, true);
+}
+
+function assertLineObservation(observation, backend, expectedTime, expectedRotation) {
+  assertCommonObservation(observation, backend, `${backend} Line at ${expectedTime}`, expectedTime);
+  assert.deepEqual(observation.committed.transform.translation, { x: 0, y: 0 });
+  assert.ok(Math.abs(observation.committed.transform.rotation - expectedRotation) < 1e-6);
+  assert.equal(observation.committed.frame_index, 2);
+  assert.equal(observation.prepared.kind, "geometry");
+  assert.equal(observation.prepared.primitive, "line");
+  assert.deepEqual(
+    [observation.prepared.instance_start, observation.prepared.instance_end],
+    [1, 2],
+  );
+  assert.equal(observation.prepared.glyph_item_count, 0);
+  assert.deepEqual(observation.prepared.glyph_ranges, []);
+  assertTargetWrite(observation.upload.target_write, "line", `${backend} Line`);
+  assert.deepEqual(
+    [observation.upload.target_write.instance_start, observation.upload.target_write.instance_end],
+    [1, 2],
+  );
+  assert.deepEqual(observation.upload.target_text_writes, []);
+  assert.equal(observation.upload.text_bytes_uploaded, 0);
+  assert.ok(observation.upload.geometry_bytes_uploaded >= observation.upload.target_write.byte_length);
 }
 
 function assertGeometryObservation(observation, backend) {
@@ -198,6 +225,35 @@ function assertVisibleScene(screenshot) {
   assert.ok(counts.label > 20, "observed callback Text was blank");
 }
 
+function assertVisibleLineScene(screenshot, direction) {
+  const png = PNG.sync.read(screenshot);
+  const counts = { moving: 0, wrongDirection: 0, marker: 0, label: 0 };
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      const offset = (y * png.width + x) * 4;
+      const [red, green, blue] = png.data.subarray(offset, offset + 3);
+      const yellow = red > 120 && green > 90 && blue < 100;
+      const expectedSide = direction === "forward" ? y > 182 : y < 178;
+      if (yellow && x > 288 && x < 322 && expectedSide && Math.abs(y - 180) < 45) {
+        counts.moving += 1;
+      }
+      if (yellow && x > 288 && x < 322 && !expectedSide && Math.abs(y - 180) < 45) {
+        counts.wrongDirection += 1;
+      }
+      if (Math.max(red, green, blue) > 35 && x > 160 && x < 210 && y > 155 && y < 205) {
+        counts.marker += 1;
+      }
+      if (Math.max(red, green, blue) > 35 && x > 285 && x < 405 && y > 235 && y < 305) {
+        counts.label += 1;
+      }
+    }
+  }
+  assert.ok(counts.moving > 20, `${direction} callback Line pixels were blank`);
+  assert.ok(counts.moving > counts.wrongDirection * 2, `${direction} callback Line pointed the wrong way`);
+  assert.ok(counts.marker > 50, "resident Circle sibling was blank");
+  assert.ok(counts.label > 20, "resident Text sibling was blank");
+}
+
 async function installHarness(page) {
   await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
   await page.evaluate(async () => {
@@ -259,6 +315,62 @@ async function observeTarget(page, target) {
   }
 }
 
+async function observeLineSequence(page) {
+  const result = await page.evaluate(async ({ source, firstSampleTime }) => {
+    const harness = window.rendererObservationHarness;
+    const authored = await harness.authoring.run(source);
+    const canvas = document.createElement("canvas");
+    canvas.id = "renderer-observation-line";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    harness.activeExecution = execution;
+    try {
+      const ready = await execution.startSemanticExecution(authored.semanticExecution, {
+        authoringClient: harness.authoring,
+        loopDurationSeconds: 4.5,
+        transportMode: "transferable",
+      });
+      const paused = await execution.pause();
+      if (paused.time > firstSampleTime) {
+        throw new Error(`Line observation advanced past ${firstSampleTime} before pause`);
+      }
+      return { canvasId: canvas.id, rendererBackend: ready.render.backend };
+    } catch (error) {
+      execution.terminate();
+      harness.activeExecution = null;
+      throw error;
+    }
+  }, { source: lineSource, firstSampleTime: 1.0 });
+  try {
+    const observations = [];
+    for (const time of [1.0, 3.0]) {
+      const observation = await page.evaluate(async (time) => {
+        const execution = window.rendererObservationHarness.activeExecution;
+        const advanced = await execution.advanceToWithRendererObservation(time);
+        if (advanced.time !== time || advanced.playing !== false) {
+          throw new Error(`Line observation did not remain paused at ${time}`);
+        }
+        if (advanced.rendererObservation?.outcome !== "presented") {
+          throw new Error(`Line observation was not presented: ${JSON.stringify(advanced)}`);
+        }
+        return advanced.rendererObservation;
+      }, time);
+      observations.push({
+        observation,
+        screenshot: await page.locator(`#${result.canvasId}`).screenshot(),
+      });
+    }
+    return { ...result, observations };
+  } finally {
+    await page.evaluate(() => {
+      window.rendererObservationHarness.activeExecution.terminate();
+      window.rendererObservationHarness.activeExecution = null;
+    });
+  }
+}
+
 async function runBackend(backend) {
   const browser = await chromium.launch({
     channel: "chromium",
@@ -275,15 +387,21 @@ async function runBackend(backend) {
     await installHarness(page);
     const geometry = await observeTarget(page, "geometry");
     const text = await observeTarget(page, "text");
+    const line = await observeLineSequence(page);
     const expectedBackend = backend === "webgl" ? "WebGL2" : "WebGPU";
     assert.equal(geometry.rendererBackend, expectedBackend);
     assert.equal(text.rendererBackend, expectedBackend);
+    assert.equal(line.rendererBackend, expectedBackend);
     assertGeometryObservation(geometry.observation, backend);
     assertTextObservation(text.observation, backend);
     assertVisibleScene(geometry.screenshot);
     assertVisibleScene(text.screenshot);
+    assertLineObservation(line.observations[0].observation, backend, 1.0, 1.0);
+    assertLineObservation(line.observations[1].observation, backend, 3.0, -1.0);
+    assertVisibleLineScene(line.observations[0].screenshot, "forward");
+    assertVisibleLineScene(line.observations[1].screenshot, "backward");
     assert.deepEqual(errors, [], `${backend}: browser errors`);
-    return { geometry, text };
+    return { geometry, text, line };
   } finally {
     await page.evaluate(() => window.rendererObservationHarness?.authoring.terminate());
     await browser.close();
@@ -316,8 +434,25 @@ try {
         `${rasterComparison.boundsDelta}px bounds delta`,
     );
   }
+  for (let sample = 0; sample < 2; sample += 1) {
+    const webglLine = webgl.line.observations[sample];
+    const webgpuLine = webgpu.line.observations[sample];
+    for (const field of ["object", "semantic_slot", "semantic_generation", "time", "transform", "style", "presence"]) {
+      assert.deepEqual(webgpuLine.observation.committed[field],
+        webglLine.observation.committed[field], `Line sample ${sample}: backend ${field} diverged`);
+    }
+    const rasterComparison = compareForegroundCoverage(
+      PNG.sync.read(webgpuLine.screenshot),
+      PNG.sync.read(webglLine.screenshot),
+      rasterTolerances,
+    );
+    assert.equal(rasterComparison.pass, true,
+      `Line callback sample ${sample} raster diverged: ` +
+      `${(rasterComparison.mismatchFraction * 100).toFixed(3)}% unmatched foreground, ` +
+      `${rasterComparison.boundsDelta}px bounds delta`);
+  }
   console.log(
-    "✓ Canonical callback geometry and Text targets were locally prepared, uploaded, drawn, presented, and raster-visible on WebGL2 and WebGPU",
+    "✓ Canonical callback Circle, Line, and Text targets were locally prepared, uploaded, drawn, presented, and raster-visible on WebGL2 and WebGPU",
   );
 } finally {
   server.close();

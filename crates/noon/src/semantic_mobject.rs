@@ -434,28 +434,48 @@ impl Mobject {
     ) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let angle = authoring_render_f64("rotation", angle)?;
-        let pivot = authoring_xy_f64(point_x, point_y)?;
-        let rotation = state.transform.rotation_z + angle;
-        finite_f32("rotation result", rotation)?;
-
-        let translation = state.transform.translation;
-        let relative_x = translation.x - pivot.x;
-        let relative_y = translation.y - pivot.y;
-        let cosine = angle.cos();
-        let sine = angle.sin();
-        let next_translation = SemanticVec3::new(
-            pivot.x + relative_x * cosine - relative_y * sine,
-            pivot.y + relative_x * sine + relative_y * cosine,
-            translation.z,
-        );
-        next_translation
-            .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
-        state.transform.translation = next_translation;
+        let ((translation_x, translation_y), rotation) = rotate_affine_about_point(
+            (state.transform.translation.x, state.transform.translation.y),
+            state.transform.rotation_z,
+            angle,
+            (point_x, point_y),
+        )?;
+        state.transform.translation.x = translation_x;
+        state.transform.translation.y = translation_y;
         state.transform.rotation_z = rotation;
         self.commit_state(state)
     }
+}
+
+pub(crate) fn rotate_affine_about_point(
+    translation: (f64, f64),
+    rotation: f64,
+    angle: f64,
+    pivot: (f64, f64),
+) -> Result<((f64, f64), f64), String> {
+    let angle = authoring_render_f64("rotation", angle)?;
+    let pivot_x = authoring_render_f64("rotation pivot.x", pivot.0)?;
+    let pivot_y = authoring_render_f64("rotation pivot.y", pivot.1)?;
+    let translation_x = authoring_render_f64("translation.x", translation.0)?;
+    let translation_y = authoring_render_f64("translation.y", translation.1)?;
+    let rotation = authoring_render_f64("rotation", rotation)?;
+    let relative_x = translation_x - pivot_x;
+    let relative_y = translation_y - pivot_y;
+    let cosine = angle.cos();
+    let sine = angle.sin();
+    Ok((
+        (
+            authoring_render_f64(
+                "rotation result translation.x",
+                pivot_x + relative_x * cosine - relative_y * sine,
+            )?,
+            authoring_render_f64(
+                "rotation result translation.y",
+                pivot_y + relative_x * sine + relative_y * cosine,
+            )?,
+        ),
+        authoring_render_f64("rotation result", rotation + angle)?,
+    ))
 }
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
