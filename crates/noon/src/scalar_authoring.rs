@@ -402,6 +402,36 @@ mod tests {
     }
 
     #[test]
+    fn invalid_detached_tracker_association_rolls_back_scope_and_runtime() {
+        let scene = Scene::new();
+        let detached = scene
+            .store()
+            .borrow_mut()
+            .insert_semantic_input_signal(f64::MAX)
+            .unwrap();
+        let tracker = ValueTracker::from_semantic_node(Rc::clone(scene.store()), detached);
+        let mut session = scene.execution_session().unwrap();
+        let revision = scene.store().borrow().scene_revision();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+
+        assert!(scene
+            .live(&mut session)
+            .associate_value_tracker(&tracker)
+            .is_err());
+
+        let store = scene.store().borrow();
+        assert_eq!(store.scene_revision(), revision);
+        assert!(!store
+            .semantic_scoped_signals(scene.root())
+            .unwrap()
+            .contains(&detached));
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+        assert!(session.effective_signal_value(detached).is_none());
+    }
+
+    #[test]
     fn tracker_handles_reject_foreign_scene_stores() {
         let scene = Scene::new();
         let foreign = Scene::new();
