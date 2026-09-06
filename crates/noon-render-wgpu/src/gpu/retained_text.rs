@@ -2843,10 +2843,12 @@ mod tests {
 
     fn geometry_only_mega_path_frame() -> FrameState {
         let path = |id, y| {
-            let mut style = Style::default();
-            style.fill = None;
-            style.stroke = Some(Color::WHITE);
-            style.stroke_width = 0.01;
+            let style = Style {
+                fill: None,
+                stroke: Some(Color::WHITE),
+                stroke_width: 0.01,
+                ..Style::default()
+            };
             FrameObjectState {
                 id: ObjectId::new(id),
                 content: ObjectContentRef::Geometry(GeometryRef::path(
