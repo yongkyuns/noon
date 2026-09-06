@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    AnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationIntent,
-    SemanticAnimationState, SemanticFadeDirection, SemanticObjectState,
-    SemanticTransformInterpolation,
+    AnimationOptions, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticAnimationState,
+    SemanticFadeDirection, SemanticObjectState, SemanticTransformInterpolation,
 };
 
 use super::{
@@ -32,6 +32,11 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         direction: SemanticFadeDirection,
     },
+    AffineLifecycle {
+        target: SemanticTransactionNodeRef,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+    },
     Create {
         target: SemanticTransactionNodeRef,
     },
@@ -49,9 +54,10 @@ impl SemanticTransactionAnimationIntent {
                 target_state,
                 ..
             } => Some([Some(*target), Some(*target_state)]),
-            Self::Rotate { target, .. } | Self::Fade { target, .. } | Self::Create { target } => {
-                Some([Some(*target), None])
-            }
+            Self::Rotate { target, .. }
+            | Self::Fade { target, .. }
+            | Self::AffineLifecycle { target, .. }
+            | Self::Create { target } => Some([Some(*target), None]),
             Self::Composition { .. } => None,
         };
         let children = match self {
@@ -59,6 +65,7 @@ impl SemanticTransactionAnimationIntent {
             Self::TransformTo { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
+            | Self::AffineLifecycle { .. }
             | Self::Create { .. } => &[],
         };
         leaf.into_iter()
@@ -115,6 +122,15 @@ impl SemanticTransactionAnimation {
                     direction: *direction,
                 }
             }
+            SemanticAnimationIntent::AffineLifecycle {
+                target,
+                direction,
+                endpoint,
+            } => SemanticTransactionAnimationIntent::AffineLifecycle {
+                target: (*target).into(),
+                direction: *direction,
+                endpoint: *endpoint,
+            },
             SemanticAnimationIntent::Create { target } => {
                 SemanticTransactionAnimationIntent::Create {
                     target: (*target).into(),
@@ -156,6 +172,15 @@ impl SemanticTransactionAnimation {
                     direction: *direction,
                 }
             }
+            SemanticTransactionAnimationIntent::AffineLifecycle {
+                target,
+                direction,
+                endpoint,
+            } => SemanticAnimationIntent::AffineLifecycle {
+                target: resolve_node_ref(*target, committed),
+                direction: *direction,
+                endpoint: *endpoint,
+            },
             SemanticTransactionAnimationIntent::Create { target } => {
                 SemanticAnimationIntent::Create {
                     target: resolve_node_ref(*target, committed),
@@ -238,6 +263,17 @@ pub(super) fn preflight_transaction_animation(
             catalog.ensure_animation_target(*target, index)?;
             catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
         }
+        SemanticTransactionAnimationIntent::AffineLifecycle {
+            target, endpoint, ..
+        } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if !endpoint.is_valid() {
+                return Err(
+                    SemanticMutationTransactionError::InvalidAffineLifecycleEndpoint { index },
+                );
+            }
+        }
         SemanticTransactionAnimationIntent::Create { target } => {
             catalog.ensure_animation_target(*target, index)?;
             catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
@@ -315,6 +351,13 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::Fade { target, direction } => store
             .insert_semantic_fade_animation(*target, *direction, options)
             .expect("preflighted semantic fade insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::AffineLifecycle {
+            target,
+            direction,
+            endpoint,
+        } => store
+            .insert_semantic_affine_lifecycle_animation(*target, *direction, *endpoint, options)
+            .expect("preflighted affine lifecycle insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Create { target } => store
             .insert_semantic_create_animation(*target, options)
             .expect("preflighted semantic Create insertion must remain valid while transaction owns the store"),

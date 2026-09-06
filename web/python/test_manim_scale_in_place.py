@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ManimScaleInPlaceTests(unittest.TestCase):
-    def test_scale_in_place_and_shrink_use_retained_target_state_transform(self) -> None:
+    def test_scale_in_place_uses_retained_target_state_transform(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
         existing_pythonpath = env.get("PYTHONPATH")
@@ -82,7 +82,6 @@ class ManimScaleInPlaceTests(unittest.TestCase):
                 Rectangle,
                 ScaleInPlace,
                 Scene,
-                ShrinkToCenter,
                 Square,
                 VGroup,
                 linear,
@@ -157,26 +156,6 @@ class ManimScaleInPlaceTests(unittest.TestCase):
             assert retained_target["translation"] == retained_start["translation"]
             assert abs(retained_target["scale"]["x"] - 2.0 * retained_start["scale"]["x"]) < 1e-12
             assert abs(retained_target["scale"]["y"] - 2.0 * retained_start["scale"]["y"]) < 1e-12
-
-            shrink_scene = Scene()
-            square = Square(
-                side_length=1.5,
-                fill_color=BLUE,
-                fill_opacity=1.0,
-                stroke_opacity=0.0,
-            ).shift((-1.5, 0.5))
-            shrink_scene.play(ShrinkToCenter(square, run_time=0.5))
-            assert abs(shrink_scene.time - 0.5) < 1e-12
-            shrink_tracks = [
-                track
-                for track in shrink_scene.to_document()["tracks"]
-                if track["object"] == square.id and track["property"] == "transform"
-            ]
-            assert len(shrink_tracks) == 1
-            shrink_target = shrink_tracks[0]["values"]["object"]["to"]["transform"]
-            assert shrink_target["translation"] == {"x": -1.5, "y": 0.5}
-            assert abs(shrink_target["scale"]["x"]) < 1e-12
-            assert abs(shrink_target["scale"]["y"]) < 1e-12
 
             try:
                 ScaleInPlace(VGroup(Square(), Square()), 2.0)

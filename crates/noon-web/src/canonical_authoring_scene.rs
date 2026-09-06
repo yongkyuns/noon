@@ -1134,6 +1134,80 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn ordinary_play_affine_lifecycle(
+        &mut self,
+        id: ObjectId,
+        target: &noon::Mobject,
+        direction: noon::AffineLifecycleDirection,
+        endpoint: noon::AffineLifecycleEndpoint,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(options.run_time.unwrap_or(1.0));
+        let bootstrapped = self.live_player.is_none();
+        if bootstrapped {
+            self.live_player(bootstrap_duration)?;
+        }
+        if self.active_live_player()?.has_required_callbacks() {
+            if bootstrapped {
+                self.live_player = None;
+                self.live_player_returned = false;
+            }
+            return Err(
+                "ordinary endpoint-only animation cannot execute required callbacks; use a continuation"
+                    .into(),
+            );
+        }
+        let end = self.begin_ordinary_affine_lifecycle(id, target, direction, endpoint, options)?;
+        let player = self.active_live_player()?;
+        player.live_advance_segment_to(end)?;
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_affine_lifecycle(
+        &mut self,
+        id: ObjectId,
+        target: &noon::Mobject,
+        direction: noon::AffineLifecycleDirection,
+        endpoint: noon::AffineLifecycleEndpoint,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(options.run_time.unwrap_or(1.0));
+        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+            return Err(
+                "ordinary affine lifecycle mobject belongs to another authoring store".into(),
+            );
+        }
+        target.validate()?;
+        let node = target.node_id();
+        let is_bound = match (self.bindings.get(&id), self.identities.get(&node)) {
+            (None, None) => false,
+            (Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => true,
+            _ => return Err("ordinary affine lifecycle target has a conflicting binding".into()),
+        };
+        if direction == noon::AffineLifecycleDirection::IntroduceFrom && is_bound {
+            return Err(format!("canonical object {} is already bound", id.get()));
+        }
+        let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
+        let end = player
+            .live_declare_and_activate_affine_lifecycle(target, direction, endpoint, options)?;
+        if !is_bound {
+            self.bindings.insert(id, node);
+            self.identities.insert(node, id);
+        }
+        Ok(end)
+    }
+
     /// Atomically declare and activate one ordinary leaf transform without advancing it.
     ///
     /// The retained player stores the existing shared execution segment. A worker may lease
@@ -1915,6 +1989,39 @@ mod wasm {
         }
     }
 
+    fn parse_affine_lifecycle_direction(
+        value: &str,
+    ) -> Result<noon::AffineLifecycleDirection, JsValue> {
+        match value {
+            "introduce-from" => Ok(noon::AffineLifecycleDirection::IntroduceFrom),
+            "remove-to" => Ok(noon::AffineLifecycleDirection::RemoveTo),
+            _ => Err(js_error(format!(
+                "ordinary affine lifecycle direction must be \"introduce-from\" or \"remove-to\", got {value:?}"
+            ))),
+        }
+    }
+
+    fn parse_affine_lifecycle_endpoint(
+        value: &str,
+        x: f64,
+        y: f64,
+        rotation_offset: f64,
+        point_color: Option<Color>,
+    ) -> Result<noon::AffineLifecycleEndpoint, JsValue> {
+        match value {
+            "point" => Ok(noon::AffineLifecycleEndpoint::Point {
+                x,
+                y,
+                rotation_offset,
+                point_color,
+            }),
+            "effective-center" => Ok(noon::AffineLifecycleEndpoint::EffectiveCenter),
+            _ => Err(js_error(format!(
+                "ordinary affine lifecycle endpoint must be \"point\" or \"effective-center\", got {value:?}"
+            ))),
+        }
+    }
+
     fn callback_color(
         label: &str,
         red: Option<f64>,
@@ -2104,6 +2211,28 @@ mod wasm {
         #[wasm_bindgen(getter)]
         pub fn height(&self) -> f64 {
             self.height
+        }
+
+        #[wasm_bindgen(js_name = criticalX)]
+        pub fn critical_x(&self, direction_x: f64, _direction_y: f64) -> f64 {
+            if direction_x < 0.0 {
+                self.center_x - self.width * 0.5
+            } else if direction_x > 0.0 {
+                self.center_x + self.width * 0.5
+            } else {
+                self.center_x
+            }
+        }
+
+        #[wasm_bindgen(js_name = criticalY)]
+        pub fn critical_y(&self, _direction_x: f64, direction_y: f64) -> f64 {
+            if direction_y < 0.0 {
+                self.center_y - self.height * 0.5
+            } else if direction_y > 0.0 {
+                self.center_y + self.height * 0.5
+            } else {
+                self.center_y
+            }
         }
     }
 
@@ -3409,6 +3538,112 @@ mod wasm {
                 .begin_ordinary_transform_to(
                     source.semantic_mobject(),
                     target.semantic_mobject(),
+                    options,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = ordinaryPlayAffineLifecycle)]
+        pub fn ordinary_play_affine_lifecycle(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            endpoint: &str,
+            x: f64,
+            y: f64,
+            rotation_offset: f64,
+            point_red: Option<f64>,
+            point_green: Option<f64>,
+            point_blue: Option<f64>,
+            point_alpha: Option<f64>,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            target.id_in_store(self.inner.scene.store(), "ordinary affine lifecycle")?;
+            let direction = parse_affine_lifecycle_direction(direction)?;
+            let endpoint = parse_affine_lifecycle_endpoint(
+                endpoint,
+                x,
+                y,
+                rotation_offset,
+                callback_color(
+                    "point_color",
+                    point_red,
+                    point_green,
+                    point_blue,
+                    point_alpha,
+                )?,
+            )?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .ordinary_play_affine_lifecycle(
+                    id,
+                    target.semantic_mobject(),
+                    direction,
+                    endpoint,
+                    options,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = beginOrdinaryAffineLifecycle)]
+        pub fn begin_ordinary_affine_lifecycle(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            endpoint: &str,
+            x: f64,
+            y: f64,
+            rotation_offset: f64,
+            point_red: Option<f64>,
+            point_green: Option<f64>,
+            point_blue: Option<f64>,
+            point_alpha: Option<f64>,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            target.id_in_store(self.inner.scene.store(), "ordinary affine lifecycle")?;
+            let direction = parse_affine_lifecycle_direction(direction)?;
+            let endpoint = parse_affine_lifecycle_endpoint(
+                endpoint,
+                x,
+                y,
+                rotation_offset,
+                callback_color(
+                    "point_color",
+                    point_red,
+                    point_green,
+                    point_blue,
+                    point_alpha,
+                )?,
+            )?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .begin_ordinary_affine_lifecycle(
+                    id,
+                    target.semantic_mobject(),
+                    direction,
+                    endpoint,
                     options,
                 )
                 .map_err(js_error)
@@ -5833,6 +6068,32 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_affine_lifecycle_preserves_authored_state_and_removes_detached_leaf() {
+        let mut context = CanonicalAuthoringScene::default();
+        let square = context.scene.square(1.0).unwrap();
+        let before = square.state().unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let end = context
+            .ordinary_play_affine_lifecycle(
+                ObjectId::new(0),
+                &square,
+                noon::AffineLifecycleDirection::RemoveTo,
+                noon::AffineLifecycleEndpoint::EffectiveCenter,
+                options,
+            )
+            .unwrap();
+        assert_eq!(end, 1.0);
+        assert!(!context.live_contains_mobject(&square).unwrap());
+        assert_eq!(square.state().unwrap(), before);
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(0)),
+            Some(&square.node_id())
+        );
+    }
+
+    #[test]
     fn ordinary_fade_reuses_one_live_session_and_preserves_readd_identity() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
@@ -6066,11 +6327,11 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_first_fade_entry_keeps_context_unbootstrapped() {
+    fn invalid_first_fade_entry_keeps_context_unbootstrapped() {
         let mut context = CanonicalAuthoringScene::default();
         let text = context
             .scene
-            .text(noon::Text::new("unsupported entry"))
+            .text(noon::Text::new("resource entry"))
             .unwrap();
         let before = context.scene.store().borrow().scene_revision();
         let id = ObjectId::new(0);
@@ -6081,7 +6342,7 @@ mod tests {
                 &text,
                 SemanticFadeDirection::In,
                 AnimationOptions::new()
-                    .run_time(1.0)
+                    .run_time(-1.0)
                     .rate_func(RateFunction::Linear),
             )
             .is_err());

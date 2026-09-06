@@ -269,6 +269,15 @@ pub async fn create_direct_ordinary_different_rotations_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for the shared Rust/Python affine appearance lifecycle example.
+#[wasm_bindgen(js_name = createDirectOrdinaryAffineLifecycleSmokeRenderer)]
+pub async fn create_direct_ordinary_affine_lifecycle_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_affine_lifecycle_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that the paired ordinary continuation and its ordered Rust
 /// callback table execute through the normal direct single-context WASM host.
 #[wasm_bindgen(js_name = createDirectOrdinaryAffineCallbackContinuationSmokeRenderer)]

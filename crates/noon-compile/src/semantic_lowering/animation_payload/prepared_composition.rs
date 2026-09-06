@@ -12,8 +12,8 @@ use super::super::{
     PreparedSemanticScheduledAnimationPayload, SemanticExecutionIndex, SemanticExecutionValueError,
 };
 use super::affine::{
-    driver_key, lower_transform_channels, validate_affine_payload, AffinePayloadIssue,
-    EffectiveAnimationProperties, SemanticAnimationCompletion,
+    driver_key, lower_affine_lifecycle_channels, lower_transform_channels, validate_affine_payload,
+    AffinePayloadIssue, EffectiveAnimationProperties, SemanticAnimationCompletion,
 };
 
 use super::transform_payload::SemanticAffineAnimationField;
@@ -123,6 +123,12 @@ pub enum PreparedSemanticAnimationLoweringError {
         animation: SemanticTransactionNodeRef,
     },
     UnsupportedCreateOptions {
+        animation: SemanticTransactionNodeRef,
+    },
+    UnsupportedAffineLifecycleComposition {
+        animation: SemanticTransactionNodeRef,
+    },
+    UnsupportedAffineLifecycleOptions {
         animation: SemanticTransactionNodeRef,
     },
     UnsupportedContentChange {
@@ -345,6 +351,41 @@ where
                     completion: SemanticAnimationCompletion::Fade { direction },
                     values: TrackValues::Scalar { from, to },
                 }
+            }
+            PreparedSemanticScheduledAnimationPayload::AffineLifecycle {
+                direction,
+                endpoint,
+            } => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.reverse_rate_function
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedAffineLifecycleOptions {
+                            animation: leaf.animation,
+                        },
+                    );
+                }
+                if !leaf.time_map.is_identity() {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedAffineLifecycleComposition {
+                            animation: leaf.animation,
+                        },
+                    );
+                }
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    index,
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                let channels = lower_affine_lifecycle_channels(source, from, direction, endpoint)
+                    .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
+                for channel in channels {
+                    push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+                continue;
             }
             PreparedSemanticScheduledAnimationPayload::Create => {
                 if leaf.options.lag_ratio != 0.0
@@ -613,7 +654,8 @@ fn prepared_payload_error(
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        RateFunction, SemanticAnimationCompositionKind, SemanticMutationTransaction,
+        Color, RateFunction, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+        SemanticAnimationCompositionKind, SemanticMutationTransaction,
         SemanticMutationTransactionResult, SemanticNodeCreation, SemanticObjectState, SemanticVec3,
         StoredGeometry, Transform2D, Vec2,
     };
@@ -912,6 +954,70 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn affine_lifecycle_uses_activation_relative_release_channels() {
+        let mut store = noon_core::SemanticStore::new();
+        let square =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Rectangle {
+                size: Vec2::new(1.0, 1.0),
+            }));
+        store.attach_to_scene(square).unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        index.lower_scene(&store).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        let animation = transaction.create_affine_lifecycle_animation(
+            square,
+            SemanticAffineLifecycleDirection::RemoveTo,
+            SemanticAffineLifecycleEndpoint {
+                point: SemanticVec3::new(-2.0, 1.0, 0.0),
+                rotation_offset: -std::f64::consts::FRAC_PI_2,
+                point_color: Some(Color::RED),
+            },
+            AnimationOptions::new().run_time(1.0),
+        );
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let effective = EffectiveAnimationProperties {
+            transform: Transform2D {
+                translation: Vec2::new(3.0, 2.0),
+                rotation: 0.25,
+                scale: Vec2::new(2.0, 3.0),
+            },
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+        };
+        let activation = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            animation,
+            4.0,
+            AnimationOptions::new(),
+            |_| Some(effective),
+        )
+        .unwrap();
+
+        assert_eq!(activation.start_time(), 4.0);
+        assert!(activation
+            .tracks()
+            .iter()
+            .all(|track| track.completion == SemanticAnimationCompletion::Release));
+        assert!(activation.tracks().iter().any(|track| {
+            track.property == Property::Position
+                && track.values
+                    == TrackValues::Vec2 {
+                        from: effective.transform.translation,
+                        to: Vec2::new(-2.0, 1.0),
+                    }
+        }));
+        assert!(activation.tracks().iter().any(|track| {
+            track.property == Property::Scale
+                && track.values
+                    == TrackValues::Vec2 {
+                        from: effective.transform.scale,
+                        to: Vec2::ZERO,
+                    }
+        }));
     }
 
     #[test]

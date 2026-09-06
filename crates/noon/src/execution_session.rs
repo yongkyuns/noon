@@ -29,9 +29,10 @@ use noon_compile::{
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
     NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, RateFunction, ReactiveError,
-    ReactiveValue, Rect, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
-    SemanticNodeId, SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
+    ReactiveValue, Rect, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
+    SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
     SemanticTransactionNodeRef, TimelineError, TrackId, TrackTiming,
 };
 use noon_runtime::{
@@ -57,6 +58,11 @@ fn resolve_committed_node(
 enum PreparedAnimationLifecycle {
     Introduce(SemanticNodeId),
     FadeOut(SemanticNodeId),
+    AffineRemove {
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        admitted: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -77,7 +83,22 @@ pub(crate) enum SemanticCompositionRequest {
 impl PreparedAnimationLifecycle {
     const fn root(self) -> SemanticNodeId {
         match self {
-            Self::Introduce(root) | Self::FadeOut(root) => root,
+            Self::Introduce(root) | Self::FadeOut(root) | Self::AffineRemove { root, .. } => root,
+        }
+    }
+
+    const fn removal(self) -> Option<(SemanticNodeId, SemanticNodeId)> {
+        match self {
+            Self::AffineRemove { root, target, .. } => Some((root, target)),
+            Self::Introduce(_) | Self::FadeOut(_) => None,
+        }
+    }
+
+    const fn admits(self) -> bool {
+        match self {
+            Self::Introduce(_) => true,
+            Self::AffineRemove { admitted, .. } => admitted,
+            Self::FadeOut(_) => false,
         }
     }
 }
@@ -1008,6 +1029,7 @@ impl ExecutionSession {
             activation_scene_revision: store.scene_revision(),
             kind: PendingSegmentCompletionKind::ObjectTracks {
                 lifecycle_root: None,
+                lifecycle_removal: None,
                 entries: completions,
             },
         });
@@ -1462,6 +1484,47 @@ impl ExecutionSession {
         )
     }
 
+    /// Atomically activate one single-leaf affine appearance lifecycle.
+    ///
+    /// Introduction admits a detached object in the declaration transaction. Removal keeps the
+    /// live object present through the endpoint and removes membership during segment completion.
+    pub fn declare_and_activate_affine_lifecycle(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        self.require_animation_declaration_context(store)?;
+        let admitted = self.require_affine_lifecycle_target(store, root, target, direction)?;
+        let mut declaration = SemanticMutationTransaction::new();
+        if admitted {
+            declaration.add_member(root, target);
+        }
+        let animation =
+            declaration.create_affine_lifecycle_animation(target, direction, endpoint, options);
+        self.declare_and_activate_prepared_animation(
+            store,
+            declaration,
+            animation,
+            AnimationOptions::new(),
+            Some(match direction {
+                SemanticAffineLifecycleDirection::IntroduceFrom => {
+                    PreparedAnimationLifecycle::Introduce(root)
+                }
+                SemanticAffineLifecycleDirection::RemoveTo => {
+                    PreparedAnimationLifecycle::AffineRemove {
+                        root,
+                        target,
+                        admitted,
+                    }
+                }
+            }),
+        )
+    }
+
     /// Atomically introduce one detached leaf and activate its geometry reveal.
     pub fn declare_and_activate_create(
         &mut self,
@@ -1626,27 +1689,7 @@ impl ExecutionSession {
         target: SemanticNodeId,
         direction: SemanticFadeDirection,
     ) -> Result<(), ExecutionSessionAnimationError> {
-        if !self.reachability.is_execution_root(root) {
-            return Err(ExecutionSessionAnimationError::FadeTarget {
-                target,
-                error: ExecutionSessionFadeError::RootIsNotInExecutionDomain,
-            });
-        }
-        if !self.callback_schedule.is_empty() {
-            return Err(ExecutionSessionAnimationError::FadeTarget {
-                target,
-                error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
-            });
-        }
-        let state = store
-            .semantic_object_state_checked(target)
-            .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?;
-        if !state.signal_bindings().is_empty() {
-            return Err(ExecutionSessionAnimationError::FadeTarget {
-                target,
-                error: ExecutionSessionFadeError::ReactiveBindingsUnsupported,
-            });
-        }
+        self.require_lifecycle_target_context(store, root, target)?;
         let node = store
             .node(target)
             .expect("validated semantic object has a live node");
@@ -1680,6 +1723,83 @@ impl ExecutionSession {
             }
         }
         Ok(())
+    }
+
+    fn require_lifecycle_target_context(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::RootIsNotInExecutionDomain,
+            });
+        }
+        if !self.callback_schedule.is_empty() {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
+            });
+        }
+        let state = store
+            .semantic_object_state_checked(target)
+            .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?;
+        if !state.signal_bindings().is_empty() {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::ReactiveBindingsUnsupported,
+            });
+        }
+        Ok(())
+    }
+
+    /// Return whether a lifecycle leaf needs a transaction-local root edge.
+    /// An unmounted family's parent edge retains authoring identity but has no execution slot.
+    fn require_affine_lifecycle_target(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        direction: SemanticAffineLifecycleDirection,
+    ) -> Result<bool, ExecutionSessionAnimationError> {
+        self.require_lifecycle_target_context(store, root, target)?;
+        let node = store
+            .node(target)
+            .expect("validated semantic object has a live node");
+        let execution_object = self.execution_index.execution_object_id(target);
+        if execution_object.is_none() && !node.is_scene_owned() {
+            return Ok(true);
+        }
+        match direction {
+            SemanticAffineLifecycleDirection::IntroduceFrom => {
+                Err(ExecutionSessionAnimationError::FadeTarget {
+                    target,
+                    error: ExecutionSessionFadeError::TargetIsNotDetached,
+                })
+            }
+            SemanticAffineLifecycleDirection::RemoveTo => {
+                if node
+                    .parents()
+                    .iter()
+                    .any(|parent| *parent != root && self.reachability.is_reachable(*parent))
+                {
+                    return Err(ExecutionSessionAnimationError::FadeTarget {
+                        target,
+                        error: ExecutionSessionFadeError::TargetIsAliased,
+                    });
+                }
+                if node.parents().contains(&root) && execution_object.is_some() {
+                    Ok(false)
+                } else {
+                    Err(ExecutionSessionAnimationError::FadeTarget {
+                        target,
+                        error: ExecutionSessionFadeError::TargetIsNotDirectRootMember,
+                    })
+                }
+            }
+        }
     }
 
     fn require_animation_declaration_context(
@@ -1768,7 +1888,7 @@ impl ExecutionSession {
             next_track_id = raw_id.checked_add(1);
         }
 
-        if matches!(lifecycle, Some(PreparedAnimationLifecycle::Introduce(_))) {
+        if lifecycle.is_some_and(PreparedAnimationLifecycle::admits) {
             let existing_tracks = definitions
                 .iter()
                 .filter(|definition| self.runtime.contains_object(definition.object))
@@ -1830,6 +1950,7 @@ impl ExecutionSession {
                 activation_scene_revision,
                 kind: PendingSegmentCompletionKind::ObjectTracks {
                     lifecycle_root: lifecycle.map(PreparedAnimationLifecycle::root),
+                    lifecycle_removal: lifecycle.and_then(PreparedAnimationLifecycle::removal),
                     entries,
                 },
             });

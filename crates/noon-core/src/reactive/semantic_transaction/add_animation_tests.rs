@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
-    AnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationIntent,
-    SemanticAnimationState, SemanticFadeDirection, SemanticObjectState, StoredGeometry,
+    AnimationOptions, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticAnimationState,
+    SemanticFadeDirection, SemanticObjectState, SemanticVec3, StoredGeometry,
 };
 
 fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
@@ -577,4 +578,31 @@ fn canceling_pending_animation_dependency_cancels_parent_compositions() {
     );
     assert_eq!(store.len(), 1);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
+}
+
+#[test]
+fn invalid_affine_lifecycle_endpoint_is_atomic() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 0.5);
+    let before_len = store.len();
+    let before_revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.create_affine_lifecycle_animation(
+        target,
+        SemanticAffineLifecycleDirection::IntroduceFrom,
+        SemanticAffineLifecycleEndpoint {
+            point: SemanticVec3::new(f64::NAN, 0.0, 0.0),
+            rotation_offset: 0.0,
+            point_color: None,
+        },
+        AnimationOptions::new(),
+    );
+
+    assert_eq!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidAffineLifecycleEndpoint { index: 0 })
+    );
+    assert_eq!(store.len(), before_len);
+    assert_eq!(store.scene_revision(), before_revision);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
 }

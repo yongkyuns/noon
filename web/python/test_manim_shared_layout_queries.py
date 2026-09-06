@@ -148,6 +148,11 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
             assert abs(ellipse.height - expected) < 1e-12
             assert abs(ellipse.get_center().x) < 1e-12
             assert abs(ellipse.get_center().y) < 1e-12
+            # A typed leaf must ask its semantic handle for the critical point;
+            # raw geometry is neither an input nor a fallback for this query.
+            ellipse._current_raw = lambda: (_ for _ in ()).throw(
+                AssertionError("critical point read raw Python geometry")
+            )
             assert abs(ellipse.get_critical_point(RIGHT).x - expected * 0.5) < 1e-12
             assert handle.snapshot_requests == 0
 

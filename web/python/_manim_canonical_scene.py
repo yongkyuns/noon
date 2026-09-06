@@ -11,6 +11,7 @@ import copy
 import inspect
 import json
 import math
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -743,6 +744,110 @@ def _canonical_affine_payload_is_supported(
     ))
 
 
+def _canonical_affine_lifecycle_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_base.Mobject, object] | None:
+    """Classify one inert Grow/Spin/Shrink leaf for shared Rust lifecycle playback."""
+    growing = sys.modules.get("_manim_growing")
+    if growing is not None and isinstance(animation, growing.GrowFromPoint):
+        target = animation.mobject
+        if target._scene is not None or getattr(target, "_semantic_handle", None) is None:
+            return None
+        return target, animation
+    if getattr(animation, "_canonical_affine_lifecycle", None) == "shrink":
+        target = animation.mobject
+        if target._scene not in (None, scene) or getattr(target, "_semantic_handle", None) is None:
+            return None
+        return target, animation
+    return None
+
+
+def _play_canonical_affine_lifecycle(
+    self: _base.Scene,
+    target: _base.Mobject,
+    animation: object,
+    *,
+    duration: float | None,
+    run_time: float | None,
+    start_time: float | None,
+    easing: str | None,
+    rate_func: object | None,
+    lag_ratio: float | None,
+    kwargs: dict[str, object],
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    if start_time is not None or kwargs:
+        raise NotImplementedError("canonical affine lifecycle supports only play timing options")
+    resolved = _options.resolve(
+        builder_args=dict(getattr(animation, "anim_args", {})),
+        default_lag_ratio=0.0,
+        play_run_time=(run_time if run_time is not None else duration),
+        play_easing=easing,
+        play_rate_func=rate_func,
+        play_lag_ratio=lag_ratio,
+    )
+    if resolved.lag_ratio != 0.0 or resolved.path_arc != 0.0 or resolved.reverse_rate_function:
+        raise NotImplementedError("canonical affine lifecycle does not support lag or path options")
+    if getattr(animation, "_canonical_affine_lifecycle", None) == "shrink":
+        direction, endpoint, x, y, rotation_offset, color = "remove-to", "effective-center", 0.0, 0.0, 0.0, None
+    else:
+        direction, endpoint = "introduce-from", "point"
+        point = animation.point
+        x, y = float(point.x), float(point.y)
+        rotation_offset = -float(animation.angle) if animation.__class__.__name__ == "SpinInFromNothing" else 0.0
+        color = getattr(animation, "point_color", None)
+    rgba = (None, None, None, None) if color is None else (
+        float(color.red), float(color.green), float(color.blue), float(color.alpha)
+    )
+    _start_default_synchronous_continuation(self)
+    context = _context(self)
+    is_intro = direction == "introduce-from"
+    reservation = None
+    if target._scene is None:
+        reservation = _reserve_typed_binding(target, self, getattr(target, "_semantic_handle"), None)
+    object_id = str(reservation.object.id) if reservation is not None else str(target._object.id)
+    try:
+        _require_semantic_continuation_active(self)
+        if _semantic_continuation_active(self):
+            _prepare_semantic_continuation_callbacks(self, context)
+        method = (
+            context.beginOrdinaryAffineLifecycle
+            if _semantic_continuation_active(self)
+            else context.ordinaryPlayAffineLifecycle
+        )
+        method(
+            object_id,
+            getattr(target, "_semantic_handle"),
+            direction,
+            endpoint,
+            x,
+            y,
+            rotation_offset,
+            *rgba,
+            float(resolved.run_time),
+            str(resolved.rate_func),
+        )
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    if reservation is not None:
+        _commit_typed_binding(target, self, reservation, getattr(target, "_semantic_handle"))
+        register = getattr(self, "_register_top_level", None)
+        if register is not None:
+            register(target)
+    if not is_intro:
+        def completed() -> None:
+            _reconcile_fade_membership(self, target, "out")
+    else:
+        completed = lambda: None
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self, completed)
+    if _synchronous_continuation_active(self):
+        _synchronous_continuation_wait(self)
+        completed()
+        return self
+    completed()
+    return self
+
+
 def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):
     """Use the one existing #959 legacy play/export boundary when it is safe."""
     authority, _ = _timing_authority(self)
@@ -1463,6 +1568,32 @@ def _play_canonical_composition(
 
 
 def _play(self, *args, **kwargs):
+    # Grow/Spin/Shrink are shared Rust lifecycle operations even while an
+    # explicit export document is being authored. Only the other compatibility
+    # animations use the document codec below.
+    canonical_lifecycles = [
+        classified
+        for argument in args
+        if (classified := _canonical_affine_lifecycle_animation(self, argument)) is not None
+    ]
+    if canonical_lifecycles:
+        if len(canonical_lifecycles) != 1 or len(args) != 1:
+            raise NotImplementedError(
+                "canonical ordinary affine lifecycle currently supports one leaf per play"
+            )
+        target, animation = canonical_lifecycles[0]
+        return _play_canonical_affine_lifecycle(
+            self,
+            target,
+            animation,
+            duration=kwargs.pop("duration", None),
+            run_time=kwargs.pop("run_time", None),
+            start_time=kwargs.pop("start_time", None),
+            easing=kwargs.pop("easing", None),
+            rate_func=kwargs.pop("rate_func", None),
+            lag_ratio=kwargs.pop("lag_ratio", None),
+            kwargs=kwargs,
+        )
     # An explicit document request authors tracks for its external artifact.
     # Completing a live segment here would discard the exported animation and
     # mix runtime completion with the codec's authored-time cursor.

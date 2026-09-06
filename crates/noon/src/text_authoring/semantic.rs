@@ -139,7 +139,8 @@ impl crate::Mobject {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        SemanticMutationTransaction, SemanticObjectProperty, SemanticVec3, TextResourceLookup,
+        AnimationOptions, SemanticMutationTransaction, SemanticObjectProperty, SemanticVec3,
+        TextResourceLookup,
     };
 
     #[test]
@@ -303,6 +304,94 @@ mod tests {
         assert!(session.frame().objects[0].geometry().is_some());
         assert!(session.frame().objects[0].text_bounds.is_none());
         assert_eq!(session.frame().objects[1], untouched_before);
+    }
+
+    #[test]
+    fn detached_text_shrink_admits_only_its_preowned_resource() {
+        let scene = crate::Scene::new();
+        let label = scene.text(super::Text::new("Hello World!")).unwrap();
+        let unrelated = scene.text(super::Text::new("not admitted")).unwrap();
+        let label_resource = label.state().unwrap().content.text().unwrap();
+        let unrelated_resource = unrelated.state().unwrap().content.text().unwrap();
+        let semantic_id = label.node_id();
+        let authored = label.state().unwrap();
+        let mut session = scene.execution_session().unwrap();
+
+        assert!(session.text_resources().get(label_resource).is_none());
+        assert!(session.text_resources().get(unrelated_resource).is_none());
+
+        let segment = {
+            let mut live = scene.live(&mut session);
+            let segment = live
+                .declare_and_activate_affine_lifecycle(
+                    &label,
+                    crate::AffineLifecycleDirection::RemoveTo,
+                    crate::AffineLifecycleEndpoint::EffectiveCenter,
+                    AnimationOptions::new().run_time(1.0),
+                )
+                .unwrap();
+
+            assert!(live.contains(&label).unwrap());
+            assert_eq!(label.node_id(), semantic_id);
+            assert_eq!(live.authored(&label).unwrap(), authored);
+            segment
+        };
+        assert_eq!(session.frame().objects.len(), 1);
+        assert_eq!(session.frame().objects[0].text(), Some(label_resource));
+        assert!(session.frame().objects[0].text_bounds.is_some());
+        assert!(session.text_resources().get(label_resource).is_some());
+        assert!(session.text_resources().get(unrelated_resource).is_none());
+
+        let mut live = scene.live(&mut session);
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert!(!live.contains(&label).unwrap());
+        assert_eq!(label.node_id(), semantic_id);
+        assert_eq!(label.state().unwrap(), authored);
+    }
+
+    #[test]
+    fn missing_detached_text_resource_rejects_before_membership_or_runtime_publication() {
+        let scene = crate::Scene::new();
+        let missing_resource = noon_core::TextResourceHandle {
+            arena: u64::MAX,
+            id: noon_core::TextResourceId::new(1),
+            version: 0,
+        };
+        // Construct the malformed detached state directly so the publication
+        // boundary, rather than authoring validation, proves its atomicity.
+        let missing = scene
+            .store()
+            .borrow_mut()
+            .insert_semantic_object(noon_core::SemanticObjectState::new(missing_resource));
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let result = session.declare_and_activate_affine_lifecycle(
+            &mut scene.store().borrow_mut(),
+            scene.root(),
+            missing,
+            noon_core::SemanticAffineLifecycleDirection::RemoveTo,
+            noon_core::SemanticAffineLifecycleEndpoint {
+                point: SemanticVec3::ZERO,
+                rotation_offset: 0.0,
+                point_color: None,
+            },
+            AnimationOptions::new().run_time(1.0),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(session.publication_context(), before);
+        assert!(!scene
+            .store()
+            .borrow()
+            .is_direct_member(scene.root(), missing)
+            .unwrap());
+        assert!(session.frame().objects.is_empty());
+        assert!(session.text_resources().get(missing_resource).is_none());
+        assert!(session.take_frame_changes().is_empty());
     }
 
     #[test]

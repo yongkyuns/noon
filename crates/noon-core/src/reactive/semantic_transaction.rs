@@ -6,7 +6,8 @@ use super::semantic_declarations::{
 };
 use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
-    AnimationOptions, HostCallbackId, SemanticAnimationCompositionKind, SemanticAnimationState,
+    AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
+    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
     SemanticFadeDirection, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
     SemanticObjectProperty, SemanticObjectState, SemanticScalarSignalHold,
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
@@ -705,6 +706,29 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::Fade {
                     target: target.into(),
                     direction,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage one content-preserving affine lifecycle declaration.
+    pub fn create_affine_lifecycle_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::AffineLifecycle {
+                    target: target.into(),
+                    direction,
+                    endpoint,
                 },
                 options,
             ),
@@ -1882,6 +1906,9 @@ pub enum SemanticMutationTransactionError {
     InvalidAnimationAngle {
         index: usize,
     },
+    InvalidAffineLifecycleEndpoint {
+        index: usize,
+    },
     InvalidAnimationLagRatio {
         index: usize,
     },
@@ -2248,6 +2275,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidAnimationAngle { index } => write!(
                 formatter,
                 "semantic mutation {index} has a non-finite rotation angle"
+            ),
+            Self::InvalidAffineLifecycleEndpoint { index } => write!(
+                formatter,
+                "semantic mutation {index} has an invalid affine lifecycle endpoint"
             ),
             Self::InvalidAnimationLagRatio { index } => write!(
                 formatter,
