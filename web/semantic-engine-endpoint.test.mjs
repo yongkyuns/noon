@@ -70,6 +70,7 @@ function fixture(
     resumeExecutionPlayer: () => { resumed += 1; return player; },
     returnExecutionPlayer: (value) => { returned += 1; returnedPlayer = value; },
     liveHandoffDuration: () => Math.max(time, 1),
+    drainReturnedPublicationJson: () => player.drainDeltaJson(),
   };
   return { control, render, player, stats: () => ({
     returned, returnedPlayer, stopped, nativeInputs, created, resumed, completedSegments,
@@ -1032,3 +1033,40 @@ for (const reachedEndpoint of [false, true]) {
     } finally { endpoint?.stop(); f.close(); }
   });
 }
+
+
+test("source result waits for final edits without another segment or callback drive", async () => {
+  let finishSegment;
+  const finished = new Promise((resolve) => { finishSegment = resolve; });
+  const f = fixture("transferable", null, {
+    generation: 27, onComplete: finishSegment, onError: (_generation, error) => { throw error; },
+  });
+  let endpoint;
+  try {
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    const initialDelta = await initial;
+    f.render.port2.postMessage({ type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence });
+    f.render.port2.postMessage({ type: "execution_presented", session: initialDelta.session, sequence: initialDelta.sequence });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    await finished;
+    assert.equal(f.stats().returned, 1);
+    f.player.drainDeltaJson = () => f.player.seekDeltaJson(1);
+    const changed = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    let resultReady = false;
+    const result = endpoint.publishContinuationResult(27).then(() => { resultReady = true; });
+    const finalDelta = await changed;
+    f.render.port2.postMessage({ type: "execution_ack", session: finalDelta.session, sequence: finalDelta.sequence });
+    await turn();
+    assert.equal(resultReady, false);
+    assert.equal(finalDelta.sequence, initialDelta.sequence + 1);
+    assert.equal(JSON.parse(decodeTransferableExecutionDelta(finalDelta).json).time, 1);
+    f.render.port2.postMessage({ type: "execution_presented", session: finalDelta.session, sequence: finalDelta.sequence });
+    await result;
+    assert.equal(f.stats().completedSegments, 1);
+    assert.equal(f.stats().continuationDriveTimes.length, 1);
+    assert.equal(f.stats().returned, 1);
+    assert.equal(f.stats().resumed, 0);
+    assert.equal(f.stats().initialSnapshots, 1);
+  } finally { endpoint?.stop(); f.close(); }
+});

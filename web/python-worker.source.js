@@ -547,6 +547,9 @@ async function handleRequest(request) {
           request.context,
           request.exportDocument ?? false,
         );
+        if (run.continuation !== null) {
+          await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
+        }
         post("result", { requestId, resultJson });
         completed = true;
       } finally {

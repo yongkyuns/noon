@@ -1156,6 +1156,24 @@ impl CanonicalAuthoringScene {
         Ok(player)
     }
 
+    /// Encode final authored changes through the returned player's existing worker
+    /// transport. This neither leases nor advances the completed runtime.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn drain_returned_publication_json(&mut self) -> Result<Option<String>, String> {
+        if self.live_player_transferred || !self.live_player_returned {
+            return Err("final publication requires a returned execution player".into());
+        }
+        let player = self
+            .live_player
+            .as_mut()
+            .ok_or("returned player is absent")?;
+        player.require_callback_progression_available()?;
+        if player.has_pending_live_segment() {
+            return Err("final publication requires a completed continuation segment".into());
+        }
+        player.drain_delta_json()
+    }
+
     /// Derive the migration/export document from live semantic state at the boundary.
     pub fn finalize(
         &self,
@@ -2687,6 +2705,14 @@ mod wasm {
             self.inner.resume_execution_player().map_err(js_error)
         }
 
+        /// Final publication at the genuine authoring/render worker boundary.
+        #[wasm_bindgen(js_name = drainReturnedPublicationJson)]
+        pub fn drain_returned_publication_json(&mut self) -> Result<Option<String>, JsValue> {
+            self.inner
+                .drain_returned_publication_json()
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = bindGeometry)]
         pub fn bind_geometry(
             &mut self,
@@ -3742,6 +3768,37 @@ mod tests {
             serde_json::from_str(&rerun.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 18);
         assert_eq!(snapshot.objects[0].transform.translation.x, 3.0);
+    }
+
+    #[test]
+    fn returned_final_publication_preserves_runtime_time_and_encoder() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        assert!(context.drain_returned_publication_json().is_err());
+        context.begin_ordinary_wait(0.25).unwrap();
+        let mut player = context.take_execution_player(1.0, 17).unwrap();
+        player.initial_delta_json().unwrap();
+        assert!(context.drain_returned_publication_json().is_err());
+        player.live_advance_segment_to(0.25).unwrap();
+        player.live_complete_segment().unwrap();
+        player.drain_delta_json().unwrap();
+        context.return_execution_player(player).unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_set_translation(&circle, 1.0, 0.0)
+            .unwrap();
+        let json = context.drain_returned_publication_json().unwrap().unwrap();
+        let delta: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(delta["session"], 17);
+        assert!(delta["sequence"].as_u64().unwrap() > 0);
+        assert_ne!(delta["snapshot"], true);
+        assert_eq!(context.live_execution_ownership(), "returned");
+        assert_eq!(context.live_handoff_duration(), Some(0.25));
+        assert!(context.drain_returned_publication_json().unwrap().is_none());
+        context.begin_ordinary_wait(0.25).unwrap();
+        assert!(context.drain_returned_publication_json().is_err());
     }
 
     #[test]

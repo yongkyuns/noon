@@ -527,6 +527,16 @@ export async function attachSemanticEngine(
   } catch (error) { stop(); throw error; }
   return {
     stop,
+    async publishContinuationResult(generation) {
+      if (stopped || continuation === null || continuationActive || player !== null ||
+          generation !== continuation.generation) {
+        throw new Error("final publication requires the completed continuation lease");
+      }
+      // Python has finished its source stack. Publish any final authored edit
+      // through the exact returned encoder without another segment or callback.
+      const publication = send(context.drainReturnedPublicationJson());
+      await awaitPresentation(publication);
+    },
     startContinuation(generation) {
       if (continuation === null) {
         throw new Error("semantic endpoint was not attached for continuation execution");
