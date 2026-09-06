@@ -15,6 +15,10 @@ mod bounds;
 mod layout;
 mod style;
 use bounds::layout_for_content;
+pub(crate) use style::{
+    edit_disable_fill, edit_fill, edit_fill_color, edit_fill_opacity, edit_manim_opacity,
+    edit_object_opacity,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManimNextToArgs {

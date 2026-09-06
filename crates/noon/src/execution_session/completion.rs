@@ -1,7 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use noon_compile::{ExecutionPatch, SemanticAnimationCompletion};
-use noon_core::{SemanticMutationTransaction, SemanticNodeId, SemanticStore};
+use noon_core::{
+    SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty, SemanticSignalValue,
+    SemanticStore,
+};
 use noon_runtime::{EffectivePropertyWrite, FrameState, RuntimeIdentity};
 
 use crate::{
@@ -172,15 +175,44 @@ impl ExecutionSession {
 
         let mut semantic = SemanticMutationTransaction::new();
         let mut release = Vec::with_capacity(pending.entries.len());
+
+        // A Fill channel carries the exact authored style because fill paint has no
+        // scalar semantic-property representation. Merge any independently lowered
+        // object-opacity endpoint into that style before emitting one mutation, so
+        // completion never constructs a forbidden ReplaceStyle + style-property batch.
+        let mut completed_styles = BTreeMap::new();
+        for entry in &pending.entries {
+            if let SemanticAnimationCompletion::Style(style) = &entry.completion {
+                completed_styles.insert(entry.semantic_object, style.clone());
+            }
+        }
+        for entry in &pending.entries {
+            let SemanticAnimationCompletion::Property {
+                property: SemanticObjectProperty::ObjectOpacity,
+                value: SemanticSignalValue::Scalar(value),
+            } = &entry.completion
+            else {
+                continue;
+            };
+            if let Some(style) = completed_styles.get_mut(&entry.semantic_object) {
+                style.object_opacity = *value;
+            }
+        }
+        for (object, style) in &completed_styles {
+            semantic.replace_style(*object, style.clone());
+        }
+
         for entry in &pending.entries {
             match &entry.completion {
                 SemanticAnimationCompletion::None => {}
                 SemanticAnimationCompletion::Property { property, value } => {
-                    semantic.set_property(entry.semantic_object, *property, value.clone());
+                    if !(*property == SemanticObjectProperty::ObjectOpacity
+                        && completed_styles.contains_key(&entry.semantic_object))
+                    {
+                        semantic.set_property(entry.semantic_object, *property, value.clone());
+                    }
                 }
-                SemanticAnimationCompletion::Style(style) => {
-                    semantic.replace_style(entry.semantic_object, style.clone());
-                }
+                SemanticAnimationCompletion::Style(_) => {}
             }
             release.push(ExecutionPatch::ReconcileTrack {
                 track: entry.track,
@@ -382,7 +414,56 @@ mod tests {
         session
             .apply_semantic_transaction(&mut store, authored)
             .unwrap();
-        assert_eq!(session.frame().objects[0].style.fill, Some(Color::BLUE));
+        assert_eq!(
+            session.frame().objects[0].style.fill,
+            Some(Color {
+                alpha: 0.4,
+                ..Color::BLUE
+            })
+        );
+        assert_eq!(session.frame().objects[0].style.opacity, 0.5);
+    }
+
+    #[test]
+    fn separate_fill_and_opacity_leaves_coalesce_into_one_authored_style() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+
+        let mut fill_target = store.semantic_object_state_checked(object).unwrap().clone();
+        fill_target.style.fill = Some(SemanticPaint::Solid(Color::RED));
+        fill_target.style.fill_opacity = 0.4;
+        let fill_target = store.insert_semantic_object(fill_target);
+        let fill = store
+            .insert_semantic_transform_animation(object, fill_target, AnimationOptions::new())
+            .unwrap();
+
+        let mut opacity_target = store.semantic_object_state_checked(object).unwrap().clone();
+        opacity_target.style.object_opacity = 0.5;
+        let opacity_target = store.insert_semantic_object(opacity_target);
+        let opacity = store
+            .insert_semantic_transform_animation(object, opacity_target, AnimationOptions::new())
+            .unwrap();
+        let sequence = store
+            .insert_semantic_sequence_animation(&[fill, opacity], AnimationOptions::new())
+            .unwrap();
+
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(&store, sequence, AnimationOptions::new())
+            .unwrap();
+        session
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+
+        let style = &store.semantic_object_state_checked(object).unwrap().style;
+        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::RED)));
+        assert_eq!(style.fill_opacity, 0.4);
+        assert_eq!(style.object_opacity, 0.5);
     }
 
     #[test]

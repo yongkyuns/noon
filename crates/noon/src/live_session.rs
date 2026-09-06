@@ -7,9 +7,13 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 use crate::{
-    semantic_mobject::authoring_render_f64, DeclaredAnimation, EffectiveSemanticObject,
-    ExecutionSegment, ExecutionSegmentCompletionError, ExecutionSegmentError,
-    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    semantic_mobject::authoring_render_f64,
+    semantic_mobject::{
+        edit_disable_fill, edit_fill, edit_fill_color, edit_fill_opacity, edit_manim_opacity,
+        edit_object_opacity,
+    },
+    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentCompletionError,
+    ExecutionSegmentError, ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionPublicationError, Mobject,
 };
 use noon_core::{
@@ -456,6 +460,78 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Set fill color and fill opacity through one authoritative style publication.
+    pub fn set_fill(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_fill(style, red, green, blue, opacity))
+    }
+
+    pub fn set_fill_color(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_fill_color(style, red, green, blue, alpha)
+        })
+    }
+
+    pub fn disable_fill(
+        &mut self,
+        mobject: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| {
+            edit_disable_fill(style);
+            Ok(())
+        })
+    }
+
+    pub fn set_fill_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_fill_opacity(style, opacity))
+    }
+
+    /// Apply Manim's paint-opacity operation to the currently enabled paint channels.
+    pub fn set_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_manim_opacity(style, opacity))
+    }
+
+    /// Set the independent object-composite opacity domain.
+    pub fn set_object_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_object_opacity(style, opacity))
+    }
+
+    fn edit_style(
+        &mut self,
+        mobject: &Mobject,
+        edit: impl FnOnce(&mut SemanticStyle) -> Result<(), String>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let mut style = mobject.state().map_err(LiveSessionError::Mobject)?.style;
+        edit(&mut style).map_err(LiveSessionError::Mobject)?;
+        self.replace_style(mobject, style)
+    }
+
     fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
         if !Rc::ptr_eq(self.store, mobject.store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
@@ -468,7 +544,7 @@ impl<'a> LiveSession<'a> {
 mod tests {
     use super::*;
     use crate::Scene;
-    use noon_core::{AnimationOptions, RateFunction, SemanticVec3};
+    use noon_core::{AnimationOptions, Color, RateFunction, SemanticPaint, SemanticVec3};
 
     #[test]
     fn live_property_edits_publish_once_and_queries_are_effective_not_authored_aliases() {
@@ -496,6 +572,34 @@ mod tests {
         };
         assert_eq!(observed.transform.translation.x, 2.0);
         assert_eq!(session.frame().objects.len(), 1);
+    }
+
+    #[test]
+    fn live_style_edits_share_mobject_semantics_and_publish_complete_styles() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let target = live.target_editor(&circle).unwrap();
+        let before = live.session.publication_context().scene_revision();
+
+        live.set_fill(&target, 1.0, 0.0, 0.0, 0.4).unwrap();
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.checked_next().unwrap()
+        );
+        live.set_object_opacity(&target, 0.5).unwrap();
+        let style = live.authored(&target).unwrap().style;
+        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::RED)));
+        assert_eq!(style.fill_opacity, 0.4);
+        assert_eq!(style.object_opacity, 0.5);
+
+        live.disable_fill(&target).unwrap();
+        live.set_fill_opacity(&target, 0.25).unwrap();
+        let style = live.authored(&target).unwrap().style;
+        assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::WHITE)));
+        assert_eq!(style.fill_opacity, 0.25);
     }
 
     #[test]

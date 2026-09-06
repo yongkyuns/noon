@@ -231,6 +231,86 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_set_fill(
+        &mut self,
+        mobject: &noon::Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_fill(mobject, red, green, blue, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_set_fill_color(
+        &mut self,
+        mobject: &noon::Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_fill_color(mobject, red, green, blue, alpha))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_disable_fill(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+        self.with_live_session(|live| live.disable_fill(mobject))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_set_fill_opacity(
+        &mut self,
+        mobject: &noon::Mobject,
+        opacity: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_fill_opacity(mobject, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_set_opacity(
+        &mut self,
+        mobject: &noon::Mobject,
+        opacity: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_opacity(mobject, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_set_object_opacity(
+        &mut self,
+        mobject: &noon::Mobject,
+        opacity: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_object_opacity(mobject, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn with_live_session<T>(
+        &mut self,
+        operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,
+    ) -> Result<T, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        operation(&mut noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        ))
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_replace_content(
         &mut self,
         target: &noon::Mobject,

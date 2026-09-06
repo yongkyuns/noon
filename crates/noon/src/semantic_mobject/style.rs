@@ -1,5 +1,65 @@
 //! Shared semantic paint and stroke edits.
 use super::*;
+
+pub(crate) fn edit_object_opacity(style: &mut SemanticStyle, opacity: f64) -> Result<(), String> {
+    style.object_opacity = unit_opacity("opacity", opacity)?;
+    Ok(())
+}
+
+pub(crate) fn edit_disable_fill(style: &mut SemanticStyle) {
+    style.fill = None;
+}
+
+pub(crate) fn edit_fill_color(
+    style: &mut SemanticStyle,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<(), String> {
+    let color = opaque_color("fill", red, green, blue)?;
+    let requested_opacity = unit_opacity("fill.alpha", alpha)?;
+    if style.fill.is_none() {
+        style.fill_opacity = requested_opacity;
+    }
+    style.fill = Some(SemanticPaint::Solid(color));
+    Ok(())
+}
+
+pub(crate) fn edit_fill_opacity(style: &mut SemanticStyle, opacity: f64) -> Result<(), String> {
+    let opacity = unit_opacity("fill opacity", opacity)?;
+    if style.fill.is_none() {
+        style.fill = Some(SemanticPaint::Solid(Color::WHITE));
+    }
+    style.fill_opacity = opacity;
+    Ok(())
+}
+
+pub(crate) fn edit_fill(
+    style: &mut SemanticStyle,
+    red: f64,
+    green: f64,
+    blue: f64,
+    opacity: f64,
+) -> Result<(), String> {
+    let color = opaque_color("fill", red, green, blue)?;
+    let opacity = unit_opacity("fill opacity", opacity)?;
+    style.fill = Some(SemanticPaint::Solid(color));
+    style.fill_opacity = opacity;
+    Ok(())
+}
+
+pub(crate) fn edit_manim_opacity(style: &mut SemanticStyle, opacity: f64) -> Result<(), String> {
+    let opacity = unit_opacity("opacity", opacity)?;
+    if style.fill.is_some() {
+        style.fill_opacity = opacity;
+    }
+    if style.stroke.is_some() {
+        style.stroke_opacity = opacity;
+    }
+    Ok(())
+}
+
 impl Mobject {
     pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
         let mut state = self.state()?;
@@ -32,7 +92,7 @@ impl Mobject {
     }
     pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), String> {
         let mut state = self.state()?;
-        state.style.object_opacity = unit_opacity("opacity", opacity)?;
+        edit_object_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
     }
     pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
@@ -59,7 +119,7 @@ impl Mobject {
     pub fn disable_fill(&mut self) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        state.style.fill = None;
+        edit_disable_fill(&mut state.style);
         self.commit_state(state)
     }
     pub fn set_fill_color(
@@ -71,22 +131,13 @@ impl Mobject {
     ) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let color = opaque_color("fill", red, green, blue)?;
-        let requested_opacity = unit_opacity("fill.alpha", alpha)?;
-        if state.style.fill.is_none() {
-            state.style.fill_opacity = requested_opacity;
-        }
-        state.style.fill = Some(SemanticPaint::Solid(color));
+        edit_fill_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
     pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let opacity = unit_opacity("fill opacity", opacity)?;
-        if state.style.fill.is_none() {
-            state.style.fill = Some(SemanticPaint::Solid(Color::WHITE));
-        }
-        state.style.fill_opacity = opacity;
+        edit_fill_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
     }
     pub fn set_fill(
@@ -98,10 +149,7 @@ impl Mobject {
     ) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let color = opaque_color("fill", red, green, blue)?;
-        let opacity = unit_opacity("fill opacity", opacity)?;
-        state.style.fill = Some(SemanticPaint::Solid(color));
-        state.style.fill_opacity = opacity;
+        edit_fill(&mut state.style, red, green, blue, opacity)?;
         self.commit_state(state)
     }
     pub fn fill_opacity(&self) -> Result<f64, String> {
@@ -170,13 +218,7 @@ impl Mobject {
     pub fn set_opacity(&mut self, opacity: f64) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
-        let opacity = unit_opacity("opacity", opacity)?;
-        if state.style.fill.is_some() {
-            state.style.fill_opacity = opacity;
-        }
-        if state.style.stroke.is_some() {
-            state.style.stroke_opacity = opacity;
-        }
+        edit_manim_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
     }
 }

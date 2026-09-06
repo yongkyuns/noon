@@ -1117,8 +1117,33 @@ def _set_fill(
     handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_FILL(self, color=color, opacity=opacity, family=family)
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError("canonical live affine targets do not support style edits")
+    live_context = _live_mutation_context(self)
+    if live_context is not None:
+        try:
+            if color is not None and opacity is not None:
+                parsed = _phase_b._as_color("fill color", color)
+                live_context.liveSetFill(
+                    handle,
+                    parsed.red,
+                    parsed.green,
+                    parsed.blue,
+                    _phase_b._opacity("fill opacity", opacity),
+                )
+            elif color is not None:
+                parsed = _phase_b._as_color("fill color", color)
+                live_context.liveSetFillColor(
+                    handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
+                )
+            elif opacity is None:
+                live_context.liveDisableFill(handle)
+            if opacity is not None and color is None:
+                live_context.liveSetFillOpacity(
+                    handle, _phase_b._opacity("fill opacity", opacity)
+                )
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        _sync_bound_style(self, handle)
+        return self
     if color is not None and opacity is not None:
         parsed = _phase_b._as_color("fill color", color)
         handle.setFill(
@@ -1175,8 +1200,14 @@ def _set_opacity(
     handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_OPACITY(self, opacity, family=family)
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError("canonical live affine targets do not support style edits")
+    live_context = _live_mutation_context(self)
+    if live_context is not None:
+        try:
+            live_context.liveSetOpacity(handle, _phase_b._opacity("opacity", opacity))
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        _sync_bound_style(self, handle)
+        return self
     handle.setOpacity(_phase_b._opacity("opacity", opacity))
     _sync_bound_style(self, handle)
     return self
