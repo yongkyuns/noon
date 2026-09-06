@@ -108,7 +108,7 @@ mod wasm {
     {
         fn new_with_callbacks(
             mut program: LiveProgram<C>,
-            callbacks: RustHostCallbackTable,
+            mut callbacks: RustHostCallbackTable,
         ) -> Result<Self, JsValue> {
             let status = program.resume().map_err(js_error)?;
             if !matches!(
@@ -118,6 +118,14 @@ mod wasm {
                 return Err(js_message(
                     "direct live continuation did not begin at an await or finished state",
                 ));
+            }
+            // Publish the first ordered callback phase before the initial frame,
+            // matching direct sessions and the native host's first redraw.
+            if matches!(status, LiveProgramStatus::Awaiting(_)) {
+                let initial_time = program.session().frame().time;
+                program
+                    .drive_to(&mut callbacks, initial_time)
+                    .map_err(js_error)?;
             }
             Ok(Self { program, callbacks })
         }

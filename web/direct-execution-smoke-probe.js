@@ -496,7 +496,8 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     );
   }
   await presentDirectFrame(renderer);
-  const initialColor = await sampleRenderedColor(canvas, 0, 0);
+  const initialColor = await sampleRenderedColor(canvas, 0, 1);
+  const initialVacatedLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
 
   await advanceDirectCallbackFrame(renderer, 500);
   const midpointColor = await sampleRenderedColor(canvas, 1, 1);
@@ -511,6 +512,7 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     objectCount: renderer.objectCount(),
     drawCalls: renderer.lastDrawCalls(),
     initialColor,
+    initialVacatedLuma,
     midpointColor,
     endpointColor,
     finalCadence: JSON.parse(renderer.directWakeDirectiveJson(1000)).cadence,
@@ -524,13 +526,13 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     throw new Error(`direct callback continuation produced invalid renderer metrics ${JSON.stringify(metrics)}`);
   }
   if (
-    initialColor.blue < 180 ||
+    initialColor.blue < 70 ||
+    initialColor.blue > 180 ||
+    initialVacatedLuma > 60 ||
     midpointColor.blue < 70 ||
     endpointColor.blue < 70 ||
-    midpointColor.blue >= initialColor.blue * 0.7 ||
-    midpointColor.blue <= initialColor.blue * 0.25 ||
-    endpointColor.blue >= initialColor.blue * 0.7 ||
-    endpointColor.blue <= initialColor.blue * 0.25 ||
+    Math.abs(midpointColor.blue - initialColor.blue) > 5 ||
+    Math.abs(endpointColor.blue - initialColor.blue) > 5 ||
     midpointVacatedLuma > 60 ||
     endpointVacatedLuma > 60
   ) {
