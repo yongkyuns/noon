@@ -1,11 +1,10 @@
 use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
-    validate_track_definition, ObjectId, ObjectSnapshot, Property, SemanticAnimationError,
-    SemanticAnimationIntent, SemanticFadeDirection, SemanticLoweringError, SemanticNodeId,
-    SemanticObjectContent, SemanticObjectProperty, SemanticSceneOperationError,
-    SemanticSignalValue, SemanticStore, SemanticStyle, SemanticTransform2_5D, StoredGeometry,
-    Style, TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
+    validate_track_definition, ObjectId, Property, SemanticAnimationError, SemanticAnimationIntent,
+    SemanticFadeDirection, SemanticLoweringError, SemanticNodeId, SemanticObjectContent,
+    SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue, SemanticStore,
+    StoredGeometry, Style, TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
 };
 
 use super::super::{
@@ -49,11 +48,7 @@ pub enum SemanticAnimationCompletion {
     /// Execution-only Create completion. Reveal is not authored object state.
     Create,
     /// Exact authored endpoint for the bounded shared analytic content morph.
-    ContentMorph {
-        content: SemanticObjectContent,
-        transform: SemanticTransform2_5D,
-        style: SemanticStyle,
-    },
+    ContentMorph { content: SemanticObjectContent },
 }
 
 /// One existing execution-timeline channel lowered from an activated semantic animation.
@@ -463,8 +458,12 @@ where
         let channels = lower_transform_channels(source, target, from)
             .map_err(|issue| existing_payload_error(leaf, issue))?;
         for channel in channels {
-            let umbrella_conflict =
-                transform_driver_conflict(&driven, leaf.execution_object_id, channel.property);
+            let umbrella_conflict = transform_driver_conflict(
+                &driven,
+                leaf.execution_object_id,
+                channel.property,
+                leaf.animation,
+            );
             if let Some(first_animation) = umbrella_conflict {
                 return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
                     first_animation,
@@ -806,29 +805,30 @@ pub(super) fn lower_transform_channels(
         .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
     let target_style =
         lower_semantic_style_value(target).map_err(AffinePayloadIssue::InvalidTargetStyle)?;
-    let from_snapshot = ObjectSnapshot {
-        geometry: geometry(source.content)?,
-        transform: from.transform,
-        style: from.style,
-    };
-    let to_snapshot = ObjectSnapshot {
-        geometry: geometry(target.content)?,
-        transform: target_transform,
-        style: target_style,
-    };
-    Ok(vec![LoweredAffineChannel {
-        property: Property::Transform,
+    let (prepared, render_transform) = crate::transform::compile_analytic_content_morph(
+        &geometry(source.content)?,
+        &geometry(target.content)?,
+        from.style,
+        target_style,
+        from.transform,
+        target_transform,
+    )
+    .map_err(|_| AffinePayloadIssue::UnsupportedContentChange)?;
+    let mut channels = lower_affine_channels(source, target, from)?;
+    channels.push(LoweredAffineChannel {
+        property: Property::Morph,
         conflict_property: SemanticObjectProperty::Translation,
         completion: SemanticAnimationCompletion::ContentMorph {
             content: target.content,
-            transform: target.transform,
-            style: target.style.clone(),
         },
-        values: TrackValues::Object {
-            from: from_snapshot,
-            to: to_snapshot,
+        values: TrackValues::PreparedMorph {
+            from: 0.0,
+            to: 1.0,
+            geometry: prepared,
+            render_transform,
         },
-    }])
+    });
+    Ok(channels)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -961,16 +961,29 @@ fn existing_payload_error(
 }
 
 /// Check only this object's bounded channel set, never the entire composition.
-pub(super) fn transform_driver_conflict<T: Copy>(
+pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     driven: &HashMap<(u64, u8), T>,
     object: ObjectId,
     property: Property,
+    animation: T,
 ) -> Option<T> {
     let (object, transform_slot) = driver_key(object, Property::Transform);
-    if property == Property::Transform {
+    let (_, morph_slot) = driver_key(object, Property::Morph);
+    if property == Property::Morph {
+        (0..morph_slot).find_map(|slot| {
+            driven
+                .get(&(object, slot))
+                .copied()
+                .filter(|owner| *owner != animation)
+        })
+    } else if property == Property::Transform {
         (0..=transform_slot).find_map(|slot| driven.get(&(object, slot)).copied())
     } else {
-        driven.get(&(object, transform_slot)).copied()
+        driven
+            .get(&(object, transform_slot))
+            .or_else(|| driven.get(&(object, morph_slot)))
+            .copied()
+            .filter(|owner| *owner != animation)
     }
 }
 
@@ -985,6 +998,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Appearance => 6,
         Property::Reveal => 7,
         Property::Transform => 8,
+        Property::Morph => 9,
         _ => unreachable!("shared animation payload lowering only registers supported drivers"),
     };
     (object.get(), slot)

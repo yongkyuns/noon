@@ -658,7 +658,6 @@ impl CompiledScene {
                 || !matches!(
                     track.property,
                     Property::Position
-                        | Property::Transform
                         | Property::Rotation
                         | Property::Scale
                         | Property::Fill
@@ -666,6 +665,7 @@ impl CompiledScene {
                         | Property::Opacity
                         | Property::Appearance
                         | Property::Reveal
+                        | Property::Morph
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1217,7 +1217,6 @@ impl CompiledScene {
                     || !matches!(
                         compiled.property,
                         Property::Position
-                            | Property::Transform
                             | Property::Rotation
                             | Property::Scale
                             | Property::Fill
@@ -1225,6 +1224,7 @@ impl CompiledScene {
                             | Property::Opacity
                             | Property::Appearance
                             | Property::Reveal
+                            | Property::Morph
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

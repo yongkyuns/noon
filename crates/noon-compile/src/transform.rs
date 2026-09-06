@@ -39,6 +39,19 @@ pub(crate) enum TransformCompileFailure {
 pub(crate) fn compile_transform_geometry_plan(
     track: &TrackDefinition,
 ) -> Result<Option<TransformGeometryPlan>, TransformCompileFailure> {
+    if track.property == Property::Morph {
+        return match &track.values {
+            TrackValues::PreparedMorph {
+                geometry,
+                render_transform,
+                ..
+            } => Ok(Some(TransformGeometryPlan::PathPair {
+                geometry: Arc::new(geometry.clone()),
+                render_transform: *render_transform,
+            })),
+            _ => Ok(None),
+        };
+    }
     if track.property != Property::Transform {
         return Ok(None);
     }
@@ -119,6 +132,46 @@ pub(crate) fn compile_transform_geometry_plan(
         _ => return Err(TransformCompileFailure::UnsupportedGeometry),
     };
     Ok(Some(plan))
+}
+
+/// Compile a typed analytic content morph without constructing an authored
+/// object endpoint. The returned resource is execution-owned and may use a
+/// fixed render frame while semantic affine channels remain independently visible.
+pub(crate) fn compile_analytic_content_morph(
+    from_geometry: &GeometryRef,
+    to_geometry: &GeometryRef,
+    from_style: Style,
+    to_style: Style,
+    from_transform: Transform2D,
+    to_transform: Transform2D,
+) -> Result<(GeometryRef, Option<Transform2D>), TransformCompileFailure> {
+    let supported = matches!(
+        (from_geometry, to_geometry),
+        (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
+            | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. })
+    );
+    if !supported {
+        return Err(TransformCompileFailure::UnsupportedGeometry);
+    }
+    let source = noon_geometry::canonical_outline_path(from_geometry)
+        .expect("closed analytic source geometry must convert to a path");
+    let target = noon_geometry::canonical_outline_path(to_geometry)
+        .expect("closed analytic target geometry must convert to a path");
+    let TransformGeometryPlan::PathPair {
+        geometry,
+        render_transform,
+    } = compile_path_pair(
+        from_style,
+        to_style,
+        from_transform,
+        to_transform,
+        source,
+        target,
+    )?
+    else {
+        unreachable!("analytic cross-content morph compiles to a path pair")
+    };
+    Ok((geometry.as_ref().clone(), render_transform))
 }
 
 fn path_style_requires_retessellation(from: Style, to: Style) -> bool {
@@ -278,5 +331,36 @@ mod tests {
             assert_eq!(render_transform.is_some(), fixed);
             assert!(geometry.is_finite());
         }
+    }
+
+    #[test]
+    fn analytic_morph_prepares_rotated_screen_space_endpoints_in_world_frame() {
+        let style = Style {
+            stroke: Some(Color::WHITE),
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let source_transform = Transform2D {
+            rotation: std::f32::consts::FRAC_PI_4,
+            ..Transform2D::IDENTITY
+        };
+        let (geometry, render_transform) = compile_analytic_content_morph(
+            &GeometryRef::rectangle(2.0, 2.0),
+            &GeometryRef::circle(1.0),
+            style,
+            style,
+            source_transform,
+            Transform2D::IDENTITY,
+        )
+        .unwrap();
+
+        let GeometryRef::VectorPath(path) = geometry else {
+            panic!("analytic cross-content morph must compile to a path pair")
+        };
+        assert!(path.morph_target().is_some());
+        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+        assert!(path
+            .conservative_bounds()
+            .is_some_and(|bounds| bounds.width() > 2.5 && bounds.height() > 2.5));
     }
 }

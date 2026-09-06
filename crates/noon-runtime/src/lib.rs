@@ -1619,6 +1619,17 @@ fn apply_group_to_row(
             Property::Position | Property::Rotation | Property::Scale
         ) && prepared_morph_owns_render_frame(compiled, group.channel.object_index, time);
     if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+        if group.channel.property == Property::Morph
+            && matches!(track.values, TrackValues::PreparedMorph { .. })
+        {
+            let changed = *row.morph != 0.0
+                || row.render_geometry.is_some()
+                || row.render_transform.is_some();
+            *row.morph = 0.0;
+            *row.render_geometry = None;
+            *row.render_transform = None;
+            return changed;
+        }
         let base = match group.channel.property {
             Property::Position => Some(EvaluatedValue::Vec2(base_transform.translation)),
             Property::Rotation => Some(EvaluatedValue::Scalar(base_transform.rotation)),

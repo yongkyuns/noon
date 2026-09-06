@@ -158,6 +158,16 @@ pub enum TrackValues {
         from: Option<crate::Color>,
         to: Option<crate::Color>,
     },
+    /// Renderer-independent geometry prepared by lowering for a scalar morph channel.
+    ///
+    /// This is execution data, not an authored object endpoint: semantic transform,
+    /// style, identity, and completion remain in their owning channels and store.
+    PreparedMorph {
+        from: f32,
+        to: f32,
+        geometry: GeometryRef,
+        render_transform: Option<Transform2D>,
+    },
     Object {
         from: ObjectSnapshot,
         to: ObjectSnapshot,
@@ -171,6 +181,7 @@ impl TrackValues {
             Self::Scalar { .. } => ValueKind::Scalar,
             Self::Vec2 { .. } => ValueKind::Vec2,
             Self::Color { .. } => ValueKind::Color,
+            Self::PreparedMorph { .. } => ValueKind::Scalar,
             Self::Object { .. } => ValueKind::Object,
         }
     }
@@ -213,6 +224,29 @@ impl TrackValues {
                     }) {
                         return Err(TimelineError::InvalidColorValue { property, endpoint });
                     }
+                }
+                Ok(())
+            }
+            Self::PreparedMorph {
+                from,
+                to,
+                geometry,
+                render_transform,
+            } => {
+                if !from.is_finite() || !to.is_finite() {
+                    return Err(TimelineError::InvalidScalarValues {
+                        property,
+                        from: *from,
+                        to: *to,
+                    });
+                }
+                validate_geometry(object, geometry).map_err(|error| {
+                    invalid_object_track_value(property, TrackValueEndpoint::From, error)
+                })?;
+                if let Some(transform) = render_transform {
+                    validate_transform(object, *transform).map_err(|error| {
+                        invalid_object_track_value(property, TrackValueEndpoint::From, error)
+                    })?;
                 }
                 Ok(())
             }
@@ -304,6 +338,7 @@ pub enum TimelineError {
         expected: ValueKind,
         actual: ValueKind,
     },
+    PreparedMorphPropertyMismatch(Property),
     InvalidScalarValues {
         property: Property,
         from: f32,
@@ -345,6 +380,10 @@ impl std::fmt::Display for TimelineError {
             } => write!(
                 formatter,
                 "value type mismatch for {property:?}: expected {expected:?}, got {actual:?}"
+            ),
+            Self::PreparedMorphPropertyMismatch(property) => write!(
+                formatter,
+                "prepared morph execution data cannot drive {property:?}"
             ),
             Self::InvalidScalarValues { property, from, to } => write!(
                 formatter,
@@ -425,6 +464,11 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
             expected,
             actual,
         });
+    }
+    if matches!(&track.values, TrackValues::PreparedMorph { .. })
+        && track.property != Property::Morph
+    {
+        return Err(TimelineError::PreparedMorphPropertyMismatch(track.property));
     }
     track
         .values

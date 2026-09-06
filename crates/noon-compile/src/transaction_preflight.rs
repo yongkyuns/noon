@@ -370,7 +370,6 @@ pub(super) fn preflight_transaction_with_resources(
                     || !matches!(
                         reconciled.property,
                         Property::Position
-                            | Property::Transform
                             | Property::Rotation
                             | Property::Scale
                             | Property::Fill
@@ -378,6 +377,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Opacity
                             | Property::Appearance
                             | Property::Reveal
+                            | Property::Morph
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

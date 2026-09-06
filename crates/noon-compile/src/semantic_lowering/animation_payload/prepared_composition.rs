@@ -389,6 +389,7 @@ fn push_prepared_channel(
         driven,
         leaf.execution_object_id,
         channel.property,
+        leaf.animation,
     );
     if let Some(first_animation) = umbrella_conflict {
         return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
@@ -690,15 +691,15 @@ mod tests {
         )
         .unwrap();
 
-        let [track] = activation.tracks() else {
-            panic!("content morph must use one shared Transform track")
-        };
-        assert_eq!(track.property, Property::Transform);
+        let track = activation
+            .tracks()
+            .iter()
+            .find(|track| track.property == Property::Morph)
+            .expect("content morph must include one prepared Morph track");
         assert!(matches!(
             &track.values,
-            TrackValues::Object { from, to }
-                if matches!(from.geometry, noon_core::GeometryRef::Circle { .. })
-                    && matches!(to.geometry, noon_core::GeometryRef::Rectangle { .. })
+            TrackValues::PreparedMorph { geometry: noon_core::GeometryRef::VectorPath(path), .. }
+                if path.morph_target().is_some()
         ));
         assert!(matches!(
             track.completion,

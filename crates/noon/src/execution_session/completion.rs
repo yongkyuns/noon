@@ -348,29 +348,8 @@ impl ExecutionSession {
                         semantic.set_property(entry.semantic_object, *property, value.clone());
                     }
                 }
-                SemanticAnimationCompletion::ContentMorph {
-                    content,
-                    transform,
-                    style,
-                } => {
-                    semantic
-                        .replace_content(entry.semantic_object, *content)
-                        .set_property(
-                            entry.semantic_object,
-                            SemanticObjectProperty::Translation,
-                            transform.translation,
-                        )
-                        .set_property(
-                            entry.semantic_object,
-                            SemanticObjectProperty::Scale,
-                            transform.scale,
-                        )
-                        .set_property(
-                            entry.semantic_object,
-                            SemanticObjectProperty::RotationZ,
-                            transform.rotation_z,
-                        )
-                        .replace_style(entry.semantic_object, style.clone());
+                SemanticAnimationCompletion::ContentMorph { content } => {
+                    semantic.replace_content(entry.semantic_object, *content);
                 }
                 SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }

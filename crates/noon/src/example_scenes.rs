@@ -1994,6 +1994,19 @@ mod continuation_tests {
             LiveProgramStatus::Awaiting(_)
         ));
         assert!((program.session().frame().morph(0) - 0.5).abs() < 1e-6);
+        assert!(
+            (program.session().frame().objects[0].transform.rotation - std::f32::consts::FRAC_PI_8)
+                .abs()
+                < 1e-6
+        );
+        assert_eq!(
+            program.session().frame().render_transform(0),
+            noon_core::Transform2D::IDENTITY
+        );
+        assert!(matches!(
+            program.session().frame().render_geometry(0),
+            Some(noon_core::GeometryRef::VectorPath(path)) if path.morph_target().is_some()
+        ));
         program.take_renderer_publication();
         assert!(matches!(
             program.drive_to(&mut callbacks, 2.0).unwrap(),
@@ -2009,6 +2022,7 @@ mod continuation_tests {
             program.session().frame().render_geometry(0),
             Some(noon_core::GeometryRef::Circle { .. })
         ));
+        assert!(program.session().frame().render_transforms[0].is_none());
         program.take_renderer_publication();
         assert!(matches!(
             program.drive_to(&mut callbacks, 3.0).unwrap(),
