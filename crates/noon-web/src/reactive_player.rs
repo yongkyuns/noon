@@ -130,7 +130,7 @@ impl TimedScenePlayer {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod wasm {
     use noon_core::{NativeEventSource, NativeStateSource, SignalId, Vec2};
     use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};

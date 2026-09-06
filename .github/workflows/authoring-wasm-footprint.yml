@@ -1,0 +1,110 @@
+name: Authoring WASM Footprint
+
+on:
+  pull_request:
+    paths:
+      - "crates/noon-web/Cargo.toml"
+      - "crates/noon-web/src/lib.rs"
+      - "scripts/build-web-authoring-package.sh"
+      - ".github/workflows/authoring-wasm-footprint.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authoring-wasm-footprint-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  measure:
+    name: Compare full and authoring WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use stable Rust and WASM target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build full browser package
+        env:
+          NOON_SKIP_WEB_PREFLIGHT: "1"
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_PROFILE: "dev"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh
+
+      - name: Build renderer-free authoring package
+        env:
+          NOON_WASM_PROFILE: "dev"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-authoring-package.sh
+
+      - name: Record package footprint
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p browser-smoke-artifacts/authoring-wasm
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const fullPath = "web/pkg/noon_web_bg.wasm";
+          const authoringPath = "web/pkg-authoring/noon_web_bg.wasm";
+          const fullBytes = fs.statSync(fullPath).size;
+          const authoringBytes = fs.statSync(authoringPath).size;
+          const savedBytes = fullBytes - authoringBytes;
+          const savedFraction = fullBytes > 0 ? savedBytes / fullBytes : 0;
+          if (!(authoringBytes > 0 && authoringBytes < fullBytes)) {
+            throw new Error(
+              `authoring-only package must be smaller than full package: ${authoringBytes} vs ${fullBytes}`,
+            );
+          }
+          const report = {
+            schemaVersion: 1,
+            commit: process.env.PR_HEAD_SHA ?? null,
+            profile: "dev",
+            wasmOptSkipped: true,
+            full: { path: fullPath, bytes: fullBytes },
+            authoring: { path: authoringPath, bytes: authoringBytes },
+            savedBytes,
+            savedFraction,
+            authoringFraction: authoringBytes / fullBytes,
+            note:
+              "This is a package-size specialization experiment. It does not change the Python worker import or claim resident-memory savings.",
+          };
+          const output = "browser-smoke-artifacts/authoring-wasm/footprint.json";
+          fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`);
+          process.stdout.write(fs.readFileSync(output, "utf8"));
+          NODE
+
+      - name: Upload authoring WASM footprint
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: authoring-wasm-footprint-${{ github.event.pull_request.number }}
+          path: browser-smoke-artifacts/authoring-wasm/footprint.json
+          if-no-files-found: error
+          retention-days: 7
