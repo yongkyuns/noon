@@ -169,6 +169,10 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                         if self.snapshot["style"][name] is not None:
                             self.snapshot["style"][name]["alpha"] = float(opacity)
 
+                def setObjectOpacity(self, opacity):
+                    self.calls.append(("setObjectOpacity", float(opacity)))
+                    self.snapshot["style"]["opacity"] = float(opacity)
+
                 def disableFill(self):
                     self.snapshot["style"]["fill"] = None
 
@@ -305,6 +309,10 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             square.set_fill(GREEN, opacity=0.25)
             assert handle.snapshot_requests == 0
             assert abs(stored["style"]["fill"]["alpha"] - 0.25) < 1e-12
+            square.set_object_opacity(0.4)
+            assert handle.calls[-1] == ("setObjectOpacity", 0.4)
+            assert handle.snapshot_requests == 0
+            assert abs(stored["style"]["opacity"] - 0.4) < 1e-12
 
             first = animate._AlignedAnimationBuilder(square)
             first_target = first.target

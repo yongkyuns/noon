@@ -462,12 +462,12 @@ class Mobject:
 
         Manim ``VMobject.set_opacity`` controls the enabled fill and stroke paint
         alpha channels. This explicit Noon operation controls the separate opacity
-        multiplier applied to the complete object.
+        multiplier applied to the complete object through the shared semantic handle.
         """
-
-        raw = _raw_mobject(self._current_raw())
-        raw.style["opacity"] = float(opacity)
-        return self._apply(raw)
+        del opacity
+        raise NotImplementedError(
+            "set_object_opacity requires Noon's shared semantic authoring handle"
+        )
 
     def next_to(
         self,

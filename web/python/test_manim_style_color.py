@@ -85,13 +85,6 @@ class ManimStyleColorTests(unittest.TestCase):
             assert abs(opacity_square.style["fill"]["alpha"] - 0.5) < 1e-12
             assert abs(opacity_square.style["stroke"]["alpha"] - 0.5) < 1e-12
 
-            # Noon exposes the renderer's separate object-composite multiplier
-            # explicitly; it does not redefine Manim's paint-opacity method.
-            opacity_square.set_object_opacity(0.25)
-            assert abs(opacity_square.style["opacity"] - 0.25) < 1e-12
-            assert abs(opacity_square.style["fill"]["alpha"] - 0.5) < 1e-12
-            assert abs(opacity_square.style["stroke"]["alpha"] - 0.5) < 1e-12
-
             # Keep the existing Noon compatibility escape hatch: an explicitly
             # disabled layer stays disabled when the remaining style is recolored.
             square.set_fill()
