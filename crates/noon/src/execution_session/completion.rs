@@ -461,19 +461,19 @@ mod tests {
     }
 
     #[test]
-    fn fill_completion_preserves_bound_stroke_sibling() {
+    fn fill_completion_preserves_bound_opacity_and_stroke_siblings() {
         let mut store = SemanticStore::new();
         let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
         source.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
         source.style.stroke_opacity = 1.0;
         let object = store.insert_semantic_object(source);
         store.attach_to_scene(object).unwrap();
-        let stroke_opacity = store.insert_semantic_input_signal(0.65_f64).unwrap();
+        let object_opacity = store.insert_semantic_input_signal(0.65_f64).unwrap();
         store
             .bind_semantic_signal(
-                stroke_opacity,
+                object_opacity,
                 object,
-                SemanticObjectProperty::StrokeOpacity,
+                SemanticObjectProperty::ObjectOpacity,
             )
             .unwrap();
 
@@ -511,13 +511,9 @@ mod tests {
                 ..Color::RED
             })
         );
-        assert_eq!(
-            effective.stroke,
-            Some(Color {
-                alpha: 0.65,
-                ..Color::WHITE
-            })
-        );
+        assert_eq!(authored.object_opacity, 1.0);
+        assert_eq!(effective.opacity, 0.65);
+        assert_eq!(effective.stroke, Some(Color::WHITE));
     }
 
     #[test]
