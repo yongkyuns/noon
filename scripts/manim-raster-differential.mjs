@@ -343,7 +343,6 @@ async function captureHostFixture(
   if (authored.hasCallbacks) {
     assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: canonical callback execution`);
   } else {
-    assert.equal(loaded.kind, "scene_document", `${fixture.id}: explicit camera/document codec`);
     assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
   }
   assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);

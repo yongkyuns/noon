@@ -117,9 +117,7 @@ class ValueTracker:
         value = _finite_scalar("value", value)
         scene = _current_authoring_scene()
         if scene is not None:
-            import _manim_canonical_scene as canonical_scene
-
-            canonical = canonical_scene._canonical_value_tracker(scene, value)
+            canonical = scene.value_tracker(value)
             self._scene = scene
             self._canonical_context = canonical._canonical_context
             self._canonical_handle = canonical._canonical_handle
