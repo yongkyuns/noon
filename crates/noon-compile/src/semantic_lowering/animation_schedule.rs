@@ -1901,7 +1901,7 @@ mod tests {
         let second_window =
             continuous_time_map_interval(tracks[1].timing(), tracks[1].time_map()).unwrap();
         assert!(first_window.1 <= second_window.0);
-        prepared.with_scalar_signal_tracks(tracks).unwrap();
+        let _prepared = prepared.with_scalar_signal_tracks(tracks).unwrap();
     }
 
     #[test]

@@ -960,7 +960,7 @@ mod tests {
         let execution = projection(&store, &mut index);
         let reactive = lower_semantic_reactive_projection(&store, &execution).unwrap();
         assert_eq!(reactive.scalar_timeline().len(), 1);
-        let CompiledScalarSignalTimelineEntry::Track(track) = reactive.scalar_timeline()[0] else {
+        let CompiledScalarSignalTimelineEntry::Track(track) = &reactive.scalar_timeline()[0] else {
             panic!("expected one lowered scalar track")
         };
         assert_eq!(track.semantic_signal(), reachable);
