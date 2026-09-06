@@ -170,6 +170,23 @@ pub struct BrowserExecutionWakeClock {
 }
 
 impl BrowserExecutionWakeClock {
+    /// Start the next wall-time interval at an already-published authored time.
+    ///
+    /// Required host callback execution may take arbitrary wall time while the
+    /// runtime is pinned at its barrier. Reanchoring after that phase commits
+    /// prevents host latency from advancing authored time. Both values use the
+    /// same units as directive: milliseconds and seconds respectively.
+    pub fn reanchor(&mut self, wall_time_ms: f64, scene_time: f64) -> Option<()> {
+        if !wall_time_ms.is_finite() || !scene_time.is_finite() {
+            return None;
+        }
+        self.anchor = Some(BrowserRealtimeAnchor {
+            wall_origin_ms: wall_time_ms,
+            scene_origin: scene_time,
+        });
+        Some(())
+    }
+
     /// Realize one target-neutral wake plan against a browser monotonic timestamp.
     ///
     /// `wall_time_ms` is expected to share the `performance.now()` / RAF timestamp
@@ -370,6 +387,18 @@ mod tests {
             BrowserHostWake::TimerAfterMilliseconds(2_000.0)
         );
         assert_eq!(clock.scene_time_at(62_000.0), Some(1.0));
+    }
+
+    #[test]
+    fn browser_realtime_clock_reanchors_after_opaque_host_work() {
+        let mut clock = BrowserExecutionWakeClock::default();
+        let active = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Continuous);
+        clock.directive(active, 1_000.0, 0.0).unwrap();
+        assert_eq!(clock.scene_time_at(1_500.0), Some(0.5));
+
+        clock.reanchor(9_000.0, 0.5).unwrap();
+        assert_eq!(clock.scene_time_at(9_000.0), Some(0.5));
+        assert_eq!(clock.scene_time_at(9_016.0), Some(0.516));
     }
 
     #[test]

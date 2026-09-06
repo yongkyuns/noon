@@ -952,6 +952,24 @@ impl SemanticExecutionPlayer {
         })
     }
 
+    /// Begin the next browser wall-time interval after required host work.
+    ///
+    /// The endpoint calls this only after retrying the callback-bearing drive
+    /// with its captured timestamp. The session's published time is therefore
+    /// unchanged while this resets the derived wall-time conversion.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn reanchor_live_segment_wake(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<WasmLiveSegmentWake, String> {
+        self.require_callback_progression_available()?;
+        self.live_segment()?;
+        self.live_wake_clock
+            .reanchor(wall_time_ms, self.session.frame().time)
+            .ok_or("invalid browser wall timestamp or authored continuation time")?;
+        self.live_segment_wake(wall_time_ms)
+    }
+
     /// Drive the current segment from one Rust-derived browser wall-time mapping.
     ///
     /// The session clamps this target to the segment boundary and owns all timeline work.
@@ -1514,6 +1532,16 @@ impl SemanticExecutionPlayer {
         self.live_segment_wake(wall_time_ms)
     }
 
+    /// Reanchor the next browser interval after a required callback completes.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
+    pub fn reanchor_live_segment_wake_wasm(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<WasmLiveSegmentWake, String> {
+        self.reanchor_live_segment_wake(wall_time_ms)
+    }
+
     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
     ///
     /// A callback phase must be committed before this is retried with the same wall
@@ -2011,17 +2039,38 @@ mod tests {
         assert!(!ready.reached_endpoint());
         assert_eq!(player.time(), 0.5);
 
+        // Simulate an opaque callback host taking 7.5 seconds after the
+        // midpoint commit. Reanchoring at actual completion keeps the next
+        // 16 ms wake to exactly 16 ms of authored progress.
+        let wake = player.reanchor_live_segment_wake(9_000.0).unwrap();
+        assert_eq!(wake.cadence(), "animation_frame");
+        let after_slow_callback = player.live_drive_segment_from_wall_time(9_016.0).unwrap();
+        let after_slow_callback_phase: serde_json::Value =
+            serde_json::from_str(&after_slow_callback.callback_phase_json().unwrap()).unwrap();
+        assert!((after_slow_callback_phase["time"].as_f64().unwrap() - 0.516).abs() < 1.0e-9);
+        assert_eq!(player.time(), 0.5);
+        player
+            .commit_callback_phase_json(&callback_batch_with_y_and_opacity(
+                &after_slow_callback_phase,
+            ))
+            .unwrap();
+        let ready = player.live_drive_segment_from_wall_time(9_016.0).unwrap();
+        assert!(ready.callback_phase_json().is_none());
+        assert!(!ready.reached_endpoint());
+        assert!((player.time() - 0.516).abs() < 1.0e-9);
+        player.reanchor_live_segment_wake(12_000.0).unwrap();
+
         // The endpoint follows the same phase/commit protocol before reporting
         // readiness for completion and source resumption.
-        let endpoint = player.live_drive_segment_from_wall_time(2_000.0).unwrap();
+        let endpoint = player.live_drive_segment_from_wall_time(12_484.0).unwrap();
         let endpoint_phase: serde_json::Value =
             serde_json::from_str(&endpoint.callback_phase_json().unwrap()).unwrap();
         assert_eq!(endpoint_phase["time"], serde_json::json!(1.0));
-        assert_eq!(player.time(), 0.5);
+        assert!((player.time() - 0.516).abs() < 1.0e-9);
         player
             .commit_callback_phase_json(&callback_batch_with_y_and_opacity(&endpoint_phase))
             .unwrap();
-        let ready = player.live_drive_segment_from_wall_time(2_000.0).unwrap();
+        let ready = player.live_drive_segment_from_wall_time(12_484.0).unwrap();
         assert!(ready.callback_phase_json().is_none());
         assert!(ready.reached_endpoint());
         assert_eq!(player.time(), 1.0);

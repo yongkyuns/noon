@@ -442,24 +442,37 @@ impl NativeApp {
         let Some(clock) = self.realtime_clock_for_timeline(timeline, now) else {
             return Ok(());
         };
-        match timeline {
-            TimelineWakeState::Continuous => {
-                self.execution.advance_to(clock.scene_time_at(now))?;
-            }
+        let completed_callback_phase = match timeline {
+            TimelineWakeState::Continuous => self.execution.advance_to(clock.scene_time_at(now))?,
             TimelineWakeState::Deadline(scene_time) => {
                 if clock
                     .wall_deadline(scene_time)
                     .is_some_and(|deadline| deadline <= now)
                 {
                     self.execution
-                        .advance_to(clock.scene_time_at(now).max(scene_time))?;
+                        .advance_to(clock.scene_time_at(now).max(scene_time))?
+                } else {
+                    false
                 }
             }
             TimelineWakeState::Quiescent => {
                 unreachable!("quiescent timeline has no realtime clock")
             }
-        }
-        self.resume_ready_and_reanchor(now)?;
+        };
+        // Host callbacks may take arbitrary wall time while canonical authored
+        // time is pinned at their barrier. Start the next interval at the actual
+        // completion instant so callback latency is never charged to the scene.
+        let post_advance_now = if completed_callback_phase {
+            let completed_at = Instant::now();
+            self.realtime_clock = Some(RealtimeClock::new(
+                completed_at,
+                self.execution.frame_time(),
+            ));
+            completed_at
+        } else {
+            now
+        };
+        self.resume_ready_and_reanchor(post_advance_now)?;
         if matches!(self.execution.timeline(), TimelineWakeState::Quiescent) {
             self.realtime_clock = None;
         }
@@ -1248,6 +1261,63 @@ mod tests {
             app.session().frame().objects[0].transform.translation.y,
             2.0
         );
+    }
+
+    #[test]
+    fn native_callback_completion_reanchors_the_next_authored_interval() {
+        use noon::{HostCallbackId, RustHostCallbackTable};
+        use noon_core::{
+            AnimationOptions, RateFunction, SemanticMutationTransaction, SemanticObjectState,
+            SemanticStore, SemanticVec3, StoredGeometry,
+        };
+
+        const CALLBACK: HostCallbackId = HostCallbackId::new(1);
+
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(object, CALLBACK, 0.0, None);
+        transaction.apply(&mut store).unwrap();
+
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(CALLBACK, |_context| Ok::<_, std::io::Error>(()))
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session
+            .activate_animation(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut app =
+            NativeApp::new_with_callbacks(session, callbacks, NativeViewportConfig::default());
+
+        // Model a callback whose host call finishes long after the timestamp
+        // that triggered its barrier. The next authored interval must start at
+        // completion, rather than inheriting the stale trigger timestamp.
+        let stale_trigger = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
+        app.advance_realtime_timeline(stale_trigger).unwrap();
+        let reanchored = app.realtime_clock.expect("animation remains active");
+        assert!(reanchored.wall_origin > stale_trigger + Duration::from_secs(1));
+        assert_eq!(reanchored.scene_origin, 0.0);
+
+        app.advance_realtime_timeline(reanchored.wall_origin + Duration::from_millis(16))
+            .unwrap();
+        assert!((app.session().frame().time - 0.016).abs() < 1.0e-9);
     }
 
     #[test]

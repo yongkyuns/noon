@@ -20,7 +20,12 @@ pub(crate) trait NativeExecutionSource {
     fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery;
     fn timeline(&self) -> TimelineWakeState;
     fn frame_pending(&self) -> bool;
-    fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError>;
+    /// Advance canonical execution and report whether this call committed at
+    /// least one opaque host callback phase.
+    ///
+    /// The bit is platform timing metadata only. The execution session remains
+    /// the sole callback schedule and authored-time authority.
+    fn advance_to(&mut self, requested_time: f64) -> Result<bool, NativeHostError>;
     /// Resume one authoring continuation when its shared program is ready.
     ///
     /// The return value lets the platform clock reanchor only when application
@@ -79,11 +84,11 @@ impl NativeExecutionSource for StaticExecutionSource {
         self.session.wake_state().frame_pending()
     }
 
-    fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError> {
+    fn advance_to(&mut self, requested_time: f64) -> Result<bool, NativeHostError> {
         self.callbacks
             .advance_to(&mut self.session, requested_time)
-            .map(|_| ())
-            .map_err(Into::into)
+            .map_err(NativeHostError::from)?;
+        Ok(self.callbacks.last_advance_completed_callback_phase())
     }
 
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
@@ -176,11 +181,11 @@ where
         self.program.session().wake_state().frame_pending()
     }
 
-    fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError> {
+    fn advance_to(&mut self, requested_time: f64) -> Result<bool, NativeHostError> {
         self.program
             .drive_to(&mut self.callbacks, requested_time)
-            .map(|_| ())
-            .map_err(|error| NativeHostError::Program(error.to_string()))
+            .map_err(|error| NativeHostError::Program(error.to_string()))?;
+        Ok(self.callbacks.last_advance_completed_callback_phase())
     }
 
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {

@@ -132,13 +132,27 @@ impl RustHostCallbackContext<'_> {
 #[derive(Default)]
 pub struct RustHostCallbackTable {
     callbacks: BTreeMap<HostCallbackId, Box<RustHostCallback>>,
+    /// Host-timing observation for the most recent bounded advance.
+    ///
+    /// This is not callback schedule state: the execution session remains the
+    /// only authority for selecting phases and occurrences. Platform hosts use
+    /// the bit only to exclude time spent executing an opaque callable from the
+    /// next wall-to-authored interval.
+    last_advance_completed_callback_phase: bool,
 }
 
 impl RustHostCallbackTable {
     pub const fn new() -> Self {
         Self {
             callbacks: BTreeMap::new(),
+            last_advance_completed_callback_phase: false,
         }
+    }
+
+    /// Whether the most recent callback-aware advance committed at least one
+    /// required host callback phase.
+    pub const fn last_advance_completed_callback_phase(&self) -> bool {
+        self.last_advance_completed_callback_phase
     }
 
     pub fn insert<F, E>(
@@ -241,6 +255,7 @@ impl RustHostCallbackTable {
         target: CallbackAdvanceTarget,
         session: &'a mut ExecutionSession,
     ) -> Result<&'a FrameState, RustHostCallbackError> {
+        self.last_advance_completed_callback_phase = false;
         loop {
             match target.advance(session)? {
                 CallbackAdvance::Ready(frame) => {
@@ -285,6 +300,7 @@ impl RustHostCallbackTable {
                         session.fail_required_callback_phase(token)?;
                         return Err(RustHostCallbackError::Session(error));
                     }
+                    self.last_advance_completed_callback_phase = true;
                 }
             }
         }
@@ -457,6 +473,7 @@ mod tests {
             live.play_animation(&animation).unwrap();
         }
         callbacks.advance_to(&mut session, 1.0).unwrap();
+        assert!(callbacks.last_advance_completed_callback_phase());
         let (source_at_one, drift_at_one) = effective_pair(&scene, &session, &source, &drift);
         assert_eq!(source_at_one.0, Vec2::new(1.0, 1.0));
         assert_eq!(source_at_one.1, 0.5);
@@ -487,6 +504,7 @@ mod tests {
                 ExecutionSessionCallbackError::NonMonotonicAdvance { .. }
             ))
         ));
+        assert!(!callbacks.last_advance_completed_callback_phase());
     }
 
     #[test]
@@ -511,9 +529,8 @@ mod tests {
         let frame = session.frame().clone();
         let publication = session.publication_context();
 
-        let error = RustHostCallbackTable::new()
-            .advance_to(&mut session, 1.0)
-            .unwrap_err();
+        let mut missing = RustHostCallbackTable::new();
+        let error = missing.advance_to(&mut session, 1.0).unwrap_err();
         assert!(matches!(
             error,
             RustHostCallbackError::UnknownCallback {
@@ -524,6 +541,7 @@ mod tests {
         assert_eq!(session.frame(), &frame);
         assert_eq!(session.publication_context(), publication);
         assert!(session.callback_termination().is_some());
+        assert!(!missing.last_advance_completed_callback_phase());
     }
 
     #[test]
