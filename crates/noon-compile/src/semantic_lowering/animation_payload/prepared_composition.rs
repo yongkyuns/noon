@@ -375,14 +375,11 @@ fn push_prepared_channel(
     driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
     tracks: &mut Vec<PreparedSemanticAnimationTrack>,
 ) -> Result<(), PreparedSemanticAnimationLoweringError> {
-    let transform_key = driver_key(leaf.execution_object_id, Property::Transform);
-    let umbrella_conflict = if channel.property == Property::Transform {
-        driven.iter().find_map(|((object, _), animation)| {
-            (*object == leaf.execution_object_id.get()).then_some(*animation)
-        })
-    } else {
-        driven.get(&transform_key).copied()
-    };
+    let umbrella_conflict = super::affine::transform_driver_conflict(
+        driven,
+        leaf.execution_object_id,
+        channel.property,
+    );
     if let Some(first_animation) = umbrella_conflict {
         return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
             first_animation,

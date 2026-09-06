@@ -14,6 +14,7 @@ const {
   createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryCreatePlaySmokeRenderer,
+  createDirectOrdinarySquareToCircleSmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
 } = await import("./pkg/noon_web.js");
@@ -575,6 +576,41 @@ async function directOrdinaryCreateProof(expectedBackend) {
   }
 }
 
+async function directSquareToCircleProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinarySquareToCircleSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    await settleDirectPublication(renderer, 0);
+    for (const time of [1000, 1500]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+    }
+    const midpoint = await sampleRenderedColor(canvas, 0, 0);
+    renderer.advanceDirectRealtime(2000);
+    await settleDirectPublication(renderer, 2000);
+    const endpoint = await sampleRenderedColor(canvas, 0, 0);
+    renderer.advanceDirectRealtime(3000);
+    await settleDirectPublication(renderer, 3000);
+    const removed = await sampleRenderedColor(canvas, 0, 0);
+    const directive = JSON.parse(renderer.directWakeDirectiveJson(3000));
+    const metrics = { midpoint, endpoint, removed, time: renderer.time(), cadence: directive.cadence };
+    if (renderer.rendererBackend() !== expectedBackend || metrics.time !== 3 ||
+        metrics.cadence !== "idle" || midpoint.red < 30 || endpoint.red < 90 ||
+        endpoint.blue < 70 || endpoint.red <= midpoint.red || removed.red > 20 ||
+        renderer.objectCount() !== 0 || renderer.lastDrawCalls() !== 0) {
+      throw new Error(`direct Create/morph/Fade sequence failed: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directLineMatchProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectLineMatchSmokeRenderer(canvas);
@@ -1116,6 +1152,7 @@ async function start() {
   metrics.callbackPaint = await directCallbackPaintProof(expectedBackend);
   metrics.lineMatch = await directLineMatchProof(expectedBackend);
   metrics.ordinaryCreate = await directOrdinaryCreateProof(expectedBackend);
+  metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.ordinaryAffinePlay = await directOrdinaryAffinePlayProof(expectedBackend);
   metrics.ordinaryAffineContinuation = await directOrdinaryAffineContinuationProof(expectedBackend);

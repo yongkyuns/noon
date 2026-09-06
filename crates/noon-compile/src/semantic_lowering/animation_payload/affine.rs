@@ -463,14 +463,8 @@ where
         let channels = lower_transform_channels(source, target, from)
             .map_err(|issue| existing_payload_error(leaf, issue))?;
         for channel in channels {
-            let transform_key = driver_key(leaf.execution_object_id, Property::Transform);
-            let umbrella_conflict = if channel.property == Property::Transform {
-                driven.iter().find_map(|((object, _), animation)| {
-                    (*object == leaf.execution_object_id.get()).then_some(*animation)
-                })
-            } else {
-                driven.get(&transform_key).copied()
-            };
+            let umbrella_conflict =
+                transform_driver_conflict(&driven, leaf.execution_object_id, channel.property);
             if let Some(first_animation) = umbrella_conflict {
                 return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
                     first_animation,
@@ -963,6 +957,20 @@ fn existing_payload_error(
                 error: error.with_node(scheduled_target_state(leaf)),
             }
         }
+    }
+}
+
+/// Check only this object's bounded channel set, never the entire composition.
+pub(super) fn transform_driver_conflict<T: Copy>(
+    driven: &HashMap<(u64, u8), T>,
+    object: ObjectId,
+    property: Property,
+) -> Option<T> {
+    let (object, transform_slot) = driver_key(object, Property::Transform);
+    if property == Property::Transform {
+        (0..=transform_slot).find_map(|slot| driven.get(&(object, slot)).copied())
+    } else {
+        driven.get(&(object, transform_slot)).copied()
     }
 }
 
