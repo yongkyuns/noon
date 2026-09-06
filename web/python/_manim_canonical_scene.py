@@ -890,7 +890,10 @@ def _canonical_uncreate_options(animation: object, kwargs: dict[str, object]) ->
         return None
     if getattr(animation, "remover", None) is not True:
         return None
-    return _canonical_affine_options(animation, kwargs)
+    resolved = _canonical_affine_options(animation, kwargs)
+    if resolved is None or resolved.rate_func not in {"linear", "smooth"}:
+        return None
+    return resolved
 
 
 def _play_canonical_create(

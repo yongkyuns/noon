@@ -241,6 +241,7 @@ pub enum ExecutionSessionCreateError {
     TargetIsNotDetached,
     ReactiveBindingsUnsupported,
     RequiredCallbacksUnsupported,
+    UnsupportedUncreateRateFunction(RateFunction),
 }
 
 impl std::fmt::Display for ExecutionSessionCreateError {
@@ -262,6 +263,11 @@ impl std::fmt::Display for ExecutionSessionCreateError {
             Self::RequiredCallbacksUnsupported => {
                 formatter.write_str("Create does not yet support required host callbacks")
             }
+            Self::UnsupportedUncreateRateFunction(rate) => write!(
+                formatter,
+                "Uncreate currently supports only linear and smooth rate functions, got {}",
+                rate.semantic_id()
+            ),
         }
     }
 }
@@ -1401,6 +1407,13 @@ impl ExecutionSession {
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
+        let rate = options.rate_func.unwrap_or(RateFunction::Smooth);
+        if !matches!(rate, RateFunction::Linear | RateFunction::Smooth) {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target,
+                error: ExecutionSessionCreateError::UnsupportedUncreateRateFunction(rate),
+            });
+        }
         self.require_create_root(root, target)?;
         self.require_create_target(store, target)?;
         let mut declaration = SemanticMutationTransaction::new();

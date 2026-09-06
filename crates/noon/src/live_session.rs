@@ -1407,6 +1407,39 @@ mod tests {
     }
 
     #[test]
+    fn uncreate_rejects_asymmetric_rate_before_admission() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let before_nodes = square.store().borrow().len();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let result = scene.live(&mut session).declare_and_activate_uncreate(
+            &square,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::RushInto),
+        );
+
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::CreateTarget {
+                    error: ExecutionSessionCreateError::UnsupportedUncreateRateFunction(
+                        RateFunction::RushInto
+                    ),
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(square.store().borrow().len(), before_nodes);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
     fn prepared_parallel_composition_publishes_one_revision_and_completes_both_leaves() {
         let mut scene = Scene::new();
         let mut left = scene.circle(1.0).unwrap();
