@@ -631,7 +631,7 @@ async function directTypstProof(expectedBackend, factory, yellow) {
     const data = context.getImageData(0, 0, pixels.width, pixels.height).data;
     let coloredPixels = 0;
     for (let i = 0; i < data.length; i += 4) {
-      if (yellow ? data[i] > 100 && data[i + 1] > 100 && data[i + 2] < 60
+      if (yellow ? data[i] > 180 && data[i + 1] > 140 && data[i] > data[i + 2] + 40 && data[i + 1] > data[i + 2] + 30
         : Math.min(data[i], data[i + 1], data[i + 2]) > 100) coloredPixels += 1;
     }
     if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 1 ||
@@ -659,7 +659,7 @@ async function directSuccessionProof(expectedBackend) {
       [500, -2, 0, [88, 196, 221]],
       [1500, 0, -2, [197, 95, 115]],
       [2500, 2, 0, [131, 193, 103]],
-      [3500, 0, 2, [255, 255, 0]],
+      [3500, 0, 2, [247, 217, 111]],
     ]) {
       renderer.advanceDirectRealtime(time);
       await settleDirectPublication(renderer, time);

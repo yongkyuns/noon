@@ -482,6 +482,7 @@ try {
     expectedDuration,
     endpointTime,
     expectText = false,
+    staticTextColor = null,
     expectedFinalCenter = null,
     expectedFinalColor = null,
     expectedComposition = false,
@@ -531,6 +532,7 @@ try {
       expectedDuration: null,
       endpointTime: null,
       expectText: true,
+      staticTextColor: "yellow",
     },
     {
       filename: "manim_example_math_typst.py",
@@ -538,6 +540,7 @@ try {
       expectedDuration: null,
       endpointTime: null,
       expectText: true,
+      staticTextColor: "white",
     },
     {
       filename: "manim_example_succession.py",
@@ -755,10 +758,16 @@ try {
       );
     }
     if (expectText) {
-      const pixels = textPixelStats(await page.locator(`#${result.canvasId}`).screenshot());
-      assert.ok(pixels.count > 100, `${filename}: replacement glyphs were not rendered`);
-      assert.ok(pixels.width > 50, `${filename}: replacement text has no glyph extent`);
-      assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
+      const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
+      const pixels = staticTextColor === "yellow"
+        ? visiblePixelStats(screenshot, (red, green, blue) =>
+            red > 180 && green > 140 && red > blue + 40 && green > blue + 30)
+        : textPixelStats(screenshot);
+      assert.ok(pixels.count > 100, `${filename}: glyphs were not rendered: ${JSON.stringify(pixels)}`);
+      assert.ok(pixels.width > 50, `${filename}: text has no glyph extent`);
+      if (staticTextColor === null) {
+        assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
+      }
     }
     if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition) {
       await page.evaluate(() => {

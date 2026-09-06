@@ -795,7 +795,7 @@ pub fn ordinary_succession_program() -> Result<LiveProgram<OrdinarySuccession>, 
         (88.0, 196.0, 221.0),
         (197.0, 95.0, 115.0),
         (131.0, 193.0, 103.0),
-        (255.0, 255.0, 0.0),
+        (247.0, 217.0, 111.0),
     ];
     let mut dots = Vec::with_capacity(4);
     let mut targets = Vec::with_capacity(4);
