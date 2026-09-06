@@ -281,10 +281,11 @@ async function observeTarget(page, target) {
         authoringClient: harness.authoring,
         loopDurationSeconds: 4,
         transportMode: "transferable",
+        initiallyPaused: true,
       });
-      const paused = await execution.pause();
-      if (paused.time > targetTime) {
-        throw new Error(`renderer observation advanced past ${targetTime} before pause`);
+      const paused = await execution.state();
+      if (paused.time !== 0 || paused.playing) {
+        throw new Error("renderer observation must attach paused at authored time zero");
       }
       const advanced = await execution.advanceToWithRendererObservation(targetTime);
       if (advanced.time !== targetTime || advanced.playing !== false) {
@@ -331,10 +332,11 @@ async function observeLineSequence(page) {
         authoringClient: harness.authoring,
         loopDurationSeconds: 4.5,
         transportMode: "transferable",
+        initiallyPaused: true,
       });
-      const paused = await execution.pause();
-      if (paused.time > firstSampleTime) {
-        throw new Error(`Line observation advanced past ${firstSampleTime} before pause`);
+      const paused = await execution.state();
+      if (paused.time !== 0 || paused.playing) {
+        throw new Error("Line observation must attach paused at authored time zero");
       }
       return { canvasId: canvas.id, rendererBackend: ready.render.backend };
     } catch (error) {

@@ -23,13 +23,13 @@ class RendererObservationLineCallbacks(Scene):
 
         moving.add_updater(forward)
         self.add(marker, reference, moving, label)
-        self.wait(2.0)
+        self.declare_wait(2.0)
         moving.remove_updater(forward)
         moving.add_updater(backward)
-        self.wait(2.0)
+        self.declare_wait(2.0)
         moving.remove_updater(backward)
-        self.wait(0.5)
+        self.declare_wait(0.5)
 
-        # The waits above author callback activation windows only. This creates
+        # Explicit declarations above author callback activation windows only. This creates
         # the one execution session that the worker advances monotonically.
         self.live_execution(duration=4.5)

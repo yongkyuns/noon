@@ -516,6 +516,14 @@ def _canonical_wait(
     return _ORIGINAL_WAIT(scene, duration)
 
 
+def _declare_wait(scene: _base.Scene, duration: float = 1.0) -> _base.Scene:
+    """Declare a pre-execution interval on the shared Rust authoring cursor."""
+    if _legacy_authored_time(scene) != 0.0:
+        raise NotImplementedError("canonical wait declaration cannot follow legacy timing")
+    _context(scene).authoredWait(float(duration))
+    return scene
+
+
 def _play_canonical_tracker(
     self: _base.Scene,
     builder: _reactive._ValueAnimationBuilder,
@@ -1904,6 +1912,7 @@ def install() -> None:
     _base.Mobject._bind_to_scene = _bind_mobject
     _base.Scene.play = _play
     _base.Scene.wait = _canonical_wait
+    _base.Scene.declare_wait = _declare_wait
     _base.Scene.time = property(_canonical_scene_time)
     _base.Scene.value_tracker = _canonical_value_tracker
     _base.Scene.bind_position = _canonical_bind_position
