@@ -933,9 +933,7 @@ impl CanonicalAuthoringScene {
         let node = target.node_id();
         let new_binding = match (self.bindings.get(&id), self.identities.get(&node)) {
             (None, None) => true,
-            (Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => {
-                false
-            }
+            (Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => false,
             _ => return Err(format!("canonical object {} is already bound", id.get())),
         };
         if self.live_player.is_none() && self.scene.time() != 0.0 {

@@ -2126,7 +2126,7 @@ mod tests {
 
     #[test]
     fn uncreate_reverses_and_removes_a_direct_bound_leaf() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let semantic_id = square.node_id();
         let authored = square.state().unwrap();
@@ -2144,11 +2144,11 @@ mod tests {
             )
             .unwrap();
         assert!(live.contains(&square).unwrap());
-        assert_eq!(live.effective(&square).unwrap().reveal, 1.0);
+        assert_eq!(live.session.frame().reveal(0), 1.0);
 
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
-        assert_eq!(live.effective(&square).unwrap().reveal, 0.0);
+        assert_eq!(live.session.frame().reveal(0), 0.0);
         live.complete_segment(segment).unwrap();
         assert!(!live.contains(&square).unwrap());
         assert_eq!(square.node_id(), semantic_id);
