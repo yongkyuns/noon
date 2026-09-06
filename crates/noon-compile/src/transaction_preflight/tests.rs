@@ -142,6 +142,37 @@ fn late_presence_replacement_rejects_without_touching_unrelated_tracks() {
 }
 
 #[test]
+fn mapped_presence_preflight_orders_by_compiled_event_boundary() {
+    let (mut compiled, objects) = compiled_circles([1.0]);
+    let target = objects[0];
+    add_presence(&mut compiled, target, 0, false, true, 1.0);
+    add_presence(&mut compiled, target, 1, true, false, 2.0);
+    let mapped = TrackDefinition {
+        id: TrackId::new(2),
+        object: target,
+        property: noon_core::Property::Presence,
+        values: TrackValues::Bool {
+            from: false,
+            to: true,
+        },
+        timing: TrackTiming::new(0.0, 6.0, Easing::Linear),
+        time_map: noon_core::CompositionTimeMap::from_steps(vec![
+            noon_core::CompositionTimeMapStep::new(0.5, 0.5, Easing::Linear),
+        ]),
+    };
+    let transaction = MutationTransaction::from_mutations([ScenePatch::AddTrack(mapped)]);
+
+    compiled.preflight_transaction(&transaction).unwrap();
+    for patch in transaction.mutations() {
+        compiled.apply_patch(patch).unwrap();
+    }
+    assert_eq!(
+        compiled.track(TrackId::new(2)).unwrap().timing,
+        TrackTiming::instant(3.0)
+    );
+}
+
+#[test]
 fn remove_recreate_and_track_replacement_use_only_transaction_overlay() {
     let (mut compiled, objects) = compiled_circles([1.0]);
     let object = objects[0];
