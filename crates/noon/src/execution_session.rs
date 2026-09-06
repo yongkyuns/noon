@@ -14,14 +14,17 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::execution_segment::{
     ExecutionSegment, ExecutionSegmentError, ExecutionSegmentSequence, ExecutionSegmentToken,
-    PendingSegmentCompletion, PendingSegmentCompletionKind, SegmentCompletionEntry,
+    PendingSegmentCompletion, PendingSegmentCompletionKind, ScalarSegmentCompletionEntry,
+    SegmentCompletionEntry,
 };
 use noon_compile::{
+    derive_prepared_scalar_animation_tracks, lower_prepared_scalar_signal_timeline_entries,
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
-    lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
-    lower_semantic_execution, lower_semantic_execution_root, CompilePatchError,
-    EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
-    PreparedScalarSignalTimelineError, PreparedSemanticAnimationLoweringError,
+    lower_prepared_semantic_animation_schedule, lower_semantic_affine_animation_tracks,
+    lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
+    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
+    PreparedScalarAnimationTrackError, PreparedScalarSignalTimelineError,
+    PreparedSemanticAnimationLoweringError, PreparedSemanticAnimationScheduleError,
     SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
     SemanticExecutionLoweringError, SemanticExecutionLoweringOutput, SemanticExecutionReachability,
     SemanticReactiveProjection,
@@ -86,6 +89,11 @@ pub(crate) enum SemanticCompositionRequest {
     Rotate {
         target: SemanticNodeId,
         angle: f64,
+        options: AnimationOptions,
+    },
+    ValueTracker {
+        signal: SemanticNodeId,
+        target: f64,
         options: AnimationOptions,
     },
     Wait {
@@ -363,6 +371,8 @@ pub enum ExecutionSessionAnimationError {
     Segment(ExecutionSegmentError),
     Payload(SemanticAffineAnimationTrackError),
     PreparedAnimation(PreparedSemanticAnimationLoweringError),
+    PreparedSchedule(PreparedSemanticAnimationScheduleError),
+    PreparedScalarAnimation(PreparedScalarAnimationTrackError),
     PreparedScalarTimeline(PreparedScalarSignalTimelineError),
     ScalarTimeline(SignalTimelineAppendError),
     ScalarQuery(SemanticScalarSignalQueryError),
@@ -425,6 +435,8 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
                 "semantic animation payload lowering failed: {error}"
             ),
             Self::PreparedAnimation(error) => error.fmt(formatter),
+            Self::PreparedSchedule(error) => error.fmt(formatter),
+            Self::PreparedScalarAnimation(error) => error.fmt(formatter),
             Self::PreparedScalarTimeline(error) => error.fmt(formatter),
             Self::ScalarTimeline(error) => error.fmt(formatter),
             Self::ScalarQuery(error) => error.fmt(formatter),
@@ -506,6 +518,18 @@ impl From<SemanticAffineAnimationTrackError> for ExecutionSessionAnimationError 
 impl From<PreparedSemanticAnimationLoweringError> for ExecutionSessionAnimationError {
     fn from(value: PreparedSemanticAnimationLoweringError) -> Self {
         Self::PreparedAnimation(value)
+    }
+}
+
+impl From<PreparedSemanticAnimationScheduleError> for ExecutionSessionAnimationError {
+    fn from(value: PreparedSemanticAnimationScheduleError) -> Self {
+        Self::PreparedSchedule(value)
+    }
+}
+
+impl From<PreparedScalarAnimationTrackError> for ExecutionSessionAnimationError {
+    fn from(value: PreparedScalarAnimationTrackError) -> Self {
+        Self::PreparedScalarAnimation(value)
     }
 }
 
@@ -1069,10 +1093,11 @@ impl ExecutionSession {
         self.pending_segment_completion = Some(PendingSegmentCompletion {
             token,
             activation_scene_revision: store.scene_revision(),
-            kind: PendingSegmentCompletionKind::ObjectTracks {
+            kind: PendingSegmentCompletionKind {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
-                entries: completions,
+                object_entries: completions,
+                scalar_entries: Vec::new(),
             },
         });
         self.next_activation_track_id = next_track_id;
@@ -1286,7 +1311,7 @@ impl ExecutionSession {
         })?;
         let entry =
             lower_prepared_scalar_signal_timeline_entry(&prepared, &self.reactive_projection)?;
-        let noon_compile::CompiledScalarSignalTimelineEntry::Track(track) = entry else {
+        let noon_compile::CompiledScalarSignalTimelineEntry::Track(track) = &entry else {
             unreachable!("tracker activation prepared one scalar track")
         };
         let effective = self.effective_signal_value(signal).cloned();
@@ -1297,7 +1322,9 @@ impl ExecutionSession {
                 effective,
             });
         }
-        let schedule = self.signal_timeline.prepare_append(entry, start_time)?;
+        let schedule = self
+            .signal_timeline
+            .prepare_append_batch([entry], start_time)?;
         let mut segment = ExecutionSegment::from_duration(start_time, duration)?;
         let runtime_publication = self
             .runtime
@@ -1329,11 +1356,16 @@ impl ExecutionSession {
         self.pending_segment_completion = Some(PendingSegmentCompletion {
             token,
             activation_scene_revision: store.scene_revision(),
-            kind: PendingSegmentCompletionKind::ScalarTrack {
-                signal,
-                authored_endpoint: target,
-                runtime_endpoint: track.to(),
-                end_time: segment.end_time(),
+            kind: PendingSegmentCompletionKind {
+                lifecycle_root: None,
+                lifecycle_removals: Vec::new(),
+                object_entries: Vec::new(),
+                scalar_entries: vec![ScalarSegmentCompletionEntry {
+                    signal,
+                    authored_endpoint: target,
+                    runtime_endpoint: track.to(),
+                    end_time: segment.end_time(),
+                }],
             },
         });
         Ok(segment)
@@ -1365,10 +1397,10 @@ impl ExecutionSession {
         })?;
         let entry =
             lower_prepared_scalar_signal_timeline_entry(&prepared, &self.reactive_projection)?;
-        let noon_compile::CompiledScalarSignalTimelineEntry::Hold(hold) = entry else {
+        let noon_compile::CompiledScalarSignalTimelineEntry::Hold(hold) = &entry else {
             unreachable!("persistent scalar publication prepared one Hold entry")
         };
-        let schedule = self.signal_timeline.prepare_append(entry, time)?;
+        let schedule = self.signal_timeline.prepare_append_batch([entry], time)?;
         let runtime_publication = self
             .runtime
             .prepare_authored_reactive_plan_change(
@@ -1562,6 +1594,16 @@ impl ExecutionSession {
                 admit(*target, declaration, admitted)?;
                 Ok(declaration.create_rotate_animation(*target, *angle, *options))
             }
+            SemanticCompositionRequest::ValueTracker {
+                signal,
+                target,
+                options,
+            } => {
+                if !store.is_semantic_signal_scoped(root, *signal) {
+                    declaration.scope_signal(root, *signal);
+                }
+                Ok(declaration.create_scalar_animation(*signal, *target, *options))
+            }
             SemanticCompositionRequest::Wait { duration } => {
                 if !duration.is_finite() || *duration < 0.0 {
                     return Err(ExecutionSessionAnimationError::Segment(
@@ -1655,6 +1697,9 @@ impl ExecutionSession {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
                 Ok(declaration.create_rotate_animation(*target, *angle, *options))
+            }
+            SemanticCompositionRequest::ValueTracker { signal, target, options } => {
+                Ok(declaration.create_scalar_animation(*signal, *target, *options))
             }
             SemanticCompositionRequest::Wait { duration } => Ok(declaration.create_wait_animation(*duration)),
             SemanticCompositionRequest::Composition { kind, children, options } => {
@@ -2098,6 +2143,107 @@ impl ExecutionSession {
                 ExecutionSessionPublicationError::Semantic(error),
             )
         })?;
+        let schedule = lower_prepared_semantic_animation_schedule(
+            &prepared,
+            &self.execution_index,
+            root,
+            self.runtime.frame().time,
+            play_options,
+        )?;
+        let scalar_tracks = derive_prepared_scalar_animation_tracks(&prepared, &schedule)?;
+        let prepared = prepared
+            .with_scalar_signal_tracks(scalar_tracks)
+            .map_err(|error| {
+                ExecutionSessionAnimationError::AuthoredPublication(
+                    ExecutionSessionPublicationError::Semantic(error),
+                )
+            })?;
+
+        let mut prospective_reactive = self.reactive_projection.clone();
+        let mut runtime_enrollments = Vec::new();
+        let mut seen_scalar_signals = HashSet::new();
+        let mut newly_enrolled_signals = HashSet::new();
+        for leaf in schedule.scalar_leaves() {
+            if !seen_scalar_signals.insert(leaf.signal)
+                || prospective_reactive
+                    .execution_signal_id(leaf.signal)
+                    .is_some()
+            {
+                continue;
+            }
+            let initial = match prepared
+                .store()
+                .semantic_signal_state(leaf.signal)
+                .map_err(|error| {
+                    ExecutionSessionAnimationError::AuthoredPublication(
+                        ExecutionSessionPublicationError::Semantic(
+                            noon_core::SemanticMutationTransactionError::Signal { index: 0, error },
+                        ),
+                    )
+                })?
+                .source()
+            {
+                noon_core::SemanticSignalSource::Input(noon_core::SemanticSignalValue::Scalar(
+                    value,
+                )) => lower_live_scalar_value(*value)?,
+                _ => {
+                    return Err(ReactiveError::NotInputSignal(
+                        noon_compile::semantic_execution_signal_id(leaf.signal),
+                    )
+                    .into())
+                }
+            };
+            let execution = prospective_reactive
+                .install_input_signal(leaf.signal, ReactiveValue::Scalar(initial))?;
+            let enrollment = self.runtime.prepare_reactive_signal_enrollment(
+                Some(execution),
+                ReactiveValue::Scalar(initial),
+            )?;
+            newly_enrolled_signals.insert(leaf.signal);
+            runtime_enrollments.push((enrollment, execution));
+        }
+
+        let scalar_timeline_entries =
+            lower_prepared_scalar_signal_timeline_entries(&prepared, &prospective_reactive)?;
+        let mut scalar_completions = BTreeMap::new();
+        let mut checked_scalar_starts = HashSet::new();
+        for entry in &scalar_timeline_entries {
+            let noon_compile::CompiledScalarSignalTimelineEntry::Track(track) = entry else {
+                continue;
+            };
+            if checked_scalar_starts.insert(track.semantic_signal())
+                && !newly_enrolled_signals.contains(&track.semantic_signal())
+            {
+                let effective = self
+                    .effective_signal_value(track.semantic_signal())
+                    .cloned();
+                if effective != Some(ReactiveValue::Scalar(track.from())) {
+                    return Err(ExecutionSessionAnimationError::ScalarEffectiveValue {
+                        signal: track.semantic_signal(),
+                        authored: track.from(),
+                        effective,
+                    });
+                }
+            }
+            scalar_completions.insert(
+                track.semantic_signal(),
+                ScalarSegmentCompletionEntry {
+                    signal: track.semantic_signal(),
+                    authored_endpoint: schedule
+                        .scalar_leaves()
+                        .iter()
+                        .rev()
+                        .find(|leaf| leaf.signal == track.semantic_signal())
+                        .expect("compiled scalar track retains one scheduled scalar leaf")
+                        .target,
+                    runtime_endpoint: track.to(),
+                    end_time: schedule.start_time() + schedule.run_time(),
+                },
+            );
+        }
+        let scalar_timeline = self
+            .signal_timeline
+            .prepare_append_batch(scalar_timeline_entries, schedule.start_time())?;
         let projection = lower_prepared_semantic_animation_composition(
             &prepared,
             &self.execution_index,
@@ -2157,31 +2303,40 @@ impl ExecutionSession {
                 .map_err(ExecutionSessionAnimationError::Publication)?;
         }
 
-        let (token, next_segment_sequence) = if definitions.is_empty() {
-            (None, self.next_segment_sequence)
-        } else {
-            let raw_sequence = self
-                .next_segment_sequence
-                .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
-            let token = ExecutionSegmentToken::new(
-                self.runtime.runtime_identity(),
-                ExecutionSegmentSequence::new(raw_sequence),
-            );
-            (Some(token), raw_sequence.checked_add(1))
-        };
+        let (token, next_segment_sequence) =
+            if definitions.is_empty() && scalar_completions.is_empty() {
+                (None, self.next_segment_sequence)
+            } else {
+                let raw_sequence = self
+                    .next_segment_sequence
+                    .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
+                let token = ExecutionSegmentToken::new(
+                    self.runtime.runtime_identity(),
+                    ExecutionSegmentSequence::new(raw_sequence),
+                );
+                (Some(token), raw_sequence.checked_add(1))
+            };
 
         let execution_prefix = definitions
             .into_iter()
             .map(ExecutionPatch::AddTrack)
             .collect();
+        let reactive_enrollment = (!runtime_enrollments.is_empty()).then_some(
+            publication::PreparedReactiveEnrollmentBatch {
+                projection: prospective_reactive,
+                enrollments: runtime_enrollments,
+            },
+        );
         let result = self
-            .apply_prepared_semantic_transaction_with_execution(
+            .apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
                 prepared,
                 execution_prefix,
                 None,
                 publication::SemanticPublicationPurpose::AuthoredMutation,
+                reactive_enrollment,
             )
             .map_err(ExecutionSessionAnimationError::AuthoredPublication)?;
+        self.signal_timeline.commit_append(scalar_timeline);
         debug_assert!(result.resolve(root).is_some());
         let activation_scene_revision = self.publication_context().scene_revision();
 
@@ -2207,7 +2362,7 @@ impl ExecutionSession {
             self.pending_segment_completion = Some(PendingSegmentCompletion {
                 token,
                 activation_scene_revision,
-                kind: PendingSegmentCompletionKind::ObjectTracks {
+                kind: PendingSegmentCompletionKind {
                     lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
                     lifecycle_removals: match lifecycle.as_ref() {
                         Some(PreparedAnimationLifecycle::Composition { removals, .. }) => {
@@ -2219,7 +2374,8 @@ impl ExecutionSession {
                             .into_iter()
                             .collect(),
                     },
-                    entries,
+                    object_entries: entries,
+                    scalar_entries: scalar_completions.into_values().collect(),
                 },
             });
         }

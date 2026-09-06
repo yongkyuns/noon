@@ -34,6 +34,11 @@ enum OrdinaryCompositionChild {
         angle: f64,
         options: noon_core::AnimationOptions,
     },
+    ValueTracker {
+        tracker: noon::ValueTracker,
+        target: f64,
+        options: noon_core::AnimationOptions,
+    },
     Wait {
         duration: f64,
     },
@@ -1357,6 +1362,15 @@ impl CanonicalAuthoringScene {
                     angle: *angle,
                     options: *options,
                 },
+                OrdinaryCompositionChild::ValueTracker {
+                    tracker,
+                    target,
+                    options,
+                } => noon::AnimationCompositionRequest::ValueTracker {
+                    tracker,
+                    target: *target,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Wait { duration } => {
                     noon::AnimationCompositionRequest::Wait {
                         duration: *duration,
@@ -1474,6 +1488,7 @@ impl CanonicalAuthoringScene {
                     ..
                 } => output.push((*entering_id, target)),
                 OrdinaryCompositionChild::Wait { .. } => {}
+                OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
                     for child in children {
                         bindings(child, output);
@@ -1552,6 +1567,35 @@ impl CanonicalAuthoringScene {
                                 .into(),
                         );
                     }
+                    continue;
+                }
+                OrdinaryCompositionChild::ValueTracker {
+                    tracker,
+                    target,
+                    options,
+                } => {
+                    if !tracker.is_in_store(self.scene.store()) {
+                        return Err(
+                            "ordinary composition ValueTracker belongs to another authoring store"
+                                .into(),
+                        );
+                    }
+                    self.scene
+                        .store()
+                        .borrow()
+                        .semantic_signal_state(tracker.node_id())
+                        .map_err(|error| error.to_string())?;
+                    if !target.is_finite() {
+                        return Err(
+                            "ordinary composition ValueTracker target must be finite".into()
+                        );
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
                     continue;
                 }
                 OrdinaryCompositionChild::Composition {
@@ -2558,6 +2602,26 @@ mod wasm {
                 .rate_func(rate_function))
         }
 
+        fn optional_options(
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<noon_core::AnimationOptions, JsValue> {
+            let mut options = noon_core::AnimationOptions::new();
+            if let Some(run_time) = child_run_time {
+                options = options.run_time(run_time);
+            }
+            if let Some(rate_function) = rate_function {
+                let rate_function = noon_core::RateFunction::from_semantic_id(&rate_function)
+                    .ok_or_else(|| {
+                        js_error(format!(
+                            "unsupported animation rate function semantic ID {rate_function:?}"
+                        ))
+                    })?;
+                options = options.rate_func(rate_function);
+            }
+            Ok(options)
+        }
+
         fn push_target(
             &mut self,
             object_id: &str,
@@ -2892,6 +2956,26 @@ mod wasm {
             }
             self.children.push(OrdinaryCompositionChild::Wait {
                 duration: child_run_time,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendValueTracker)]
+        pub fn append_value_tracker(
+            &mut self,
+            tracker: &WasmValueTrackerHandle,
+            target: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<(), JsValue> {
+            if !target.is_finite() {
+                return Err(js_error("ValueTracker target must be finite"));
+            }
+            tracker.tracker_in(&tracker.store)?;
+            self.children.push(OrdinaryCompositionChild::ValueTracker {
+                tracker: tracker.tracker.clone(),
+                target,
+                options: Self::optional_options(child_run_time, rate_function)?,
             });
             Ok(())
         }

@@ -201,85 +201,34 @@ impl ExecutionSession {
             ));
         }
 
-        if let crate::execution_segment::PendingSegmentCompletionKind::ScalarTrack {
-            signal,
-            authored_endpoint,
-            runtime_endpoint,
-            end_time,
-        } = &pending.kind
-        {
-            let (signal, authored_endpoint, runtime_endpoint, end_time) =
-                (*signal, *authored_endpoint, *runtime_endpoint, *end_time);
-            if end_time != actual_time {
+        let crate::execution_segment::PendingSegmentCompletionKind {
+            lifecycle_root,
+            lifecycle_removals,
+            object_entries: entries,
+            scalar_entries,
+        } = &pending.kind;
+
+        for entry in scalar_entries {
+            if entry.end_time != actual_time {
                 return Err(ExecutionSegmentCompletionError::NotAtBoundary {
-                    expected: end_time,
+                    expected: entry.end_time,
                     actual: actual_time,
                 });
             }
-            let effective = self.effective_signal_value(signal).cloned();
-            if effective != Some(ReactiveValue::Scalar(runtime_endpoint)) {
+            let effective = self.effective_signal_value(entry.signal).cloned();
+            if effective != Some(ReactiveValue::Scalar(entry.runtime_endpoint)) {
                 return Err(ExecutionSegmentCompletionError::ScalarEffectiveValue {
-                    signal,
-                    expected: runtime_endpoint,
+                    signal: entry.signal,
+                    expected: entry.runtime_endpoint,
                     actual: effective,
                 });
             }
-            let mut semantic = SemanticMutationTransaction::new();
-            semantic.set_scalar_signal_at(signal, authored_endpoint, actual_time);
-            let prepared = semantic.prepare(store).map_err(|error| {
-                ExecutionSegmentCompletionError::Publication(
-                    ExecutionSessionPublicationError::Semantic(error),
-                )
-            })?;
-            let timeline_entry = noon_compile::lower_prepared_scalar_signal_timeline_entry(
-                &prepared,
-                &self.reactive_projection,
-            )
-            .map_err(ExecutionSegmentCompletionError::PreparedScalarTimeline)?;
-            let schedule = self
-                .signal_timeline
-                .prepare_append(timeline_entry, actual_time)
-                .map_err(ExecutionSegmentCompletionError::ScalarTimeline)?;
-            let runtime_publication = self
-                .runtime
-                .prepare_authored_plan_change(
-                    self.publication_context(),
-                    prepared.proposed_scene_revision(),
-                )
-                .map_err(|error| {
-                    ExecutionSegmentCompletionError::Publication(
-                        ExecutionSessionPublicationError::Runtime(error),
-                    )
-                })?;
-
-            let (_result, store) = prepared.commit_with_store();
-            self.signal_timeline.commit_append(schedule);
-            self.runtime
-                .apply_prepared_authored_plan_change(runtime_publication)
-                .expect("scalar completion publication was preflighted under exclusive ownership");
-            debug_assert_eq!(
-                store.scene_revision(),
-                self.publication_context().scene_revision()
-            );
-            self.pending_segment_completion = None;
-            self.completed_segment_sequence = Some(token.sequence());
-            self.last_callback_receipt = None;
-            let publication = self.publication_context();
-            self.callback_schedule
-                .carry_completed_publication(actual_time, publication);
-            return Ok(self.frame());
         }
 
-        let crate::execution_segment::PendingSegmentCompletionKind::ObjectTracks {
-            lifecycle_root,
-            lifecycle_removals,
-            entries,
-        } = &pending.kind
-        else {
-            unreachable!("scalar completion returned above")
-        };
-
         let mut semantic = SemanticMutationTransaction::new();
+        for entry in scalar_entries {
+            semantic.set_scalar_signal_at(entry.signal, entry.authored_endpoint, actual_time);
+        }
         for &(root, target) in lifecycle_removals {
             semantic.remove_member(root, target);
         }
@@ -436,13 +385,27 @@ impl ExecutionSession {
                 )
             })?;
 
-        self.apply_semantic_transaction_with_execution(
-            store,
-            semantic,
+        let prepared = semantic.prepare(store).map_err(|error| {
+            ExecutionSegmentCompletionError::Publication(
+                ExecutionSessionPublicationError::Semantic(error),
+            )
+        })?;
+        let timeline_entries = noon_compile::lower_prepared_scalar_signal_timeline_entries(
+            &prepared,
+            &self.reactive_projection,
+        )
+        .map_err(ExecutionSegmentCompletionError::PreparedScalarTimeline)?;
+        let timeline = self
+            .signal_timeline
+            .prepare_append_batch(timeline_entries, actual_time)
+            .map_err(ExecutionSegmentCompletionError::ScalarTimeline)?;
+        self.apply_prepared_semantic_transaction_with_execution(
+            prepared,
             release,
             Some(effective),
             super::publication::SemanticPublicationPurpose::SegmentCompletion,
         )?;
+        self.signal_timeline.commit_append(timeline);
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
         self.last_callback_receipt = None;

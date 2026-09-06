@@ -48,19 +48,20 @@ pub(crate) struct SegmentCompletionEntry {
     pub end_time: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ScalarSegmentCompletionEntry {
+    pub signal: SemanticNodeId,
+    pub authored_endpoint: f64,
+    pub runtime_endpoint: f32,
+    pub end_time: f64,
+}
+
 #[derive(Clone, Debug)]
-pub(crate) enum PendingSegmentCompletionKind {
-    ObjectTracks {
-        lifecycle_root: Option<SemanticNodeId>,
-        lifecycle_removals: Vec<(SemanticNodeId, SemanticNodeId)>,
-        entries: Vec<SegmentCompletionEntry>,
-    },
-    ScalarTrack {
-        signal: SemanticNodeId,
-        authored_endpoint: f64,
-        runtime_endpoint: f32,
-        end_time: f64,
-    },
+pub(crate) struct PendingSegmentCompletionKind {
+    pub lifecycle_root: Option<SemanticNodeId>,
+    pub lifecycle_removals: Vec<(SemanticNodeId, SemanticNodeId)>,
+    pub object_entries: Vec<SegmentCompletionEntry>,
+    pub scalar_entries: Vec<ScalarSegmentCompletionEntry>,
 }
 
 #[derive(Clone, Debug)]

@@ -10,6 +10,7 @@ use noon_core::{
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
     AuthoredPublicationError, ExecutionSlotError, FrameObjectState, PreparedEffectivePropertyBatch,
+    PreparedReactiveSignalEnrollment,
 };
 
 use super::ExecutionSession;
@@ -18,6 +19,11 @@ use super::ExecutionSession;
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
     SegmentCompletion,
+}
+
+pub(crate) struct PreparedReactiveEnrollmentBatch {
+    pub projection: noon_compile::SemanticReactiveProjection,
+    pub enrollments: Vec<(PreparedReactiveSignalEnrollment, noon_core::SignalId)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -182,6 +188,23 @@ impl ExecutionSession {
         effective: Option<PreparedEffectivePropertyBatch>,
         purpose: SemanticPublicationPurpose,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+            prepared,
+            execution_prefix,
+            effective,
+            purpose,
+            None,
+        )
+    }
+
+    pub(crate) fn apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
+        reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
         }
@@ -255,6 +278,13 @@ impl ExecutionSession {
                 .chain(execution.mutations().iter().cloned())
                 .chain(execution_suffix),
         );
+        if let Some(reactive_enrollment) = reactive_enrollment {
+            self.reactive_projection = reactive_enrollment.projection;
+            for (enrollment, signal) in reactive_enrollment.enrollments {
+                self.runtime
+                    .commit_reactive_signal_enrollment(enrollment, signal);
+            }
+        }
         self.runtime
             .apply_authored_execution_transaction_with_effective(
                 &execution,
