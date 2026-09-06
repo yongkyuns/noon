@@ -490,7 +490,6 @@ try {
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
-      const authored = await harness.authoring.run(source, {});
       const canvas = document.createElement("canvas");
       canvas.id = `scene-${filename.replaceAll(".", "-")}`;
       canvas.width = 640;
@@ -499,12 +498,35 @@ try {
       const execution = new harness.AuthoringExecutionClient(canvas);
       let retainForInspection = false;
       try {
-        const options = {
-          authoringClient: harness.authoring,
-          transportMode: "transferable",
-        };
-        if (authored.duration > 0) options.loopDurationSeconds = authored.duration;
-        await execution.startSemanticExecution(authored.semanticExecution, options);
+        let continuation = null;
+        const authored = await harness.authoring.run(source, {}, {
+          async onSemanticContinuation(registration) {
+            if (continuation !== null) {
+              throw new Error(`${filename}: source registered more than one semantic continuation`);
+            }
+            continuation = registration;
+            await execution.startSemanticExecution(registration.semanticExecution, {
+              authoringClient: harness.authoring,
+              loopDurationSeconds: Math.max(1, registration.duration),
+              transportMode: "transferable",
+            });
+          },
+        });
+        if (continuation !== null) {
+          if (
+            authored.semanticExecution.contextId !== continuation.semanticExecution.contextId ||
+            authored.semanticExecution.continuationGeneration !== continuation.generation
+          ) {
+            throw new Error(`${filename}: final source result changed continuation context`);
+          }
+        } else {
+          const options = {
+            authoringClient: harness.authoring,
+            transportMode: "transferable",
+          };
+          if (authored.duration > 0) options.loopDurationSeconds = authored.duration;
+          await execution.startSemanticExecution(authored.semanticExecution, options);
+        }
 
         async function waitForFrame(afterPresentedFrames = 0) {
           let latest;
