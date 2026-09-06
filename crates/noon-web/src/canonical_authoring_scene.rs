@@ -6538,7 +6538,7 @@ mod tests {
             .unwrap()
             .scalar_timeline()
             .to_vec();
-        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = timeline[1] else {
+        let noon_core::SemanticScalarSignalTimelineEntry::Track(second) = &timeline[1] else {
             panic!("expected a second scalar track")
         };
         assert_eq!(second.timing().start_time, 3.0);

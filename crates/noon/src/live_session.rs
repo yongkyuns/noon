@@ -2856,7 +2856,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn mixed_scalar_object_composition_publishes_and_completes_once() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let square = scene.square(1.0).unwrap();
         scene.add(&circle).unwrap();
