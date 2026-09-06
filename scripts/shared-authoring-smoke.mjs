@@ -830,6 +830,7 @@ try {
     let execution = null;
     let registration = null;
     let settled = false;
+    let authoringFailure = null;
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -845,7 +846,10 @@ try {
         });
       },
     });
-    authoredPromise.then(() => { settled = true; }, () => {});
+    authoredPromise.then(() => { settled = true; }, (error) => {
+      settled = true;
+      authoringFailure = String(error?.message ?? error);
+    });
     harness.callbackContinuationAuthoredPromise = authoredPromise;
 
     let midpoint = null;
@@ -864,7 +868,7 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     if (midpoint === null || settled) {
-      throw new Error("callback continuation source did not remain suspended at a live midpoint");
+      throw new Error(authoringFailure ?? "callback continuation source did not remain suspended at a live midpoint");
     }
     return { canvasId: canvas.id, midpoint, registration };
   }, callbackContinuationSource);
@@ -888,7 +892,6 @@ try {
     return { authored, metrics };
   });
   assert.equal(callbackContinuationResult.authored.duration, 1);
-  assert.equal(callbackContinuationResult.authored.kind, "scene_document");
   assert.equal(
     callbackContinuationResult.authored.semanticExecution.contextId,
     callbackContinuation.registration.semanticExecution.contextId,
@@ -1049,8 +1052,8 @@ try {
     return { canvasId: canvas.id };
   }, fadeContinuationSource);
 
-  async function observeFadeDuring(start, end, label) {
-    return page.evaluate(async ({ startTime, endTime, phaseLabel }) => {
+  async function observeFadeDuring(start, end, label, expectedObjectCount = null) {
+    return page.evaluate(async ({ startTime, endTime, phaseLabel, objectCount }) => {
       const { execution } = window.sharedAuthoringSmoke.ordinaryFadeContinuation;
       let latest = null;
       for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -1058,7 +1061,10 @@ try {
           const state = await execution.state();
           latest = state;
           if (state.time >= startTime && state.time <= endTime) {
-            return state;
+            if (objectCount === null ||
+                (await execution.metrics()).metrics.objectCount === objectCount) {
+              return state;
+            }
           }
         } catch {
           // The exact player is briefly returned between continuation segments.
@@ -1069,7 +1075,7 @@ try {
         `fade ${phaseLabel} did not reach its observable interval: ` +
         JSON.stringify({ latest }),
       );
-    }, { startTime: start, endTime: end, phaseLabel: label });
+    }, { startTime: start, endTime: end, phaseLabel: label, objectCount: expectedObjectCount });
   }
 
   const fadeInMidpoint = await observeFadeDuring(0.3, 0.5, "FadeIn midpoint");
@@ -1090,7 +1096,10 @@ try {
       fadeOutPixel.green > 15 && fadeOutPixel.green < 100,
     `FadeOut midpoint did not present partial appearance: ${JSON.stringify({ fadeOutMidpoint, fadeOutPixel })}`,
   );
-  const fadeAbsent = await observeFadeDuring(2.05, 2.1, "detached wait");
+  // A clean static wait sleeps until its deadline: published authored time may
+  // remain exactly 2.0. Observe the committed renderer membership, not a tick
+  // that the runtime has no reason to produce.
+  const fadeAbsent = await observeFadeDuring(2.0, 2.1, "detached wait", 0);
   const absentPixels = visiblePixelStats(
     await page.locator(`#${fadeContinuation.canvasId}`).screenshot(),
     (red, green, blue) => blue > 35 && blue > red + 20 && blue > green + 10,

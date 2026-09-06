@@ -238,6 +238,30 @@ test("semantic continuation services Rust callback barriers before endpoint publ
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("continuation sends coherent intermediate publications before its endpoint", async () => {
+  const f = fixture("transferable", null, {
+    generation: 25, onComplete: () => {}, onError: (_generation, error) => { throw error; },
+  });
+  let endpoint;
+  try {
+    f.player.driveLiveSegmentFromWallTime = () => ({ callbackPhaseJson: null, reachedEndpoint: false });
+    f.player.drainDeltaJson = () => f.player.seekDeltaJson(0.5);
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const initialDelta = await initial;
+    f.render.port2.postMessage({ type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence });
+    const intermediate = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    const publication = await intermediate;
+    assert.equal(JSON.parse(decodeTransferableExecutionDelta(publication).json).time, 0.5);
+    assert.equal(publication.sequence, initialDelta.sequence + 1);
+    assert.equal(f.stats().completedSegments, 0);
+    assert.equal(f.stats().returned, 0, "an intermediate frame retains the source continuation lease");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("continuation presents admitted native input before completing and returning its lease", async () => {
   const completions = [];
   const f = fixture("transferable", null, {
@@ -965,3 +989,46 @@ test("stalled native-event queue rejects overflow and preserves accepted command
     endpoint.stop();
   } finally { f.close(); }
 });
+
+
+for (const reachedEndpoint of [false, true]) {
+  test(`renderer failure terminates ${reachedEndpoint ? "endpoint" : "intermediate"} continuation once`, async () => {
+    const failures = [];
+    let completed = 0;
+    let drives = 0;
+    const f = fixture("transferable", null, {
+      generation: 26,
+      onComplete: () => { completed += 1; },
+      onError: (generation, error) => { failures.push({ generation, error }); },
+    });
+    let endpoint;
+    try {
+      f.player.driveLiveSegmentFromWallTime = () => {
+        drives += 1;
+        return { callbackPhaseJson: null, reachedEndpoint };
+      };
+      f.player.drainDeltaJson = () => f.player.seekDeltaJson(0.5);
+      const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+      endpoint = await f.attach();
+      const initialDelta = await initial;
+      f.render.port2.postMessage({ type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence });
+      const publication = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+      f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+      await publication;
+      const error = nextMatching(f.control.port2, (message) => message.type === "error");
+      f.render.port2.postMessage({ type: "render_error", message: "upload failed" });
+      await error;
+      await turn();
+      f.render.port2.postMessage({ type: "tick", timestamp: 2 });
+      await turn();
+      assert.equal(failures.length, 1);
+      assert.equal(failures[0].generation, 26);
+      assert.match(failures[0].error.message, /upload failed/);
+      assert.equal(drives, 1);
+      assert.equal(completed, 0);
+      assert.equal(f.stats().completedSegments, 0);
+      assert.equal(f.stats().returned, 0);
+      assert.equal(f.stats().stopped, 1);
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}

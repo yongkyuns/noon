@@ -55,3 +55,29 @@ test("worker delegates every Scene construct lifecycle to the canonical adapter"
   assert.doesNotMatch(authoring, /__noon_result\.(?:setup|construct|tear_down)\(/);
   assert.doesNotMatch(authoring, /_(?:begin|finish)_(?:async|synchronous)_continuation_construct/);
 });
+
+
+test("retired callback sessions release only after the active Python run unwinds", async () => {
+  const retirementSource = source.slice(
+    source.indexOf("function retireSemanticContext"),
+    source.indexOf("async function handleHostRequest"),
+  );
+  let finishRun;
+  const activeRun = new Promise((resolve) => { finishRun = resolve; });
+  let releases = 0;
+  const contexts = new Map();
+  const entry = { released: true, endpoints: new Set(), releaseCallbackSession() { releases += 1; } };
+  contexts.set("context", entry);
+  const retire = new Function("semanticContexts", "postError", "activeRun", `
+    let requestQueue = activeRun;
+    ${retirementSource}
+    return (token, entry) => { retireSemanticContext(token, entry); return requestQueue; };
+  `)(contexts, (id, error) => { throw error; }, activeRun);
+  const released = retire("context", entry);
+  await Promise.resolve();
+  assert.equal(contexts.size, 0);
+  assert.equal(releases, 0);
+  finishRun();
+  await released;
+  assert.equal(releases, 1);
+});

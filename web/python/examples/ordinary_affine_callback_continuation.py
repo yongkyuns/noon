@@ -13,6 +13,9 @@ from noon import Circle, Color, Scene, Transform, linear
 class OrdinaryAffineCallbackContinuation(Scene):
     async def construct(self):
         circle = Circle(radius=0.4).set_fill(Color(0.0, 0.4, 1.0), opacity=1.0)
+        self.add(circle)
+        # Match the Rust program: author the target before attaching callbacks.
+        target = circle.copy().shift((2.0, 0.0, 0.0))
         phase_counts: dict[float, int] = {}
 
         def lift(mobject, _dt):
@@ -28,9 +31,6 @@ class OrdinaryAffineCallbackContinuation(Scene):
 
         circle.add_updater(lift)
         circle.add_updater(dim_after_lift)
-        self.add(circle)
-
-        target = circle.copy().shift((2.0, 0.0, 0.0))
         await self.play(Transform(circle, target), run_time=1.0, rate_func=linear)
 
         assert phase_counts.get(0.0) == 1

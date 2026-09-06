@@ -73,6 +73,9 @@ async function advanceDirectCallbackFrame(renderer, wallTimeMs) {
   if (!renderer.advanceDirectRealtime(wallTimeMs)) {
     throw new Error(`direct affine callbacks published no frame at ${wallTimeMs}ms`);
   }
+  // Mirror the production driver's post-callback wake observation. The test
+  // clock assigns zero callback latency; the next timestamp advances from here.
+  renderer.directWakeDirectiveJson(wallTimeMs);
   await presentDirectFrame(renderer);
 }
 
@@ -482,17 +485,11 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
   await presentDirectFrame(renderer);
   const initialColor = await sampleRenderedColor(canvas, 0, 0);
 
-  if (!renderer.advanceDirectRealtime(500)) {
-    throw new Error("direct callback continuation did not publish its midpoint");
-  }
-  await presentDirectFrame(renderer);
+  await advanceDirectCallbackFrame(renderer, 500);
   const midpointColor = await sampleRenderedColor(canvas, 1, 1);
   const midpointVacatedLuma = await sampleRenderedNeighborhood(canvas, 1, 0);
 
-  if (!renderer.advanceDirectRealtime(1000)) {
-    throw new Error("direct callback continuation did not publish its endpoint");
-  }
-  await presentDirectFrame(renderer);
+  await advanceDirectCallbackFrame(renderer, 1000);
   const endpointColor = await sampleRenderedColor(canvas, 2, 1);
   const endpointVacatedLuma = await sampleRenderedNeighborhood(canvas, 2, 0);
   const metrics = {

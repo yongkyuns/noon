@@ -502,9 +502,9 @@ async function handleContinuationControl(request) {
   try {
     validateRequest(request);
     requestId = request.requestId;
-    await pyodidePromise;
+    const pyodide = await pyodidePromise;
     if (request.type === "attach_semantic_execution") {
-      await attachSemanticExecutionRequest(request, true);
+      await attachSemanticExecutionRequest(request, true, pyodide);
       post("semantic_execution_attached", { requestId });
       return;
     }
@@ -604,7 +604,7 @@ async function handleRequest(request) {
   }
 }
 
-async function attachSemanticExecutionRequest(request, continuationOnly, pyodide = null) {
+async function attachSemanticExecutionRequest(request, continuationOnly, pyodide) {
   const entry = semanticContexts.get(request.contextId);
   if (!entry || entry.released) throw new Error("unknown or retired semantic execution context");
   const continuation = activeAuthoringRun?.continuation;
@@ -661,7 +661,11 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
 function retireSemanticContext(token, entry) {
   if (entry.released && entry.endpoints.size === 0) {
     semanticContexts.delete(token);
-    void entry.releaseCallbackSession?.();
+    // Cancellation may retire the endpoint while its Python stack is still
+    // unwinding. Release through the existing interpreter queue after that run.
+    requestQueue = requestQueue
+      .then(() => entry.releaseCallbackSession?.())
+      .catch((error) => postError(null, error));
     // Python may still retain this same wrapper on a reusable Scene. Dropping
     // our registry reference lets wasm-bindgen finalize it after all owners leave.
   }
