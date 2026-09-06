@@ -8,8 +8,8 @@ use noon_core::{
 };
 
 use super::super::{
-    projection::lower_semantic_style, SemanticAnimationScheduleProjection,
-    SemanticScheduledAnimationLeaf,
+    projection::{lower_semantic_style, SemanticLoweringError as StyleLoweringError},
+    SemanticAnimationScheduleProjection, SemanticScheduledAnimationLeaf,
 };
 
 /// The activation-time effective domains consumed by the shared animation lowerer.
@@ -184,7 +184,7 @@ pub enum SemanticAffineAnimationTrackError {
     InvalidTargetStyle {
         animation: SemanticNodeId,
         target_state: SemanticNodeId,
-        error: SemanticLoweringError,
+        error: StyleLoweringError,
     },
     InvalidTrack {
         animation: SemanticNodeId,
@@ -531,7 +531,7 @@ pub(super) enum AffinePayloadIssue {
         error: SemanticLoweringError,
     },
     TargetValueOutOfRange(SemanticAffineAnimationField),
-    InvalidTargetStyle(SemanticLoweringError),
+    InvalidTargetStyle(StyleLoweringError),
 }
 
 pub(super) fn validate_affine_payload(

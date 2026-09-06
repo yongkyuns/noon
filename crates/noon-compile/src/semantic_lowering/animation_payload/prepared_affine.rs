@@ -5,7 +5,9 @@ use noon_core::{
     TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues,
 };
 
-use super::super::SemanticExecutionIndex;
+use super::super::{
+    projection::SemanticLoweringError as StyleLoweringError, SemanticExecutionIndex,
+};
 use super::affine::{
     lower_affine_channels, validate_affine_payload, AffinePayloadIssue,
     EffectiveAnimationProperties, SemanticAffineAnimationField, SemanticAnimationCompletion,
@@ -92,7 +94,7 @@ pub enum PreparedSemanticTransformToError {
         error: SemanticLoweringError,
     },
     TargetValueOutOfRange(SemanticAffineAnimationField),
-    InvalidTargetStyle(SemanticLoweringError),
+    InvalidTargetStyle(StyleLoweringError),
     InvalidTrack(TimelineError),
 }
 
