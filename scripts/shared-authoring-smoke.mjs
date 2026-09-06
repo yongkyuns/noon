@@ -767,49 +767,20 @@ try {
       );
     }
     if (expectedCamera) {
-      // Live Scene.add is an authoritative host mutation, not a replayable timeline
-      // effect. The completed session therefore retains its three objects when seeking
-      // its authored camera tracks. Forward admission across the initial wait is covered
-      // by the paired direct continuation proof.
-      async function seekCamera(time) {
-        const metrics = await page.evaluate(async (time) => {
-          const execution = window.sharedAuthoringSmoke.liveExampleExecution;
-          const before = (await execution.metrics()).metrics.presentedFrames;
-          await execution.pause();
-          const sought = await execution.seek(time);
-          let latest;
-          for (let attempt = 0; attempt < 150; attempt += 1) {
-            latest = (await execution.metrics()).metrics;
-            if (latest.presentedFrames > before && latest.objectCount === 3) {
-              return { sought: sought.time, metrics: latest };
-            }
-            await new Promise((resolve) => setTimeout(resolve, 20));
-          }
-          throw new Error(`moving-camera seek did not render: ${JSON.stringify(latest)}`);
-        }, time);
-        assert.ok(Math.abs(metrics.sought - time) < 1e-6, `${filename}: camera seek ${time}`);
-        return page.locator(`#${result.canvasId}`).screenshot();
-      }
-
-      const admitted = await seekCamera(0.3);
-      const firstMidpoint = await seekCamera(0.8);
-      const firstEndpoint = await seekCamera(1.3);
-      const secondMidpoint = await seekCamera(2.1);
-      const secondEndpoint = await seekCamera(2.6);
-      const samples = {
-        admittedSquare: renderedWorldPixel(admitted, -2, 0),
-        admittedTriangle: renderedWorldPixel(admitted, 2, 0),
-        firstMidpointSquare: renderedWorldPixel(firstMidpoint, -1, 0),
-        firstEndpointSquare: renderedWorldPixel(firstEndpoint, 0, 0),
-        secondMidpointTriangle: renderedWorldPixel(secondMidpoint, 2, 0),
-        secondEndpointTriangle: renderedWorldPixel(secondEndpoint, 0, 0),
-      };
-      assert.ok(samples.admittedSquare.red > samples.admittedSquare.green + 25, `${filename}: ${JSON.stringify(samples)}`);
-      assert.ok(samples.admittedTriangle.green > samples.admittedTriangle.red + 25, `${filename}: ${JSON.stringify(samples)}`);
-      assert.ok(samples.firstMidpointSquare.red > samples.firstMidpointSquare.green + 25, `${filename}: ${JSON.stringify(samples)}`);
-      assert.ok(samples.firstEndpointSquare.red > samples.firstEndpointSquare.green + 25, `${filename}: ${JSON.stringify(samples)}`);
-      assert.ok(samples.secondMidpointTriangle.green > samples.secondMidpointTriangle.red + 25, `${filename}: ${JSON.stringify(samples)}`);
-      assert.ok(samples.secondEndpointTriangle.green > samples.secondEndpointTriangle.red + 25, `${filename}: ${JSON.stringify(samples)}`);
+      // Python owns this live source continuation; playback controls are intentionally
+      // unavailable. Verify its completed camera view. The paired direct Rust forward
+      // proof covers the initial wait, admission, and both movement midpoints/endpoints.
+      const cameraView = await page.locator(`#${result.canvasId}`).screenshot();
+      const triangle = renderedWorldPixel(cameraView, 0, 0);
+      const square = renderedWorldPixel(cameraView, -4, 0);
+      assert.ok(
+        triangle.green > triangle.red + 25,
+        `${filename}: camera did not center the triangle: ${JSON.stringify(triangle)}`,
+      );
+      assert.ok(
+        square.red > square.green + 25,
+        `${filename}: camera-relative square position is wrong: ${JSON.stringify(square)}`,
+      );
     }
     if (expectText) {
       const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
