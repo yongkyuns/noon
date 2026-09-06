@@ -14,10 +14,50 @@ use noon_core::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::{
+    BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan, BrowserHostWake,
+};
 use crate::{
     PlaybackClock, RetainedExecutionDeltaEncoder, RetainedExecutionDeltaEnvelope,
     RetainedResourceBundle,
 };
+
+/// A browser-host wake observation for the player-owned current continuation segment.
+///
+/// The browser receives only this derived scheduling directive. Segment identity, authored
+/// time, and interpolation remain in the shared session.
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+pub struct WasmLiveSegmentWake {
+    present_now: bool,
+    cadence: BrowserExecutionCadence,
+    timer_after_milliseconds: Option<f64>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+impl WasmLiveSegmentWake {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = presentNow))]
+    pub fn present_now(&self) -> bool {
+        self.present_now
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = cadence))]
+    pub fn cadence(&self) -> String {
+        match self.cadence {
+            BrowserExecutionCadence::AnimationFrame => "animation_frame",
+            BrowserExecutionCadence::TimerAtSceneTime(_) => "timer",
+            BrowserExecutionCadence::Idle => "idle",
+        }
+        .to_owned()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = timerAfterMilliseconds))]
+    pub fn timer_after_milliseconds(&self) -> Option<f64> {
+        self.timer_after_milliseconds
+    }
+}
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SemanticExecutionPlayer {
@@ -42,6 +82,10 @@ pub struct SemanticExecutionPlayer {
     /// frontend scheduler or animation state mirror.
     #[cfg(any(target_arch = "wasm32", test))]
     live_segment: Option<noon::ExecutionSegment>,
+    /// Wall-to-authored conversion for one browser-host continuation lease. This derives
+    /// targets from the current segment wake state; it is not a second timeline.
+    #[cfg(any(target_arch = "wasm32", test))]
+    live_wake_clock: BrowserExecutionWakeClock,
     /// Host-local occurrence order for the genuine browser control-port input
     /// boundary. Returning and re-leasing this player preserves the sequence.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -124,6 +168,8 @@ impl SemanticExecutionPlayer {
             #[cfg(any(target_arch = "wasm32", test))]
             live_segment: None,
             #[cfg(any(target_arch = "wasm32", test))]
+            live_wake_clock: BrowserExecutionWakeClock::default(),
+            #[cfg(any(target_arch = "wasm32", test))]
             next_native_event_sequence: 0,
         })
     }
@@ -148,6 +194,7 @@ impl SemanticExecutionPlayer {
             semantics: Some(semantics),
             semantic_root: Some(semantic_root),
             live_segment: None,
+            live_wake_clock: BrowserExecutionWakeClock::default(),
             next_native_event_sequence: 0,
         })
     }
@@ -179,6 +226,10 @@ impl SemanticExecutionPlayer {
         self.resource_bundle = resource_bundle;
         self.encoder = RetainedExecutionDeltaEncoder::new(transport_session);
         self.snapshot_sent = false;
+        // A transport recovery reuses this runtime but begins a new host lease.
+        // Re-anchor the derived wall conversion at its next wake so elapsed wall
+        // time while no endpoint owned the player cannot advance authored time.
+        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
 
@@ -601,6 +652,7 @@ impl SemanticExecutionPlayer {
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(segment);
+        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -635,6 +687,7 @@ impl SemanticExecutionPlayer {
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(segment);
+        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -674,6 +727,7 @@ impl SemanticExecutionPlayer {
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(segment);
+        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -719,39 +773,109 @@ impl SemanticExecutionPlayer {
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(segment);
+        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_advance_segment_to(&mut self, requested_time: f64) -> Result<bool, String> {
-        let segment = self
-            .live_segment
-            .ok_or("play an animation or wait before advancing a live segment")?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
+    fn live_segment(&self) -> Result<noon::ExecutionSegment, String> {
+        self.live_segment
+            .ok_or_else(|| "play an animation or wait before driving a live segment".to_owned())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn reject_required_callback_segment(&self) -> Result<(), String> {
+        if self.session.has_required_callbacks() {
+            return Err(
+                "ordinary asynchronous continuation does not support required callbacks".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Observe browser wake mechanics for the active shared continuation segment.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_segment_wake(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<WasmLiveSegmentWake, String> {
+        self.reject_required_callback_segment()?;
+        let segment = self.live_segment()?;
+        let plan = BrowserExecutionWakePlan::from_segment(&self.session, segment);
+        let directive = self
+            .live_wake_clock
+            .directive(plan, wall_time_ms, self.session.frame().time)
+            .ok_or("invalid browser wall timestamp or authored continuation time")?;
+        let timer_after_milliseconds = match directive.wake() {
+            BrowserHostWake::TimerAfterMilliseconds(delay) => Some(delay),
+            BrowserHostWake::AnimationFrame | BrowserHostWake::Idle => None,
+        };
+        Ok(WasmLiveSegmentWake {
+            present_now: directive.present_now(),
+            cadence: plan.cadence(),
+            timer_after_milliseconds,
+        })
+    }
+
+    /// Drive the current segment from one Rust-derived browser wall-time mapping.
+    ///
+    /// The session clamps this target to the segment boundary and owns all timeline work.
+    /// A required callback is rejected before an async Python continuation can be resumed.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_drive_segment_from_wall_time(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<bool, String> {
+        self.reject_required_callback_segment()?;
+        let segment = self.live_segment()?;
+        let requested_time = self
+            .live_wake_clock
+            .scene_time_at(wall_time_ms)
+            .ok_or("observe the live segment wake before driving it from wall time")?;
+        self.live_drive_segment_to(segment, requested_time)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_drive_segment_to(
+        &mut self,
+        segment: noon::ExecutionSegment,
+        requested_time: f64,
+    ) -> Result<bool, String> {
         let current_time = self.session.frame().time;
         let mut clock = self.live_clock_at(current_time, segment.end_time(), false)?;
-        let complete = {
-            let mut live = noon::LiveSession::new(
-                &semantics,
-                self.semantic_root
-                    .expect("live semantic store has one scene root"),
-                &mut self.session,
-            );
-            live.advance_segment_to(segment, requested_time)
-                .map_err(|error| error.to_string())?;
-            live.segment_state(segment).is_complete()
-        };
-        // Runtime publication is authoritative. A callback-aware advance may
-        // stop at an earlier coherent barrier, which remains within the
-        // endpoint extent preflighted above.
+        match self
+            .session
+            .advance_segment_to_callback_barrier(segment, requested_time)
+            .map_err(|error| error.to_string())?
+        {
+            CallbackAdvance::Ready(_) => {}
+            CallbackAdvance::HostRequired { overlay, .. } => {
+                let token = overlay.token();
+                self.session
+                    .fail_required_callback_phase(token)
+                    .map_err(|error| error.to_string())?;
+                return Err(
+                    "ordinary asynchronous continuation reached an unsupported required callback"
+                        .into(),
+                );
+            }
+        }
         clock
             .seek(self.session.frame().time)
             .expect("published live time must remain within the preflighted segment extent");
         self.clock = clock;
-        Ok(complete)
+        Ok(self.session.frame().time >= segment.end_time())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_advance_segment_to(&mut self, requested_time: f64) -> Result<bool, String> {
+        let segment = self.live_segment()?;
+        self.live_drive_segment_to(segment, requested_time)?;
+        // Preserve the established wrapper contract: this reports completion
+        // reconciliation, not merely reaching an animation endpoint. The async
+        // wall-time drive above deliberately exposes the latter so its owner can
+        // call `completeLiveSegment` exactly once.
+        Ok(self.session.segment_state(segment).is_complete())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -773,6 +897,7 @@ impl SemanticExecutionPlayer {
         .complete_segment(segment)
         .map_err(|error| error.to_string())?;
         self.clock = clock;
+        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
 
@@ -1250,6 +1375,37 @@ impl SemanticExecutionPlayer {
         Ok(phase)
     }
 
+    /// Derive one browser wake directive for the active ordinary continuation segment.
+    ///
+    /// This is deliberately a typed WASM value rather than a host-authored duration.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = liveSegmentWake))]
+    pub fn live_segment_wake_wasm(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<WasmLiveSegmentWake, String> {
+        self.live_segment_wake(wall_time_ms)
+    }
+
+    /// Advance one active ordinary continuation segment from an anchored browser timestamp.
+    ///
+    /// `true` means the endpoint was reached; shared completion is still a separate
+    /// operation so authored reconciliation cannot be skipped.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentFromWallTime))]
+    pub fn drive_live_segment_from_wall_time_wasm(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<bool, String> {
+        self.live_drive_segment_from_wall_time(wall_time_ms)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment))]
+    pub fn complete_live_segment_wasm(&mut self) -> Result<(), String> {
+        self.live_complete_segment()
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]
     pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), String> {
         let batch = decode_callback_batch(batch_json)?;
@@ -1549,6 +1705,100 @@ mod tests {
         assert!(error.contains("unsupported while required callbacks are configured"));
         assert_eq!(player.session.frame(), &frame);
         assert_eq!(player.next_native_event_sequence, 0);
+    }
+
+    #[test]
+    fn live_segment_wake_drives_one_leased_session_without_a_host_timeline() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(0.4).unwrap();
+        scene.add(&circle).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(2.0, -1.0).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            2.0,
+            63,
+        )
+        .unwrap();
+
+        let endpoint = player
+            .live_declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(endpoint, 2.0);
+        assert_eq!(
+            player.time(),
+            0.0,
+            "begin must not fast-forward the segment"
+        );
+
+        let wake = player.live_segment_wake(1_000.0).unwrap();
+        assert_eq!(wake.cadence(), "animation_frame");
+        assert_eq!(wake.timer_after_milliseconds(), None);
+        assert!(!player.live_drive_segment_from_wall_time(2_000.0).unwrap());
+        assert_eq!(
+            player
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(1.0, -0.5)
+        );
+
+        assert!(player.live_drive_segment_from_wall_time(4_000.0).unwrap());
+        assert_eq!(player.time(), endpoint);
+        player.live_complete_segment().unwrap();
+        assert_eq!(
+            player
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(2.0, -1.0)
+        );
+
+        assert_eq!(player.live_wait(1.0).unwrap(), 3.0);
+        assert_eq!(player.time(), 2.0, "beginning a wait must not advance it");
+        let wait_wake = player.live_segment_wake(5_000.0).unwrap();
+        assert_eq!(wait_wake.cadence(), "timer");
+        assert_eq!(wait_wake.timer_after_milliseconds(), Some(1_000.0));
+        assert!(player.live_drive_segment_from_wall_time(6_000.0).unwrap());
+        player.live_complete_segment().unwrap();
+        assert_eq!(player.time(), 3.0);
+    }
+
+    #[test]
+    fn live_segment_wake_rejects_required_callbacks_without_advancing() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(0.4).unwrap();
+        scene.add(&circle).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(7), 0.0, None);
+        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            1.0,
+            64,
+        )
+        .unwrap();
+        let frame = player.session.frame().clone();
+
+        player.live_wait(1.0).unwrap();
+        let error = player.live_segment_wake(1_000.0).unwrap_err();
+
+        assert!(error.contains("does not support required callbacks"));
+        assert_eq!(player.session.frame(), &frame);
     }
 
     #[test]

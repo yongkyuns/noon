@@ -608,18 +608,37 @@ impl CanonicalAuthoringScene {
         if self.live_player.is_none() {
             return self.authored_wait(duration);
         }
+        let end_time = self.begin_ordinary_wait(duration)?;
         let player = self.active_live_player()?;
-        if player.has_required_callbacks() {
-            return Err(
-                "ordinary wait with required callbacks needs an asynchronous continuation".into(),
-            );
-        }
-        let end_time = player.live_wait(duration)?;
         player.live_advance_segment_to(end_time)?;
         player.live_complete_segment()?;
         player
             .live_handoff_duration()
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
+    /// Begin one ordinary wait without advancing it.
+    ///
+    /// This exists for the async worker continuation path. The returned endpoint is derived
+    /// from the player-owned segment; no Python or JavaScript cursor is created.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
+        if self.live_player.is_none() {
+            if self.scene.time() != 0.0 {
+                return Err(
+                    "ordinary asynchronous wait cannot follow pre-execution canonical timing"
+                        .into(),
+                );
+            }
+            // A wait has no animation extent, but the presentation clock still needs a
+            // positive valid range before its session-derived deadline replaces it.
+            self.live_player(duration.max(1.0))?;
+        }
+        let player = self.active_live_player()?;
+        if player.has_required_callbacks() {
+            return Err("ordinary asynchronous wait does not support required callbacks".into());
+        }
+        player.live_wait(duration)
     }
 
     /// Read only the live runtime's authored handoff duration.
@@ -658,6 +677,29 @@ impl CanonicalAuthoringScene {
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
+        let end_time = self.begin_ordinary_transform_to(source, target, options)?;
+        let player = self.active_live_player()?;
+        // Reaching the endpoint still has completion reconciliation pending.
+        // The shared completion operation validates time and callback coherence.
+        player.live_advance_segment_to(end_time)?;
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+    }
+
+    /// Atomically declare and activate one ordinary leaf transform without advancing it.
+    ///
+    /// The retained player stores the existing shared execution segment. A worker may lease
+    /// that player and use its Rust-owned wake/drive/completion methods without rebuilding the
+    /// context or manufacturing a frontend segment identity.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_ordinary_transform_to(
+        &mut self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
         if !self.can_ordinary_transform_to(source, target, options)? {
             return Err("ordinary affine animation payload is not yet supported".into());
         }
@@ -671,18 +713,10 @@ impl CanonicalAuthoringScene {
         let player = self.live_player(bootstrap_duration)?;
         if player.has_required_callbacks() {
             return Err(
-                "ordinary affine animation with required callbacks needs an asynchronous continuation"
-                    .into(),
+                "ordinary asynchronous affine animation does not support required callbacks".into(),
             );
         }
-        let end_time = player.live_declare_and_activate_transform_to(source, target, options)?;
-        // Reaching the endpoint still has completion reconciliation pending.
-        // The shared completion operation validates time and callback coherence.
-        player.live_advance_segment_to(end_time)?;
-        player.live_complete_segment()?;
-        player
-            .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+        player.live_declare_and_activate_transform_to(source, target, options)
     }
 
     /// Run one flat Parallel/Sequence candidate through the shared prepared
@@ -1667,6 +1701,12 @@ mod wasm {
             self.inner.ordinary_wait(duration).map_err(js_error)
         }
 
+        /// Begin one ordinary wait for an async continuation without fast-forwarding it.
+        #[wasm_bindgen(js_name = beginOrdinaryWait)]
+        pub fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
+            self.inner.begin_ordinary_wait(duration).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = beginOrdinaryTransformComposition)]
         pub fn begin_ordinary_transform_composition(
             &self,
@@ -1871,6 +1911,38 @@ mod wasm {
                 .rate_func(rate_function);
             self.inner
                 .ordinary_play_transform_to(
+                    source.semantic_mobject(),
+                    target.semantic_mobject(),
+                    options,
+                )
+                .map_err(js_error)
+        }
+
+        /// Atomically declare and activate one ordinary transform for an async continuation.
+        ///
+        /// The retained player keeps the shared segment; this method intentionally does not
+        /// advance or complete it.
+        #[wasm_bindgen(js_name = beginOrdinaryTransformTo)]
+        pub fn begin_ordinary_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            source.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
+            target.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .begin_ordinary_transform_to(
                     source.semantic_mobject(),
                     target.semantic_mobject(),
                     options,
@@ -3120,6 +3192,52 @@ mod tests {
 
         context.return_execution_player(player).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
+    }
+
+    #[test]
+    fn begun_ordinary_transform_leases_and_returns_the_same_unadvanced_player() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(2.0, -1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+
+        let end_time = context
+            .begin_ordinary_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(end_time, 2.0);
+        assert_eq!(context.active_live_player().unwrap().time(), 0.0);
+
+        let mut player = context.take_execution_player(end_time, 71).unwrap();
+        assert_eq!(context.live_execution_ownership(), "transferred");
+        assert_eq!(
+            player.live_segment_wake(1_000.0).unwrap().cadence(),
+            "animation_frame"
+        );
+        assert!(!player.live_drive_segment_from_wall_time(2_000.0).unwrap());
+        assert_eq!(
+            player
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(1.0, -0.5)
+        );
+        assert!(player.live_drive_segment_from_wall_time(3_000.0).unwrap());
+        player.live_complete_segment().unwrap();
+
+        context.return_execution_player(player).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
+        assert_eq!(
+            context.mobject_layout(&circle).unwrap(),
+            (2.0, -1.0, 0.8, 0.8)
+        );
     }
 
     #[test]
