@@ -7,50 +7,61 @@
   </head>
   <body>
     <script type="module">
-      import initNoonWeb, { HostScenePlayer } from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
+      import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 
-      const client = new PythonAuthoringClient();
-      const readyPromise = Promise.all([initNoonWeb(), client.ready()]);
+      const authoring = new PythonAuthoringClient();
+      const readyPromise = authoring.ready();
 
       window.noonUpdaterSmoke = {
         ready: () => readyPromise,
         run: async (source, times) => {
           await readyPromise;
-          const result = await client.run(source);
-          if (result.kind !== "scene_document") {
-            throw new Error("updater smoke requires a scene document");
+          const authored = await authoring.run(source);
+          if (authored.semanticExecution === null) {
+            throw new Error("updater smoke requires canonical semantic execution");
           }
-          if (result.callbacks === null) {
-            throw new Error("updater smoke scene did not register host callbacks");
-          }
-          const player = new HostScenePlayer(
-            JSON.stringify(result.document),
-            JSON.stringify(result.callbacks.slots),
-          );
-          const phases = [];
+
+          const canvas = document.createElement("canvas");
+          canvas.width = 640;
+          canvas.height = 360;
+          document.body.append(canvas);
+          const execution = new AuthoringExecutionClient(canvas);
           try {
-            for (const time of times) {
-              player.advanceTo(time);
-              const frame = JSON.parse(player.callbackFrameJson());
-              const sequence = Number(player.nextSequence());
-              const batch = await client.runCallbackPhase(
-                result.callbacks.session_id,
-                frame,
-                sequence,
-              );
-              player.commitPatchBatch(JSON.stringify(batch));
-              phases.push({ frame, batch });
+            const ready = await execution.startSemanticExecution(authored.semanticExecution, {
+              authoringClient: authoring,
+              loopDurationSeconds: 1,
+              transportMode: "transferable",
+            });
+            const paused = await execution.pause();
+            if (paused.time > times[0]) {
+              throw new Error(`updater smoke advanced past ${times[0]} before pause`);
             }
-            const finalFrame = JSON.parse(player.callbackFrameJson());
+
+            const phases = [];
+            for (const time of times) {
+              const advanced = await execution.advanceToWithRendererObservation(time);
+              if (advanced.time !== time || advanced.playing !== false) {
+                throw new Error(`updater smoke did not remain paused at ${time}`);
+              }
+              if (advanced.rendererObservation?.outcome !== "presented") {
+                throw new Error(
+                  `updater publication was not presented: ${JSON.stringify(advanced)}`,
+                );
+              }
+              phases.push(advanced.rendererObservation);
+            }
             return {
-              result,
+              result: authored,
+              ready,
+              paused,
               phases,
-              finalFrame,
-              nextSequence: Number(player.nextSequence()),
+              state: await execution.state(),
+              metrics: await execution.metrics(),
             };
           } finally {
-            player.free();
+            execution.terminate();
+            canvas.remove();
           }
         },
       };

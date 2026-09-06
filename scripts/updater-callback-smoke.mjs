@@ -65,48 +65,43 @@ try {
   );
   assert.equal(errors.length, 0, errors.join("\n"));
   assert.equal(output.result.kind, "scene_document");
-  assert.ok(output.result.callbacks);
-  assert.deepEqual(output.result.callbacks.slots, [
-    { id: 0, objects: [0, 1], active_after: 0, active_through: 0 },
-    { id: 1, objects: [0, 1], active_after: 0 },
-  ]);
+  assert.ok(output.result.semanticExecution);
+  assert.equal(output.paused.playing, false);
+  assert.ok(output.paused.time <= 0.25);
   assert.equal(output.phases.length, 2);
-  assert.equal(output.nextSequence, 2);
 
-  assert.equal(output.phases[0].frame.time, 0.25);
-  assert.equal(output.phases[0].frame.delta_time, 0.25);
-  assert.equal(output.phases[0].frame.objects.length, 2);
-  assert.deepEqual(output.phases[0].frame.invocations.map(({ callback }) => callback), [1]);
-  assert.equal(output.phases[0].batch.sequence, 0);
-  assert.equal(output.phases[0].batch.patches.length, 2);
-  const firstTransform = output.phases[0].batch.patches[0].set_transform;
-  assert.equal(firstTransform.object, 1);
-  assert.equal(firstTransform.transform.translation.x, 2);
-  assert.equal(firstTransform.transform.translation.y, 0.25);
-  const firstStyle = output.phases[0].batch.patches[1].set_style.style;
-  assert.equal(firstStyle.opacity, 1);
-  assert.equal(firstStyle.fill.alpha, 0.75);
+  const [first, second] = output.phases;
+  for (const phase of output.phases) {
+    assert.equal(phase.schema_version, 1);
+    assert.equal(phase.outcome, "presented");
+    assert.equal(phase.committed.dirty, "updated");
+    assert.equal(phase.committed.presence, true);
+    assert.equal(phase.mirrored.object, phase.committed.object);
+    assert.equal(phase.mirrored.frame_index, phase.committed.frame_index);
+    assert.equal(phase.mirrored.time, phase.committed.time);
+    assert.deepEqual(phase.mirrored.transform, phase.committed.transform);
+    assert.deepEqual(phase.mirrored.style, phase.committed.style);
+    assert.equal(phase.prepared.kind, "geometry");
+    assert.ok(phase.upload.target_geometry_writes.length > 0);
+    assert.equal(phase.presentation.presented, true);
+  }
 
-  assert.equal(output.phases[1].frame.time, 0.75);
-  assert.equal(output.phases[1].frame.delta_time, 0.5);
-  assert.equal(output.phases[1].frame.objects[1].transform.translation.x, 2);
-  assert.equal(output.phases[1].frame.objects[1].transform.translation.y, 0.25);
-  assert.deepEqual(output.phases[1].frame.invocations.map(({ callback }) => callback), [1]);
-  assert.equal(output.phases[1].batch.sequence, 1);
-  const secondTransform = output.phases[1].batch.patches[0].set_transform;
-  assert.equal(secondTransform.transform.translation.x, 2);
-  assert.equal(secondTransform.transform.translation.y, 0.5);
-  const secondStyle = output.phases[1].batch.patches[1].set_style.style;
-  assert.equal(secondStyle.opacity, 1);
-  assert.equal(secondStyle.fill.alpha, 1);
+  assert.equal(first.committed.time, 0.25);
+  assert.deepEqual(first.committed.transform.translation, { x: 2, y: 0.25 });
+  assert.equal(first.committed.style.opacity, 0.75);
+  assert.equal(second.committed.time, 0.75);
+  assert.deepEqual(second.committed.transform.translation, { x: 2, y: 0.5 });
+  assert.equal(second.committed.style.opacity, 1);
+  assert.equal(second.committed.object, first.committed.object);
+  assert.equal(second.committed.frame_index, first.committed.frame_index);
+  assert.ok(second.publication.sequence > first.publication.sequence);
 
-  assert.equal(output.finalFrame.time, 0.75);
-  assert.equal(output.finalFrame.objects[1].transform.translation.x, 2);
-  assert.equal(output.finalFrame.objects[1].transform.translation.y, 0.5);
-  assert.equal(output.finalFrame.objects[1].style.opacity, 1);
-  assert.equal(output.finalFrame.objects[1].style.fill.alpha, 1);
+  assert.equal(output.state.time, 0.75);
+  assert.equal(output.state.playing, false);
+  assert.equal(output.metrics.metrics.objectCount, 2);
+  assert.ok(output.metrics.metrics.drawCalls > 0);
 
-  console.log("Python updater callback smoke test passed");
+  console.log("Canonical Python updater callback smoke test passed");
 } finally {
   if (browser !== null) await browser.close();
   server.kill("SIGTERM");
