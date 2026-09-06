@@ -312,36 +312,44 @@ async def execute_construct(
             "exportDocument cannot run an async Scene construct; "
             "async source requires a semantic continuation renderer"
         )
-    scene.setup()
+    canonical = not export_document and (
+        _create_context is not None
+        or getattr(scene, "_canonical_authoring_context", None) is not None
+    )
+    token = _reactive._enter_authoring_scene(scene if canonical else None)
     try:
-        if export_document:
-            # #959 owns this explicit codec/export boundary. Ordinary supported
-            # operations retain their existing Rust endpoint helpers here; they
-            # must not request a renderer continuation lease from an exporter.
-            setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, True)
-            try:
-                scene.construct()
-            finally:
-                setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
-        elif inspect.iscoroutinefunction(scene.construct):
-            _begin_async_continuation_construct(scene)
-            try:
-                await scene.construct()
-            finally:
-                _finish_async_continuation_construct(scene)
-        else:
-            # Do not probe JSPI for a static or legacy-only ordinary construct.
-            # The first supported canonical segment preflights it before Rust
-            # creates or activates that segment, so unsupported browsers fail
-            # without selecting endpoint-only execution for the same operation.
-            setattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, True)
-            try:
-                scene.construct()
-            finally:
-                setattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False)
-                _finish_synchronous_continuation_construct(scene)
+        scene.setup()
+        try:
+            if export_document:
+                # #959 owns this explicit codec/export boundary. Ordinary supported
+                # operations retain their existing Rust endpoint helpers here; they
+                # must not request a renderer continuation lease from an exporter.
+                setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, True)
+                try:
+                    scene.construct()
+                finally:
+                    setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
+            elif inspect.iscoroutinefunction(scene.construct):
+                _begin_async_continuation_construct(scene)
+                try:
+                    await scene.construct()
+                finally:
+                    _finish_async_continuation_construct(scene)
+            else:
+                # Do not probe JSPI for a static or legacy-only ordinary construct.
+                # The first supported canonical segment preflights it before Rust
+                # creates or activates that segment, so unsupported browsers fail
+                # without selecting endpoint-only execution for the same operation.
+                setattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, True)
+                try:
+                    scene.construct()
+                finally:
+                    setattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False)
+                    _finish_synchronous_continuation_construct(scene)
+        finally:
+            scene.tear_down()
     finally:
-        scene.tear_down()
+        _reactive._leave_authoring_scene(token)
 
 
 class _SemanticContinuationAwaitable:
