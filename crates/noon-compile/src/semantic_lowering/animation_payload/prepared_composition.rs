@@ -790,6 +790,50 @@ mod tests {
     }
 
     #[test]
+    fn reveal_direction_is_independent_of_cleanup() {
+        for reverse in [false, true] {
+            for remove in [false, true] {
+                let mut store = noon_core::SemanticStore::new();
+                let root = store.insert_family();
+                let circle = store.insert_semantic_object(SemanticObjectState::new(
+                    StoredGeometry::Circle { radius: 0.4 },
+                ));
+                let index = SemanticExecutionIndex::new();
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.add_member(root, circle);
+                let animation = transaction.create_create_animation(
+                    circle,
+                    AnimationOptions::new()
+                        .reverse_rate_function(reverse)
+                        .remover(remove),
+                );
+                let prepared = transaction.prepare(&mut store).unwrap();
+                let activation = lower_prepared_semantic_animation_composition(
+                    &prepared,
+                    &index,
+                    animation,
+                    0.0,
+                    AnimationOptions::new(),
+                    |_| None,
+                )
+                .unwrap();
+                let track = &activation.tracks()[0];
+                assert_eq!(
+                    track.completion,
+                    SemanticAnimationCompletion::RevealLifecycle { remove }
+                );
+                assert_eq!(
+                    track.values,
+                    TrackValues::Scalar {
+                        from: if reverse { 1.0 } else { 0.0 },
+                        to: if reverse { 0.0 } else { 1.0 },
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
     fn prepared_sequential_create_remains_unavailable_before_publication() {
         let mut store = noon_core::SemanticStore::new();
         let root = store.insert_family();

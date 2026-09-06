@@ -2149,7 +2149,10 @@ mod continuation_tests {
             program.drive_to(&mut callbacks, 1.0).unwrap(),
             LiveProgramStatus::PublicationPending(_)
         ));
-        assert_eq!(program.session().frame().reveal(0), 0.0);
+        assert!(!program.session().frame().is_present(0));
+        // Completion releases the reveal driver back to its authored default so a
+        // later re-add of this same semantic object is fully visible.
+        assert_eq!(program.session().frame().reveal(0), 1.0);
         let publication = program.take_renderer_publication().context();
         program.admit_publication(publication).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
