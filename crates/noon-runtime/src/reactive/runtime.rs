@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use noon_compile::{CompileError, CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
-    ComputeProgram, ComputeState, ObjectId, PreparedComputeInputBatch, Property,
-    PublicationContext, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveProgram,
-    ReactiveValue, SemanticScene, SignalId,
+    ComputeProgram, ComputeState, ObjectId, PreparedComputeInputBatch,
+    PreparedComputeInputEnrollment, Property, PublicationContext, ReactiveBinding, ReactiveError,
+    ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene, SignalId,
 };
 
 use crate::{frame_row_mut, FrameRowMut, FrameState, SceneInstance};
@@ -73,6 +73,11 @@ pub(crate) struct PreparedReactiveRuntimeUpdate {
     stats: ReactiveRuntimeStats,
 }
 
+#[derive(Clone, Debug)]
+pub struct PreparedReactiveSignalEnrollment {
+    compute: PreparedComputeInputEnrollment,
+}
+
 impl PreparedReactiveRuntimeUpdate {
     pub(crate) fn is_empty(&self) -> bool {
         self.compute.is_empty()
@@ -83,6 +88,10 @@ impl PreparedReactiveRuntimeUpdate {
 }
 
 impl ReactiveRuntime {
+    pub(crate) fn state_value(&self, signal: noon_core::SignalId) -> Option<&ReactiveValue> {
+        self.state.value(signal)
+    }
+
     fn new(
         compiled: &CompiledScene,
         bindings: &[ReactiveBinding],
@@ -146,6 +155,34 @@ impl ReactiveRuntime {
         })
     }
 
+    pub(crate) fn prepared_value(
+        &self,
+        prepared: &PreparedReactiveRuntimeUpdate,
+        signal: noon_core::SignalId,
+    ) -> Option<ReactiveValue> {
+        self.state.prepared_value(&prepared.compute, signal)
+    }
+
+    pub(crate) fn prepare_signal_enrollment(
+        &self,
+        signal: Option<noon_core::SignalId>,
+        value: ReactiveValue,
+    ) -> Result<PreparedReactiveSignalEnrollment, ReactiveError> {
+        Ok(PreparedReactiveSignalEnrollment {
+            compute: self.state.prepare_input_enrollment(signal, value)?,
+        })
+    }
+
+    pub(crate) fn commit_signal_enrollment(
+        &mut self,
+        prepared: PreparedReactiveSignalEnrollment,
+        signal: noon_core::SignalId,
+    ) {
+        self.state
+            .commit_input_enrollment(prepared.compute, signal)
+            .expect("reactive enrollment commits immediately under exclusive runtime ownership");
+    }
+
     pub(crate) fn commit_prepared_input_batch(
         &mut self,
         prepared: PreparedReactiveRuntimeUpdate,
@@ -195,6 +232,30 @@ impl ReactiveRuntime {
 }
 
 impl SceneInstance {
+    /// Preflight one input-only reactive slot append. `None` reserves a slot for
+    /// a semantic identity that will be allocated by the owning transaction.
+    pub fn prepare_reactive_signal_enrollment(
+        &self,
+        signal: Option<noon_core::SignalId>,
+        value: ReactiveValue,
+    ) -> Result<PreparedReactiveSignalEnrollment, ReactiveError> {
+        self.reactive
+            .as_ref()
+            .expect("semantic execution sessions always install the reactive runtime")
+            .prepare_signal_enrollment(signal, value)
+    }
+
+    pub fn commit_reactive_signal_enrollment(
+        &mut self,
+        prepared: PreparedReactiveSignalEnrollment,
+        signal: noon_core::SignalId,
+    ) {
+        self.reactive
+            .as_mut()
+            .expect("semantic execution sessions always install the reactive runtime")
+            .commit_signal_enrollment(prepared, signal);
+    }
+
     /// Build runtime state directly from the canonical semantic execution lowering
     /// handoff produced by `noon-compile`.
     ///

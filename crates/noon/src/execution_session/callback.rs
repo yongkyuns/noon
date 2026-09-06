@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon_compile::{CompilePatchError, SemanticHostCallbackEventKind, SemanticHostCallbackPlan};
-use noon_core::{HostCallbackId, PublicationContext, SemanticNodeId, Style, Transform2D};
+use noon_core::{
+    HostCallbackId, PublicationContext, ReactiveValue, SemanticNodeId, Style, Transform2D,
+};
 use noon_runtime::{
     EffectiveObjectProperties, EffectivePropertyWrite as RuntimeEffectivePropertyWrite,
     EvaluationError, FrameState, PreparedFrameCommitError, PreparedFrameEvaluation,
@@ -203,6 +205,66 @@ pub enum CallbackAdvance<'a> {
         overlay: CallbackPhaseOverlay,
     },
 }
+
+/// One arbitrary semantic read requested by a callback already pinned to a phase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallbackReadRequest {
+    ScalarSignal(SemanticNodeId),
+    Object(SemanticNodeId),
+}
+
+/// Owned result from the unpublished prepared callback evaluation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CallbackReadValue {
+    Scalar(f32),
+    Object(EffectiveObjectProperties),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExecutionSessionCallbackReadError {
+    NoPendingPhase,
+    StaleToken {
+        expected: CallbackPhaseToken,
+        actual: CallbackPhaseToken,
+    },
+    UnknownSignal(SemanticNodeId),
+    NonScalarSignal(SemanticNodeId),
+    UnknownObject(SemanticNodeId),
+}
+
+impl std::fmt::Display for ExecutionSessionCallbackReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPendingPhase => formatter.write_str("no required callback phase is pending"),
+            Self::StaleToken { expected, actual } => write!(
+                formatter,
+                "callback read sequence {} does not match pending sequence {}",
+                actual.sequence().get(),
+                expected.sequence().get()
+            ),
+            Self::UnknownSignal(signal) => write!(
+                formatter,
+                "semantic signal {}:{} is not live in this callback phase",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NonScalarSignal(signal) => write!(
+                formatter,
+                "semantic signal {}:{} is not scalar",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::UnknownObject(object) => write!(
+                formatter,
+                "semantic object {}:{} is not live in this callback phase",
+                object.slot(),
+                object.generation()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionSessionCallbackReadError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallbackTerminationKind {
@@ -431,6 +493,7 @@ pub enum ExecutionSessionCallbackError {
     },
     UnsupportedCallbackTarget(SemanticNodeId),
     UnknownObject(SemanticNodeId),
+    Read(ExecutionSessionCallbackReadError),
     Evaluation(EvaluationError),
     InvalidEffectiveWrite(CompilePatchError),
     Commit(PreparedFrameCommitError),
@@ -474,6 +537,7 @@ impl std::fmt::Display for ExecutionSessionCallbackError {
                 object.slot(),
                 object.generation()
             ),
+            Self::Read(error) => error.fmt(formatter),
             Self::Evaluation(error) => error.fmt(formatter),
             Self::InvalidEffectiveWrite(error) => error.fmt(formatter),
             Self::Commit(error) => error.fmt(formatter),
@@ -501,6 +565,12 @@ impl From<PreparedFrameCommitError> for ExecutionSessionCallbackError {
     }
 }
 
+impl From<ExecutionSessionCallbackReadError> for ExecutionSessionCallbackError {
+    fn from(value: ExecutionSessionCallbackReadError) -> Self {
+        Self::Read(value)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct PendingCallbackPhase {
     token: CallbackPhaseToken,
@@ -516,6 +586,64 @@ impl PendingCallbackPhase {
 }
 
 impl ExecutionSession {
+    /// Read through the exact unpublished evaluation pinned by `token`.
+    /// This does not advance, commit, or mutate callback/runtime state.
+    pub fn required_callback_read(
+        &self,
+        token: CallbackPhaseToken,
+        request: CallbackReadRequest,
+    ) -> Result<CallbackReadValue, ExecutionSessionCallbackReadError> {
+        let pending = self
+            .pending_callback
+            .as_ref()
+            .ok_or(ExecutionSessionCallbackReadError::NoPendingPhase)?;
+        if pending.token != token {
+            return Err(ExecutionSessionCallbackReadError::StaleToken {
+                expected: pending.token,
+                actual: token,
+            });
+        }
+        match request {
+            CallbackReadRequest::ScalarSignal(semantic) => {
+                let execution = self
+                    .reactive_projection
+                    .execution_signal_id(semantic)
+                    .ok_or(ExecutionSessionCallbackReadError::UnknownSignal(semantic))?;
+                match self
+                    .runtime
+                    .prepared_reactive_value(&pending.prepared, execution)
+                {
+                    Some(ReactiveValue::Scalar(value)) => Ok(CallbackReadValue::Scalar(value)),
+                    Some(_) => Err(ExecutionSessionCallbackReadError::NonScalarSignal(semantic)),
+                    None => Err(ExecutionSessionCallbackReadError::UnknownSignal(semantic)),
+                }
+            }
+            CallbackReadRequest::Object(semantic) => {
+                let execution = self
+                    .execution_index
+                    .execution_object_id(semantic)
+                    .ok_or(ExecutionSessionCallbackReadError::UnknownObject(semantic))?;
+                let object_index = self
+                    .runtime
+                    .frame_index_for_object(execution)
+                    .filter(|index| self.runtime.object_slot_is_live(*index))
+                    .ok_or(ExecutionSessionCallbackReadError::UnknownObject(semantic))?;
+                let slot = self
+                    .slots
+                    .slot_for_object(execution)
+                    .ok_or(ExecutionSessionCallbackReadError::UnknownObject(semantic))?;
+                self.runtime
+                    .prepared_properties_at(
+                        &pending.prepared,
+                        object_index,
+                        self.spatial_index.bounds_for_slot(slot),
+                    )
+                    .map(CallbackReadValue::Object)
+                    .ok_or(ExecutionSessionCallbackReadError::UnknownObject(semantic))
+            }
+        }
+    }
+
     pub(crate) fn callback_progression_is_coherent_at(&self, time: f64) -> bool {
         self.callback_termination.is_none()
             && self.pending_callback.is_none()
@@ -830,7 +958,7 @@ impl ExecutionSession {
 
 #[cfg(test)]
 mod tests {
-    use crate::ExecutionSessionInputError;
+    use crate::{ExecutionSessionInputError, Scene};
     use noon_core::{
         HostCallbackId, NativeEventOccurrence, NativeEventSource, NativeInputValue,
         NativeStateSource, SemanticMutationTransaction, SemanticObjectProperty,
@@ -839,6 +967,98 @@ mod tests {
     use noon_runtime::TimelineWakeState;
 
     use super::*;
+
+    #[test]
+    fn token_pinned_callback_reads_prepared_scalar_and_arbitrary_object_without_commit() {
+        let mut scene = Scene::new();
+        let active = scene.circle(0.5).unwrap();
+        let anchor = scene.circle(0.25).unwrap();
+        scene.add(&active).unwrap();
+        scene.add(&anchor).unwrap();
+        let tracker = scene.value_tracker(0.0).unwrap();
+        scene
+            .play_value(&tracker, 2.0)
+            .rate_func(noon_core::RateFunction::Linear)
+            .run_time(1.0)
+            .unwrap();
+        let mut hold = SemanticMutationTransaction::new();
+        hold.set_scalar_signal_at(tracker.node_id(), 3.0, 1.0);
+        hold.apply(&mut scene.store().borrow_mut()).unwrap();
+        let mut callbacks = SemanticMutationTransaction::new();
+        callbacks.add_updater(active.node_id(), HostCallbackId::new(7), 0.0, None);
+        callbacks.apply(&mut scene.store().borrow_mut()).unwrap();
+        let mut session = scene.execution_session().unwrap();
+
+        let CallbackAdvance::HostRequired { overlay, .. } =
+            session.advance_to_callback_barrier(0.0).unwrap()
+        else {
+            panic!("callback must run at authored time zero")
+        };
+        let token = overlay.token();
+        assert_eq!(
+            session
+                .required_callback_read(token, CallbackReadRequest::ScalarSignal(tracker.node_id()))
+                .unwrap(),
+            CallbackReadValue::Scalar(0.0)
+        );
+        assert!(matches!(
+            session
+                .required_callback_read(token, CallbackReadRequest::Object(anchor.node_id()))
+                .unwrap(),
+            CallbackReadValue::Object(_)
+        ));
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+
+        let CallbackAdvance::HostRequired { overlay, .. } =
+            session.advance_to_callback_barrier(0.5).unwrap()
+        else {
+            panic!("active callback must run at the requested midpoint")
+        };
+        assert_eq!(
+            session
+                .required_callback_read(
+                    overlay.token(),
+                    CallbackReadRequest::ScalarSignal(tracker.node_id()),
+                )
+                .unwrap(),
+            CallbackReadValue::Scalar(1.0)
+        );
+        let stale = CallbackPhaseToken::new(
+            overlay.token().runtime(),
+            overlay.token().publication(),
+            CallbackSequence::new(999),
+        );
+        assert!(matches!(
+            session.required_callback_read(stale, CallbackReadRequest::Object(anchor.node_id())),
+            Err(ExecutionSessionCallbackReadError::StaleToken { .. })
+        ));
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        let CallbackAdvance::HostRequired { overlay, .. } =
+            session.advance_to_callback_barrier(1.25).unwrap()
+        else {
+            panic!("active callback must observe the post-track Hold during wait")
+        };
+        assert_eq!(
+            session
+                .required_callback_read(
+                    overlay.token(),
+                    CallbackReadRequest::ScalarSignal(tracker.node_id()),
+                )
+                .unwrap(),
+            CallbackReadValue::Scalar(3.0)
+        );
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        assert!(matches!(
+            session.required_callback_read(token, CallbackReadRequest::Object(anchor.node_id())),
+            Err(ExecutionSessionCallbackReadError::NoPendingPhase)
+        ));
+    }
 
     #[test]
     fn callback_entrypoint_preserves_deterministic_seek_without_callbacks() {

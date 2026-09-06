@@ -338,6 +338,14 @@ pub struct PreparedComputeInputBatch {
     update: ReactiveUpdate,
 }
 
+#[derive(Clone, Debug)]
+pub struct PreparedComputeInputEnrollment {
+    identity: u64,
+    expected_revision: u64,
+    expected_signal: Option<SignalId>,
+    value: ReactiveValue,
+}
+
 impl PreparedComputeInputBatch {
     pub fn update(&self) -> &ReactiveUpdate {
         &self.update
@@ -371,6 +379,88 @@ impl ComputeState {
     pub fn value(&self, signal: SignalId) -> Option<&ReactiveValue> {
         let index = self.program.reference.signal_indices.get(&signal)?;
         self.values.get(*index)
+    }
+
+    /// Observe one value through an unpublished prepared input batch.
+    pub fn prepared_value(
+        &self,
+        prepared: &PreparedComputeInputBatch,
+        signal: SignalId,
+    ) -> Option<ReactiveValue> {
+        if prepared.identity != self.identity || prepared.expected_revision != self.revision {
+            return None;
+        }
+        let index = *self.program.reference.signal_indices.get(&signal)?;
+        prepared
+            .changed_values
+            .iter()
+            .rev()
+            .find_map(|(changed, value)| (*changed == index).then(|| value.clone()))
+            .or_else(|| self.values.get(index).cloned())
+    }
+
+    /// Reserve one sparse input slot without assigning a new semantic identity.
+    pub fn prepare_input_enrollment(
+        &self,
+        signal: Option<SignalId>,
+        value: ReactiveValue,
+    ) -> Result<PreparedComputeInputEnrollment, ReactiveError> {
+        if let Some(signal) = signal {
+            if self.program.reference.signal_indices.contains_key(&signal) {
+                return Err(ReactiveError::DuplicateSignal(signal));
+            }
+            validate_reactive_value(signal, &value)?;
+        } else if !value.is_finite() {
+            return Err(ReactiveError::NonFiniteValue(SignalId::new(0)));
+        }
+        self.revision
+            .checked_add(1)
+            .ok_or(ReactiveError::ComputeRevisionExhausted)?;
+        Ok(PreparedComputeInputEnrollment {
+            identity: self.identity,
+            expected_revision: self.revision,
+            expected_signal: signal,
+            value,
+        })
+    }
+
+    pub fn commit_input_enrollment(
+        &mut self,
+        prepared: PreparedComputeInputEnrollment,
+        signal: SignalId,
+    ) -> Result<(), PreparedComputeCommitError> {
+        if prepared.identity != self.identity {
+            return Err(PreparedComputeCommitError::ForeignState);
+        }
+        if prepared.expected_revision != self.revision {
+            return Err(PreparedComputeCommitError::StaleRevision);
+        }
+        debug_assert!(prepared
+            .expected_signal
+            .is_none_or(|expected| expected == signal));
+        debug_assert!(!self.program.reference.signal_indices.contains_key(&signal));
+        let index = self.program.reference.signals.len();
+        self.program.reference.signal_indices.insert(signal, index);
+        self.program.reference.signals.push(super::CompiledSignal {
+            id: signal,
+            source: SignalSource::Input(prepared.value.clone()),
+        });
+        self.program.reference.topological_order.push(index);
+        self.program.reference.topological_rank.push(index);
+        self.program.reference.dependents.push(Vec::new());
+        self.program.reference.bindings_by_signal.push(Vec::new());
+        self.program
+            .reference
+            .initial_values
+            .push(prepared.value.clone());
+        self.program.kernels.push(None);
+        self.values.push(prepared.value);
+        self.queued.push(false);
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(PreparedComputeCommitError::RevisionExhausted)?;
+        Ok(())
     }
 
     pub fn set_input(

@@ -332,6 +332,11 @@ impl SemanticSignalState {
         }
     }
 
+    pub(crate) fn input(value: SemanticSignalValue) -> Result<Self, SemanticSignalError> {
+        let value_kind = validate_value(&value)?;
+        Ok(Self::new(SemanticSignalSource::Input(value), value_kind))
+    }
+
     pub const fn source(&self) -> &SemanticSignalSource {
         &self.source
     }
@@ -473,11 +478,7 @@ impl SemanticStore {
     ) -> Result<SemanticNodeId, SemanticSignalError> {
         self.set_last_mutation_writes(0);
         let value = value.into();
-        let value_kind = validate_value(&value)?;
-        Ok(self.insert_semantic_signal_state(SemanticSignalState::new(
-            SemanticSignalSource::Input(value),
-            value_kind,
-        )))
+        Ok(self.insert_semantic_signal_state(SemanticSignalState::input(value)?))
     }
 
     /// Insert one authored derived signal after validating its referenced closure.
