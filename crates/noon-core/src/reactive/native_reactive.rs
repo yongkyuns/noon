@@ -176,6 +176,28 @@ impl ReactiveGraphDefinition {
         id
     }
 
+    /// Append a validated input under an already-derived execution identity.
+    pub fn add_input_with_id(
+        &mut self,
+        id: SignalId,
+        value: ReactiveValue,
+    ) -> Result<(), ReactiveError> {
+        if self.signals.iter().any(|signal| signal.id == id) {
+            return Err(ReactiveError::DuplicateSignal(id));
+        }
+        validate_reactive_value(id, &value)?;
+        self.next_signal_id = self.next_signal_id.max(
+            id.get()
+                .checked_add(1)
+                .ok_or(ReactiveError::SignalIdExhausted)?,
+        );
+        self.signals.push(SignalDefinition {
+            id,
+            source: SignalSource::Input(value),
+        });
+        Ok(())
+    }
+
     pub fn add_derived(&mut self, expression: ReactiveExpr) -> SignalId {
         let id = SignalId::new(self.next_signal_id);
         self.next_signal_id = self

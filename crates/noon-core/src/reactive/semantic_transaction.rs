@@ -99,6 +99,10 @@ pub enum SemanticMutation {
         target: SemanticTransactionNodeRef,
         inactive_from: f64,
     },
+    ScopeSignal {
+        scope: SemanticTransactionNodeRef,
+        signal: SemanticTransactionNodeRef,
+    },
     AddMember {
         family: SemanticTransactionNodeRef,
         member: SemanticTransactionNodeRef,
@@ -138,6 +142,7 @@ impl SemanticMutation {
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => vec![*target],
+            Self::ScopeSignal { scope, signal } => vec![*scope, *signal],
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 vec![*family, *member]
             }
@@ -183,6 +188,7 @@ impl SemanticMutation {
             Self::AddUpdater { target, .. }
             | Self::RemoveUpdater { target, .. }
             | Self::ClearUpdaters { target, .. } => target.existing(),
+            Self::ScopeSignal { scope, .. } => scope.existing(),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => family.existing(),
@@ -212,9 +218,10 @@ impl SemanticMutation {
                 object: *object,
                 property: *property,
             }),
-            Self::AddUpdater { .. } | Self::RemoveUpdater { .. } | Self::ClearUpdaters { .. } => {
-                None
-            }
+            Self::AddUpdater { .. }
+            | Self::RemoveUpdater { .. }
+            | Self::ClearUpdaters { .. }
+            | Self::ScopeSignal { .. } => None,
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
                 Some(SemanticMutationKey::FamilyEdge {
                     family: *family,
@@ -289,6 +296,10 @@ pub enum SemanticMutationImpact {
     UpdaterRegistrations {
         target: SemanticNodeId,
     },
+    SignalScoped {
+        scope: SemanticNodeId,
+        signal: SemanticNodeId,
+    },
     FamilyMemberAdded {
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -327,6 +338,7 @@ pub(super) struct SemanticTransactionPreflight {
     family_edges: FamilyEdgePreflight,
     pending_creations: HashMap<SemanticLocalNodeToken, SemanticNodeCreation>,
     pending_animations: HashMap<SemanticLocalNodeToken, SemanticTransactionAnimation>,
+    staged_signal_scope_additions: Vec<(SemanticTransactionNodeRef, SemanticTransactionNodeRef)>,
     removed_existing: HashSet<SemanticNodeId>,
     removed_pending: HashSet<SemanticLocalNodeToken>,
 }
@@ -495,6 +507,20 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::ClearUpdaters {
             target: target.into(),
             inactive_from,
+        });
+        self
+    }
+
+    /// Associate a signal with one family execution scope without changing
+    /// painter membership. Repeated association is an exact no-op.
+    pub fn scope_signal(
+        &mut self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+        signal: impl Into<SemanticTransactionNodeRef>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::ScopeSignal {
+            scope: scope.into(),
+            signal: signal.into(),
         });
         self
     }
@@ -831,6 +857,8 @@ impl SemanticMutationTransaction {
             HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
         let mut staged_signal_timeline =
             HashMap::<SemanticNodeId, Vec<SemanticScalarSignalTimelineEntry>>::new();
+        let mut staged_signal_scope_additions = Vec::new();
+        let mut staged_signal_scope_membership = HashSet::new();
         let mut available_pending_animations = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
@@ -1232,6 +1260,35 @@ impl SemanticMutationTransaction {
                         .map_err(|error| updater_edit_error(index, *target, error))?;
                     changed.push(did_change);
                 }
+                SemanticMutation::ScopeSignal { scope, signal } => {
+                    catalog.ensure_family(*scope, index)?;
+                    catalog.ensure_signal(*signal, index)?;
+                    if matches!(signal, SemanticTransactionNodeRef::Existing(id) if removed_nodes.contains(id))
+                    {
+                        return Err(
+                            SemanticMutationTransactionError::SignalScopeUsesRemovedNode {
+                                index,
+                                scope: *scope,
+                                signal: *signal,
+                            },
+                        );
+                    }
+                    let pair = (*scope, *signal);
+                    let already_scoped = staged_signal_scope_membership.contains(&pair)
+                        || matches!(
+                            pair,
+                            (
+                                SemanticTransactionNodeRef::Existing(scope),
+                                SemanticTransactionNodeRef::Existing(signal)
+                            ) if store.is_semantic_signal_scoped(scope, signal)
+                        );
+                    let did_change = !already_scoped;
+                    if did_change {
+                        staged_signal_scope_membership.insert(pair);
+                        staged_signal_scope_additions.push(pair);
+                    }
+                    changed.push(did_change);
+                }
                 SemanticMutation::AddMember { family, member } => {
                     changed.push(family_edges.add(&catalog, *family, *member, index)?);
                 }
@@ -1304,6 +1361,7 @@ impl SemanticMutationTransaction {
             staged_objects,
             staged_object_order,
             family_edges,
+            staged_signal_scope_additions,
             pending_creations,
             pending_animations,
             removed_existing: removed_nodes,
@@ -1695,6 +1753,11 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         node: SemanticNodeId,
     },
+    SignalScopeUsesRemovedNode {
+        index: usize,
+        scope: SemanticTransactionNodeRef,
+        signal: SemanticTransactionNodeRef,
+    },
     AnimationUsesRemovedNode {
         index: usize,
         node: SemanticNodeId,
@@ -2026,6 +2089,14 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 node.slot(),
                 node.generation()
             ),
+            Self::SignalScopeUsesRemovedNode {
+                index,
+                scope,
+                signal,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot scope removed signal {signal:?} under {scope:?}"
+            ),
             Self::AnimationUsesRemovedNode { index, node } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add an animation referencing node {}:{} because that node is removed by the same transaction",
@@ -2222,3 +2293,6 @@ mod prepared_tests;
 
 #[cfg(test)]
 mod provisional_tests;
+
+#[cfg(test)]
+mod signal_scope_tests;

@@ -13,6 +13,7 @@ use super::{
 pub(crate) enum SemanticReferenceKind {
     SignalDependency,
     SignalBinding { property: SemanticObjectProperty },
+    ScopedSignal,
     AnimationTarget,
     AnimationTargetState,
     AnimationChild,
@@ -56,6 +57,29 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
+    /// Whether one exact live signal-to-family scope edge is indexed.
+    ///
+    /// Stale identities and nodes of another kind have no such edge and return
+    /// `false`. Work is proportional only to this signal's direct scope aliases.
+    pub fn is_semantic_signal_scoped(&self, scope: SemanticNodeId, signal: SemanticNodeId) -> bool {
+        let reference = SemanticIncomingReference::new(scope, SemanticReferenceKind::ScopedSignal);
+        self.incoming_references
+            .get(&signal)
+            .is_some_and(|incoming| incoming.contains(&reference))
+    }
+
+    pub(crate) fn register_semantic_scoped_signal_reference(
+        &mut self,
+        scope: SemanticNodeId,
+        signal: SemanticNodeId,
+    ) {
+        let reference = SemanticIncomingReference::new(scope, SemanticReferenceKind::ScopedSignal);
+        let incoming = self.incoming_references.entry(signal).or_default();
+        if !incoming.contains(&reference) {
+            incoming.push(reference);
+        }
+    }
+
     /// Register all currently live semantic identities referenced by one owner.
     ///
     /// The reverse index is store metadata rather than authored node payload. Work
@@ -132,7 +156,8 @@ impl SemanticStore {
                     continue;
                 }
                 match reference.kind {
-                    SemanticReferenceKind::SignalBinding { .. } => {}
+                    SemanticReferenceKind::SignalBinding { .. }
+                    | SemanticReferenceKind::ScopedSignal => {}
                     SemanticReferenceKind::SignalDependency
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
@@ -223,6 +248,15 @@ impl SemanticStore {
                             });
                     }
                 }
+                SemanticReferenceKind::ScopedSignal => {
+                    let scope = reference.owner;
+                    let removed = self
+                        .node_mut(scope)
+                        .is_some_and(|node| node.scoped_signals_mut().remove(&id));
+                    if removed {
+                        outcome.written_slots.insert(scope);
+                    }
+                }
                 SemanticReferenceKind::SignalDependency
                 | SemanticReferenceKind::AnimationTarget
                 | SemanticReferenceKind::AnimationTargetState
@@ -271,6 +305,13 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             )
         }));
     }
+
+    references.extend(
+        node.scoped_signals()
+            .iter()
+            .copied()
+            .map(|signal| (signal, SemanticReferenceKind::ScopedSignal)),
+    );
 
     match node.kind() {
         SemanticNodeKind::Signal(state) => {

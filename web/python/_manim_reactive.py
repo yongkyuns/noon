@@ -127,9 +127,12 @@ class ValueTracker:
     def get_value(self) -> float:
         canonical = self._canonical_context_handle()
         if _ACTIVE_CALLBACK_SIGNAL_VALUES is not None and canonical is not None:
-            raise NotImplementedError(
-                "canonical ValueTracker callback reads require a Rust-published signal read set"
-            )
+            # The callback phase is deliberately ahead of the published context
+            # frame. Read the token-pinned phase view rather than stale runtime
+            # state or this wrapper's authored value.
+            import _manim_updaters
+
+            return _manim_updaters.canonical_callback_scalar_value(self._scene, canonical[1])
         if canonical is not None:
             context, handle = canonical
             return float(context.valueTrackerValue(handle))

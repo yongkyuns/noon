@@ -170,21 +170,28 @@ try {
   const unavailablePage = await browser.newPage({ viewport: { width: 1000, height: 600 } });
   const unavailableErrors = collectErrors(unavailablePage);
   await unavailablePage.addInitScript(() => {
-    const originalGetContext = HTMLCanvasElement.prototype.getContext;
-    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
-      configurable: true,
-      value(type, ...args) {
-        const normalized = String(type).toLowerCase();
-        if (
-          normalized === "webgl" ||
-          normalized === "webgl2" ||
-          normalized === "experimental-webgl"
-        ) {
-          return null;
-        }
-        return originalGetContext.call(this, type, ...args);
-      },
-    });
+    const rejectWebGlContexts = (prototype) => {
+      if (!prototype || typeof prototype.getContext !== "function") return;
+      const originalGetContext = prototype.getContext;
+      Object.defineProperty(prototype, "getContext", {
+        configurable: true,
+        value(type, ...args) {
+          const normalized = String(type).toLowerCase();
+          if (
+            normalized === "webgl" ||
+            normalized === "webgl2" ||
+            normalized === "experimental-webgl"
+          ) {
+            return null;
+          }
+          return originalGetContext.call(this, type, ...args);
+        },
+      });
+    };
+    rejectWebGlContexts(HTMLCanvasElement.prototype);
+    if (typeof OffscreenCanvas !== "undefined") {
+      rejectWebGlContexts(OffscreenCanvas.prototype);
+    }
   });
 
   const unavailable = await waitForHarness(unavailablePage);

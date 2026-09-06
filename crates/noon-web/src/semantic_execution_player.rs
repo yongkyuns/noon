@@ -1,7 +1,9 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::TimelineWakeState;
 use noon::{
-    CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
-    ExecutionSession, RuntimeIdentity,
+    CallbackAdvance, CallbackPhaseToken, CallbackReadRequest, CallbackReadValue,
+    EffectivePropertyBatch, EffectiveSemanticPropertyWrite, ExecutionSession, RuntimeIdentity,
 };
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
@@ -23,14 +25,14 @@ use crate::{
     RetainedExecutionDeltaEnvelope, RetainedResourceBundle,
 };
 
-/// A browser-host wake observation for the player-owned current continuation segment.
+/// A browser-host wake observation derived from one player-owned execution session.
 ///
-/// The browser receives only this derived scheduling directive. Segment identity, authored
-/// time, and interpolation remain in the shared session.
+/// The browser receives only this derived scheduling directive. Runtime/segment identity,
+/// authored time, event cursors, and interpolation remain in the shared session.
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 #[derive(Debug)]
-pub struct WasmLiveSegmentWake {
+pub struct WasmExecutionWake {
     present_now: bool,
     cadence: BrowserExecutionCadence,
     timer_after_milliseconds: Option<f64>,
@@ -66,7 +68,15 @@ impl WasmLiveSegmentDrive {
 
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
-impl WasmLiveSegmentWake {
+impl WasmExecutionWake {
+    fn from_plan(plan: BrowserExecutionWakePlan, timer_after_milliseconds: Option<f64>) -> Self {
+        Self {
+            present_now: plan.present_now(),
+            cadence: plan.cadence(),
+            timer_after_milliseconds,
+        }
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = presentNow))]
     pub fn present_now(&self) -> bool {
         self.present_now
@@ -890,6 +900,27 @@ impl SemanticExecutionPlayer {
         Ok(end_time)
     }
 
+    /// Create and sparsely enroll one scalar tracker in this retained session.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_value_tracker(
+        &mut self,
+        initial: f64,
+    ) -> Result<noon::ValueTracker, String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .value_tracker(initial)
+        .map_err(|error| error.to_string())
+    }
+
     /// Create a detached target through the retained session so its semantic
     /// publication remains coherent with this runtime. Detached target rows do
     /// not create execution objects or frame work.
@@ -965,7 +996,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentWake, String> {
+    ) -> Result<WasmExecutionWake, String> {
         self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
@@ -977,11 +1008,51 @@ impl SemanticExecutionPlayer {
             BrowserHostWake::TimerAfterMilliseconds(delay) => Some(delay),
             BrowserHostWake::AnimationFrame | BrowserHostWake::Idle => None,
         };
-        Ok(WasmLiveSegmentWake {
-            present_now: directive.present_now(),
-            cadence: plan.cadence(),
-            timer_after_milliseconds,
-        })
+        Ok(WasmExecutionWake::from_plan(plan, timer_after_milliseconds))
+    }
+
+    /// Project the generic player's runtime-owned wake state through its one
+    /// browser playback clock.
+    ///
+    /// `wall_time_ms` comes from this authoring/engine context. Renderer-worker
+    /// timestamps are admission signals only and may use a different time origin.
+    /// Required callbacks pin the clock until their exact batch commits. A looping
+    /// player adds the loop boundary only when the execution session retains actual
+    /// timeline history, allowing a clean static scene to settle at O(0).
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn execution_wake(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<WasmExecutionWake, String> {
+        let callback_blocked =
+            self.pending_callback_phase.is_some() || self.session.callback_termination().is_some();
+        let mut wake = self.session.wake_state();
+        if callback_blocked || !self.clock.is_playing() {
+            wake = wake.without_timeline_wake();
+        } else if let Some(loop_duration) = self.clock.loop_duration() {
+            if self.session.has_replay_timeline_work() {
+                wake = wake.with_additional_timeline(TimelineWakeState::Deadline(loop_duration));
+            }
+        }
+        let plan = BrowserExecutionWakePlan::from_runtime(wake);
+        let timer_after_milliseconds = if callback_blocked {
+            None
+        } else {
+            match plan.cadence() {
+                BrowserExecutionCadence::TimerAtSceneTime(deadline) => Some(
+                    self.clock
+                        .timer_delay_milliseconds(deadline, wall_time_ms, self.session.frame().time)
+                        .map_err(|error| error.to_string())?,
+                ),
+                BrowserExecutionCadence::AnimationFrame | BrowserExecutionCadence::Idle => {
+                    self.clock
+                        .observe_wake_time(wall_time_ms)
+                        .map_err(|error| error.to_string())?;
+                    None
+                }
+            }
+        };
+        Ok(WasmExecutionWake::from_plan(plan, timer_after_milliseconds))
     }
 
     /// Begin the next browser wall-time interval after required host work.
@@ -993,7 +1064,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn reanchor_live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentWake, String> {
+    ) -> Result<WasmExecutionWake, String> {
         self.require_callback_progression_available()?;
         self.live_segment()?;
         self.live_wake_clock
@@ -1328,6 +1399,29 @@ struct CallbackPhaseTokenEnvelope {
     token: CallbackTokenWire,
 }
 
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CallbackReadRequestWire {
+    ScalarSignal { node: CallbackNodeWire },
+    Object { node: CallbackNodeWire },
+}
+
+impl From<CallbackReadRequestWire> for CallbackReadRequest {
+    fn from(value: CallbackReadRequestWire) -> Self {
+        match value {
+            CallbackReadRequestWire::ScalarSignal { node } => Self::ScalarSignal(node.into()),
+            CallbackReadRequestWire::Object { node } => Self::Object(node.into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CallbackReadValueWire {
+    Scalar { value: f32 },
+    Object { object: CallbackPhaseObjectWire },
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CallbackTerminationWire {
     token: CallbackTokenWire,
@@ -1505,6 +1599,12 @@ impl SemanticExecutionPlayer {
         }
     }
 
+    fn callback_token_from_json(token_json: &str) -> Result<CallbackPhaseToken, String> {
+        let token: CallbackTokenWire = serde_json::from_str(token_json)
+            .map_err(|error| format!("invalid callback token JSON: {error}"))?;
+        token.try_into()
+    }
+
     fn phase_token_from_json(phase_json: &str) -> Result<CallbackPhaseToken, String> {
         let phase: CallbackPhaseTokenEnvelope = serde_json::from_str(phase_json)
             .map_err(|error| format!("invalid callback phase JSON: {error}"))?;
@@ -1570,8 +1670,15 @@ impl SemanticExecutionPlayer {
     pub fn live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentWake, String> {
+    ) -> Result<WasmExecutionWake, String> {
         self.live_segment_wake(wall_time_ms)
+    }
+
+    /// Derive the next generic browser wake from the canonical runtime/session.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = executionWake))]
+    pub fn execution_wake_wasm(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
+        self.execution_wake(wall_time_ms)
     }
 
     /// Reanchor the next browser interval after a required callback completes.
@@ -1580,7 +1687,7 @@ impl SemanticExecutionPlayer {
     pub fn reanchor_live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentWake, String> {
+    ) -> Result<WasmExecutionWake, String> {
         self.reanchor_live_segment_wake(wall_time_ms)
     }
 
@@ -1602,6 +1709,47 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment))]
     pub fn complete_live_segment_wasm(&mut self) -> Result<(), String> {
         self.live_complete_segment()
+    }
+
+    /// Read one typed value from the exact pending callback phase without
+    /// committing it. This is the real Python-worker boundary; direct Rust
+    /// callbacks call the session API without JSON.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = requiredCallbackReadJson))]
+    pub fn required_callback_read_json(
+        &mut self,
+        token_json: &str,
+        request_json: &str,
+    ) -> Result<String, String> {
+        let token = Self::callback_token_from_json(token_json)?;
+        self.pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback read does not match the player pending phase")?;
+        let request_wire: CallbackReadRequestWire = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
+        let requested_object = match &request_wire {
+            CallbackReadRequestWire::Object { node } => Some(node.clone()),
+            CallbackReadRequestWire::ScalarSignal { .. } => None,
+        };
+        let value = self
+            .session
+            .required_callback_read(token, request_wire.into())
+            .map_err(|error| error.to_string())?;
+        let wire = match value {
+            CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },
+            CallbackReadValue::Object(properties) => CallbackReadValueWire::Object {
+                object: CallbackPhaseObjectWire {
+                    node: requested_object.ok_or("scalar callback read returned an object")?,
+                    transform: properties.transform,
+                    style: properties.style,
+                    appearance: properties.appearance,
+                    presence: properties.presence,
+                    reveal: properties.reveal,
+                    morph: properties.morph,
+                    bounds: properties.bounds,
+                },
+            },
+        };
+        serde_json::to_string(&wire).map_err(|error| error.to_string())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]
@@ -2256,6 +2404,9 @@ mod tests {
         for field in ["scene_revision", "execution_revision", "frame_epoch"] {
             assert!(phase["token"]["publication"][field].is_string());
         }
+        let pending_wake = player.execution_wake(1_000.0).unwrap();
+        assert_eq!(pending_wake.cadence(), "idle");
+        assert_eq!(pending_wake.timer_after_milliseconds(), None);
 
         let source_row = phase["objects"]
             .as_array()
@@ -2287,6 +2438,8 @@ mod tests {
         player
             .commit_callback_phase_json(&batch.to_string())
             .unwrap();
+        let committed_wake = player.execution_wake(9_000.0).unwrap();
+        assert_eq!(committed_wake.cadence(), "animation_frame");
         assert_eq!(
             player.session.frame().objects[0].transform.translation.y,
             1.0
@@ -2315,6 +2468,56 @@ mod tests {
             1.0
         );
         assert_eq!(publication["observation"]["committed"]["dirty"], "all");
+    }
+
+    #[test]
+    fn callback_sparse_read_accepts_the_raw_pending_token_and_rejects_a_foreign_one() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
+        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            1.0,
+            13,
+        )
+        .unwrap();
+
+        let phase: serde_json::Value = serde_json::from_str(
+            &player
+                .initial_callback_phase_json()
+                .unwrap()
+                .expect("time-zero callbacks require one phase"),
+        )
+        .unwrap();
+        let raw_token = phase["token"].to_string();
+        let object_request = serde_json::json!({
+            "kind": "object",
+            "node": phase["objects"][0]["node"].clone(),
+        })
+        .to_string();
+
+        let response: serde_json::Value = serde_json::from_str(
+            &player
+                .required_callback_read_json(&raw_token, &object_request)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(response["kind"], "object");
+        assert_eq!(response["object"]["node"], phase["objects"][0]["node"]);
+        assert!(player.pending_callback_phase.is_some());
+
+        let mut foreign_token = phase["token"].clone();
+        foreign_token["sequence"] = serde_json::json!("999");
+        assert!(player
+            .required_callback_read_json(&foreign_token.to_string(), &object_request)
+            .is_err());
+        assert!(player.pending_callback_phase.is_some());
     }
 
     #[test]
@@ -2414,6 +2617,80 @@ mod tests {
         assert!(player.tick_delta_json(0.0).unwrap().is_none());
         assert!(player.tick_delta_json(500.0).unwrap().is_none());
         assert_eq!(player.time(), 0.5);
+    }
+
+    #[test]
+    fn generic_wake_settles_a_playing_static_session() {
+        let mut scene = noon::Scene::new();
+        scene.add(&scene.circle(1.0).unwrap()).unwrap();
+        let mut player =
+            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 1)
+                .unwrap();
+        player.initial_delta_json().unwrap();
+
+        let wake = player.execution_wake(8_000.0).unwrap();
+        assert!(player.is_playing());
+        assert_eq!(wake.cadence(), "idle");
+        assert_eq!(wake.timer_after_milliseconds(), None);
+        assert!(!wake.present_now());
+        assert!(!player.session.has_replay_timeline_work());
+    }
+
+    #[test]
+    fn generic_wake_uses_runtime_activity_then_the_real_loop_boundary() {
+        let mut player = animated_player();
+        player.initial_delta_json().unwrap();
+        assert!(player.session.has_replay_timeline_work());
+
+        let active = player.execution_wake(10_000.0).unwrap();
+        assert_eq!(active.cadence(), "animation_frame");
+        assert!(player.tick_callback_phase_json(11_000.0).unwrap().is_none());
+        player.drain_delta_json().unwrap();
+
+        let settled = player.execution_wake(11_250.0).unwrap();
+        assert_eq!(settled.cadence(), "timer");
+        assert_eq!(settled.timer_after_milliseconds(), Some(750.0));
+
+        let overdue = player.execution_wake(12_100.0).unwrap();
+        assert_eq!(overdue.cadence(), "timer");
+        assert_eq!(overdue.timer_after_milliseconds(), Some(0.0));
+        assert!(player.tick_callback_phase_json(12_100.0).unwrap().is_none());
+        let replaying = player.execution_wake(12_100.0).unwrap();
+        assert_eq!(replaying.cadence(), "animation_frame");
+    }
+
+    #[test]
+    fn generic_wake_suppresses_timeline_cadence_while_paused() {
+        let mut player = animated_player();
+        player.pause();
+        let paused = player.execution_wake(1_000.0).unwrap();
+        assert_eq!(paused.cadence(), "idle");
+
+        player.resume();
+        let resumed = player.execution_wake(9_000.0).unwrap();
+        assert_eq!(resumed.cadence(), "animation_frame");
+        assert!(player.tick_callback_phase_json(9_250.0).unwrap().is_none());
+        assert_eq!(player.time(), 0.25);
+    }
+
+    #[test]
+    fn opaque_callback_history_is_explicitly_non_looping() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
+        transaction.remove_updater(circle.node_id(), HostCallbackId::new(1), 0.5);
+        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let mut player =
+            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7)
+                .unwrap();
+
+        assert_eq!(player.clock.loop_duration(), None);
+        assert!(!player.session.has_replay_timeline_work());
+        let before = player.clock.clone();
+        assert!(player.set_loop_duration(2.0).is_err());
+        assert_eq!(player.clock, before);
     }
 
     #[test]

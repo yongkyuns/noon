@@ -8,6 +8,14 @@ description = "Browser-facing persistent runtime and live patch control for Noon
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["renderer"]
+renderer = [
+    "dep:noon-render-wgpu",
+    "dep:noon-text-render-wgpu",
+    "dep:wgpu",
+]
+
 [dependencies]
 ciborium = "0.2"
 noon = { path = "../noon" }
@@ -20,12 +28,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["web"] }
-noon-text-render-wgpu = { path = "../noon-text-render-wgpu", default-features = false, features = ["web"] }
+noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["web"], optional = true }
+noon-text-render-wgpu = { path = "../noon-text-render-wgpu", default-features = false, features = ["web"], optional = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Event", "EventTarget", "HtmlCanvasElement", "OffscreenCanvas", "Performance", "Window"] }
-wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "webgpu", "webgl"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "webgpu", "webgl"], optional = true }
 
 [dev-dependencies]
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["ci-noop"] }

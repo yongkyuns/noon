@@ -104,10 +104,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
         compat.install()
+        import _manim_semantic_handles as semantic_handles
+
         if not updaters._INSTALLED:
             # Mirror the production final method that otherwise bypasses the
             # base Mobject patch. Updater installation must reclaim it.
-            import _manim_semantic_handles as semantic_handles
 
             compat.VMobject.set_opacity = semantic_handles._set_opacity
             updaters.install()
@@ -349,6 +350,70 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         row = next(iter(context._rows.values()))
         self.assertIsInstance(row, updaters._PhasePropertyRow)
         self.assertFalse(hasattr(row, "geometry"))
+
+    def test_callback_bound_copy_uses_canonical_target_editor_without_copying_callbacks(
+        self,
+    ) -> None:
+        compat.install()
+        import _manim_semantic_handles as semantic_handles
+
+        scene = updaters._base.Scene()
+        circle = compat.Circle(1.0)
+        scene.add(circle)
+        source_handle = object()
+        target_handle = object()
+
+        class TargetEditorContext:
+            def __init__(self) -> None:
+                self.calls: list[object] = []
+
+            def liveTargetEditor(self, handle: object) -> object:
+                self.calls.append(handle)
+                return target_handle
+
+            def liveExecutionOwnership(self) -> str:
+                return "returned"
+
+        context = TargetEditorContext()
+        scene._canonical_authoring_context = context
+        circle._semantic_handle = source_handle
+        circle._semantic_handle_fresh = True
+        class SourceRegistration:
+            def __deepcopy__(self, memo):
+                raise AssertionError("target copy traversed source callback ownership")
+
+        registration = SourceRegistration()
+        circle._noon_updaters = [object()]
+        circle._noon_updater_registrations = [registration]
+        circle._noon_updater_registration_history = [registration]
+
+        target = semantic_handles._clone_mobject(circle, target_state=True)
+
+        self.assertEqual(context.calls, [source_handle])
+        self.assertIs(target._semantic_handle, target_handle)
+        self.assertTrue(target._semantic_handle_fresh)
+        self.assertIsNone(target._scene)
+        self.assertIsNone(target._object)
+        self.assertFalse(hasattr(target, "_noon_updaters"))
+        self.assertFalse(hasattr(target, "_noon_updater_registrations"))
+        self.assertFalse(hasattr(target, "_noon_updater_registration_history"))
+        self.assertIs(circle._noon_updater_registrations[0], registration)
+
+    def test_callback_bound_copy_rejects_inside_the_active_phase(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        import _manim_semantic_handles as semantic_handles
+
+        mobject._semantic_handle_fresh = True
+        mobject._noon_updaters = [object()]
+        scene._canonical_authoring_context = SimpleNamespace(
+            liveExecutionOwnership=lambda: "active"
+        )
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "callback copies"):
+                semantic_handles._clone_mobject(mobject, target_state=True)
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
     def test_spatial_transform_and_raw_operations_fail_explicitly(self) -> None:
         scene, mobject, context = self._mobject_and_context()

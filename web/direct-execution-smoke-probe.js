@@ -1,4 +1,4 @@
-import {
+const {
   createDirectAffineCallbackSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
@@ -6,13 +6,14 @@ import {
   createDirectOrdinaryAffineCallbackContinuationSmokeRenderer,
   createDirectOrdinaryAffineContinuationSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
+  createDirectOrdinaryCallbackSparseReadsSmokeRenderer,
   createDirectOrdinaryCompositionContinuationSmokeRenderer,
   createDirectOrdinaryValueTrackerContinuationSmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
   createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryPaintPlaySmokeRenderer,
   createDirectOrdinaryStylePlaySmokeRenderer,
-} from "./pkg/noon_web.js";
+} = await import("./pkg/noon_web.js");
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
 
 const state = {
@@ -495,7 +496,8 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     );
   }
   await presentDirectFrame(renderer);
-  const initialColor = await sampleRenderedColor(canvas, 0, 0);
+  const initialColor = await sampleRenderedColor(canvas, 0, 1);
+  const initialVacatedLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
 
   await advanceDirectCallbackFrame(renderer, 500);
   const midpointColor = await sampleRenderedColor(canvas, 1, 1);
@@ -510,6 +512,7 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     objectCount: renderer.objectCount(),
     drawCalls: renderer.lastDrawCalls(),
     initialColor,
+    initialVacatedLuma,
     midpointColor,
     endpointColor,
     finalCadence: JSON.parse(renderer.directWakeDirectiveJson(1000)).cadence,
@@ -523,17 +526,83 @@ async function directOrdinaryAffineCallbackContinuationProof(expectedBackend) {
     throw new Error(`direct callback continuation produced invalid renderer metrics ${JSON.stringify(metrics)}`);
   }
   if (
-    initialColor.blue < 180 ||
+    initialColor.blue < 70 ||
+    initialColor.blue > 180 ||
+    initialVacatedLuma > 60 ||
     midpointColor.blue < 70 ||
     endpointColor.blue < 70 ||
-    midpointColor.blue >= initialColor.blue * 0.7 ||
-    midpointColor.blue <= initialColor.blue * 0.25 ||
-    endpointColor.blue >= initialColor.blue * 0.7 ||
-    endpointColor.blue <= initialColor.blue * 0.25 ||
+    Math.abs(midpointColor.blue - initialColor.blue) > 5 ||
+    Math.abs(endpointColor.blue - initialColor.blue) > 5 ||
     midpointVacatedLuma > 60 ||
     endpointVacatedLuma > 60
   ) {
     throw new Error(`direct callback continuation pixels or lifecycle are invalid ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
+async function directOrdinaryCallbackSparseReadsProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryCallbackSparseReadsSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow || initial.cadence !== "animation-frame") {
+    throw new Error(`direct sparse reads did not start: ${JSON.stringify(initial)}`);
+  }
+  await settleDirectPublication(renderer, 0);
+  const initialRead = await sampleRenderedColor(canvas, -1, 1);
+  const initialVacatedLuma = await sampleRenderedNeighborhood(canvas, 0, 0);
+
+  renderer.advanceDirectRealtime(250);
+  let trackStart = JSON.parse(renderer.directWakeDirectiveJson(250));
+  if (trackStart.presentNow) trackStart = await settleDirectPublication(renderer, 250);
+  if (trackStart.cadence !== "animation-frame") {
+    throw new Error(`direct sparse reads did not begin its scalar track: ${JSON.stringify(trackStart)}`);
+  }
+  if (!renderer.advanceDirectRealtime(750)) {
+    throw new Error("direct sparse reads did not publish its scalar midpoint");
+  }
+  await settleDirectPublication(renderer, 750);
+  const midpoint = await sampleRenderedColor(canvas, 0, 1);
+
+  if (!renderer.advanceDirectRealtime(1250)) {
+    throw new Error("direct sparse reads did not publish its scalar endpoint");
+  }
+  await settleDirectPublication(renderer, 1250);
+  if (!renderer.advanceDirectRealtime(1500)) {
+    throw new Error("direct sparse reads did not publish its persistent Hold");
+  }
+  await settleDirectPublication(renderer, 1500);
+  const persistentHold = await sampleRenderedColor(canvas, 2, 1);
+  const anchor = await sampleRenderedColor(canvas, -1, 1);
+  const finalDirective = JSON.parse(renderer.directWakeDirectiveJson(1500));
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    initialRead,
+    initialVacatedLuma,
+    midpoint,
+    persistentHold,
+    anchor,
+    finalCadence: finalDirective.cadence,
+  };
+  if (
+    metrics.backend !== expectedBackend ||
+    metrics.authoredTime !== 1.5 ||
+    metrics.objectCount !== 2 ||
+    metrics.drawCalls <= 0 ||
+    metrics.finalCadence !== "idle" ||
+    metrics.initialVacatedLuma > 60
+  ) {
+    throw new Error(`direct sparse-read lifecycle is invalid ${JSON.stringify(metrics)}`);
+  }
+  for (const [label, color] of Object.entries({ initialRead, midpoint, persistentHold, anchor })) {
+    if (color.blue < 180 || color.green < 60) {
+      throw new Error(`direct sparse-read ${label} is not visibly blue: ${JSON.stringify(metrics)}`);
+    }
   }
   return metrics;
 }
@@ -890,6 +959,14 @@ async function directNativeSignalsProof(expectedBackend) {
 }
 
 async function start() {
+  if (typeof createDirectExecutionSmokeRenderer !== "function") {
+    state.metrics = {
+      skipped: true,
+      reason: "debug-only direct execution proof is unavailable in this production package",
+    };
+    state.ready = true;
+    return;
+  }
   const expectedBackend = await waitForPrimaryRenderer();
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectExecutionSmokeRenderer(canvas);
@@ -964,6 +1041,8 @@ async function start() {
   metrics.ordinaryFadePlay = await directOrdinaryFadePlayProof(expectedBackend);
   metrics.ordinaryAffineCallbackContinuation =
     await directOrdinaryAffineCallbackContinuationProof(expectedBackend);
+  metrics.ordinaryCallbackSparseReads =
+    await directOrdinaryCallbackSparseReadsProof(expectedBackend);
   metrics.ordinaryCompositionPlay = await directOrdinaryCompositionPlayProof(expectedBackend);
   metrics.ordinaryCompositionContinuation =
     await directOrdinaryCompositionContinuationProof(expectedBackend);

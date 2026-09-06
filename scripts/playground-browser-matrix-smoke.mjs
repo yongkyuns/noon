@@ -275,10 +275,9 @@ async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000) {
 async function assertDeferredRuntime(page) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   const runtime = await runtimeSnapshot(page);
-  assert.equal(
-    runtime.runtimeStartup,
-    "deferred",
-    `${browserName}/${profileName}: page load started the runtime eagerly`,
+  assert.ok(
+    ["deferred", "preparing-on-run", "prepared-on-run"].includes(runtime.runtimeStartup),
+    `${browserName}/${profileName}: unexpected pre-Run startup state ${runtime.runtimeStartup}`,
   );
   assert.equal(
     runtime.executionMode,

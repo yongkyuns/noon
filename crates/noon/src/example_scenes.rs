@@ -16,8 +16,9 @@ const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
 const ACCUMULATE_TEXT_DT: HostCallbackId = HostCallbackId::new(4);
 const ROTATE_LINE_FORWARD: HostCallbackId = HostCallbackId::new(5);
 const ROTATE_LINE_BACKWARD: HostCallbackId = HostCallbackId::new(6);
-const RECOLOR_PAINT: HostCallbackId = HostCallbackId::new(7);
-const FILL_AND_COMPOSITE_OPACITY: HostCallbackId = HostCallbackId::new(8);
+const FOLLOW_SPARSE_READS: HostCallbackId = HostCallbackId::new(7);
+const RECOLOR_PAINT: HostCallbackId = HostCallbackId::new(8);
+const FILL_AND_COMPOSITE_OPACITY: HostCallbackId = HostCallbackId::new(9);
 
 fn ordered_affine_callbacks() -> Result<RustHostCallbackTable, Box<dyn Error>> {
     let mut callbacks = RustHostCallbackTable::new();
@@ -709,10 +710,6 @@ pub fn ordinary_callback_continuation_program() -> Result<
         .set_fill(0.0, 0.4, 1.0, 1.0)
         .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
-    let mut target = circle.target_editor().map_err(|error| error.to_string())?;
-    target
-        .set_translation(2.0, 0.0)
-        .map_err(|error| error.to_string())?;
 
     let callbacks = ordered_affine_callbacks().map_err(|error| error.to_string())?;
     {
@@ -724,6 +721,13 @@ pub fn ordinary_callback_continuation_program() -> Result<
             .add_updater(&mut store, circle.node_id(), SET_OPACITY, 0.0, None)
             .map_err(|error| error.to_string())?;
     }
+    // The paired Python proof creates its target after callback registration too.
+    // Before bootstrap, this remains an authored detached target with no runtime
+    // copy or callback-table duplication.
+    let mut target = circle.target_editor().map_err(|error| error.to_string())?;
+    target
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
 
     let program = scene
         .into_live_program(OrdinaryCallbackContinuation {
@@ -731,6 +735,143 @@ pub fn ordinary_callback_continuation_program() -> Result<
             target,
             stage: 0,
         })
+        .map_err(|error| error.to_string())?;
+    Ok((program, callbacks))
+}
+
+/// Continuation for the paired sparse callback-read example.
+pub struct OrdinaryCallbackSparseReadsContinuation {
+    tracker: ValueTracker,
+    stage: u8,
+}
+
+impl LiveContinuation for OrdinaryCallbackSparseReadsContinuation {
+    type Error = String;
+
+    fn resume(
+        &mut self,
+        live: &mut LiveSession<'_>,
+    ) -> Result<crate::ContinuationStep, Self::Error> {
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.wait_segment(0.25)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            1 => {
+                self.stage = 2;
+                live.declare_and_activate_value_tracker(
+                    &self.tracker,
+                    2.0,
+                    1.0,
+                    RateFunction::Linear,
+                )
+                .map(crate::ContinuationStep::Await)
+                .map_err(|error| error.to_string())
+            }
+            2 => {
+                live.set_value(&self.tracker, 3.0)
+                    .map_err(|error| error.to_string())?;
+                self.stage = 3;
+                live.wait_segment(0.25)
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
+            }
+            3 => {
+                self.stage = 4;
+                Ok(crate::ContinuationStep::Finished)
+            }
+            _ => Err("ordinary sparse-read continuation resumed after it finished".to_owned()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SparseReadExampleError(String);
+
+impl std::fmt::Display for SparseReadExampleError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for SparseReadExampleError {}
+
+/// Build the paired sparse callback-read scene for native and direct Rust/WASM hosts.
+///
+/// A callback on the blue circle reads an unbound, root-scoped scalar and a
+/// separate static anchor through the exact pending phase. It first observes the
+/// scalar before any track exists, then follows `0 -> 2` over one second and a
+/// persistent hold at `3` through the final wait. The callable rejects a repeated
+/// invocation at one authored phase time instead of replaying host behavior.
+pub fn ordinary_callback_sparse_reads_program() -> Result<
+    (
+        LiveProgram<OrdinaryCallbackSparseReadsContinuation>,
+        RustHostCallbackTable,
+    ),
+    String,
+> {
+    let mut scene = Scene::new();
+    let mut anchor = scene.circle(0.4).map_err(|error| error.to_string())?;
+    anchor
+        .set_fill(0.0, 0.4, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    anchor
+        .set_translation(-1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    let mut circle = scene.circle(0.4).map_err(|error| error.to_string())?;
+    circle
+        .set_fill(0.0, 0.4, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    scene.add(&anchor).map_err(|error| error.to_string())?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
+    let tracker = scene
+        .value_tracker(0.0)
+        .map_err(|error| error.to_string())?;
+
+    let tracker_id = tracker.node_id();
+    let anchor_id = anchor.node_id();
+    let mut observed_phase_times = Vec::new();
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks
+        .insert(FOLLOW_SPARSE_READS, move |context| {
+            if observed_phase_times.contains(&context.time()) {
+                return Err(SparseReadExampleError(format!(
+                    "sparse-read callback repeated authored phase {}",
+                    context.time()
+                )));
+            }
+            observed_phase_times.push(context.time());
+            let scalar = context
+                .scalar_signal(tracker_id)
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            let anchor = context
+                .read_object(anchor_id)
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            let center = anchor.bounds.ok_or_else(|| {
+                SparseReadExampleError("sparse-read anchor has no layout bounds".to_owned())
+            })?;
+            let mut transform = context.target_state().transform;
+            let center = center.center();
+            transform.translation = Vec2::new(center.x + scalar, center.y);
+            context
+                .set_target_transform(transform)
+                .map_err(|error| SparseReadExampleError(error.to_string()))
+        })
+        .map_err(|error| error.to_string())?;
+    callbacks
+        .add_updater(
+            &mut scene.store().borrow_mut(),
+            circle.node_id(),
+            FOLLOW_SPARSE_READS,
+            0.0,
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let program = scene
+        .into_live_program(OrdinaryCallbackSparseReadsContinuation { tracker, stage: 0 })
         .map_err(|error| error.to_string())?;
     Ok((program, callbacks))
 }
@@ -1337,6 +1478,77 @@ mod continuation_tests {
         );
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     }
+
+    #[test]
+    fn ordinary_sparse_reads_cover_initial_signal_track_and_persistent_hold() {
+        let (mut program, mut callbacks) = ordinary_callback_sparse_reads_program().unwrap();
+
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.0).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[1].transform.translation,
+            Vec2::new(-1.0, 1.0),
+            "the first phase must read the scoped tracker before any track exists"
+        );
+
+        let wait_endpoint = program.drive_to(&mut callbacks, 0.25).unwrap();
+        match wait_endpoint {
+            LiveProgramStatus::PublicationPending(expected) => {
+                let publication = program.take_renderer_publication().context();
+                assert_eq!(publication, expected);
+                assert_eq!(
+                    program.admit_publication(publication).unwrap(),
+                    LiveProgramStatus::ReadyToResume
+                );
+            }
+            LiveProgramStatus::ReadyToResume => {}
+            other => panic!("initial wait did not reach its resume barrier: {other:?}"),
+        }
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.75).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[1].transform.translation,
+            Vec2::new(0.0, 1.0)
+        );
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.25).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        let track_publication = program.take_renderer_publication().context();
+        program.admit_publication(track_publication).unwrap();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 1.5).unwrap(),
+            LiveProgramStatus::PublicationPending(_)
+        ));
+        assert_eq!(
+            program.session().frame().objects[1].transform.translation,
+            Vec2::new(2.0, 1.0),
+            "the callback must read the persistent hold during the inactive wait"
+        );
+        let hold_publication = program.take_renderer_publication().context();
+        program.admit_publication(hold_publication).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert_eq!(program.session().frame().time, 1.5);
+    }
+
     #[test]
     fn ordinary_fade_continuation_exposes_absent_boundary_then_readds() {
         let mut program = ordinary_fade_continuation_program().unwrap();
