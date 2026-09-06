@@ -97,7 +97,13 @@ class MixedPainterOrder(Scene):
         self.add(Square(side_length=0.5))
 `;
 
-function canonicalTextObject(result, { source, fontSize, order, objectId }) {
+function canonicalTextObject(result, {
+  source,
+  fontSize,
+  effectiveFontSize = null,
+  order,
+  objectId,
+}) {
   assert.equal(result.kind, "scene_document");
   assert.equal(result.retained_document, null, "the canonical export carries mixed content");
   assert.ok(result.scene_spec, "scene result must include canonical SceneSpec");
@@ -107,6 +113,16 @@ function canonicalTextObject(result, { source, fontSize, order, objectId }) {
   const text = object.content.value;
   assert.equal(text.source, source);
   assert.equal(text.font_size, fontSize);
+  if (effectiveFontSize !== null) {
+    assert.ok(
+      Math.abs(text.font_size * object.transform.scale.x - effectiveFontSize) < 1e-5,
+      "canonical text font size and transform scale must preserve the effective X presentation",
+    );
+    assert.ok(
+      Math.abs(text.font_size * object.transform.scale.y - effectiveFontSize) < 1e-5,
+      "canonical text font size and transform scale must preserve the effective Y presentation",
+    );
+  }
 
   const wire = JSON.stringify(text);
   for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
@@ -127,6 +143,8 @@ function assertNativeText(result, expected) {
 function assertTypst(result, expected) {
   const text = canonicalTextObject(result, expected);
   assert.equal(text.text.kind, expected.math ? "math_typst" : "typst");
+  assert.deepEqual(text.object.style.fill, { red: 1, green: 1, blue: 1, alpha: 1 });
+  assert.equal(text.object.style.opacity, 1);
 }
 
 let browser = null;
@@ -280,7 +298,8 @@ try {
   assertTypst(helloTypst, {
     source: "*Hello* from _Typst!_",
     math: false,
-    fontSize: 96,
+    fontSize: 48,
+    effectiveFontSize: 96,
     order: 0,
     objectId: 0,
   });
@@ -297,7 +316,8 @@ try {
   assertTypst(helloMathTypst, {
     source: "sum_(k=1)^n k = (n(n + 1)) / 2",
     math: true,
-    fontSize: 72,
+    fontSize: 48,
+    effectiveFontSize: 72,
     order: 0,
     objectId: 0,
   });
