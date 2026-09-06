@@ -3700,8 +3700,7 @@ mod wasm {
             if let Some(run_time) = composition_run_time {
                 composition_options = composition_options.run_time(run_time);
             }
-            let mut play_options =
-                noon_core::AnimationOptions::new().rate_func(noon_core::RateFunction::Linear);
+            let mut play_options = noon_core::AnimationOptions::new();
             if let Some(run_time) = play_run_time {
                 play_options = play_options.run_time(run_time);
             }

@@ -1301,9 +1301,11 @@ def _canonical_play_options(kwargs: dict[str, object]) -> float | None:
     return None if value is None else float(value)
 
 
-def _canonical_composition_rate_id(kwargs: dict[str, object]) -> str:
+def _canonical_composition_rate_id(kwargs: dict[str, object]) -> str | None:
     easing = kwargs.get("easing")
     rate_func = kwargs.get("rate_func")
+    if easing is None and rate_func is None:
+        return None
     if easing is not None and rate_func is not None:
         raise ValueError("use either easing or rate_func, not both")
     return str(easing) if easing is not None else (
@@ -1340,7 +1342,9 @@ def _build_canonical_composition_candidate(
     candidate.setCompositionRateFunction(
         _compat._easing_from_rate_func(group.rate_func) if group is not None else "linear"
     )
-    candidate.setPlayRateFunction(_canonical_composition_rate_id(kwargs))
+    play_rate = _canonical_composition_rate_id(kwargs)
+    if play_rate is not None:
+        candidate.setPlayRateFunction(play_rate)
     reservations: list[tuple[_base.Mobject, object]] = []
     removals: list[_base.Mobject] = []
     next_object_id = self._next_object_id
@@ -1460,7 +1464,9 @@ def _build_canonical_composition_candidate(
         nested.setCompositionRateFunction(
             _compat._easing_from_rate_func(root_group.rate_func) if root_group is not None else "linear"
         )
-        nested.setPlayRateFunction(_canonical_composition_rate_id(root_kwargs))
+        play_rate = _canonical_composition_rate_id(root_kwargs)
+        if play_rate is not None:
+            nested.setPlayRateFunction(play_rate)
         for child_animation in root_animations:
             append_leaf(nested, child_animation, {} if root_group is not None else root_kwargs)
         return nested
