@@ -2272,6 +2272,41 @@ mod tests {
     }
 
     #[test]
+    fn filled_half_turn_morph_prepares_its_initial_frame() {
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(-1.0, 1.0))
+            .close();
+        // Preserve point correspondence for a π turn: it collapses at the
+        // midpoint but has valid filled endpoints and never reverses winding.
+        let target = VectorPath::new()
+            .move_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(-1.0, 1.0))
+            .line_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .close();
+        let geometry = GeometryRef::path(source.with_morph_target(target));
+        let mut path = object(8, geometry.clone());
+        path.style.fill = Some(Color::BLUE);
+        path.style.stroke = Some(Color::BLACK);
+        path.style.stroke_width = 0.08;
+        let mut initial = frame(vec![path]);
+        initial.render_geometries[0] = Some(geometry.into());
+        initial.render_transforms[0] = Some(Transform2D::IDENTITY);
+
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer.prepare(&initial);
+
+        assert_eq!(prepared.stats.geometry_cache_misses, 1);
+        assert!(prepared
+            .path_vertices
+            .iter()
+            .any(|vertex| vertex.surface & 1 == 0));
+    }
+
+    #[test]
     fn fill_presence_is_part_of_path_mesh_cache_identity() {
         let geometry = GeometryRef::path(curved_path());
         let mut path = object(17, geometry);
