@@ -1,6 +1,6 @@
 # Noon WebGPU demo
 
-This demo proves that a serialized Noon scene can compile, evaluate, and render in a browser without Python, while an optional Pyodide worker can author complete scenes or ordered live patches without blocking playback.
+The direct Rust/WASM examples author, lower, execute, and render through typed Rust boundaries in one WASM context. The optional Pyodide authoring worker uses the same shared semantic operations; its separate execution worker is an explicit cross-context transport boundary.
 
 From the repository root:
 
@@ -17,6 +17,7 @@ Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `r
 | Flat ordinary composition | `noon::example_scenes::ordinary_composition_play()` | None; the typed Rust session owns Parallel/Sequence scheduling and completion |
 | Flat composition continuation | `noon::example_scenes::ordinary_composition_continuation_program()` | None; the typed Rust program owns both composition segments and their renderer admission barriers |
 | Ordinary FadeIn/FadeOut | `noon::example_scenes::ordinary_fade_continuation_program()` | None; the typed Rust program owns appearance, membership, detached wait, and same-handle re-entry |
+| Parallel Create | `noon::example_scenes::ordinary_square_and_circle_create_continuation_program()` | None; matches Python `manim_parity_square_and_circle.py` with one atomic admission and reveal segment |
 | Ordinary Create | `noon::example_scenes::ordinary_create_continuation_program()` | None; the typed Rust program owns introduction, reveal, endpoint reconciliation, and continuation admission |
 | Create → SquareToCircle → FadeOut | `noon::example_scenes::ordinary_create_then_content_morph_program()` | None; native and direct-WASM hosts run the same typed content and lifecycle continuation |
 | Ordinary style play | `noon::example_scenes::ordinary_style_play()` | None; the typed Rust session owns fill/object-opacity interpolation, completion, and the following authored style edit |
@@ -99,5 +100,3 @@ scene.add(Path(curve, fill=BLUE, stroke=WHITE, stroke_width=0.06))
 ```
 
 Static path meshes are tessellated once per semantic path/topology cache key and reused across instances. Geometry-changing path Transforms and supported cross-kind analytic Transforms prepare a fixed source/target pair before playback; steady frames update only compact instance state rather than retessellating geometry.
-
-The paired `ordinary_square_and_circle_create` native example and direct WASM factory execute the same two-shape parallel Create as `manim_parity_square_and_circle.py`.
