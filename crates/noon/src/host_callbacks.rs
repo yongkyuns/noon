@@ -163,6 +163,17 @@ impl RustHostCallbackContext<'_> {
         effective_style_with_fill(self.target_state().style, red, green, blue, opacity)
     }
 
+    /// Derive a stroke-color edit while retaining an already enabled stroke alpha.
+    pub fn target_style_with_stroke_color(
+        &self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<Style, String> {
+        effective_style_with_stroke_color(self.target_state().style, red, green, blue, alpha)
+    }
+
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
         self.overlay.set_style(self.target, style)
     }
@@ -247,6 +258,18 @@ pub fn effective_style_with_fill(
     opacity: f64,
 ) -> Result<Style, String> {
     crate::semantic_mobject::edit_fill(&mut style, red, green, blue, opacity)?;
+    Ok(style)
+}
+
+/// Apply shared Manim stroke-color semantics to an effective runtime style.
+pub fn effective_style_with_stroke_color(
+    mut style: Style,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Style, String> {
+    crate::semantic_mobject::edit_stroke_color(&mut style, red, green, blue, alpha)?;
     Ok(style)
 }
 
@@ -566,6 +589,12 @@ mod tests {
         assert_eq!(filled.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
         assert_eq!(filled.stroke, recolored.stroke);
         assert_eq!(filled.opacity, recolored.opacity);
+
+        let restroked = effective_style_with_stroke_color(filled, 0.2, 0.7, 0.4, 0.9).unwrap();
+        assert_eq!(restroked.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
+        assert_eq!(restroked.stroke, Some(Color::rgba(0.2, 0.7, 0.4, 0.75)));
+        assert_eq!(restroked.stroke_width, 3.0);
+        assert_eq!(restroked.opacity, 0.6);
 
         let disabled = Style {
             fill: None,

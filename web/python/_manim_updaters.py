@@ -744,6 +744,18 @@ class _CanonicalCallbackContext:
         )
         return _phase_callback_paint_color(result, "fill")
 
+    def paint_set_stroke(
+        self,
+        style: _PhaseStyle,
+        color: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float] | None:
+        result = self._operations.callbackPaintSetStroke(
+            *_phase_optional_color_args(style.fill),
+            *_phase_optional_color_args(style.stroke),
+            *color,
+        )
+        return _phase_callback_paint_color(result, "stroke")
+
     def style_changed(
         self, key: tuple[int, int], before: _PhaseStyle, row: _PhasePropertyRow
     ) -> None:
@@ -999,16 +1011,20 @@ def _canonical_set_stroke(
     if value is None:
         return _ORIGINAL_SET_STROKE(self, color, width)
     context, key, row = value
-    before = row.style
-    stroke = None if color is None else _phase_color("set_stroke", color.to_ir())
-    style = replace(row.style, stroke=stroke)
     if width is not None:
-        style = replace(style, stroke_width=float(width))
+        raise NotImplementedError(
+            "canonical callback stroke width is not supported"
+        )
+    before = row.style
+    if color is None:
+        style = replace(row.style, stroke=None)
+    else:
+        parsed = _phase_color("set_stroke", color.to_ir())
+        assert parsed is not None
+        stroke = context.paint_set_stroke(row.style, parsed)
+        style = replace(row.style, stroke=stroke)
     row.style = style
-    if (
-        (row.style.stroke is None) != (before.stroke is None)
-        or row.style.stroke_width != before.stroke_width
-    ):
+    if (row.style.stroke is None) != (before.stroke is None):
         row.invalidate_bounds()
     context.style_changed(key, before, row)
     return self

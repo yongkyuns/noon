@@ -2001,6 +2001,46 @@ mod wasm {
             Ok(callback_paint_result(style))
         }
 
+        /// Apply shared Manim `set_stroke(color=...)` semantics to callback-local paint.
+        #[wasm_bindgen(js_name = callbackPaintSetStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_paint_set_stroke(
+            &self,
+            fill_red: Option<f64>,
+            fill_green: Option<f64>,
+            fill_blue: Option<f64>,
+            fill_alpha: Option<f64>,
+            stroke_red: Option<f64>,
+            stroke_green: Option<f64>,
+            stroke_blue: Option<f64>,
+            stroke_alpha: Option<f64>,
+            color_red: f64,
+            color_green: f64,
+            color_blue: f64,
+            color_alpha: f64,
+        ) -> Result<WasmCallbackPaint, JsValue> {
+            let style = callback_paint_style(
+                callback_color("callback fill", fill_red, fill_green, fill_blue, fill_alpha)?,
+                callback_color(
+                    "callback stroke",
+                    stroke_red,
+                    stroke_green,
+                    stroke_blue,
+                    stroke_alpha,
+                )?,
+            );
+            Ok(callback_paint_result(
+                noon::effective_style_with_stroke_color(
+                    style,
+                    color_red,
+                    color_green,
+                    color_blue,
+                    color_alpha,
+                )
+                .map_err(js_error)?,
+            ))
+        }
+
         #[wasm_bindgen(js_name = bindMobject)]
         pub fn bind_mobject(
             &mut self,

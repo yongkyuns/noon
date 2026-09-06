@@ -199,6 +199,16 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                     has_fill = True
                 return self._paint_result(fill, stroke, has_fill, has_stroke)
 
+            def callbackPaintSetStroke(self, *values: object):
+                self.paint_edits.append(("stroke", values))
+                fill = values[:4]
+                stroke = values[4:8]
+                color = values[8:12]
+                has_fill = fill[0] is not None
+                has_stroke = stroke[0] is not None
+                stroke = (*color[:3], stroke[3] if has_stroke else color[3])
+                return self._paint_result(fill, stroke, has_fill, True)
+
             @staticmethod
             def _paint_result(fill, stroke, has_fill: bool, has_stroke: bool):
                 return SimpleNamespace(
@@ -256,6 +266,42 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             before = row.style
             with self.assertRaises(NotImplementedError):
                 mobject.set_stroke(width=2.0, opacity=0.5)
+            self.assertEqual(row.style, before)
+            self.assertEqual(context.effective_batch()["writes"], [])
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_callback_stroke_color_uses_shared_rust_result(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        item = next(iter(context._frame_items.values()))
+        item["style"]["fill"] = {
+            "red": 0.1,
+            "green": 0.2,
+            "blue": 0.3,
+            "alpha": 0.25,
+        }
+        item["style"]["stroke"]["alpha"] = 0.75
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            mobject.set_stroke(updaters._base.Color(0.2, 0.7, 0.4, 0.9))
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+        row = next(iter(context._rows.values()))
+        self.assertEqual(row.style.fill, (0.1, 0.2, 0.3, 0.25))
+        self.assertEqual(row.style.stroke, (0.2, 0.7, 0.4, 0.75))
+        self.assertEqual(
+            [kind for kind, _ in context._operations.paint_edits], ["stroke"]
+        )
+
+    def test_unsupported_callback_stroke_width_fails_before_row_mutation(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            _, row = context.row(mobject)
+            before = row.style
+            with self.assertRaises(NotImplementedError):
+                mobject.set_stroke(width=2.0)
             self.assertEqual(row.style, before)
             self.assertEqual(context.effective_batch()["writes"], [])
         finally:
