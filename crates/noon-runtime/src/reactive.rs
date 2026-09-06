@@ -10,9 +10,6 @@ pub use host_callbacks::*;
 mod host_policy;
 pub use host_policy::*;
 
-mod native_inputs;
-pub use native_inputs::*;
-
 mod signal_timeline;
 pub use signal_timeline::*;
 
