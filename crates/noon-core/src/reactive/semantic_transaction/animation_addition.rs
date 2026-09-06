@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     AnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationIntent,
     SemanticAnimationState, SemanticFadeDirection, SemanticObjectState,
+    SemanticTransformInterpolation,
 };
 
 use super::{
@@ -16,11 +17,16 @@ use super::{
 /// This is transaction vocabulary, not a second authored animation model. It is
 /// resolved to [`SemanticAnimationIntent`] only after complete transaction
 /// preflight and semantic identity allocation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SemanticTransactionAnimationIntent {
     TransformTo {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
+        interpolation: SemanticTransformInterpolation,
+    },
+    Rotate {
+        target: SemanticTransactionNodeRef,
+        angle: f64,
     },
     Fade {
         target: SemanticTransactionNodeRef,
@@ -41,13 +47,19 @@ impl SemanticTransactionAnimationIntent {
             Self::TransformTo {
                 target,
                 target_state,
+                ..
             } => Some([Some(*target), Some(*target_state)]),
-            Self::Fade { target, .. } | Self::Create { target } => Some([Some(*target), None]),
+            Self::Rotate { target, .. } | Self::Fade { target, .. } | Self::Create { target } => {
+                Some([Some(*target), None])
+            }
             Self::Composition { .. } => None,
         };
         let children = match self {
             Self::Composition { children, .. } => children.as_slice(),
-            Self::TransformTo { .. } | Self::Fade { .. } | Self::Create { .. } => &[],
+            Self::TransformTo { .. }
+            | Self::Rotate { .. }
+            | Self::Fade { .. }
+            | Self::Create { .. } => &[],
         };
         leaf.into_iter()
             .flatten()
@@ -85,10 +97,18 @@ impl SemanticTransactionAnimation {
             SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
+                interpolation,
             } => SemanticTransactionAnimationIntent::TransformTo {
                 target: (*target).into(),
                 target_state: (*target_state).into(),
+                interpolation: *interpolation,
             },
+            SemanticAnimationIntent::Rotate { target, angle } => {
+                SemanticTransactionAnimationIntent::Rotate {
+                    target: (*target).into(),
+                    angle: *angle,
+                }
+            }
             SemanticAnimationIntent::Fade { target, direction } => {
                 SemanticTransactionAnimationIntent::Fade {
                     target: (*target).into(),
@@ -118,10 +138,18 @@ impl SemanticTransactionAnimation {
             SemanticTransactionAnimationIntent::TransformTo {
                 target,
                 target_state,
+                interpolation,
             } => SemanticAnimationIntent::TransformTo {
                 target: resolve_node_ref(*target, committed),
                 target_state: resolve_node_ref(*target_state, committed),
+                interpolation: *interpolation,
             },
+            SemanticTransactionAnimationIntent::Rotate { target, angle } => {
+                SemanticAnimationIntent::Rotate {
+                    target: resolve_node_ref(*target, committed),
+                    angle: *angle,
+                }
+            }
             SemanticTransactionAnimationIntent::Fade { target, direction } => {
                 SemanticAnimationIntent::Fade {
                     target: resolve_node_ref(*target, committed),
@@ -171,6 +199,7 @@ pub(super) fn preflight_transaction_animation(
         SemanticTransactionAnimationIntent::TransformTo {
             target,
             target_state,
+            ..
         } => {
             catalog.ensure_animation_target(*target, index)?;
             catalog.ensure_animation_target(*target_state, index)?;
@@ -196,6 +225,13 @@ pub(super) fn preflight_transaction_animation(
                         }
                     }
                 });
+            }
+        }
+        SemanticTransactionAnimationIntent::Rotate { target, angle } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if !angle.is_finite() {
+                return Err(SemanticMutationTransactionError::InvalidAnimationAngle { index });
             }
         }
         SemanticTransactionAnimationIntent::Fade { target, .. } => {
@@ -264,9 +300,18 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::TransformTo {
             target,
             target_state,
+            interpolation,
         } => store
-            .insert_semantic_transform_animation(*target, *target_state, options)
+            .insert_semantic_transform_animation_with_interpolation(
+                *target,
+                *target_state,
+                *interpolation,
+                options,
+            )
             .expect("preflighted semantic animation insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::Rotate { target, angle } => store
+            .insert_semantic_rotate_animation(*target, *angle, options)
+            .expect("preflighted semantic Rotate insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Fade { target, direction } => store
             .insert_semantic_fade_animation(*target, *direction, options)
             .expect("preflighted semantic fade insertion must remain valid while transaction owns the store"),

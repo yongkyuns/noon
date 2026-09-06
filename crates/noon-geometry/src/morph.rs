@@ -698,9 +698,10 @@ impl From<MorphError> for FilledMorphError {
 ///
 /// The supported class is one simple closed contour whose source and target
 /// are both star-shaped around their area centroids, with every center-fan
-/// triangle retaining positive orientation for the complete linear morph.
-/// This gives one provably fixed triangle topology and rejects cases that would
-/// require per-frame triangulation or could invert triangles during playback.
+/// triangle retaining its winding for the complete linear morph. A triangle
+/// may collapse at an isolated interior instant, but both endpoints must have
+/// positive area and the interpolation may not invert. This gives one fixed
+/// triangle topology without per-frame triangulation.
 pub fn plan_filled_morph(
     source: &VectorPath,
     target: &VectorPath,
@@ -767,7 +768,7 @@ fn plan_filled_morph_impl(
     }
     for index in 0..count {
         let next = (index + 1) % count;
-        let minimum = minimum_triangle_orientation_over_interval(
+        let orientation = triangle_orientation_over_interval(
             source_center,
             target_center,
             contour.source_points[index],
@@ -775,7 +776,7 @@ fn plan_filled_morph_impl(
             contour.source_points[next],
             contour.target_points[next],
         );
-        if !minimum.is_finite() || minimum <= FILL_AREA_EPSILON as f64 {
+        if !orientation.is_valid_non_inverting() {
             return Err(FilledMorphError::NoStableFanTriangulation);
         }
     }
@@ -924,40 +925,70 @@ fn point_on_segment(point: Vec2, start: Vec2, end: Vec2) -> bool {
         && point.y <= start.y.max(end.y) + epsilon
 }
 
-fn minimum_triangle_orientation_over_interval(
+#[derive(Clone, Copy, Debug)]
+struct TriangleOrientationInterval {
+    start: f64,
+    end: f64,
+    minimum: f64,
+    numerical_tolerance: f64,
+}
+
+impl TriangleOrientationInterval {
+    fn is_valid_non_inverting(self) -> bool {
+        self.start.is_finite()
+            && self.end.is_finite()
+            && self.minimum.is_finite()
+            && self.start > FILL_AREA_EPSILON as f64
+            && self.end > FILL_AREA_EPSILON as f64
+            && self.minimum >= -self.numerical_tolerance
+    }
+}
+
+fn triangle_orientation_over_interval(
     source_center: Vec2,
     target_center: Vec2,
     source_a: Vec2,
     target_a: Vec2,
     source_b: Vec2,
     target_b: Vec2,
-) -> f64 {
-    let a0 = Vec2::new(source_a.x - source_center.x, source_a.y - source_center.y);
-    let b0 = Vec2::new(source_b.x - source_center.x, source_b.y - source_center.y);
-    let center_delta = Vec2::new(
-        target_center.x - source_center.x,
-        target_center.y - source_center.y,
-    );
-    let da = Vec2::new(
-        target_a.x - source_a.x - center_delta.x,
-        target_a.y - source_a.y - center_delta.y,
-    );
-    let db = Vec2::new(
-        target_b.x - source_b.x - center_delta.x,
-        target_b.y - source_b.y - center_delta.y,
-    );
-    let c0 = cross(a0, b0) as f64;
-    let c1 = (cross(da, b0) + cross(a0, db)) as f64;
-    let c2 = cross(da, db) as f64;
+) -> TriangleOrientationInterval {
+    let relative = |point: Vec2, center: Vec2| {
+        (
+            f64::from(point.x) - f64::from(center.x),
+            f64::from(point.y) - f64::from(center.y),
+        )
+    };
+    let a0 = relative(source_a, source_center);
+    let b0 = relative(source_b, source_center);
+    let a1 = relative(target_a, target_center);
+    let b1 = relative(target_b, target_center);
+    let da = (a1.0 - a0.0, a1.1 - a0.1);
+    let db = (b1.0 - b0.0, b1.1 - b0.1);
+    let cross64 = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
+    let c0 = cross64(a0, b0);
+    let c1 = cross64(da, b0) + cross64(a0, db);
+    let c2 = cross64(da, db);
     let evaluate = |time: f64| c0 + c1 * time + c2 * time * time;
-    let mut minimum = evaluate(0.0).min(evaluate(1.0));
+    let start = evaluate(0.0);
+    let end = evaluate(1.0);
+    let mut minimum = start.min(end);
     if c2 > 0.0 {
         let critical = -c1 / (2.0 * c2);
         if (0.0..1.0).contains(&critical) {
             minimum = minimum.min(evaluate(critical));
         }
     }
-    minimum
+    // Compute coefficients and the minimum in f64 from the f32 geometry,
+    // avoiding f32 cancellation before testing the tangent. Permit only the rounding-sized negative residue of
+    // an otherwise tangential collapse; a material negative minimum would
+    // reverse a fixed fan triangle and still fails validation.
+    let numerical_tolerance = f64::EPSILON * 64.0 * (c0.abs() + c1.abs() + c2.abs()).max(1.0);
+    TriangleOrientationInterval {
+        start,
+        end,
+        minimum,
+        numerical_tolerance,
+    }
 }
 
 #[cfg(test)]
@@ -1035,6 +1066,40 @@ mod tests {
             .points
             .iter()
             .all(|point| (point.y - 1.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn preserving_order_filled_half_turn_keeps_a_fixed_fan_through_collapse() {
+        let source = square_from(0, false);
+        // This is the same square rotated by π while retaining point
+        // correspondence. Every fan triangle collapses at t=0.5, then resumes
+        // with the original winding; no retessellation is required.
+        let target = square_from(2, false);
+
+        let plan = plan_filled_morph_preserving_order(&source, &target, MorphOptions::DEFAULT)
+            .expect("a tangential interior collapse keeps its fixed fan");
+        let midpoint = plan.interpolate_vertices(0.5);
+
+        assert!(plan.vertex_count() >= 5);
+        assert!(midpoint.iter().all(|point| point.x.abs() < 1.0e-6));
+        assert!(midpoint.iter().all(|point| point.y.abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn filled_fan_still_rejects_an_interior_winding_reversal() {
+        let orientation = triangle_orientation_over_interval(
+            Vec2::ZERO,
+            Vec2::ZERO,
+            Vec2::new(1.0, 0.0),
+            Vec2::new(-1.0, 0.0),
+            Vec2::new(0.0, 1.0),
+            Vec2::new(0.0, -2.0),
+        );
+
+        assert!(orientation.start > 0.0);
+        assert!(orientation.end > 0.0);
+        assert!(orientation.minimum < 0.0);
+        assert!(!orientation.is_valid_non_inverting());
     }
 
     #[test]

@@ -97,7 +97,24 @@ fn target_style_from_effective(
 pub struct TransformToRequest<'a> {
     source: &'a Mobject,
     target_state: &'a Mobject,
+    interpolation: noon_core::SemanticTransformInterpolation,
     options: AnimationOptions,
+}
+
+/// One typed leaf in an atomic live animation composition.
+#[derive(Clone, Copy)]
+pub enum AnimationCompositionRequest<'a> {
+    /// Transform a source toward an authored target using the requested interpolation.
+    TransformTo(TransformToRequest<'a>),
+    /// Rotate a centered 2D leaf along an angular path.
+    Rotate {
+        /// The authored semantic object affected by this leaf.
+        target: &'a Mobject,
+        /// Signed 2D rotation in radians.
+        angle: f64,
+        /// Leaf-local authored timing options.
+        options: AnimationOptions,
+    },
 }
 
 impl<'a> TransformToRequest<'a> {
@@ -109,6 +126,21 @@ impl<'a> TransformToRequest<'a> {
         Self {
             source,
             target_state,
+            interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            options,
+        }
+    }
+
+    /// Request analytic point correspondence rather than affine-only interpolation.
+    pub const fn point_correspondence(
+        source: &'a Mobject,
+        target_state: &'a Mobject,
+        options: AnimationOptions,
+    ) -> Self {
+        Self {
+            source,
+            target_state,
+            interpolation: noon_core::SemanticTransformInterpolation::PointCorrespondence,
             options,
         }
     }
@@ -615,22 +647,78 @@ impl<'a> LiveSession<'a> {
         }
         let children = children
             .iter()
-            .map(|child| {
-                (
-                    child.source.node_id(),
-                    child.target_state.node_id(),
-                    child.options,
-                )
-            })
+            .map(
+                |child| crate::execution_session::SemanticCompositionRequest::TransformTo {
+                    source: child.source.node_id(),
+                    target_state: child.target_state.node_id(),
+                    interpolation: child.interpolation,
+                    options: child.options,
+                },
+            )
             .collect::<Vec<_>>();
         let mut store = self.store.borrow_mut();
         self.session
-            .declare_and_activate_transform_composition(
+            .declare_and_activate_mixed_composition(
                 &mut store,
                 kind,
                 &children,
                 composition_options,
                 play_options,
+                None,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Atomically admit detached leaves and activate mixed point-transform/angular-path leaves.
+    pub fn declare_and_activate_animation_composition(
+        &mut self,
+        kind: SemanticAnimationCompositionKind,
+        children: &[AnimationCompositionRequest<'_>],
+        composition_options: AnimationOptions,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        for child in children {
+            match child {
+                AnimationCompositionRequest::TransformTo(child) => {
+                    self.require_mobject(child.source)?;
+                    self.require_mobject(child.target_state)?;
+                }
+                AnimationCompositionRequest::Rotate { target, .. } => {
+                    self.require_mobject(target)?;
+                }
+            }
+        }
+        let children = children
+            .iter()
+            .map(|child| match child {
+                AnimationCompositionRequest::TransformTo(child) => {
+                    crate::execution_session::SemanticCompositionRequest::TransformTo {
+                        source: child.source.node_id(),
+                        target_state: child.target_state.node_id(),
+                        interpolation: child.interpolation,
+                        options: child.options,
+                    }
+                }
+                AnimationCompositionRequest::Rotate {
+                    target,
+                    angle,
+                    options,
+                } => crate::execution_session::SemanticCompositionRequest::Rotate {
+                    target: target.node_id(),
+                    angle: *angle,
+                    options: *options,
+                },
+            })
+            .collect::<Vec<_>>();
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_mixed_composition(
+                &mut store,
+                kind,
+                &children,
+                composition_options,
+                play_options,
+                Some(self.root),
             )
             .map_err(Into::into)
     }
@@ -1764,6 +1852,140 @@ mod tests {
         assert_eq!(session.frame(), &before_frame);
         assert_eq!(circle.store().borrow().len(), before_nodes);
         assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn mixed_composition_rejects_foreign_leaf_before_detached_admission() {
+        let scene = Scene::new();
+        let square = scene.rectangle(2.0, 2.0).unwrap();
+        let mut target = square.target_editor().unwrap();
+        target.rotate(std::f64::consts::PI).unwrap();
+        let foreign = Scene::new().rectangle(2.0, 2.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_frame = session.frame().clone();
+        let before_nodes = square.store().borrow().len();
+        let children = [
+            AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                &square,
+                &target,
+                AnimationOptions::new(),
+            )),
+            AnimationCompositionRequest::Rotate {
+                target: &foreign,
+                angle: std::f64::consts::PI,
+                options: AnimationOptions::new(),
+            },
+        ];
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &children,
+                AnimationOptions::new(),
+                AnimationOptions::new().run_time(2.0),
+            );
+
+        assert!(matches!(result, Err(LiveSessionError::ForeignMobjectStore)));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(session.frame(), &before_frame);
+        assert_eq!(square.store().borrow().len(), before_nodes);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn unsupported_point_correspondence_rolls_back_detached_admission() {
+        let scene = Scene::new();
+        let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+        let mut target = line.target_editor().unwrap();
+        target.rotate(std::f64::consts::PI).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = line.store().borrow().len();
+
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[AnimationCompositionRequest::TransformTo(
+                    TransformToRequest::point_correspondence(
+                        &line,
+                        &target,
+                        AnimationOptions::new(),
+                    ),
+                )],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            );
+
+        assert!(matches!(
+            &result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::PreparedAnimation(
+                    noon_compile::PreparedSemanticAnimationLoweringError::UnsupportedPointCorrespondence { .. }
+                )
+            ))
+        ), "unexpected rejection: {result:?}");
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(line.store().borrow().len(), before_nodes);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn mixed_sequence_preserves_rotate_before_transform_order() {
+        let scene = Scene::new();
+        let rotating = scene.square(1.0).unwrap();
+        let moving = scene.square(1.0).unwrap();
+        let mut moving_target = moving.target_editor().unwrap();
+        moving_target.set_translation(2.0, 0.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &[
+                    AnimationCompositionRequest::Rotate {
+                        target: &rotating,
+                        angle: std::f64::consts::PI,
+                        options,
+                    },
+                    AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                        &moving,
+                        &moving_target,
+                        options,
+                    )),
+                ],
+                AnimationOptions::new().lag_ratio(1.0),
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+        let mut live = scene.live(&mut session);
+        live.advance_segment_to(segment, 0.5).unwrap();
+        assert!(
+            (live.effective(&rotating).unwrap().transform.rotation - std::f32::consts::FRAC_PI_2)
+                .abs()
+                < 1e-5
+        );
+        assert_eq!(
+            live.effective(&moving).unwrap().transform.translation,
+            noon_core::Vec2::ZERO
+        );
+        live.advance_segment_to(segment, 1.5).unwrap();
+        assert!(
+            (live.effective(&rotating).unwrap().transform.rotation - std::f32::consts::PI).abs()
+                < 1e-5
+        );
+        assert_eq!(
+            live.effective(&moving).unwrap().transform.translation,
+            noon_core::Vec2::new(1.0, 0.0)
+        );
     }
 
     #[test]

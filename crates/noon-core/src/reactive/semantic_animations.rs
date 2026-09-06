@@ -19,12 +19,22 @@ pub enum SemanticFadeDirection {
     Out,
 }
 
+/// Geometry interpolation chosen explicitly by an authored TransformTo operation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SemanticTransformInterpolation {
+    /// Interpolate the object's semantic affine and style properties.
+    #[default]
+    Affine,
+    /// Interpolate corresponding analytic path points while retaining semantic affine channels.
+    PointCorrespondence,
+}
+
 /// One authored animation operation before execution scheduling/lowering.
 ///
 /// Targets and composition children are semantic identities. Execution tracks,
 /// runtime slots, retained object IDs, transport IDs, and resolved intervals are
 /// deliberately absent.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationIntent {
     /// Transform one semantic object toward the authored state of another semantic
     /// object. The target-state node is a semantic reference, not an execution
@@ -32,7 +42,11 @@ pub enum SemanticAnimationIntent {
     TransformTo {
         target: SemanticNodeId,
         target_state: SemanticNodeId,
+        interpolation: SemanticTransformInterpolation,
     },
+    /// Rotate one centered 2D object along an angular path. This remains distinct
+    /// from TransformTo point correspondence even when both share affine endpoints.
+    Rotate { target: SemanticNodeId, angle: f64 },
     /// Fade one semantic leaf through the shared runtime appearance channel.
     /// Membership entry/exit is applied atomically by live activation/completion.
     Fade {
@@ -56,6 +70,7 @@ impl SemanticAnimationIntent {
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target, .. }
+            | Self::Rotate { target, .. }
             | Self::Fade { target, .. }
             | Self::Create { target } => Some(*target),
             Self::Composition { .. } => None,
@@ -65,20 +80,29 @@ impl SemanticAnimationIntent {
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target_state, .. } => Some(*target_state),
-            Self::Fade { .. } | Self::Create { .. } | Self::Composition { .. } => None,
+            Self::Rotate { .. }
+            | Self::Fade { .. }
+            | Self::Create { .. }
+            | Self::Composition { .. } => None,
         }
     }
 
     pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
         match self {
-            Self::TransformTo { .. } | Self::Fade { .. } | Self::Create { .. } => None,
+            Self::TransformTo { .. }
+            | Self::Rotate { .. }
+            | Self::Fade { .. }
+            | Self::Create { .. } => None,
             Self::Composition { kind, .. } => Some(*kind),
         }
     }
 
     pub fn children(&self) -> &[SemanticNodeId] {
         match self {
-            Self::TransformTo { .. } | Self::Fade { .. } | Self::Create { .. } => &[],
+            Self::TransformTo { .. }
+            | Self::Rotate { .. }
+            | Self::Fade { .. }
+            | Self::Create { .. } => &[],
             Self::Composition { children, .. } => children,
         }
     }
@@ -117,6 +141,7 @@ pub enum SemanticAnimationError {
     Target(SemanticSceneOperationError),
     Options(AnimationOptionsError),
     SameTargetAndTargetState(SemanticNodeId),
+    InvalidRotationAngle(f64),
 }
 
 impl std::fmt::Display for SemanticAnimationError {
@@ -145,6 +170,9 @@ impl std::fmt::Display for SemanticAnimationError {
                 id.slot(),
                 id.generation()
             ),
+            Self::InvalidRotationAngle(angle) => {
+                write!(formatter, "rotation angle must be finite, got {angle}")
+            }
         }
     }
 }
@@ -197,6 +225,22 @@ impl SemanticStore {
         target_state: SemanticNodeId,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_transform_animation_with_interpolation(
+            target,
+            target_state,
+            SemanticTransformInterpolation::Affine,
+            options,
+        )
+    }
+
+    /// Insert one TransformTo declaration with an explicit geometry interpolation contract.
+    pub fn insert_semantic_transform_animation_with_interpolation(
+        &mut self,
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+        interpolation: SemanticTransformInterpolation,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
         self.semantic_object_state_checked(target_state)?;
@@ -210,6 +254,7 @@ impl SemanticStore {
                 SemanticAnimationIntent::TransformTo {
                     target,
                     target_state,
+                    interpolation,
                 },
                 options,
             )),
@@ -229,6 +274,27 @@ impl SemanticStore {
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::Fade { target, direction },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one centered 2D angular-path rotation declaration.
+    pub fn insert_semantic_rotate_animation(
+        &mut self,
+        target: SemanticNodeId,
+        angle: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if !angle.is_finite() {
+            return Err(SemanticAnimationError::InvalidRotationAngle(angle));
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Rotate { target, angle },
                 options,
             )),
         )
@@ -354,6 +420,7 @@ mod tests {
             &SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
+                interpolation: SemanticTransformInterpolation::Affine,
             }
         );
         assert_eq!(state.options(), options);

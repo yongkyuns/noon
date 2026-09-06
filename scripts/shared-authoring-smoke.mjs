@@ -487,6 +487,7 @@ try {
     expectedFinalColor = null,
     expectedComposition = false,
     expectedCamera = false,
+    expectedDifferentRotations = false,
   } of [
     {
       filename: "live_semantic_scene.py",
@@ -571,6 +572,13 @@ try {
       expectedFinalCenter: [0, 0],
     },
     {
+      filename: "manim_parity_different_rotations.py",
+      objectCount: 2,
+      expectedDuration: 3,
+      endpointTime: null,
+      expectedDifferentRotations: true,
+    },
+    {
       filename: "manim_example_move_to_target.py",
       objectCount: 1,
       expectedDuration: 1,
@@ -624,6 +632,7 @@ try {
       expectedFinalCenter,
       expectedComposition,
       expectedCamera,
+      expectedDifferentRotations,
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -691,13 +700,13 @@ try {
           const rendered = await waitForFrame(initial.presentedFrames);
           endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
         }
-        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera;
+        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera || expectedDifferentRotations;
         if (retainForInspection) harness.liveExampleExecution = execution;
         return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, expectedDifferentRotations, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     if (objectCount === 0) {
       assert.equal(result.metrics.drawCalls, 0, `${filename}: removed object still draws`);
@@ -782,6 +791,21 @@ try {
         `${filename}: camera-relative square position is wrong: ${JSON.stringify(square)}`,
       );
     }
+    if (expectedDifferentRotations) {
+      // This source owns a live continuation, so inspect only its completed view.
+      // The direct Rust proof samples the distinct midpoint interpolation paths.
+      const view = await page.locator(`#${result.canvasId}`).screenshot();
+      const left = renderedWorldPixel(view, -2, 0);
+      const right = renderedWorldPixel(view, 2, 0);
+      assert.ok(
+        left.blue > left.red + 25 && left.blue > left.green + 10,
+        `${filename}: final left square is not blue: ${JSON.stringify(left)}`,
+      );
+      assert.ok(
+        right.green > right.red + 25 && right.green > right.blue + 10,
+        `${filename}: final right square is not green: ${JSON.stringify(right)}`,
+      );
+    }
     if (expectText) {
       const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
       const pixels = staticTextColor === "yellow"
@@ -794,7 +818,7 @@ try {
         assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
       }
     }
-    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera) {
+    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera || expectedDifferentRotations) {
       await page.evaluate(() => {
         window.sharedAuthoringSmoke.liveExampleExecution.terminate();
         window.sharedAuthoringSmoke.liveExampleExecution = null;

@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -666,7 +667,7 @@ def _canonical_affine_animation(
         source, target = animation.source, animation.target
     else:
         return None
-    if not isinstance(source, _base.Mobject) or source._scene is not scene:
+    if not isinstance(source, _base.Mobject) or source._scene not in (None, scene):
         return None
     if getattr(source, "_semantic_handle", None) is None:
         return None
@@ -1213,13 +1214,31 @@ def _play_canonical_fade(
     return self
 
 
-def _canonical_composition_shape(args: tuple[object, ...]):
+def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
     """Return one flat Rust composition request shape without scheduling it."""
     if len(args) == 1 and isinstance(args[0], _composition.Succession):
         group = args[0]
         return "sequence", tuple(group.animations), group
     if len(args) > 1:
         return "parallel", args, None
+    if len(args) == 1:
+        import _manim_rotate as _rotate
+
+        animation = args[0]
+        if type(animation) is _rotate.Rotate:
+            return "parallel", args, None
+        affine = _canonical_affine_animation(scene, animation)
+        if affine is not None and type(animation) in (
+            _base._AnimationBuilder,
+            _compat._CompatAnimationBuilder,
+        ):
+            source, target, _ = affine
+            if not math.isclose(
+                float(getattr(source, "_semantic_handle").wireRotation),
+                float(getattr(target, "_semantic_handle").wireRotation),
+                abs_tol=1e-12,
+            ):
+                return "parallel", args, None
     return None
 
 
@@ -1274,7 +1293,42 @@ def _build_canonical_composition_candidate(
     group: object | None,
     kwargs: dict[str, object],
 ):
-    classified = [_canonical_affine_animation(self, animation) for animation in animations]
+    import _manim_rotate as _rotate
+
+    classified = []
+    for animation in animations:
+        affine = _canonical_affine_animation(self, animation)
+        if affine is not None:
+            source, target, animation = affine
+            source_handle = getattr(source, "_semantic_handle")
+            target_handle = getattr(target, "_semantic_handle")
+            builder_rotation = type(animation) in (
+                _base._AnimationBuilder,
+                _compat._CompatAnimationBuilder,
+            ) and not math.isclose(
+                float(source_handle.wireRotation),
+                float(target_handle.wireRotation),
+                abs_tol=1e-12,
+            )
+            classified.append(
+                ("point_transform" if builder_rotation else "transform", source, target, animation)
+            )
+            continue
+        if type(animation) is _rotate.Rotate:
+            target = animation.mobject
+            if not isinstance(target, _base.Mobject) or getattr(target, "_semantic_handle", None) is None:
+                classified.append(None)
+                continue
+            if target._scene not in (None, self):
+                raise NotImplementedError("canonical Rotate target belongs to another Scene")
+            center = target.get_center()
+            pivot = _compat._as_vec2(animation.about_point)
+            if not (math.isclose(center.x, pivot.x, abs_tol=1e-9) and math.isclose(center.y, pivot.y, abs_tol=1e-9)):
+                raise NotImplementedError("canonical Rotate requires the object's center pivot")
+            angle = float(animation.angle) * _rotate._axis_sign(animation.axis)
+            classified.append(("rotate", target, angle, animation))
+            continue
+        classified.append(None)
     present = [leaf for leaf in classified if leaf is not None]
     if not present:
         return None
@@ -1309,27 +1363,72 @@ def _build_canonical_composition_candidate(
         composition_lag_ratio,
         play_run_time,
     )
-    for source, target, animation in present:
+    reservations = []
+    next_object_id = self._next_object_id
+    for leaf_kind, source, target, animation in present:
         # Implicit parallel play options apply to its top-level animations;
         # explicit Succession owns its root options and preserves child curves.
         child = _canonical_composition_child_options(
             animation, kwargs if group is None else {},
         )
-        candidate.appendTransformTo(
-            getattr(source, "_semantic_handle"),
-            getattr(target, "_semantic_handle"),
-            float(child.run_time),
-            str(child.rate_func),
-        )
+        if leaf_kind in ("transform", "point_transform"):
+            point_correspondence = leaf_kind == "point_transform"
+            if source._scene is None:
+                reservation = _reserve_typed_binding(source, self, getattr(source, "_semantic_handle"), None, object_id=next_object_id)
+                reservations.append((source, reservation))
+                next_object_id += 1
+                method = (
+                    candidate.appendEnteringPointTransformTo
+                    if point_correspondence
+                    else candidate.appendEnteringTransformTo
+                )
+                method(
+                    str(reservation.object.id),
+                    getattr(source, "_semantic_handle"),
+                    getattr(target, "_semantic_handle"),
+                    float(child.run_time),
+                    str(child.rate_func),
+                )
+            else:
+                method = (
+                    candidate.appendPointTransformTo
+                    if point_correspondence
+                    else candidate.appendTransformTo
+                )
+                method(
+                    getattr(source, "_semantic_handle"),
+                    getattr(target, "_semantic_handle"),
+                    float(child.run_time),
+                    str(child.rate_func),
+                )
+        else:
+            if source._scene is None:
+                reservation = _reserve_typed_binding(source, self, getattr(source, "_semantic_handle"), None, object_id=next_object_id)
+                reservations.append((source, reservation))
+                next_object_id += 1
+                candidate.appendRotate(
+                    str(reservation.object.id),
+                    getattr(source, "_semantic_handle"),
+                    float(target),
+                    float(child.run_time),
+                    str(child.rate_func),
+                )
+            else:
+                candidate.appendBoundRotate(
+                    getattr(source, "_semantic_handle"),
+                    float(target),
+                    float(child.run_time),
+                    str(child.rate_func),
+                )
     try:
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:
         raise ValueError(str(error)) from None
-    return candidate if supported else False
+    return (candidate, reservations) if supported else False
 
 
 def _play_canonical_composition(
-    self: _base.Scene, candidate: object
+    self: _base.Scene, candidate: object, reservations: list[tuple[_base.Mobject, object]]
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     if getattr(self, "_legacy_geometry_materialized", False):
         raise NotImplementedError(
@@ -1350,6 +1449,12 @@ def _play_canonical_composition(
             context.ordinaryPlayComposition(candidate)
     except Exception as error:
         raise ValueError(str(error)) from None
+    for source, reservation in reservations:
+        handle = getattr(source, "_semantic_handle")
+        _commit_typed_binding(source, self, reservation, handle)
+        register = getattr(self, "_register_top_level", None)
+        if register is not None:
+            register(source)
     if _async_continuation_active(self):
         return _continuation_awaitable(self)
     if _synchronous_continuation_active(self):
@@ -1464,7 +1569,7 @@ def _play(self, *args, **kwargs):
             kwargs=kwargs,
         )
 
-    if (shape := _canonical_composition_shape(args)) is not None:
+    if (shape := _canonical_composition_shape(self, args)) is not None:
         kind, animations, group = shape
         try:
             candidate = _build_canonical_composition_candidate(
@@ -1484,7 +1589,8 @@ def _play(self, *args, **kwargs):
                 )
             return _play_legacy_compatibility(self, *args, **kwargs)
         if candidate is not None:
-            return _play_canonical_composition(self, candidate)
+            candidate, reservations = candidate
+            return _play_canonical_composition(self, candidate, reservations)
 
     canonical_affine = [
         classified

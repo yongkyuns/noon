@@ -18,6 +18,24 @@ use crate::{
     RetainedTrackAuthoringSpec,
 };
 
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone)]
+enum OrdinaryCompositionChild {
+    TransformTo {
+        entering_id: Option<ObjectId>,
+        source: noon::Mobject,
+        target: noon::Mobject,
+        interpolation: noon_core::SemanticTransformInterpolation,
+        options: noon_core::AnimationOptions,
+    },
+    Rotate {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        angle: f64,
+        options: noon_core::AnimationOptions,
+    },
+}
+
 /// One scene family in the worker's shared semantic store.
 /// Geometry bindings retain identity only. Source-level text remains a deletion-owned
 /// export adapter (#959); it cannot enter geometry-only typed execution silently.
@@ -1142,18 +1160,15 @@ impl CanonicalAuthoringScene {
         player.live_declare_and_activate_transform_to(source, target, options)
     }
 
-    /// Run one flat Parallel/Sequence candidate through the shared prepared
-    /// semantic transaction and retained session. The candidate owns no IDs,
-    /// intervals, clock, or execution state.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn ordinary_play_transform_composition(
+    fn ordinary_play_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
-        children: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        let end_time = self.activate_ordinary_composition(
+        let end = self.activate_ordinary_mixed_composition(
             kind,
             children,
             composition_options,
@@ -1161,48 +1176,40 @@ impl CanonicalAuthoringScene {
             false,
         )?;
         let player = self.active_live_player()?;
-        player.live_advance_segment_to(end_time)?;
+        player.live_advance_segment_to(end)?;
         player.live_complete_segment()?;
         player
             .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+            .ok_or_else(|| "live execution player has no handoff duration".into())
     }
 
-    /// Atomically declare and activate one flat Parallel/Sequence candidate
-    /// without advancing its shared execution segment.
-    ///
-    /// Handle provenance and option support are checked before a first player
-    /// bootstrap. Required callbacks remain part of that one lowered session;
-    /// the continuation host services their barriers while driving the retained
-    /// segment.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_composition(
+    fn begin_ordinary_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
-        children: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        self.activate_ordinary_composition(kind, children, composition_options, play_options, true)
+        self.activate_ordinary_mixed_composition(
+            kind,
+            children,
+            composition_options,
+            play_options,
+            true,
+        )
     }
 
-    /// Shared activation path for endpoint-only and continuation composition.
-    /// A first execution player remains provisional until activation succeeds.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn activate_ordinary_composition(
+    fn activate_ordinary_mixed_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
-        children: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
         allow_required_callbacks: bool,
     ) -> Result<f64, String> {
-        if !self.can_ordinary_transform_composition(children, composition_options, play_options)? {
-            return Err("ordinary transform composition payload is not yet supported".into());
-        }
-
-        // The provisional extent is replaced immediately by the authoritative
-        // endpoint returned from the shared prepared composition schedule.
+        self.validate_ordinary_mixed_composition(children, composition_options, play_options)?;
         let bootstrap_duration = self
             .live_handoff_duration()
             .unwrap_or_else(|| self.scene.time())
@@ -1214,20 +1221,43 @@ impl CanonicalAuthoringScene {
             );
         let requests = children
             .iter()
-            .map(|(source, target, options)| {
-                noon::TransformToRequest::new(source, target, *options)
+            .map(|child| match child {
+                OrdinaryCompositionChild::TransformTo {
+                    source,
+                    target,
+                    interpolation,
+                    options,
+                    ..
+                } => {
+                    let request = match interpolation {
+                        noon_core::SemanticTransformInterpolation::Affine => {
+                            noon::TransformToRequest::new(source, target, *options)
+                        }
+                        noon_core::SemanticTransformInterpolation::PointCorrespondence => {
+                            noon::TransformToRequest::point_correspondence(source, target, *options)
+                        }
+                    };
+                    noon::AnimationCompositionRequest::TransformTo(request)
+                }
+                OrdinaryCompositionChild::Rotate {
+                    target,
+                    angle,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::Rotate {
+                    target,
+                    angle: *angle,
+                    options: *options,
+                },
             })
             .collect::<Vec<_>>();
-        if self.live_player.is_none() {
+        let end = if self.live_player.is_none() {
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
             if !allow_required_callbacks && player.has_required_callbacks() {
-                return Err(
-                    "ordinary composition with required callbacks needs an asynchronous continuation"
-                        .into(),
-                );
+                return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }
-            let end_time = player.live_declare_and_activate_transform_composition(
+            let end = player.live_declare_and_activate_animation_composition(
                 kind,
                 &requests,
                 composition_options,
@@ -1235,22 +1265,38 @@ impl CanonicalAuthoringScene {
             )?;
             self.live_player = Some(player);
             self.live_player_returned = false;
-            return Ok(end_time);
+            end
+        } else {
+            let player = self.active_live_player()?;
+            if !allow_required_callbacks && player.has_required_callbacks() {
+                return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
+            }
+            player.live_declare_and_activate_animation_composition(
+                kind,
+                &requests,
+                composition_options,
+                play_options,
+            )?
+        };
+        for child in children {
+            let (Some(id), target) = (match child {
+                OrdinaryCompositionChild::TransformTo {
+                    entering_id,
+                    source,
+                    ..
+                } => (*entering_id, source),
+                OrdinaryCompositionChild::Rotate {
+                    entering_id,
+                    target,
+                    ..
+                } => (*entering_id, target),
+            }) else {
+                continue;
+            };
+            self.bindings.insert(id, target.node_id());
+            self.identities.insert(target.node_id(), id);
         }
-
-        let player = self.active_live_player()?;
-        if !allow_required_callbacks && player.has_required_callbacks() {
-            return Err(
-                "ordinary composition with required callbacks needs an asynchronous continuation"
-                    .into(),
-            );
-        }
-        player.live_declare_and_activate_transform_composition(
-            kind,
-            &requests,
-            composition_options,
-            play_options,
-        )
+        Ok(end)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1286,17 +1332,15 @@ impl CanonicalAuthoringScene {
             .can_ordinary_transform_to(source, target, options)
     }
 
-    /// Check handle provenance and the shared leaf/root option policy without
-    /// creating or transferring an execution player.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn can_ordinary_transform_composition(
+    fn validate_ordinary_mixed_composition(
         &self,
-        children: &[(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)],
+        children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         if children.is_empty() {
-            return Err("ordinary transform composition requires at least one child".into());
+            return Err("ordinary composition requires at least one child".into());
         }
         noon_core::resolve_animation_options(
             noon_core::AnimationDefaults::MANIM,
@@ -1304,11 +1348,71 @@ impl CanonicalAuthoringScene {
             play_options,
         )
         .map_err(|error| error.to_string())?;
-        let mut supported = true;
-        for (source, target, options) in children {
-            supported &= self.can_ordinary_transform_to(source, target, *options)?;
+        let mut ids = BTreeSet::new();
+        let mut entering_nodes = BTreeSet::new();
+        for child in children {
+            let (entering_id, target, options) = match child {
+                OrdinaryCompositionChild::TransformTo {
+                    entering_id,
+                    source,
+                    target,
+                    options,
+                    ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                        return Err(
+                            "ordinary composition target belongs to another authoring store".into(),
+                        );
+                    }
+                    target.validate()?;
+                    if self.identities.contains_key(&target.node_id()) {
+                        return Err(
+                            "ordinary composition TransformTo target state must be detached".into(),
+                        );
+                    }
+                    (*entering_id, source, *options)
+                }
+                OrdinaryCompositionChild::Rotate {
+                    entering_id,
+                    target,
+                    angle,
+                    options,
+                } => {
+                    if !angle.is_finite() {
+                        return Err("ordinary Rotate angle must be finite".into());
+                    }
+                    (*entering_id, target, *options)
+                }
+            };
+            if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                return Err(
+                    "ordinary composition target belongs to another authoring store".into(),
+                );
+            }
+            target.validate()?;
+            noon_core::resolve_animation_options(
+                noon_core::AnimationDefaults::MANIM,
+                options,
+                noon_core::AnimationOptions::new(),
+            )
+            .map_err(|error| error.to_string())?;
+            match entering_id {
+                Some(id) => {
+                    if self.bindings.contains_key(&id)
+                        || self.identities.contains_key(&target.node_id())
+                        || !ids.insert(id)
+                        || !entering_nodes.insert(target.node_id())
+                    {
+                        return Err("ordinary composition requires unique detached targets and wrapper identities".into());
+                    }
+                }
+                None if !self.identities.contains_key(&target.node_id()) => {
+                    return Err("ordinary composition bound target has no wrapper identity".into());
+                }
+                None => {}
+            }
         }
-        Ok(supported)
+        Ok(())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1898,7 +2002,7 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmOrdinaryTransformCompositionBuilder {
         kind: noon_core::SemanticAnimationCompositionKind,
-        children: Vec<(noon::Mobject, noon::Mobject, noon_core::AnimationOptions)>,
+        children: Vec<OrdinaryCompositionChild>,
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     }
@@ -2058,6 +2162,63 @@ mod wasm {
         }
     }
 
+    impl WasmOrdinaryTransformCompositionBuilder {
+        fn push_transform(
+            &mut self,
+            entering_id: Option<ObjectId>,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            interpolation: noon_core::SemanticTransformInterpolation,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.children.push(OrdinaryCompositionChild::TransformTo {
+                entering_id,
+                source: source.semantic_mobject().clone(),
+                target: target.semantic_mobject().clone(),
+                interpolation,
+                options: noon_core::AnimationOptions::new()
+                    .run_time(child_run_time)
+                    .rate_func(rate_function),
+            });
+            Ok(())
+        }
+
+        fn push_rotate(
+            &mut self,
+            entering_id: Option<ObjectId>,
+            target: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            if !angle.is_finite() {
+                return Err(js_error("rotation angle must be finite"));
+            }
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.children.push(OrdinaryCompositionChild::Rotate {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                angle,
+                options: noon_core::AnimationOptions::new()
+                    .run_time(child_run_time)
+                    .rate_func(rate_function),
+            });
+            Ok(())
+        }
+    }
+
     #[wasm_bindgen]
     impl WasmOrdinaryTransformCompositionBuilder {
         #[wasm_bindgen(js_name = appendTransformTo)]
@@ -2068,20 +2229,99 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            self.children.push((
-                source.semantic_mobject().clone(),
-                target.semantic_mobject().clone(),
-                noon_core::AnimationOptions::new()
-                    .run_time(child_run_time)
-                    .rate_func(rate_function),
-            ));
-            Ok(())
+            self.push_transform(
+                None,
+                source,
+                target,
+                noon_core::SemanticTransformInterpolation::Affine,
+                child_run_time,
+                rate_function,
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendPointTransformTo)]
+        pub fn append_point_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            self.push_transform(
+                None,
+                source,
+                target,
+                noon_core::SemanticTransformInterpolation::PointCorrespondence,
+                child_run_time,
+                rate_function,
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendEnteringTransformTo)]
+        pub fn append_entering_transform_to(
+            &mut self,
+            object_id: &str,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            self.push_transform(
+                Some(parse_object_id("object ID", object_id)?),
+                source,
+                target,
+                noon_core::SemanticTransformInterpolation::Affine,
+                child_run_time,
+                rate_function,
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendEnteringPointTransformTo)]
+        pub fn append_entering_point_transform_to(
+            &mut self,
+            object_id: &str,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            self.push_transform(
+                Some(parse_object_id("object ID", object_id)?),
+                source,
+                target,
+                noon_core::SemanticTransformInterpolation::PointCorrespondence,
+                child_run_time,
+                rate_function,
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendRotate)]
+        pub fn append_rotate(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            self.push_rotate(
+                Some(parse_object_id("object ID", object_id)?),
+                target,
+                angle,
+                child_run_time,
+                rate_function,
+            )
+        }
+
+        #[wasm_bindgen(js_name = appendBoundRotate)]
+        pub fn append_bound_rotate(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            self.push_rotate(None, target, angle, child_run_time, rate_function)
         }
     }
 
@@ -2796,11 +3036,12 @@ mod wasm {
             candidate: &WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<bool, JsValue> {
             self.inner
-                .can_ordinary_transform_composition(
+                .validate_ordinary_mixed_composition(
                     &candidate.children,
                     candidate.composition_options,
                     candidate.play_options,
                 )
+                .map(|()| true)
                 .map_err(js_error)
         }
 
@@ -2810,7 +3051,7 @@ mod wasm {
             candidate: WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<f64, JsValue> {
             self.inner
-                .ordinary_play_transform_composition(
+                .ordinary_play_mixed_composition(
                     candidate.kind,
                     &candidate.children,
                     candidate.composition_options,
@@ -2828,7 +3069,7 @@ mod wasm {
             candidate: WasmOrdinaryTransformCompositionBuilder,
         ) -> Result<f64, JsValue> {
             self.inner
-                .begin_ordinary_composition(
+                .begin_ordinary_mixed_composition(
                     candidate.kind,
                     &candidate.children,
                     candidate.composition_options,
@@ -3769,6 +4010,20 @@ mod tests {
 
     use super::*;
 
+    fn bound_transform_child(
+        source: &noon::Mobject,
+        target: noon::Mobject,
+        options: AnimationOptions,
+    ) -> OrdinaryCompositionChild {
+        OrdinaryCompositionChild::TransformTo {
+            entering_id: None,
+            source: source.clone(),
+            target,
+            interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            options,
+        }
+    }
+
     #[test]
     fn typed_binding_shares_state_and_root_without_snapshot_synchronization() {
         use std::{cell::RefCell, rc::Rc};
@@ -4376,8 +4631,8 @@ mod tests {
             .run_time(2.0)
             .rate_func(RateFunction::Linear);
         let children = [
-            (left.clone(), left_target, child),
-            (right.clone(), right_target, child),
+            bound_transform_child(&left, left_target, child),
+            bound_transform_child(&right, right_target, child),
         ];
         let composition = AnimationOptions::new()
             .lag_ratio(0.0)
@@ -4385,28 +4640,30 @@ mod tests {
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
         let revision = context.scene.store().borrow().scene_revision();
 
-        assert!(context
-            .can_ordinary_transform_composition(&children, composition, play)
-            .unwrap());
+        context
+            .validate_ordinary_mixed_composition(&children, composition, play)
+            .unwrap();
         assert!(context.live_player.is_none());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         let mut unsupported_target = right.target_editor().unwrap();
         unsupported_target.set_stroke_width(3.0).unwrap();
+        let unsupported = [bound_transform_child(&right, unsupported_target, child)];
         let revision = context.scene.store().borrow().scene_revision();
-        assert!(!context
-            .can_ordinary_transform_composition(
-                &[(right.clone(), unsupported_target, child)],
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &unsupported,
                 composition,
                 play,
             )
-            .unwrap());
+            .is_err());
         assert!(context.live_player.is_none());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         assert_eq!(
             context
-                .ordinary_play_transform_composition(
+                .ordinary_play_mixed_composition(
                     noon_core::SemanticAnimationCompositionKind::Parallel,
                     &children,
                     composition,
@@ -4423,6 +4680,67 @@ mod tests {
         assert_eq!(
             player.live_effective(&right).unwrap().transform.translation,
             Vec2::new(2.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn mixed_sequence_keeps_rotate_before_transform_in_one_shared_segment() {
+        let mut context = CanonicalAuthoringScene::default();
+        let rotating = context.scene.square(0.8).unwrap();
+        let moving = context.scene.circle(0.4).unwrap();
+        let mut moving_target = moving.target_editor().unwrap();
+        moving_target.set_translation(2.0, 0.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &rotating).unwrap();
+        context.bind_mobject(ObjectId::new(1), &moving).unwrap();
+        let child = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            OrdinaryCompositionChild::Rotate {
+                entering_id: None,
+                target: rotating.clone(),
+                angle: std::f64::consts::PI,
+                options: child,
+            },
+            bound_transform_child(&moving, moving_target, child),
+        ];
+        let composition = AnimationOptions::new()
+            .lag_ratio(1.0)
+            .rate_func(RateFunction::Linear);
+        let play = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Sequence,
+                &children,
+                composition,
+                play,
+            )
+            .unwrap();
+        assert_eq!(end, 2.0);
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(0.5).unwrap();
+        assert_eq!(
+            player
+                .live_effective(&moving)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::ZERO
+        );
+        player.live_advance_segment_to(1.5).unwrap();
+        assert_eq!(
+            player
+                .live_effective(&moving)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(1.0, 0.0)
+        );
+        assert!(
+            (player.live_effective(&rotating).unwrap().transform.rotation - std::f32::consts::PI)
+                .abs()
+                < 1e-6
         );
     }
 
@@ -4449,8 +4767,8 @@ mod tests {
             .run_time(2.0)
             .rate_func(RateFunction::Linear);
         let children = [
-            (left.clone(), left_target, child),
-            (right.clone(), right_target, child),
+            bound_transform_child(&left, left_target, child),
+            bound_transform_child(&right, right_target, child),
         ];
         let composition = AnimationOptions::new()
             .lag_ratio(0.0)
@@ -4459,7 +4777,7 @@ mod tests {
 
         let revision = context.scene.store().borrow().scene_revision();
         let endpoint_only_error = context
-            .ordinary_play_transform_composition(
+            .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
                 &children,
                 composition,
@@ -4471,7 +4789,7 @@ mod tests {
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         let end_time = context
-            .begin_ordinary_composition(
+            .begin_ordinary_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
                 &children,
                 composition,
@@ -4558,8 +4876,8 @@ mod tests {
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
         let children = [
-            (source.clone(), first_target, child),
-            (source.clone(), second_target, child),
+            bound_transform_child(&source, first_target, child),
+            bound_transform_child(&source, second_target, child),
         ];
         let composition = AnimationOptions::new()
             .lag_ratio(0.0)
@@ -4568,7 +4886,7 @@ mod tests {
         let revision = context.scene.store().borrow().scene_revision();
 
         assert!(context
-            .begin_ordinary_composition(
+            .begin_ordinary_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
                 &children,
                 composition,
@@ -4583,9 +4901,9 @@ mod tests {
         valid_target.set_translation(3.0, 0.0).unwrap();
         assert_eq!(
             context
-                .begin_ordinary_composition(
+                .begin_ordinary_mixed_composition(
                     noon_core::SemanticAnimationCompositionKind::Parallel,
-                    &[(source.clone(), valid_target, child)],
+                    &[bound_transform_child(&source, valid_target, child)],
                     composition,
                     play,
                 )
@@ -4641,11 +4959,11 @@ mod tests {
         };
 
         assert!(context
-            .begin_ordinary_composition(
+            .begin_ordinary_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
                 &[
-                    (source.clone(), first_target, child),
-                    (source, second_target, child),
+                    bound_transform_child(&source, first_target, child),
+                    bound_transform_child(&source, second_target, child),
                 ],
                 composition,
                 play,
@@ -4678,10 +4996,10 @@ mod tests {
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
 
         assert!(context
-            .can_ordinary_transform_composition(
+            .validate_ordinary_mixed_composition(
                 &[
-                    (source.clone(), unsupported.clone(), child),
-                    (source.clone(), foreign, child),
+                    bound_transform_child(&source, unsupported.clone(), child),
+                    bound_transform_child(&source, foreign, child),
                 ],
                 composition,
                 play,
@@ -4697,8 +5015,11 @@ mod tests {
             .apply(&mut context.scene.store().borrow_mut())
             .unwrap();
         assert!(context
-            .can_ordinary_transform_composition(
-                &[(source.clone(), unsupported, child), (source, stale, child)],
+            .validate_ordinary_mixed_composition(
+                &[
+                    bound_transform_child(&source, unsupported, child),
+                    bound_transform_child(&source, stale, child),
+                ],
                 composition,
                 play,
             )

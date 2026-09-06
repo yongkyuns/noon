@@ -937,16 +937,12 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    /// Atomically declare and activate one flat prepared transform composition.
-    ///
-    /// The borrowed requests retain shared semantic handles only. Scheduling,
-    /// effective capture, identity promotion, and runtime publication remain in
-    /// the shared Rust compiler/session path.
+    /// Atomically admit and activate one mixed point-transform/angular-path composition.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_declare_and_activate_transform_composition(
+    pub(crate) fn live_declare_and_activate_animation_composition(
         &mut self,
         kind: noon_core::SemanticAnimationCompositionKind,
-        children: &[noon::TransformToRequest<'_>],
+        children: &[noon::AnimationCompositionRequest<'_>],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
@@ -961,7 +957,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         )
-        .declare_and_activate_transform_composition(
+        .declare_and_activate_animation_composition(
             kind,
             children,
             composition_options,

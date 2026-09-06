@@ -12,7 +12,7 @@ use super::{
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
     SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticUpdaterRegistration, StoredGeometry,
+    SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
 };
 use crate::TrackTiming;
 
@@ -639,6 +639,22 @@ impl SemanticMutationTransaction {
         target_state: impl Into<SemanticTransactionNodeRef>,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
+        self.create_transform_animation_with_interpolation(
+            target,
+            target_state,
+            SemanticTransformInterpolation::Affine,
+            options,
+        )
+    }
+
+    /// Stage a transform declaration with an explicit geometry interpolation contract.
+    pub fn create_transform_animation_with_interpolation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        interpolation: SemanticTransformInterpolation,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
         let token = self.allocate_local_node_token();
         self.mutations.push(SemanticMutation::AddAnimation {
             token,
@@ -646,6 +662,28 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::TransformTo {
                     target: target.into(),
                     target_state: target_state.into(),
+                    interpolation,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage a centered 2D angular-path rotation declaration.
+    pub fn create_rotate_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        angle: f64,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Rotate {
+                    target: target.into(),
+                    angle,
                 },
                 options,
             ),
@@ -1841,6 +1879,9 @@ pub enum SemanticMutationTransactionError {
     InvalidAnimationRunTime {
         index: usize,
     },
+    InvalidAnimationAngle {
+        index: usize,
+    },
     InvalidAnimationLagRatio {
         index: usize,
     },
@@ -2203,6 +2244,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidAnimationRunTime { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add animation with non-finite or non-positive run_time"
+            ),
+            Self::InvalidAnimationAngle { index } => write!(
+                formatter,
+                "semantic mutation {index} has a non-finite rotation angle"
             ),
             Self::InvalidAnimationLagRatio { index } => write!(
                 formatter,

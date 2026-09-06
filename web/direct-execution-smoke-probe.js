@@ -15,6 +15,7 @@ const {
   createDirectOrdinaryFadePlaySmokeRenderer,
   createDirectOrdinaryCreatePlaySmokeRenderer,
   createDirectOrdinarySquareToCircleSmokeRenderer,
+  createDirectOrdinaryDifferentRotationsSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinarySuccessionSmokeRenderer,
@@ -721,6 +722,69 @@ async function directSquareToCircleProof(expectedBackend) {
   }
 }
 
+async function directDifferentRotationsProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryDifferentRotationsSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    const initialDirective = JSON.parse(renderer.directWakeDirectiveJson(0));
+    if (!initialDirective.presentNow || initialDirective.cadence !== "animation-frame") {
+      throw new Error(`direct DifferentRotations did not start: ${JSON.stringify(initialDirective)}`);
+    }
+    await settleDirectPublication(renderer, 0);
+    const startLeft = await sampleRenderedColor(canvas, -2, 0.5);
+    const startRight = await sampleRenderedColor(canvas, 2, 0.5);
+
+    if (!renderer.advanceDirectRealtime(1000)) {
+      throw new Error("direct DifferentRotations did not publish its midpoint");
+    }
+    await settleDirectPublication(renderer, 1000);
+    const midpointLeft = await sampleRenderedColor(canvas, -2, 0.5);
+    const midpointRight = await sampleRenderedColor(canvas, 2, 0.5);
+
+    if (!renderer.advanceDirectRealtime(2000)) {
+      throw new Error("direct DifferentRotations did not publish its endpoint");
+    }
+    await settleDirectPublication(renderer, 2000);
+    const endpointLeft = await sampleRenderedColor(canvas, -2, 0.5);
+    const endpointRight = await sampleRenderedColor(canvas, 2, 0.5);
+
+    renderer.advanceDirectRealtime(3000);
+    // A completed wait can settle without publishing a dirty renderer frame.
+    // Follow the host wake contract instead of requiring a redundant draw.
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3000));
+    const finalDirective = wake.presentNow
+      ? await settleDirectPublication(renderer, 3000)
+      : wake;
+    const metrics = {
+      startLeft,
+      startRight,
+      midpointLeft,
+      midpointRight,
+      endpointLeft,
+      endpointRight,
+      time: renderer.time(),
+      objectCount: renderer.objectCount(),
+      cadence: finalDirective.cadence,
+    };
+    const blue = (color) => color.blue > color.red + 25 && color.blue > color.green + 10;
+    const green = (color) => color.green > color.red + 25 && color.green > color.blue + 10;
+    const dark = (color) => color.red + color.green + color.blue < 60;
+    if (renderer.rendererBackend() !== expectedBackend || metrics.time !== 3 ||
+        metrics.objectCount !== 2 || metrics.cadence !== "idle" ||
+        !blue(startLeft) || !green(startRight) || !dark(midpointLeft) ||
+        !green(midpointRight) || !blue(endpointLeft) || !green(endpointRight)) {
+      throw new Error(`direct DifferentRotations pixels or lifecycle are invalid: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directMovingCameraCenterProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectMovingCameraCenterSmokeRenderer(canvas);
@@ -1318,6 +1382,7 @@ async function start() {
     expectedBackend, createDirectOrdinarySquareAndCircleCreateSmokeRenderer, true,
   );
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
+  metrics.differentRotations = await directDifferentRotationsProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);

@@ -337,11 +337,13 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
+                ..
             } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
                 references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
             }
-            SemanticAnimationIntent::Fade { target, .. }
+            SemanticAnimationIntent::Rotate { target, .. }
+            | SemanticAnimationIntent::Fade { target, .. }
             | SemanticAnimationIntent::Create { target } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
             }

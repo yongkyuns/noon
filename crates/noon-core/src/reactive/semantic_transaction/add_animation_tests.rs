@@ -25,6 +25,7 @@ fn transform_state(
         SemanticAnimationIntent::TransformTo {
             target,
             target_state,
+            interpolation: SemanticTransformInterpolation::Affine,
         },
         options,
     )
@@ -393,6 +394,7 @@ fn pending_animation_tree_reads_and_commits_through_one_identity_map() {
         &SemanticAnimationIntent::TransformTo {
             target: source,
             target_state: first_target,
+            interpolation: SemanticTransformInterpolation::Affine,
         }
     );
     assert_eq!(
@@ -400,6 +402,7 @@ fn pending_animation_tree_reads_and_commits_through_one_identity_map() {
         &SemanticAnimationIntent::TransformTo {
             target: source,
             target_state: second_target,
+            interpolation: SemanticTransformInterpolation::Affine,
         }
     );
     assert_eq!(
