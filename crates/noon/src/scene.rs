@@ -109,22 +109,23 @@ impl Scene {
         source: &Mobject,
         target: &Mobject,
         options: AnimationOptions,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         self.require_object(source)?;
         self.require_object(target)?;
-        noon_compile::validate_semantic_transform_to_payload(
+        match noon_compile::validate_semantic_transform_to_payload(
             &self.store.borrow(),
             source.node_id(),
             target.node_id(),
             options,
-        )
-        .map_err(|error| error.to_string())?;
-        if options.rate_func != Some(RateFunction::Linear) {
-            return Err(
-                "ordinary canonical Transform currently requires a linear rate function".into(),
-            );
+        ) {
+            Ok(()) => {}
+            Err(error) if error.is_unsupported_payload() => return Ok(false),
+            Err(error) => return Err(error.to_string()),
         }
-        Ok(())
+        if options.rate_func != Some(RateFunction::Linear) {
+            return Ok(false);
+        }
+        Ok(true)
     }
     pub fn execution_session(
         &self,

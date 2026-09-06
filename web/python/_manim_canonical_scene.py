@@ -330,10 +330,10 @@ def _canonical_affine_options(
     easing = kwargs.get("easing")
     rate_func = kwargs.get("rate_func")
     lag_ratio = kwargs.get("lag_ratio")
-    if (
-        duration is not None and run_time is not None
-    ) or (easing is not None and rate_func is not None):
-        return None
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
     if kwargs.keys() - {"duration", "run_time", "start_time", "easing", "rate_func", "lag_ratio"}:
         return None
     if kwargs.get("start_time") is not None:
@@ -347,7 +347,9 @@ def _canonical_affine_options(
             play_rate_func=rate_func,
             play_lag_ratio=lag_ratio,
         )
-    except (TypeError, ValueError, NotImplementedError):
+    except NotImplementedError:
+        return None
+    if resolved.lag_ratio != 0.0 or resolved.path_arc != 0.0 or resolved.reverse_rate_function:
         return None
     return resolved
 
@@ -363,16 +365,12 @@ def _canonical_affine_payload_is_supported(
     resolved = _canonical_affine_options(animation, kwargs)
     if resolved is None:
         return False
-    try:
-        _context(scene).ordinaryCanPlayTransformTo(
-            getattr(source, "_semantic_handle"),
-            getattr(target, "_semantic_handle"),
-            float(resolved.run_time),
-            str(resolved.rate_func),
-        )
-    except Exception:
-        return False
-    return True
+    return bool(_context(scene).ordinaryCanPlayTransformTo(
+        getattr(source, "_semantic_handle"),
+        getattr(target, "_semantic_handle"),
+        float(resolved.run_time),
+        str(resolved.rate_func),
+    ))
 
 
 def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):

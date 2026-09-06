@@ -106,6 +106,23 @@ impl std::fmt::Display for PreparedSemanticTransformToError {
 
 impl std::error::Error for PreparedSemanticTransformToError {}
 
+impl PreparedSemanticTransformToError {
+    /// Whether this is an explicitly unsupported semantic payload rather than
+    /// invalid provenance, identity, value, or execution state.
+    pub const fn is_unsupported_payload(&self) -> bool {
+        matches!(
+            self,
+            Self::UnsupportedContentChange
+                | Self::UnsupportedStyleChange
+                | Self::UnsupportedPainterOrderChange
+                | Self::UnsupportedBindingChange
+                | Self::UnsupportedDepthChange(_)
+                | Self::UnsupportedLifecycle { .. }
+                | Self::ReactiveDriverConflict(_)
+        )
+    }
+}
+
 /// Validate an inert TransformTo payload before any declaration, runtime, or
 /// execution identity is created.
 ///

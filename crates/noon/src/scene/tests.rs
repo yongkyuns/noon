@@ -12,18 +12,31 @@ fn ordinary_transform_preflight_is_read_only_and_shares_affine_payload_validatio
         .run_time(1.0)
         .rate_func(RateFunction::Linear);
     let revision = scene.store().borrow().scene_revision();
-    scene
+    assert!(scene
         .can_ordinary_transform_to(&circle, &affine_target, options)
-        .unwrap();
+        .unwrap());
     assert_eq!(scene.store().borrow().scene_revision(), revision);
 
     let mut style_target = circle.target_editor().unwrap();
     style_target.set_fill_opacity(0.5).unwrap();
     let revision = scene.store().borrow().scene_revision();
+    assert!(!scene
+        .can_ordinary_transform_to(&circle, &style_target, options)
+        .unwrap());
+    assert_eq!(scene.store().borrow().scene_revision(), revision);
+
+    let foreign = Scene::new().circle(1.0).unwrap();
+    assert!(scene
+        .can_ordinary_transform_to(&circle, &foreign, options)
+        .is_err());
+    scene
+        .store()
+        .borrow_mut()
+        .remove_node(style_target.node_id())
+        .unwrap();
     assert!(scene
         .can_ordinary_transform_to(&circle, &style_target, options)
         .is_err());
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
 }
 
 #[test]

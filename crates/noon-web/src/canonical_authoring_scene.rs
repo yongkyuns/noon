@@ -658,7 +658,9 @@ impl CanonicalAuthoringScene {
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        self.validate_ordinary_transform_to(source, target, options)?;
+        if !self.can_ordinary_transform_to(source, target, options)? {
+            return Err("ordinary affine animation payload is not yet supported".into());
+        }
 
         // `live_player` needs a valid presentation extent before activation. The
         // player replaces it with the exact returned segment endpoint below.
@@ -684,12 +686,12 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn validate_ordinary_transform_to(
+    fn can_ordinary_transform_to(
         &self,
         source: &noon::Mobject,
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
             || !std::rc::Rc::ptr_eq(self.scene.store(), target.store())
         {
@@ -1725,7 +1727,7 @@ mod wasm {
                 .run_time(run_time)
                 .rate_func(rate_function);
             self.inner
-                .validate_ordinary_transform_to(
+                .can_ordinary_transform_to(
                     source.semantic_mobject(),
                     target.semantic_mobject(),
                     options,
