@@ -19,7 +19,6 @@ const artifactDir = path.resolve(
 );
 const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
-const sampleMs = Number(process.env.NOON_PRODUCT_FPS_SAMPLE_MS ?? "2000");
 
 await mkdir(artifactDir, { recursive: true });
 
@@ -74,11 +73,31 @@ async function waitForApplied(page) {
   return state;
 }
 
-async function runAndMeasure(page) {
+async function runAndMeasure(page, { captureFrames = false } = {}) {
   const started = performance.now();
-  await page.locator("#replace-scene").click();
-  const state = await waitForApplied(page);
-  return { milliseconds: performance.now() - started, state };
+  let sampling = captureFrames;
+  const frameSamples = [];
+  const sampleFrames = (async () => {
+    while (sampling) {
+      const sample = await page.evaluate(async () => {
+        const report = await window.__noonExampleGallery?.executionMetrics?.();
+        return {
+          frames: Number(report?.metrics?.presentedFrames ?? 0),
+          now: performance.now(),
+        };
+      });
+      frameSamples.push(sample);
+      await page.waitForTimeout(50);
+    }
+  })();
+  try {
+    await page.locator("#replace-scene").click();
+    const state = await waitForApplied(page);
+    return { milliseconds: performance.now() - started, state, frameSamples };
+  } finally {
+    sampling = false;
+    await sampleFrames;
+  }
 }
 
 function changedPixelStats(buffer) {
@@ -96,21 +115,14 @@ function changedPixelStats(buffer) {
   return { width: png.width, height: png.height, changedPixels: changed };
 }
 
-async function sampleRendererFps(page) {
-  await page.waitForFunction(
-    () => Number(document.querySelector("#status")?.dataset.presentedFrames ?? 0) > 0,
-    null,
-    { timeout: 10_000 },
-  );
-  const start = await page.evaluate(() => ({
-    frames: Number(document.querySelector("#status")?.dataset.presentedFrames ?? 0),
-    now: performance.now(),
-  }));
-  await page.waitForTimeout(sampleMs);
-  const end = await page.evaluate(() => ({
-    frames: Number(document.querySelector("#status")?.dataset.presentedFrames ?? 0),
-    now: performance.now(),
-  }));
+function sampleRendererFps(frameSamples) {
+  // The frame counter is sampled while the animation is running. Sampling after
+  // waitForApplied measures the finished scene's idle policy instead of render work.
+  const changes = frameSamples.filter((sample, index) => index > 0 &&
+    sample.frames > frameSamples[index - 1].frames);
+  assert.ok(changes.length >= 2, "active product run did not expose enough presentation samples");
+  const start = changes[0];
+  const end = changes.at(-1);
   const elapsedSeconds = Math.max((end.now - start.now) / 1000, 0.001);
   return {
     startFrames: start.frames,
@@ -196,9 +208,9 @@ try {
   assert.equal(shell.executionMode, null, "page shell entered an execution mode before Run");
   assert.equal(shell.controls, false, "page shell allocated playback controls before Run");
 
-  const cold = await runAndMeasure(page);
+  const cold = await runAndMeasure(page, { captureFrames: true });
   assert.equal(cold.state.backend, "WebGL2", `expected WebGL2 product path, got ${cold.state.backend}`);
-  const fps = await sampleRendererFps(page);
+  const fps = sampleRendererFps(cold.frameSamples);
 
   const warm = await runAndMeasure(page);
 
