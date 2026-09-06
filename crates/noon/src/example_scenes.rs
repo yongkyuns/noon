@@ -371,7 +371,7 @@ pub fn ordinary_callback_continuation_program() -> Result<
         .set_translation(2.0, 0.0)
         .map_err(|error| error.to_string())?;
 
-    let mut callbacks = ordered_affine_callbacks().map_err(|error| error.to_string())?;
+    let callbacks = ordered_affine_callbacks().map_err(|error| error.to_string())?;
     {
         let mut store = scene.store().borrow_mut();
         callbacks
@@ -883,7 +883,7 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
 #[cfg(test)]
 mod continuation_tests {
     use super::*;
-    use crate::LiveProgramStatus;
+    use crate::{LiveProgramStatus, TimelineWakeState};
 
     #[test]
     fn ordinary_affine_continuation_uses_shared_segments_and_publication_admission() {
