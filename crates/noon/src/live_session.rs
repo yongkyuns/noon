@@ -387,6 +387,30 @@ impl<'a> LiveSession<'a> {
         Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
     }
 
+    /// Publish one fully validated detached Manim primitive through this session.
+    ///
+    /// The new identity has no root membership, execution slot, or frame work
+    /// until [`Self::add`] admits it.
+    pub fn create_manim_primitive(
+        &mut self,
+        options: crate::ManimPrimitiveOptions,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.create_detached_mobject(options.into_state())
+    }
+
+    fn create_detached_mobject(
+        &mut self,
+        state: SemanticObjectState,
+    ) -> Result<Mobject, LiveSessionError> {
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        let result = self.apply(transaction)?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached primitive creation has one exact semantic impact")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+    }
+
     /// Read the current effective runtime value at the session's publication.
     pub fn effective(&self, mobject: &Mobject) -> Result<EffectiveMobjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
@@ -1451,6 +1475,54 @@ mod tests {
         assert_eq!(
             live.authored(&circle).unwrap().transform.translation,
             SemanticVec3::ZERO
+        );
+    }
+
+    #[test]
+    fn live_primitive_creation_is_detached_atomic_and_admits_locally() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let before = live.session.publication_context();
+        live.session.take_frame_changes();
+
+        let mut invalid = crate::ManimPrimitiveOptions::circle(0.25).unwrap();
+        assert!(invalid.set_stroke_width(-0.1).is_err());
+        assert_eq!(live.session.publication_context(), before);
+        assert!(live.session.take_frame_changes().is_empty());
+
+        let mut options = crate::ManimPrimitiveOptions::circle(0.25).unwrap();
+        options.set_translation(2.0, -1.0).unwrap();
+        options.set_fill(0.0, 0.4, 1.0, 0.6).unwrap();
+        let circle = live.create_manim_primitive(options).unwrap();
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        let authored = live.authored(&circle).unwrap();
+        assert_eq!(
+            authored.transform.translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+        assert_eq!(authored.style.fill_opacity, 0.6);
+        assert!(matches!(
+            live.effective(&circle),
+            Err(LiveSessionError::Publication(
+                ExecutionSessionPublicationError::UnknownObject(_)
+            ))
+        ));
+        assert_eq!(live.session.frame().objects.len(), 1);
+        assert!(live.session.take_frame_changes().is_empty());
+
+        live.set_translation(&circle, 2.0, -1.0).unwrap();
+        assert!(live.session.take_frame_changes().is_empty());
+        live.add(&circle).unwrap();
+        assert_eq!(live.session.frame().objects.len(), 2);
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            2.0
         );
     }
 

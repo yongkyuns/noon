@@ -20,6 +20,7 @@ pub(crate) use style::{
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
     edit_stroke_opacity,
 };
+use style::{edit_stroke_width, parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManimNextToArgs {
@@ -27,6 +28,141 @@ pub struct ManimNextToArgs {
     pub buff: f64,
     pub aligned_edge: (f64, f64),
     pub mask: (f64, f64),
+}
+
+/// Inert, fully typed input for one ordinary Manim primitive.
+///
+/// This owns no semantic identity, store, execution state, or clock. A live
+/// session consumes it in one semantic transaction after every requested
+/// constructor option has been validated against the shared semantic state.
+#[derive(Clone, Debug)]
+pub struct ManimPrimitiveOptions {
+    state: SemanticObjectState,
+}
+
+impl ManimPrimitiveOptions {
+    pub fn circle(radius: f64) -> Result<Self, String> {
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle {
+            radius: positive_f32("radius", radius)?,
+        });
+        state.style = manim_style(Color::RED);
+        Ok(Self { state })
+    }
+
+    pub fn square(side: f64) -> Result<Self, String> {
+        let side = positive_f32("side", side)?;
+        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(side, side),
+        });
+        state.style = manim_style(Color::WHITE);
+        Ok(Self { state })
+    }
+
+    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), String> {
+        let value = authoring_xy_f64(x, y)?;
+        self.state.transform.translation.x = value.x;
+        self.state.transform.translation.y = value.y;
+        Ok(())
+    }
+
+    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+        let value = authoring_xy_f64(x, y)?;
+        self.state.transform.scale.x = value.x;
+        self.state.transform.scale.y = value.y;
+        Ok(())
+    }
+
+    pub fn set_rotation(&mut self, angle: f64) -> Result<(), String> {
+        self.state.transform.rotation_z = authoring_render_f64("rotation", angle)?;
+        Ok(())
+    }
+
+    pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
+        edit_color(&mut self.state.style, red, green, blue, alpha)
+    }
+
+    pub fn disable_fill(&mut self) {
+        edit_disable_fill(&mut self.state.style);
+    }
+
+    pub fn set_fill(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), String> {
+        edit_fill(&mut self.state.style, red, green, blue, opacity)
+    }
+
+    pub fn set_fill_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), String> {
+        edit_fill_color(&mut self.state.style, red, green, blue, alpha)
+    }
+
+    pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), String> {
+        edit_fill_opacity(&mut self.state.style, opacity)
+    }
+
+    pub fn disable_stroke(&mut self) {
+        edit_disable_stroke(&mut self.state.style);
+    }
+
+    pub fn set_stroke(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), String> {
+        edit_stroke(&mut self.state.style, red, green, blue, opacity)
+    }
+
+    pub fn set_stroke_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), String> {
+        edit_stroke_color(&mut self.state.style, red, green, blue, alpha)
+    }
+
+    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {
+        edit_stroke_opacity(&mut self.state.style, opacity)
+    }
+
+    pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
+        edit_stroke_width(&mut self.state.style, width)
+    }
+
+    pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
+        self.state.style.stroke_width_mode = parse_stroke_width_mode(mode)?;
+        Ok(())
+    }
+
+    pub fn set_stroke_join(&mut self, join: &str) -> Result<(), String> {
+        self.state.style.stroke_join = parse_stroke_join(join)?;
+        Ok(())
+    }
+
+    pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), String> {
+        self.state.style.stroke_cap = parse_stroke_cap(cap)?;
+        Ok(())
+    }
+
+    pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), String> {
+        edit_object_opacity(&mut self.state.style, opacity)
+    }
+
+    pub(crate) fn into_state(self) -> SemanticObjectState {
+        self.state
+    }
 }
 
 /// An aliasing handle to one node. Use `copy_handle` for an independent object.
@@ -158,14 +294,10 @@ impl Mobject {
         Self::new(store, state)
     }
     pub fn manim_circle(store: Rc<RefCell<SemanticStore>>, radius: f64) -> Result<Self, String> {
-        Self::from_geometry(
-            store,
-            GeometryRef::circle(positive_f32("radius", radius)?),
-            manim_style(Color::RED),
-        )
+        Self::new(store, ManimPrimitiveOptions::circle(radius)?.into_state())
     }
     pub fn manim_square(store: Rc<RefCell<SemanticStore>>, side: f64) -> Result<Self, String> {
-        Self::manim_rectangle(store, side, side)
+        Self::new(store, ManimPrimitiveOptions::square(side)?.into_state())
     }
     pub fn manim_rectangle(
         store: Rc<RefCell<SemanticStore>>,

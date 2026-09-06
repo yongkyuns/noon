@@ -920,6 +920,10 @@ try {
     path.join(repoRoot, "web/python/examples/ordinary_affine_continuation.py"),
     "utf8",
   );
+  const primitiveConstructionSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_live_primitive_construction.py"),
+    "utf8",
+  );
   const continuationResult = await page.evaluate(async (source) => {
     const harness = window.sharedAuthoringSmoke;
     const canvas = document.createElement("canvas");
@@ -978,6 +982,78 @@ try {
   await page.evaluate(() => {
     window.sharedAuthoringSmoke.liveContinuationExecution.terminate();
     window.sharedAuthoringSmoke.liveContinuationExecution = null;
+  });
+
+  // A source-owned wait barrier keeps newly constructed primitives detached until
+  // the continuation resumes. Their first rendered appearance must come from the
+  // same publication that admits both Circle and Square.
+  console.log("Checking live primitive construction after a wait");
+  let primitiveTimeout;
+  const primitiveConstruction = await Promise.race([page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-ordinary-live-primitive-construction";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    harness.primitiveConstructionExecution = execution;
+    let resolveAttached;
+    let rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
+    });
+    const authoredPromise = harness.authoring.run(source, {}, {
+      async onSemanticContinuation(registration) {
+        await execution.startSemanticExecution(registration.semanticExecution, {
+          authoringClient: harness.authoring,
+          transportMode: "transferable",
+          pacing: "external_samples",
+        });
+        resolveAttached();
+      },
+    });
+    authoredPromise.then(
+      () => rejectAttached(new Error("primitive source returned without registering a continuation")),
+      rejectAttached,
+    );
+    await attached;
+    const before = (await execution.metrics()).metrics;
+    if (before.objectCount !== 1) {
+      throw new Error(`detached primitive construction published ${before.objectCount} objects before the wait barrier`);
+    }
+    const [, authored] = await Promise.all([
+      execution.sampleToAuthoredTime(1),
+      authoredPromise,
+    ]);
+    let after = null;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      after = (await execution.metrics()).metrics;
+      if (after.objectCount === 3 && after.presentedFrames > before.presentedFrames) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return {
+      canvasId: canvas.id,
+      duration: authored.duration,
+      before,
+      after,
+    };
+  }, primitiveConstructionSource), new Promise((_, reject) => {
+    primitiveTimeout = setTimeout(() => reject(new Error("live primitive construction did not complete within 45 seconds")), 45_000);
+  })]).finally(() => clearTimeout(primitiveTimeout));
+  assert.equal(primitiveConstruction.duration, 1);
+  assert.equal(primitiveConstruction.before.objectCount, 1);
+  assert.equal(primitiveConstruction.after.objectCount, 3);
+  assert.ok(primitiveConstruction.after.drawCalls > 0);
+  assert.ok(primitiveConstruction.after.presentedFrames > primitiveConstruction.before.presentedFrames);
+  const primitivePixels = visiblePixelStats(
+    await page.locator(`#${primitiveConstruction.canvasId}`).screenshot(),
+  );
+  assert.ok(primitivePixels.count > 500, "post-barrier primitive construction rendered a blank frame");
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.primitiveConstructionExecution.terminate();
+    window.sharedAuthoringSmoke.primitiveConstructionExecution = null;
   });
 
   // Scalar tracker continuation keeps both values and timing in the returned

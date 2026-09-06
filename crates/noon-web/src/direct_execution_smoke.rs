@@ -181,6 +181,16 @@ pub async fn create_direct_moving_camera_center_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct Rust/WASM execution of the paired live primitive construction program.
+#[wasm_bindgen(js_name = createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer)]
+pub async fn create_direct_ordinary_live_primitive_construction_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::example_scenes::ordinary_live_primitive_construction_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that scalar track activation, persistent set, wait, and a
 /// second track execute through one direct Rust/WASM continuation program.
 #[wasm_bindgen(js_name = createDirectOrdinaryValueTrackerContinuationSmokeRenderer)]

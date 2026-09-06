@@ -47,7 +47,7 @@ pub use noon_runtime::{
 };
 pub use retained_family_authoring_lowering::*;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use semantic_mobject::Mobject;
+pub use semantic_mobject::{ManimPrimitiveOptions, Mobject};
 mod scene;
 pub use scene::Scene;
 pub use text_authoring::*;

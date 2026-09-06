@@ -18,6 +18,7 @@ const {
   createDirectOrdinaryDifferentRotationsSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
+  createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
   createDirectOrdinarySuccessionSmokeRenderer,
   createDirectOrdinaryUncreatePlaySmokeRenderer,
   createDirectTypstTextSmokeRenderer,
@@ -77,13 +78,66 @@ async function presentDirectFrame(renderer) {
 
 async function settleDirectPublication(renderer, wallTimeMs) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
+    const directive = JSON.parse(renderer.directWakeDirectiveJson(wallTimeMs));
+    if (!directive.presentNow) return directive;
     await presentDirectFrame(renderer);
     // Presentation may resume Rust source and publish a final edit or begin its
     // next segment. Mirror the production driver's fresh wake observation.
-    const directive = JSON.parse(renderer.directWakeDirectiveJson(wallTimeMs));
-    if (!directive.presentNow) return directive;
   }
   throw new Error("direct source did not settle its presentation publications");
+}
+
+async function directLivePrimitiveConstructionProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+    if (!initial.presentNow || renderer.objectCount() !== 1) {
+      throw new Error(`direct primitive construction did not start with its anchor-only publication: ${JSON.stringify(initial)}`);
+    }
+    await presentDirectFrame(renderer);
+    const before = renderer.objectCount();
+    const initialAnchor = await sampleRenderedColor(canvas, 0, 0);
+    const initialCircle = await sampleRenderedColor(canvas, 2, -1);
+    const initialSquare = await sampleRenderedColor(canvas, -2, 1);
+    if (initialAnchor.red < 150 || initialAnchor.green < 150 || initialAnchor.blue < 150 ||
+        initialCircle.red + initialCircle.green + initialCircle.blue > 90 ||
+        initialSquare.red + initialSquare.green + initialSquare.blue > 90) {
+      throw new Error(`direct primitive construction rendered detached paint before admission: ${JSON.stringify({ initialAnchor, initialCircle, initialSquare })}`);
+    }
+    renderer.advanceDirectRealtime(1000);
+    const finalDirective = await settleDirectPublication(renderer, 1000);
+    const finalCircle = await sampleRenderedColor(canvas, 2, -1);
+    const finalSquare = await sampleRenderedColor(canvas, -2, 1);
+    const metrics = {
+      backend: renderer.rendererBackend(),
+      before,
+      after: renderer.objectCount(),
+      drawCalls: renderer.lastDrawCalls(),
+      time: renderer.time(),
+      cadence: finalDirective.cadence,
+      initialAnchor,
+      initialCircle,
+      initialSquare,
+      finalCircle,
+      finalSquare,
+    };
+    if (metrics.backend !== expectedBackend || metrics.before !== 1 || metrics.after !== 3 ||
+        metrics.drawCalls <= 0 || metrics.time !== 1 || metrics.cadence !== "idle" ||
+        metrics.finalCircle.blue <= metrics.finalCircle.red + 25 ||
+        metrics.finalCircle.blue <= metrics.finalCircle.green + 10 ||
+        metrics.finalSquare.green <= metrics.finalSquare.red + 20 ||
+        metrics.finalSquare.green <= metrics.finalSquare.blue + 5) {
+      throw new Error(`direct primitive construction did not publish its final admitted frame: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
 }
 
 async function advanceDirectCallbackFrame(renderer, wallTimeMs) {
@@ -1381,6 +1435,7 @@ async function start() {
   metrics.parallelCreate = await directOrdinaryCreateProof(
     expectedBackend, createDirectOrdinarySquareAndCircleCreateSmokeRenderer, true,
   );
+  metrics.livePrimitiveConstruction = await directLivePrimitiveConstructionProof(expectedBackend);
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
   metrics.differentRotations = await directDifferentRotationsProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);

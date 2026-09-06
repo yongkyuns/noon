@@ -1429,6 +1429,23 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn live_create_manim_primitive(
+        &mut self,
+        options: noon::ManimPrimitiveOptions,
+    ) -> Result<noon::Mobject, String> {
+        match self.live_execution_ownership() {
+            "active" | "returned" => self
+                .active_live_player()?
+                .live_create_manim_primitive(options),
+            "none" => {
+                Err("live primitive construction requires an active canonical session".into())
+            }
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_add_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
         if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
@@ -1995,6 +2012,15 @@ mod wasm {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     }
 
+    /// Consumed, inert input for one fully configured ordinary Circle or Square.
+    ///
+    /// The candidate carries only shared typed semantic state. It has no store,
+    /// semantic node, execution slot, or renderer work before live publication.
+    #[wasm_bindgen]
+    pub struct WasmManimPrimitiveBuilder {
+        options: noon::ManimPrimitiveOptions,
+    }
+
     /// Consumed, inert input for one flat ordinary transform composition.
     ///
     /// This owns opaque shared handles and unresolved semantic options only. It
@@ -2216,6 +2242,134 @@ mod wasm {
                     .rate_func(rate_function),
             });
             Ok(())
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmManimPrimitiveBuilder {
+        #[wasm_bindgen(js_name = setTranslation)]
+        pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+            self.options.set_translation(x, y).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setScale)]
+        pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+            self.options.set_scale(x, y).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setRotation)]
+        pub fn set_rotation(&mut self, angle: f64) -> Result<(), JsValue> {
+            self.options.set_rotation(angle).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setColor)]
+        pub fn set_color(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.options
+                .set_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = disableFill)]
+        pub fn disable_fill(&mut self) {
+            self.options.disable_fill();
+        }
+
+        #[wasm_bindgen(js_name = setFill)]
+        pub fn set_fill(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.options
+                .set_fill(red, green, blue, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setFillColor)]
+        pub fn set_fill_color(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.options
+                .set_fill_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setFillOpacity)]
+        pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+            self.options.set_fill_opacity(opacity).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = disableStroke)]
+        pub fn disable_stroke(&mut self) {
+            self.options.disable_stroke();
+        }
+
+        #[wasm_bindgen(js_name = setStroke)]
+        pub fn set_stroke(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.options
+                .set_stroke(red, green, blue, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeColor)]
+        pub fn set_stroke_color(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.options
+                .set_stroke_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeOpacity)]
+        pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+            self.options.set_stroke_opacity(opacity).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeWidth)]
+        pub fn set_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
+            self.options.set_stroke_width(width).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeWidthMode)]
+        pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), JsValue> {
+            self.options.set_stroke_width_mode(mode).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeJoin)]
+        pub fn set_stroke_join(&mut self, join: &str) -> Result<(), JsValue> {
+            self.options.set_stroke_join(join).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeCap)]
+        pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), JsValue> {
+            self.options.set_stroke_cap(cap).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setObjectOpacity)]
+        pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+            self.options.set_object_opacity(opacity).map_err(js_error)
         }
     }
 
@@ -3512,6 +3666,42 @@ mod wasm {
             source.id_in_store(self.inner.scene.store(), "live target editor")?;
             self.inner
                 .live_target_editor(source.semantic_mobject())
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
+        /// Start an inert Circle constructor request. It owns no semantic identity
+        /// until `liveCreateManimPrimitive` consumes it through the retained session.
+        #[wasm_bindgen(js_name = beginLiveManimCircle)]
+        pub fn begin_live_manim_circle(
+            &self,
+            radius: f64,
+        ) -> Result<WasmManimPrimitiveBuilder, JsValue> {
+            noon::ManimPrimitiveOptions::circle(radius)
+                .map(|options| WasmManimPrimitiveBuilder { options })
+                .map_err(js_error)
+        }
+
+        /// Start an inert Square constructor request. See `beginLiveManimCircle`.
+        #[wasm_bindgen(js_name = beginLiveManimSquare)]
+        pub fn begin_live_manim_square(
+            &self,
+            side: f64,
+        ) -> Result<WasmManimPrimitiveBuilder, JsValue> {
+            noon::ManimPrimitiveOptions::square(side)
+                .map(|options| WasmManimPrimitiveBuilder { options })
+                .map_err(js_error)
+        }
+
+        /// Validate and publish a fully configured primitive in one retained live
+        /// transaction. The consumed candidate has no identity before this call.
+        #[wasm_bindgen(js_name = liveCreateManimPrimitive)]
+        pub fn live_create_manim_primitive(
+            &mut self,
+            candidate: WasmManimPrimitiveBuilder,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            self.inner
+                .live_create_manim_primitive(candidate.options)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }

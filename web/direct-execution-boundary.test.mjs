@@ -43,6 +43,7 @@ for (const required of [
   "example_scenes::live_callback_paint",
   "example_scenes::live_affine_completion",
   "example_scenes::ordinary_affine_play",
+  "example_scenes::ordinary_live_primitive_construction_program",
   "example_scenes::ordinary_fade_continuation_program",
   "example_scenes::ordinary_create_continuation_program",
   "example_scenes::ordinary_composition_play",
@@ -173,6 +174,9 @@ for (const required of [
   "persistentHold",
   "firstClickLuma",
   "secondClickLuma",
+  "directLivePrimitiveConstructionProof",
+  "renderer.objectCount() !== 1",
+  "createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer",
 ]) {
   assert.ok(browserProbe.includes(required), `browser direct-execution proof must contain ${required}`);
 }

@@ -381,6 +381,25 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_manim_primitive(
+        &mut self,
+        options: noon::ManimPrimitiveOptions,
+    ) -> Result<noon::Mobject, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .create_manim_primitive(options)
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
         mobject: &noon::Mobject,
