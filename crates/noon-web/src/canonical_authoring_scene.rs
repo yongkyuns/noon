@@ -8514,13 +8514,13 @@ mod tests {
     fn ordinary_affine_play_rejects_a_pre_execution_scalar_cursor_without_bootstrapping() {
         let mut context = CanonicalAuthoringScene::default();
         let tracker = context.create_value_tracker(0.0).unwrap();
-        context
-            .declare_tracker_play(&tracker, 4.0, 2.0, RateFunction::Linear)
-            .unwrap();
         let circle = context.scene.circle(0.4).unwrap();
         let mut target = circle.target_editor().unwrap();
         target.set_translation(2.0, -1.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context
+            .declare_tracker_play(&tracker, 4.0, 2.0, RateFunction::Linear)
+            .unwrap();
         let revision = context.scene.store().borrow().scene_revision();
 
         let error = context

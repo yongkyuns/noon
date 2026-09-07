@@ -322,13 +322,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 index.execution_object_id(second).unwrap(),
-                index.execution_object_id(first).unwrap(),
                 index.execution_object_id(third).unwrap(),
+                index.execution_object_id(first).unwrap(),
             ]
         );
-        assert_eq!(compiled.objects()[1].base_transform.translation.x, 2.0);
-        assert_eq!(compiled.objects()[1].base_transform.translation.y, 3.0);
-        assert_eq!(compiled.objects()[1].base_style.fill.unwrap().alpha, 0.5);
+        assert_eq!(compiled.objects()[2].base_transform.translation.x, 2.0);
+        assert_eq!(compiled.objects()[2].base_transform.translation.y, 3.0);
+        assert_eq!(compiled.objects()[2].base_style.fill.unwrap().alpha, 0.5);
         assert!(compiled.tracks().is_empty());
     }
 
