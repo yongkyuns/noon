@@ -271,6 +271,153 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = createManimDot)]
+        pub fn create_manim_dot(
+            &self,
+            point_x: f64,
+            point_y: f64,
+            radius: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            Mobject::manim_dot(Rc::clone(&self.semantics), point_x, point_y, radius)
+                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimTriangle)]
+        pub fn create_manim_triangle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            Mobject::manim_triangle(Rc::clone(&self.semantics))
+                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimElbow)]
+        pub fn create_manim_elbow(
+            &self,
+            width: f64,
+            angle: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            Mobject::manim_elbow(Rc::clone(&self.semantics), width, angle)
+                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimRoundedRectangle)]
+        pub fn create_manim_rounded_rectangle(
+            &self,
+            width: f64,
+            height: f64,
+            radius: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            Mobject::manim_rounded_rectangle(Rc::clone(&self.semantics), width, height, radius)
+                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimAnnularSector)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_manim_annular_sector(
+            &self,
+            inner_radius: f64,
+            outer_radius: f64,
+            angle: f64,
+            start_angle: f64,
+            num_components: u32,
+            center_x: f64,
+            center_y: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            Mobject::manim_annular_sector(
+                Rc::clone(&self.semantics),
+                inner_radius,
+                outer_radius,
+                angle,
+                start_angle,
+                num_components,
+                center_x,
+                center_y,
+            )
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimSector)]
+        pub fn create_manim_sector(
+            &self,
+            radius: f64,
+            angle: f64,
+            start_angle: f64,
+            num_components: u32,
+            center_x: f64,
+            center_y: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            Mobject::manim_sector(
+                Rc::clone(&self.semantics),
+                radius,
+                angle,
+                start_angle,
+                num_components,
+                center_x,
+                center_y,
+            )
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimAnnulus)]
+        pub fn create_manim_annulus(
+            &self,
+            inner_radius: f64,
+            outer_radius: f64,
+            num_components: u32,
+            center_x: f64,
+            center_y: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            Mobject::manim_annulus(
+                Rc::clone(&self.semantics),
+                inner_radius,
+                outer_radius,
+                num_components,
+                center_x,
+                center_y,
+            )
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimDashedLine)]
+        pub fn create_manim_dashed_line(
+            &self,
+            start_x: f64,
+            start_y: f64,
+            end_x: f64,
+            end_y: f64,
+            dash_length: f64,
+            dashed_ratio: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            Mobject::manim_dashed_line(
+                Rc::clone(&self.semantics),
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                dash_length,
+                dashed_ratio,
+            )
+            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimUnderline)]
+        pub fn create_manim_underline(
+            &self,
+            target: &WasmAuthoringMobjectHandle,
+            buff: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            target.id_in_store(&self.semantics, "Underline target")?;
+            Mobject::manim_underline(&target.handle, buff)
+                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
         /// Shape native text into the same semantic store as geometry handles.
         #[wasm_bindgen(js_name = createManimText)]
         pub fn create_manim_text(

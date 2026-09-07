@@ -238,6 +238,15 @@ fn point_is_finite(point: Vec2) -> bool {
     point.x.is_finite() && point.y.is_finite()
 }
 
+pub(crate) fn authored_f32(value: f64, label: &str) -> Result<f32, String> {
+    if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
+        return Err(format!(
+            "{label} must be finite and representable as f32, got {value}"
+        ));
+    }
+    Ok(value as f32)
+}
+
 /// Return the transformed first path anchor for an Arc-compatible retained snapshot.
 ///
 /// Frontends can call this against their current authoritative snapshot after any
@@ -357,7 +366,7 @@ fn validate_arc_inputs(
     Ok(())
 }
 
-fn circular_arc_path(
+pub(crate) fn circular_arc_path(
     radius: f32,
     start_angle: f32,
     angle: f32,

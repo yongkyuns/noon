@@ -13,6 +13,7 @@ use noon_core::{
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
 mod layout;
+mod manim_geometry;
 mod style;
 use bounds::layout_for_content;
 pub(crate) use style::{
@@ -285,11 +286,26 @@ impl Mobject {
         geometry: GeometryRef,
         style: SemanticStyle,
     ) -> Result<Self, String> {
-        if !geometry.is_finite() || !style.is_finite() {
-            return Err("geometry and style must be finite".into());
+        Self::from_geometry_state(store, geometry, SemanticTransform2_5D::default(), style)
+    }
+
+    fn from_geometry_state(
+        store: Rc<RefCell<SemanticStore>>,
+        geometry: GeometryRef,
+        transform: SemanticTransform2_5D,
+        style: SemanticStyle,
+    ) -> Result<Self, String> {
+        if !geometry.is_finite()
+            || !transform.translation.is_finite()
+            || !transform.scale.is_finite()
+            || !transform.rotation_z.is_finite()
+            || !style.is_finite()
+        {
+            return Err("geometry, transform, and style must be finite".into());
         }
         let content = import_geometry(&mut store.borrow_mut(), geometry)?;
         let mut state = SemanticObjectState::new(content);
+        state.transform = transform;
         state.style = style;
         Self::new(store, state)
     }
@@ -803,6 +819,7 @@ fn manim_style(color: Color) -> SemanticStyle {
         object_opacity: 1.0,
     }
 }
+
 fn color_tuple(color: Color) -> (f64, f64, f64, f64) {
     (
         color.red as f64,

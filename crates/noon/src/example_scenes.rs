@@ -9,6 +9,7 @@ pub mod mixed_scalar_composition;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
+pub mod specialized_geometry;
 pub mod text_family_fade;
 pub mod text_family_reveal;
 pub mod text_family_write;

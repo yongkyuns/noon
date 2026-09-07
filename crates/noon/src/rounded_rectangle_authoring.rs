@@ -66,16 +66,7 @@ impl RoundedRectangle {
         height: f32,
         corner_radii: [f32; 4],
     ) -> Result<Self, RoundedRectangleAuthoringError> {
-        validate_dimensions(width, height)?;
-        for radius in corner_radii {
-            if !radius.is_finite() {
-                return Err(RoundedRectangleAuthoringError::NonFiniteCornerRadius(
-                    radius,
-                ));
-            }
-        }
-
-        let path = rounded_rectangle_path(width, height, corner_radii);
+        let path = manim_rounded_rectangle_path(width, height, corner_radii)?;
         Ok(Self(Path::new(path).into_snapshot()))
     }
 
@@ -165,7 +156,19 @@ struct CornerCurve {
     rounded: bool,
 }
 
-fn rounded_rectangle_path(width: f32, height: f32, corner_radii: [f32; 4]) -> VectorPath {
+pub(crate) fn manim_rounded_rectangle_path(
+    width: f32,
+    height: f32,
+    corner_radii: [f32; 4],
+) -> Result<VectorPath, RoundedRectangleAuthoringError> {
+    validate_dimensions(width, height)?;
+    for radius in corner_radii {
+        if !radius.is_finite() {
+            return Err(RoundedRectangleAuthoringError::NonFiniteCornerRadius(
+                radius,
+            ));
+        }
+    }
     let half_width = width * 0.5;
     let half_height = height * 0.5;
     // Manim Rectangle vertex order after stretching UR/UL/DL/DR to width/height.
@@ -196,7 +199,7 @@ fn rounded_rectangle_path(width: f32, height: f32, corner_radii: [f32; 4]) -> Ve
             path = path.line_to(next_start);
         }
     }
-    path
+    Ok(path)
 }
 
 fn rounded_corner(previous: Vec2, vertex: Vec2, next: Vec2, radius: f32) -> CornerCurve {
