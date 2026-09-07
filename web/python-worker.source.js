@@ -864,7 +864,6 @@ if isinstance(__noon_result, Scene):
         __noon_callbacks = None
         __noon_scene_spec = None
         __noon_document = None
-        __noon_retained = None
         __noon_identities = None
     else:
         __noon_callbacks = _manim_updaters.register_scene(__noon_result)
@@ -880,10 +879,6 @@ if isinstance(__noon_result, Scene):
             materialize_legacy_geometry(__noon_result)
         __noon_scene_spec = __noon_result.to_scene_spec()
         __noon_document = __noon_result.to_document()
-        # The canonical document already includes every text object. The old
-        # retained sidecar is not an execution input and must not ask a native
-        # semantic Text handle for a source mirror.
-        __noon_retained = None
         __noon_identities = __noon_result.identity_document()
     __noon_duration = (
         float(__noon_live_duration)
@@ -897,7 +892,6 @@ elif isinstance(__noon_result, PatchBatch):
     __noon_kind = "patch_batch"
     __noon_scene_spec = None
     __noon_document = __noon_result.to_document()
-    __noon_retained = None
     __noon_duration = None
     __noon_identities = None
     __noon_callbacks = None
@@ -908,7 +902,6 @@ json.dumps(
         "kind": __noon_kind,
         "semantic_execution": __noon_semantic,
         "document": __noon_document,
-        "retained_document": __noon_retained,
         "scene_spec": __noon_scene_spec,
         "duration": __noon_duration,
         "identities": __noon_identities,

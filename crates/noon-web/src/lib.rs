@@ -33,13 +33,7 @@ mod manim_shape_matcher_bridge;
 #[cfg(any(target_arch = "wasm32", test))]
 mod manim_shape_matcher_handle_bridge;
 mod renderer_observation;
-mod retained_authoring;
 mod retained_authoring_player;
-#[cfg(test)]
-mod retained_authoring_scene;
-mod retained_authoring_scene_spec;
-mod retained_authoring_tracks;
-mod retained_authoring_wire_scene;
 #[cfg(feature = "renderer")]
 mod retained_execution_canvas;
 mod retained_execution_resources;
@@ -84,11 +78,7 @@ pub use manim_path_query_bridge::*;
 pub use manim_sector_bridge::*;
 pub use manim_shape_matcher_bridge::*;
 pub use renderer_observation::*;
-pub use retained_authoring::*;
 pub use retained_authoring_player::*;
-pub use retained_authoring_scene_spec::*;
-pub use retained_authoring_tracks::*;
-pub use retained_authoring_wire_scene::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_execution_canvas::*;
 pub use retained_execution_resources::*;
@@ -100,6 +90,7 @@ pub use retained_family_transport::*;
 pub use retained_resource_mutation_encoder::*;
 pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;
+pub use retained_scene_spec_runtime::MixedRetainedAuthoringError;
 pub use retained_text_family_transport::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_typst_canvas::*;

@@ -474,12 +474,16 @@ export class AuthoringExecutionClient {
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
     const preparedPlayer = this.#preparedPlayer;
+    const activePlayer = this.#player;
     preparedPlayer?.terminate();
     if (preparedPlayer !== null && this.#canvas !== preparedPlayer.canvas) {
       this.#canvas = preparedPlayer.canvas;
     }
     this.#preparedPlayer = null;
-    this.#player?.terminate();
+    activePlayer?.terminate();
+    if (activePlayer !== null && this.#canvas !== activePlayer.canvas) {
+      this.#canvas = activePlayer.canvas;
+    }
     this.#player = null;
     this.#mode = null;
     this.#rendererBackend = "";

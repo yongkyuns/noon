@@ -5,9 +5,9 @@ use noon_core::{
 use noon_runtime::{EvaluationError, FrameState, SceneInstance};
 
 use crate::{
-    MixedRetainedAuthoringError, MixedRetainedAuthoringScene, RetainedExecutionDeltaEncoder,
-    RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError, RetainedResourceBundle,
-    RetainedResourceTransportError,
+    retained_scene_spec_runtime::{CanonicalRetainedAuthoringScene, MixedRetainedAuthoringError},
+    RetainedExecutionDeltaEncoder, RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError,
+    RetainedResourceBundle, RetainedResourceTransportError,
 };
 
 /// Deterministic execution owner for one mixed retained scene.
@@ -27,23 +27,13 @@ pub struct RetainedAuthoringPlayer {
 }
 
 impl RetainedAuthoringPlayer {
-    pub fn from_json(
-        legacy_scene_json: &str,
-        retained_document_json: &str,
+    pub(crate) fn new(
+        materialized: CanonicalRetainedAuthoringScene,
         session: u32,
     ) -> Result<Self, RetainedAuthoringPlayerError> {
-        let mixed =
-            MixedRetainedAuthoringScene::from_json(legacy_scene_json, retained_document_json)?;
-        Self::new(mixed, session)
-    }
-
-    pub fn new(
-        mixed: MixedRetainedAuthoringScene,
-        session: u32,
-    ) -> Result<Self, RetainedAuthoringPlayerError> {
-        let camera_object = mixed.camera_object();
-        let compiled = mixed.compile()?;
-        let scene = mixed.into_scene();
+        let camera_object = materialized.camera_object();
+        let compiled = materialized.compile()?;
+        let scene = materialized.into_scene();
         let render_geometries =
             crate::retained_resource_transport::compiled_render_geometries(&compiled);
         let mut bundle = RetainedResourceBundle::capture(
@@ -205,171 +195,120 @@ impl From<RetainedExecutionTransportError> for RetainedAuthoringPlayerError {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use noon_core::{
-        GeometryRef, ObjectContentRef, Property, RateFunction, SceneDefinition, TextSourceKind,
+        CompositionTimeMap, ObjectContentRef, Property, RateFunction, TrackDefinition, TrackId,
         TrackTiming, TrackValues, Vec2,
     };
 
-    use crate::{
-        RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedTextAuthoringSpec,
-        RetainedTrackAuthoringSpec, RetainedTypstAuthoringSpec, TransportObjectContent,
-    };
+    use crate::{CanonicalAuthoringScene, TransportObjectContent};
 
     use super::*;
 
-    fn text_document(
-        source: &str,
-        math: bool,
-        order: u32,
-        object: ObjectId,
-    ) -> RetainedAuthoringDocument {
-        RetainedAuthoringDocument::new(vec![RetainedAuthoringTextObject {
-            object,
-            order,
-            text: RetainedTypstAuthoringSpec::new(source, math, 48.0).unwrap(),
-        }])
+    fn player(
+        scene: &noon::Scene,
+        bindings: Vec<(ObjectId, noon::Mobject)>,
+        tracks: Vec<TrackDefinition>,
+        camera_object: Option<ObjectId>,
+        session: u32,
+    ) -> RetainedAuthoringPlayer {
+        let mut context = CanonicalAuthoringScene::with_store(Rc::clone(scene.store()));
+        for (id, object) in bindings {
+            context.bind_mobject(id, &object).unwrap();
+        }
+        let spec = context.finalize(tracks, Vec::new(), camera_object).unwrap();
+        RetainedAuthoringPlayer::new(
+            CanonicalRetainedAuthoringScene::from_scene_spec(spec).unwrap(),
+            session,
+        )
         .unwrap()
     }
 
-    fn native_text_document(
-        source: &str,
-        order: u32,
-        object: ObjectId,
-    ) -> RetainedAuthoringDocument {
-        RetainedAuthoringDocument::new(vec![RetainedAuthoringTextObject {
+    fn position_track(object: ObjectId, duration: f64) -> TrackDefinition {
+        TrackDefinition {
+            id: TrackId::new(0),
             object,
-            order,
-            text: RetainedTextAuthoringSpec::native(
-                source,
-                noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
-                48.0,
-                -1.0,
-            )
-            .unwrap(),
-        }])
-        .unwrap()
+            property: Property::Position,
+            values: TrackValues::Vec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(2.0, 0.0),
+            },
+            timing: TrackTiming::new(0.0, duration, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        }
     }
 
     #[test]
-    fn first_frame_is_one_geometry_text_geometry_snapshot_with_live_resources() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.25));
-        let square = legacy.add(GeometryRef::rectangle(0.5, 0.5));
-        let text_id = ObjectId::new(1_u64 << 52);
-        let mixed = MixedRetainedAuthoringScene::from_parts(
-            &legacy,
-            text_document("*Hello*", false, 1, text_id),
-        )
-        .unwrap();
-        let mut player = RetainedAuthoringPlayer::new(mixed, 17).unwrap();
+    fn first_frame_preserves_canonical_geometry_text_geometry_order_and_resources() {
+        let circle = ObjectId::new(1);
+        let text = ObjectId::new(2);
+        let square = ObjectId::new(3);
+        let scene = noon::Scene::new();
+        let circle_handle = scene.circle(0.25).unwrap();
+        let text_handle = scene.text(noon::Text::new("Hello")).unwrap();
+        let square_handle = scene.square(0.5).unwrap();
+        let mut player = player(
+            &scene,
+            vec![
+                (circle, circle_handle),
+                (text, text_handle),
+                (square, square_handle),
+            ],
+            Vec::new(),
+            None,
+            17,
+        );
 
         let delta = player.evaluate_delta(0.0).unwrap().unwrap();
         assert!(delta.snapshot);
-        assert_eq!(delta.sequence, 0);
         assert_eq!(
             delta
                 .objects
                 .iter()
                 .map(|object| object.object)
                 .collect::<Vec<_>>(),
-            vec![circle, text_id, square]
+            vec![circle, text, square]
         );
         assert!(matches!(
             delta.objects[0].content,
             TransportObjectContent::Geometry { .. }
         ));
-        let TransportObjectContent::Text { text } = delta.objects[1].content else {
-            panic!("middle retained object must stay text-backed");
-        };
-        let retained_handle = player.scene().objects()[1].content.text().unwrap();
-        assert_eq!(text.id, retained_handle.id.get());
-        assert_eq!(text.version, retained_handle.version);
+        assert!(matches!(
+            delta.objects[1].content,
+            TransportObjectContent::Text { .. }
+        ));
         assert_eq!(
-            player.texts().get(retained_handle).unwrap().kind,
-            TextSourceKind::Typst
-        );
-        assert!(!player.fonts().is_empty());
-        let bundle = RetainedResourceBundle::decode_binary(player.resource_bundle_bytes()).unwrap();
-        assert_eq!(bundle.text_count(), 1);
-        assert!(bundle.font_count() >= 1);
-    }
-
-    #[test]
-    fn retained_native_text_scale_track_evaluates_without_replacing_resource_identity() {
-        let legacy = SceneDefinition::new();
-        let text_id = ObjectId::new(1_u64 << 52);
-        let base_scale = noon::NATIVE_POINT_TO_SCENE_SCALE;
-        let track = RetainedTrackAuthoringSpec::new(
-            text_id,
-            Property::Scale,
-            TrackValues::Vec2 {
-                from: Vec2::ONE,
-                to: Vec2::ZERO,
-            },
-            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-        );
-        let mixed = MixedRetainedAuthoringScene::from_parts_with_tracks(
-            &legacy,
-            native_text_document("Shrink", 0, text_id),
-            vec![track],
-        )
-        .unwrap();
-        let mut player = RetainedAuthoringPlayer::new(mixed, 21).unwrap();
-        let text_handle = player.scene().objects()[0].content.text().unwrap();
-
-        let initial = player.evaluate_delta(0.0).unwrap().unwrap();
-        assert!(initial.snapshot);
-        let midpoint = player.evaluate_delta(0.5).unwrap().unwrap();
-        assert!(!midpoint.snapshot);
-        assert_eq!(midpoint.objects.len(), 1);
-        assert_eq!(midpoint.objects[0].object, text_id);
-        assert!((midpoint.objects[0].transform.scale.x - base_scale * 0.5).abs() < 1.0e-6);
-        assert!((midpoint.objects[0].transform.scale.y - base_scale * 0.5).abs() < 1.0e-6);
-        let TransportObjectContent::Text { text } = midpoint.objects[0].content else {
-            panic!("scaled retained Text must stay text-backed");
-        };
-        assert_eq!(text.id, text_handle.id.get());
-        assert_eq!(text.version, text_handle.version);
-
-        let endpoint = player.evaluate_delta(1.0).unwrap().unwrap();
-        assert_eq!(endpoint.objects.len(), 1);
-        assert_eq!(endpoint.objects[0].transform.scale, Vec2::ZERO);
-        assert_eq!(
-            player.scene().objects()[0].content,
-            ObjectContentRef::Text(text_handle)
+            RetainedResourceBundle::decode_binary(player.resource_bundle_bytes())
+                .unwrap()
+                .text_count(),
+            1
         );
     }
 
     #[test]
-    fn forward_evaluation_emits_only_dirty_geometry_and_keeps_text_identity_stable() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.25));
-        legacy
-            .animate_position(
-                circle,
-                Vec2::ZERO,
-                Vec2::new(2.0, 0.0),
-                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-            )
-            .unwrap();
-        let text_id = ObjectId::new(1_u64 << 52);
-        let mixed = MixedRetainedAuthoringScene::from_parts(
-            &legacy,
-            text_document("stable", false, 1, text_id),
-        )
-        .unwrap();
-        let mut player = RetainedAuthoringPlayer::new(mixed, 18).unwrap();
+    fn forward_and_backward_evaluation_preserve_text_identity() {
+        let circle = ObjectId::new(1);
+        let text = ObjectId::new(2);
+        let scene = noon::Scene::new();
+        let circle_handle = scene.circle(0.25).unwrap();
+        let authored_text = scene.text(noon::Text::new("stable")).unwrap();
+        let mut player = player(
+            &scene,
+            vec![(circle, circle_handle), (text, authored_text)],
+            vec![position_track(circle, 1.0)],
+            None,
+            18,
+        );
         let text_handle = player.scene().objects()[1].content.text().unwrap();
 
         player.evaluate_delta(0.0).unwrap().unwrap();
-        let delta = player.evaluate_delta(0.5).unwrap().unwrap();
-        assert!(!delta.snapshot);
-        assert_eq!(delta.objects.len(), 1);
-        assert_eq!(delta.objects[0].object, circle);
-        assert!(matches!(
-            delta.objects[0].content,
-            TransportObjectContent::Geometry { .. }
-        ));
+        let forward = player.evaluate_delta(0.5).unwrap().unwrap();
+        assert!(!forward.snapshot);
+        assert_eq!(forward.objects.len(), 1);
+        assert_eq!(forward.objects[0].object, circle);
+        let rewind = player.evaluate_delta(0.25).unwrap().unwrap();
+        assert!(rewind.snapshot);
         assert_eq!(
             player.scene().objects()[1].content,
             ObjectContentRef::Text(text_handle)
@@ -377,60 +316,20 @@ mod tests {
     }
 
     #[test]
-    fn backward_evaluation_reissues_snapshot_without_changing_text_resource_handle() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.25));
-        legacy
-            .animate_position(
-                circle,
-                Vec2::ZERO,
-                Vec2::new(2.0, 0.0),
-                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-            )
-            .unwrap();
-        let text_id = ObjectId::new(1_u64 << 52);
-        let mixed = MixedRetainedAuthoringScene::from_parts(
-            &legacy,
-            text_document("seek", false, 1, text_id),
-        )
-        .unwrap();
-        let mut player = RetainedAuthoringPlayer::new(mixed, 19).unwrap();
-        let text_handle = player.scene().objects()[1].content.text().unwrap();
-
-        player.evaluate_delta(0.0).unwrap().unwrap();
-        player.evaluate_delta(0.75).unwrap().unwrap();
-        let rewind = player.evaluate_delta(0.25).unwrap().unwrap();
-        assert!(rewind.snapshot);
-        assert_eq!(rewind.sequence, 2);
-        let TransportObjectContent::Text { text } = rewind.objects[1].content else {
-            panic!("rewind must preserve retained text content identity");
-        };
-        assert_eq!(text.id, text_handle.id.get());
-        assert_eq!(text.version, text_handle.version);
-    }
-
-    #[test]
-    fn retained_player_derives_camera_from_the_same_evaluated_object_stream() {
-        let mut legacy = SceneDefinition::new();
-        let camera = legacy.add(GeometryRef::rectangle(14.0, 8.0));
-        assert!(legacy.set_camera_object(camera));
-        legacy
-            .animate_position(
-                camera,
-                Vec2::ZERO,
-                Vec2::new(4.0, -2.0),
-                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-            )
-            .unwrap();
-        let mixed = MixedRetainedAuthoringScene::from_parts(
-            &legacy,
-            RetainedAuthoringDocument::new(Vec::new()).unwrap(),
-        )
-        .unwrap();
-        let mut player = RetainedAuthoringPlayer::new(mixed, 20).unwrap();
+    fn camera_is_derived_from_the_same_evaluated_object_stream() {
+        let camera = ObjectId::new(1);
+        let mut scene = noon::Scene::new();
+        let camera_handle = scene.camera_frame().unwrap();
+        let mut player = player(
+            &scene,
+            vec![(camera, camera_handle)],
+            vec![position_track(camera, 1.0)],
+            Some(camera),
+            20,
+        );
 
         let delta = player.evaluate_delta(0.5).unwrap().unwrap();
-        assert_eq!(delta.camera.center, Vec2::new(2.0, -1.0));
+        assert_eq!(delta.camera.center, Vec2::new(1.0, 0.0));
         assert!((delta.camera.height - 8.0).abs() < 1.0e-6);
     }
 }

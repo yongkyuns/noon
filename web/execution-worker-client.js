@@ -1235,7 +1235,6 @@ export class ExecutionWorkerClient {
 
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       this.terminate({ preserveHostConfiguration: true });
-      this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
 
     const ready =
@@ -1266,10 +1265,10 @@ export class ExecutionWorkerClient {
   }
 
   terminate({ preserveHostConfiguration = false } = {}) {
-    const restorePreparedCanvas =
-      this.#engineWorker === null &&
-      this.#renderWorker !== null &&
-      this.#renderPrepared !== null;
+    // The render owner holds the transferred OffscreenCanvas whether or not an
+    // engine has attached yet. Once that owner is terminated, replace the DOM
+    // canvas exactly once so a later owner can transfer a fresh element.
+    const restoreTransferredCanvas = this.#renderWorker !== null;
     this.#lifecycleGeneration += 1;
     const cancellation = new Error(LIFECYCLE_CANCELLED_MESSAGE);
     this.#candidateEngineReject?.(cancellation);
@@ -1298,7 +1297,7 @@ export class ExecutionWorkerClient {
       pending.reject(error);
     }
     this.#pending.clear();
-    if (restorePreparedCanvas) {
+    if (restoreTransferredCanvas) {
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
     if (!preserveHostConfiguration) {

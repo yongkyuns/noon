@@ -166,7 +166,18 @@ test("prepared authoring execution stays unpublished until the canonical retaine
   assert.equal(ready.session, 1);
   assert.equal(client.mode, "retained");
   assert.equal(client.rendererBackend, "WebGL2");
+  const transferred = client.canvas;
   client.terminate();
+  assert.notEqual(client.canvas, transferred);
+  assert.equal(transferred.replacement, client.canvas);
+  assert.equal(client.canvas.transferred, false);
+
+  const next = new AuthoringExecutionClient(client.canvas);
+  const nextPreparation = next.prepare({ transportMode: "transferable" });
+  const nextRender = workerByName(2, "noon-render");
+  acknowledgePreparation(nextRender);
+  await nextPreparation;
+  next.terminate();
 });
 
 test("prepared canonical startup inherits a non-default shared slot capacity", async () => {

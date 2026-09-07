@@ -26,7 +26,6 @@ const expectedJavascriptSurface = [
   "createManimRectangle(",
   "createManimLine(",
   "export class WasmAuthoringMobjectHandle",
-  "textSpecJson(",
   "export class SemanticExecutionPlayer",
   "resourceBundleBytes(",
   "advanceForwardToCallbackPhaseJson(",
@@ -229,7 +228,6 @@ const expectedTypeSurface = [
   "createManimRectangle(width: number, height: number): WasmAuthoringMobjectHandle",
   "createManimLine(start_x: number, start_y: number, end_x: number, end_y: number): WasmAuthoringMobjectHandle",
   "export class WasmAuthoringMobjectHandle",
-  "textSpecJson(): string",
   "export class SemanticExecutionPlayer",
   "resourceBundleBytes(): Uint8Array",
   "advanceForwardToCallbackPhaseJson(time: number): string | undefined",
@@ -497,6 +495,12 @@ for (const fragment of expectedTypeSurface) {
 for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer"]) {
   if (javascript.includes(`export class ${retired}`) || declarations.includes(`export class ${retired}`)) {
     throw new Error(`Deleted reactive player returned to the browser package: ${retired}`);
+  }
+}
+for (const retired of ["textSpecJson(", "validateRetainedAuthoringDocumentJson(",
+  "export class RetainedNativeTextAuthoringHandle", "export class RetainedTypstAuthoringHandle"]) {
+  if (javascript.includes(retired) || declarations.includes(retired)) {
+    throw new Error(`Deleted text authoring API returned to the browser package: ${retired}`);
   }
 }
 if (wasmStats.size === 0) {

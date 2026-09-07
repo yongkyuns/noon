@@ -8,13 +8,6 @@ use noon_core::{
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction, SemanticVec3};
 use noon_ir::{ObjectSpec, SceneSpec, TextSpec};
-#[cfg(target_arch = "wasm32")]
-use noon_ir::{ObjectSpecContent, TextSpecKind, TextSpecOptions};
-
-use crate::{
-    materialize_retained_tracks, RetainedTextAuthoringSpec, RetainedTextBackendSpec,
-    RetainedTrackAuthoringSpec,
-};
 
 #[derive(Clone)]
 enum OwnedSceneMembershipMember {
@@ -160,14 +153,11 @@ enum OrdinaryCompositionChild {
 }
 
 /// One scene family in the worker's shared semantic store.
-/// Geometry bindings retain identity only. Source-level text remains a deletion-owned
-/// export adapter (#959); it cannot enter geometry-only typed execution silently.
+/// Frontend bindings retain identity only; all object content remains Rust-owned.
 pub struct CanonicalAuthoringScene {
     scene: noon::Scene,
     bindings: BTreeMap<ObjectId, noon_core::SemanticNodeId>,
     identities: BTreeMap<noon_core::SemanticNodeId, ObjectId>,
-    text_adapters: BTreeMap<noon_core::SemanticNodeId, ObjectSpec>,
-    retained_scale_factors: BTreeMap<ObjectId, Vec2>,
     #[cfg(any(target_arch = "wasm32", test))]
     live_player: Option<crate::SemanticExecutionPlayer>,
     #[cfg(any(target_arch = "wasm32", test))]
@@ -195,8 +185,6 @@ impl CanonicalAuthoringScene {
             scene,
             bindings: BTreeMap::new(),
             identities: BTreeMap::new(),
-            text_adapters: BTreeMap::new(),
-            retained_scale_factors: BTreeMap::new(),
             #[cfg(any(target_arch = "wasm32", test))]
             live_player: None,
             #[cfg(any(target_arch = "wasm32", test))]
@@ -251,55 +239,8 @@ impl CanonicalAuthoringScene {
         snapshot: ObjectSnapshot,
     ) -> Result<(), String> {
         let node = self.node(id)?;
-        if self.text_adapters.contains_key(&node) {
-            return Err(format!(
-                "canonical object {} is not geometry-backed",
-                id.get()
-            ));
-        }
         let mut handle = noon::Mobject::from_node(std::rc::Rc::clone(self.scene.store()), node)?;
         noon::legacy::replace_mobject_snapshot(&mut handle, snapshot)
-    }
-
-    pub fn bind_text(
-        &mut self,
-        id: ObjectId,
-        text: RetainedTextAuthoringSpec,
-    ) -> Result<(), String> {
-        let scale_factor = retained_scale_factor(&text);
-        let object = canonical_text_object(id, text)?;
-        if self.bindings.contains_key(&id) {
-            return Err(format!("canonical object {} is already bound", id.get()));
-        }
-        let node = self.scene.store().borrow_mut().insert_authoring_object();
-        // The explicit retained-text export adapter still uses its historical
-        // identity-only node; it is never admitted to typed geometry execution.
-        self.scene
-            .store()
-            .borrow_mut()
-            .add_member(self.scene.root(), node)
-            .map_err(|e| e.to_string())?;
-        self.bindings.insert(id, node);
-        self.identities.insert(node, id);
-        self.text_adapters.insert(node, object);
-        self.retained_scale_factors.insert(id, scale_factor);
-        Ok(())
-    }
-
-    pub fn update_text(
-        &mut self,
-        id: ObjectId,
-        text: RetainedTextAuthoringSpec,
-    ) -> Result<(), String> {
-        let node = self.node(id)?;
-        if !self.text_adapters.contains_key(&node) {
-            return Err(format!("canonical object {} is not text-backed", id.get()));
-        }
-        let scale_factor = retained_scale_factor(&text);
-        let object = canonical_text_object(id, text)?;
-        self.text_adapters.insert(node, object);
-        self.retained_scale_factors.insert(id, scale_factor);
-        Ok(())
     }
 
     fn members(&self) -> Result<Vec<noon_core::SemanticNodeId>, String> {
@@ -326,41 +267,19 @@ impl CanonicalAuthoringScene {
         let removed = &members[checkpoint..];
         let mut transaction = noon_core::SemanticMutationTransaction::new();
         for node in removed {
-            if !self.text_adapters.contains_key(node) {
-                transaction.remove_member(self.scene.root(), *node);
-            }
+            transaction.remove_member(self.scene.root(), *node);
         }
         transaction
             .apply(&mut self.scene.store().borrow_mut())
             .map_err(|error| error.to_string())?;
+        self.bindings.retain(|_, node| !removed.contains(node));
         for node in removed {
-            if self.text_adapters.contains_key(node) {
-                self.scene
-                    .store()
-                    .borrow_mut()
-                    .remove_member(self.scene.root(), *node)
-                    .map_err(|e| e.to_string())?;
-            }
-        }
-        self.bindings.retain(|id, node| {
-            if removed.contains(node) {
-                self.retained_scale_factors.remove(id);
-                false
-            } else {
-                true
-            }
-        });
-        for node in removed {
-            self.text_adapters.remove(node);
             self.identities.remove(node);
         }
         Ok(())
     }
 
     pub fn lower_execution(&self) -> Result<noon::ExecutionSession, String> {
-        if !self.text_adapters.is_empty() {
-            return Err("retained text requires the explicit retained execution adapter".into());
-        }
         self.scene
             .execution_session()
             .map_err(|error| error.to_string())
@@ -2169,11 +2088,19 @@ impl CanonicalAuthoringScene {
             resolved.map_err(|error| error.to_string())?;
             match entering_id {
                 Some(id) => {
-                    if self.bindings.contains_key(&id)
-                        || self.identities.contains_key(&target.node_id())
-                        || !ids.insert(id)
-                        || !entering_nodes.insert(target.node_id())
-                    {
+                    let node = target.node_id();
+                    let detached = !self.contains_mobject(target)?;
+                    let binding_available =
+                        match (self.bindings.get(&id), self.identities.get(&node)) {
+                            (None, None) => detached,
+                            (Some(bound_node), Some(bound_id))
+                                if *bound_node == node && *bound_id == id =>
+                            {
+                                detached
+                            }
+                            _ => false,
+                        };
+                    if !binding_available || !ids.insert(id) || !entering_nodes.insert(node) {
                         return Err("ordinary composition requires unique detached targets and wrapper identities".into());
                     }
                 }
@@ -2612,11 +2539,10 @@ impl CanonicalAuthoringScene {
         player.drain_delta_json()
     }
 
-    /// Derive the migration/export document from live semantic state at the boundary.
+    /// Derive the explicit export document from shared semantic state at the boundary.
     pub fn finalize(
         &self,
         geometry_tracks: Vec<TrackDefinition>,
-        retained_tracks: Vec<RetainedTrackAuthoringSpec>,
         family_animations: Vec<FamilyAnimationRequest>,
         camera_object: Option<ObjectId>,
     ) -> Result<SceneSpec, String> {
@@ -2628,10 +2554,6 @@ impl CanonicalAuthoringScene {
             .ordered_leaf_nodes(self.scene.root())
             .map_err(|error| error.to_string())?;
         for node in leaves {
-            if let Some(text) = self.text_adapters.get(&node) {
-                objects.push(text.clone());
-                continue;
-            }
             let handle = noon::Mobject::from_node(std::rc::Rc::clone(self.scene.store()), node)?;
             let state = handle.state()?;
             if state.content.text().is_some() {
@@ -2657,13 +2579,8 @@ impl CanonicalAuthoringScene {
             object.style = snapshot.style;
             objects.push(object);
         }
-        let tracks = materialize_retained_tracks(
-            &geometry_tracks,
-            retained_tracks,
-            &self.retained_scale_factors,
-        )
-        .map_err(|error| error.to_string())?;
-        let mut spec = SceneSpec::new(objects, tracks).map_err(|error| error.to_string())?;
+        let mut spec =
+            SceneSpec::new(objects, geometry_tracks).map_err(|error| error.to_string())?;
         spec.family_animations = family_animations;
         spec.camera_object = camera_object;
         spec.validate().map_err(|error| error.to_string())?;
@@ -2692,10 +2609,8 @@ fn authored_mobject_layout(handle: &noon::Mobject) -> Result<(f64, f64, f64, f64
     ))
 }
 
-/// Reconstruct the legacy source document only when the normal semantic session
-/// is unavailable (for example, callback/timeline execution). This #959 export
-/// seam reads immutable content and presentation from the shared store; Python
-/// wrappers never provide a parallel Text source or transform representation.
+/// Project source-level Text content at the explicit export boundary.
+/// Content and presentation are read from the shared semantic store.
 fn canonical_text_export(
     store: &noon_core::SemanticStore,
     id: ObjectId,
@@ -2752,56 +2667,6 @@ fn canonical_text_export(
     object.transform = transform;
     object.style = legacy_style(&state.style)?;
     Ok(object)
-}
-
-/// Derive the temporary #959 Text authoring codec from shared semantic
-/// state. This is only consumed when the normal live session cannot run; Python
-/// wrappers never retain a second text source or presentation model.
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn canonical_text_authoring_spec(
-    store: &noon_core::SemanticStore,
-    state: &SemanticObjectState,
-) -> Result<RetainedTextAuthoringSpec, String> {
-    let object = canonical_text_export(store, ObjectId::new(0), state)?;
-    let ObjectSpec {
-        content: ObjectSpecContent::Text(text),
-        transform,
-        style,
-        ..
-    } = object
-    else {
-        return Err("canonical text export produced non-text content".into());
-    };
-    let TextSpec {
-        kind,
-        source,
-        font_size,
-        options,
-    } = text;
-    let mut spec = match (kind, options) {
-        (
-            TextSpecKind::Plain,
-            TextSpecOptions::NativePlain {
-                font_family,
-                line_spacing,
-            },
-        ) => RetainedTextAuthoringSpec::native(source, font_family, font_size, line_spacing)?,
-        (TextSpecKind::Typst, TextSpecOptions::Default) => {
-            RetainedTextAuthoringSpec::new(source, false, font_size)?
-        }
-        (TextSpecKind::MathTypst, TextSpecOptions::Default) => {
-            RetainedTextAuthoringSpec::new(source, true, font_size)?
-        }
-        (kind, _) => {
-            return Err(format!(
-                "canonical text export produced unsupported {kind:?} retained content"
-            ));
-        }
-    };
-    spec.transform = transform;
-    spec.color = style.fill.unwrap_or(noon_core::WHITE);
-    spec.opacity = style.opacity;
-    Ok(spec)
 }
 
 fn text_export_transform(
@@ -2869,47 +2734,6 @@ fn legacy_f32(name: &str, value: f64) -> Result<f32, String> {
         return Err(format!("{name} must be a finite f32-compatible number"));
     }
     Ok(value as f32)
-}
-
-fn retained_scale_factor(text: &RetainedTextAuthoringSpec) -> Vec2 {
-    let factor = match &text.backend {
-        RetainedTextBackendSpec::Native { .. } => noon::NATIVE_POINT_TO_SCENE_SCALE,
-        RetainedTextBackendSpec::Typst { .. } => text.font_size * noon::SCALE_FACTOR_PER_FONT_POINT,
-    };
-    Vec2::new(factor, factor)
-}
-
-fn canonical_text_object(
-    id: ObjectId,
-    text: RetainedTextAuthoringSpec,
-) -> Result<ObjectSpec, String> {
-    text.validate()?;
-    let RetainedTextAuthoringSpec {
-        source,
-        backend,
-        font_size,
-        transform,
-        color,
-        opacity,
-    } = text;
-    let text = match backend {
-        RetainedTextBackendSpec::Native {
-            font_family,
-            line_spacing,
-        } => TextSpec::native_plain(source, font_family, font_size, line_spacing),
-        RetainedTextBackendSpec::Typst { math: false } => TextSpec::typst(source, font_size),
-        RetainedTextBackendSpec::Typst { math: true } => TextSpec::math_typst(source, font_size),
-    };
-    let mut object = ObjectSpec::text(id, text);
-    object.transform = transform;
-    object.style = Style {
-        fill: Some(color),
-        stroke: None,
-        stroke_width: 0.0,
-        opacity,
-        ..Style::default()
-    };
-    Ok(object)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -6308,20 +6132,6 @@ mod wasm {
             self.inner.update_geometry(id, snapshot).map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = bindText)]
-        pub fn bind_text(&mut self, object_id: &str, text_json: &str) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            let text = parse_json::<RetainedTextAuthoringSpec>("retained text spec", text_json)?;
-            self.inner.bind_text(id, text).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = updateText)]
-        pub fn update_text(&mut self, object_id: &str, text_json: &str) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            let text = parse_json::<RetainedTextAuthoringSpec>("retained text spec", text_json)?;
-            self.inner.update_text(id, text).map_err(js_error)
-        }
-
         pub fn checkpoint(&self) -> u32 {
             u32::try_from(self.inner.checkpoint()).expect("canonical object count fits u32")
         }
@@ -6334,16 +6144,11 @@ mod wasm {
         pub fn scene_spec_json(
             &self,
             geometry_tracks_json: &str,
-            retained_tracks_json: &str,
             family_animations_json: &str,
             camera_object_id: &str,
         ) -> Result<String, JsValue> {
             let geometry_tracks =
                 parse_json::<Vec<TrackDefinition>>("geometry tracks", geometry_tracks_json)?;
-            let retained_tracks = parse_json::<Vec<RetainedTrackAuthoringSpec>>(
-                "retained tracks",
-                retained_tracks_json,
-            )?;
             let family_animations = parse_json::<Vec<FamilyAnimationRequest>>(
                 "family animations",
                 family_animations_json,
@@ -6355,12 +6160,7 @@ mod wasm {
             };
             let spec = self
                 .inner
-                .finalize(
-                    geometry_tracks,
-                    retained_tracks,
-                    family_animations,
-                    camera_object,
-                )
+                .finalize(geometry_tracks, family_animations, camera_object)
                 .map_err(js_error)?;
             serde_json::to_string(&spec).map_err(js_error)
         }
@@ -6697,10 +6497,6 @@ mod tests {
         ));
     }
 
-    fn native_text(source: &str) -> RetainedTextAuthoringSpec {
-        RetainedTextAuthoringSpec::native(source, "DejaVu Sans Mono", 48.0, 0.5).unwrap()
-    }
-
     #[test]
     fn mixed_bind_events_define_the_canonical_object_stream_directly() {
         let mut context = CanonicalAuthoringScene::default();
@@ -6710,9 +6506,8 @@ mod tests {
                 ObjectSnapshot::new(GeometryRef::circle(0.5)),
             )
             .unwrap();
-        context
-            .bind_text(ObjectId::new(1), native_text("A"))
-            .unwrap();
+        let label = context.scene.text(noon::Text::new("A")).unwrap();
+        context.bind_mobject(ObjectId::new(1), &label).unwrap();
         context
             .bind_geometry(
                 ObjectId::new(2),
@@ -6720,9 +6515,7 @@ mod tests {
             )
             .unwrap();
 
-        let spec = context
-            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
-            .unwrap();
+        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
         assert_eq!(
             spec.objects
                 .iter()
@@ -6751,9 +6544,7 @@ mod tests {
             })
             .unwrap();
 
-        let spec = context
-            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
-            .unwrap();
+        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
         assert_eq!(
             spec.objects
                 .iter()
@@ -6764,7 +6555,7 @@ mod tests {
     }
 
     #[test]
-    fn native_semantic_text_exports_only_at_the_legacy_callback_boundary() {
+    fn native_semantic_text_exports_from_shared_state() {
         let mut context = CanonicalAuthoringScene::default();
         let mut label = context
             .scene
@@ -6777,11 +6568,9 @@ mod tests {
         label.shift(2.0, -1.0).unwrap();
         context.bind_mobject(ObjectId::new(4), &label).unwrap();
 
-        let spec = context
-            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
-            .unwrap();
+        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
         let ObjectSpecContent::Text(text) = &spec.objects[0].content else {
-            panic!("shared native Text must derive a legacy-boundary text spec");
+            panic!("shared native Text must derive the exported text spec");
         };
         assert_eq!(text.source, "A\nB");
         assert_eq!(text.font_size, 36.0);
@@ -6816,9 +6605,7 @@ mod tests {
         context.bind_mobject(ObjectId::new(4), &label).unwrap();
         context.bind_mobject(ObjectId::new(5), &equation).unwrap();
 
-        let spec = context
-            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
-            .unwrap();
+        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
         let ObjectSpecContent::Text(label) = &spec.objects[0].content else {
             panic!("Typst export must remain source-level text");
         };
@@ -6849,18 +6636,15 @@ mod tests {
             .bind_geometry(first, ObjectSnapshot::new(GeometryRef::circle(0.5)))
             .unwrap();
         let checkpoint = context.checkpoint();
-        context
-            .bind_text(ObjectId::new(1), native_text("temporary"))
-            .unwrap();
+        let temporary = context.scene.text(noon::Text::new("temporary")).unwrap();
+        context.bind_mobject(ObjectId::new(1), &temporary).unwrap();
         // Checkpoint rollback is intentionally append-only: an update to an
         // existing slot remains visible after the failed bind is reclaimed.
         context
             .update_geometry(first, ObjectSnapshot::new(GeometryRef::circle(0.75)))
             .unwrap();
         context.restore(checkpoint).unwrap();
-        let exported = context
-            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
-            .unwrap();
+        let exported = context.finalize(Vec::new(), Vec::new(), None).unwrap();
         let ObjectSpecContent::Geometry(geometry) = &exported.objects[0].content else {
             panic!("first object must remain geometry-backed");
         };
@@ -6880,7 +6664,7 @@ mod tests {
             .unwrap();
 
         let spec = context
-            .finalize(Vec::new(), Vec::new(), Vec::new(), Some(first))
+            .finalize(Vec::new(), Vec::new(), Some(first))
             .unwrap();
         assert_eq!(spec.objects.len(), 2);
         assert_eq!(spec.objects[0].id, first);
@@ -6892,11 +6676,12 @@ mod tests {
     fn content_domain_cannot_change_after_binding() {
         let mut context = CanonicalAuthoringScene::default();
         let id = ObjectId::new(7);
-        context.bind_text(id, native_text("stable")).unwrap();
+        let text = context.scene.text(noon::Text::new("stable")).unwrap();
+        context.bind_mobject(id, &text).unwrap();
         let error = context
             .update_geometry(id, ObjectSnapshot::new(GeometryRef::circle(1.0)))
             .unwrap_err();
-        assert!(error.contains("not geometry-backed"));
+        assert!(error.contains("geometry required"));
     }
 
     #[test]
@@ -7355,6 +7140,64 @@ mod tests {
         assert_eq!(
             player.live_effective(&right).unwrap().transform.translation,
             Vec2::new(2.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn cleared_text_reenters_composition_with_its_existing_wrapper_identity() {
+        let mut context = CanonicalAuthoringScene::default();
+        let label = context.scene.text(noon::Text::new("stable")).unwrap();
+        let id = ObjectId::new(7);
+        context.bind_mobject(id, &label).unwrap();
+        context.live_player(1.0).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Clear,
+                members: Vec::new(),
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert!(!context.live_contains_mobject(&label).unwrap());
+        assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
+        assert_eq!(context.identities.get(&label.node_id()), Some(&id));
+
+        let target = context.live_target_editor(&label).unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_shift(&target, 2.0, -1.0)
+            .unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let child = OrdinaryCompositionChild::TransformTo {
+            entering_id: Some(id),
+            source: label.clone(),
+            target,
+            interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            options,
+        };
+        context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &[child],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        assert!(context.live_contains_mobject(&label).unwrap());
+        assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
+        assert_eq!(context.identities.get(&label.node_id()), Some(&id));
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&label)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(2.0, -1.0),
         );
     }
 

@@ -452,47 +452,28 @@ impl From<serde_json::Error> for InstalledExecutionError {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{
-        FamilyAnimationMode, FamilyAnimationState, ObjectId, RateFunction, SceneDefinition, Vec2,
-    };
+    use noon_core::{FamilyAnimationMode, FamilyAnimationState, ObjectId, RateFunction, Vec2};
 
     use super::*;
     use crate::{
-        canonical_retained_scene_spec_json, CanonicalRetainedEnginePlayer,
-        RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedFamilyExecutionObjectState,
-        RetainedFamilyPlanTransport, RetainedTextAuthoringSpec,
+        CanonicalAuthoringScene, CanonicalRetainedEnginePlayer, RetainedFamilyExecutionObjectState,
+        RetainedFamilyPlanTransport,
     };
 
-    fn native_text(source: &str, font_size: f32) -> RetainedTextAuthoringSpec {
-        RetainedTextAuthoringSpec::native(
-            source,
-            noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
-            font_size,
-            -1.0,
-        )
-        .unwrap()
-    }
-
     fn engine() -> CanonicalRetainedEnginePlayer {
-        let legacy = SceneDefinition::new();
-        let document = RetainedAuthoringDocument::new(vec![
-            RetainedAuthoringTextObject {
-                object: ObjectId::new(8),
-                order: 0,
-                text: native_text("Hello", 64.0),
-            },
-            RetainedAuthoringTextObject {
-                object: ObjectId::new(21),
-                order: 1,
-                text: native_text("World", 72.0),
-            },
-        ])
-        .unwrap();
-        let legacy_json = noon_ir::encode_scene(&legacy).unwrap();
-        let document_json = document.to_json().unwrap();
-        let scene_spec_json =
-            canonical_retained_scene_spec_json(&legacy_json, &document_json).unwrap();
-        CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 17).unwrap()
+        let store = std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+        let scene = noon::Scene::with_store(std::rc::Rc::clone(&store));
+        let hello = scene
+            .text(noon::Text::new("Hello").with_font_size(64.0))
+            .unwrap();
+        let world = scene
+            .text(noon::Text::new("World").with_font_size(72.0))
+            .unwrap();
+        let mut context = CanonicalAuthoringScene::with_store(store);
+        context.bind_mobject(ObjectId::new(8), &hello).unwrap();
+        context.bind_mobject(ObjectId::new(21), &world).unwrap();
+        let exported = context.finalize(Vec::new(), Vec::new(), None).unwrap();
+        CanonicalRetainedEnginePlayer::new(exported, 4.0, 17).unwrap()
     }
 
     fn family_state(progress: f64) -> FamilyAnimationState {

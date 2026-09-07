@@ -68,34 +68,6 @@ const browserArgs = [
   "--disable-dev-shm-usage",
 ];
 
-const retainedDocumentJson = JSON.stringify({
-  channel: "noon.authoring.retained",
-  protocol_version: 2,
-  objects: [
-    {
-      object: 4503599627370496,
-      order: 0,
-      text: {
-        source: "Prepared retained Text",
-        backend: {
-          kind: "native",
-          font_family: "DejaVu Sans Mono",
-          line_spacing: -1,
-        },
-        font_size: 48,
-        transform: {
-          translation: { x: 0, y: 0 },
-          scale: { x: 1, y: 1 },
-          rotation: 0,
-        },
-        color: { red: 1, green: 1, blue: 1, alpha: 1 },
-        opacity: 1,
-      },
-    },
-  ],
-});
-const sceneJson = JSON.stringify({ version: 1, objects: [], tracks: [] });
-
 async function runMode(browser, transportMode) {
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
   const browserErrors = [];
@@ -106,10 +78,19 @@ async function runMode(browser, transportMode) {
   await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
 
   const result = await page.evaluate(
-    async ({ transportMode: mode, retainedDocumentJson: retained, sceneJson: scene }) => {
+    async ({ transportMode: mode }) => {
       const wasm = await import("./pkg/noon_web.js");
       await wasm.default();
-      const sceneSpecJson = wasm.canonicalRetainedSceneSpecJson(scene, retained);
+      const store = new wasm.WasmAuthoringStore();
+      const context = store.createSceneContext();
+      const text = store.createManimText(
+        "Prepared retained Text",
+        "DejaVu Sans Mono",
+        48,
+        -1,
+      );
+      context.bindMobject("4503599627370496", text);
+      const sceneSpecJson = context.sceneSpecJson("[]", "[]", "");
       const canvas = document.querySelector("#scene");
       const devicePixelRatio = window.devicePixelRatio || 1;
       const width = Math.max(1, Math.round(canvas.clientWidth * devicePixelRatio));
@@ -258,7 +239,7 @@ async function runMode(browser, transportMode) {
         errors,
       };
     },
-    { transportMode, retainedDocumentJson, sceneJson },
+    { transportMode },
   );
 
   assert.equal(result.crossOriginIsolated, true);

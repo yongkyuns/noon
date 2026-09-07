@@ -41,6 +41,7 @@ from noon import *
 class RetainedSceneLifecycle(Scene):
     def construct(self):
         label = Text("Lifecycle", font_size=48)
+        self.live_execution()
 
         self.wait(0.5)
         assert label not in self.mobjects
@@ -84,62 +85,16 @@ try {
   await page.evaluate(() => window.noonManimCompat.ready());
 
   const result = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
+    (source) => window.noonManimCompat.runLive(source),
     lifecycleSource,
   );
-  assert.equal(result.kind, "scene_document");
-  assert.equal(
-    result.document.objects.length,
-    0,
-    "retained Scene lifecycle must not synthesize legacy placeholder geometry",
-  );
-  assert.ok(result.retainedDocument, "retained Scene lifecycle must emit a retained document");
-  assert.equal(result.retainedDocument.objects.length, 1);
-  assert.equal(result.retainedDocument.objects[0].text.source, "Lifecycle");
-  assert.deepEqual(result.retainedDocument.objects[0].text.transform.translation, {
-    x: 0,
-    y: 0,
-  });
-
-  const tracks = result.retainedDocument.tracks ?? [];
-  const presence = tracks.filter((track) => track.property === "presence");
-  const position = tracks.filter((track) => track.property === "position");
-
-  assert.deepEqual(
-    presence.map((track) => ({
-      values: track.values.bool,
-      start: track.timing.start_time,
-      duration: track.timing.duration,
-      easing: track.timing.easing,
-    })),
-    [
-      { values: { from: false, to: true }, start: 0.5, duration: 0, easing: "linear" },
-      { values: { from: true, to: false }, start: 1, duration: 0, easing: "linear" },
-      { values: { from: false, to: true }, start: 1.5, duration: 0, easing: "linear" },
-      { values: { from: true, to: false }, start: 2, duration: 0, easing: "linear" },
-      { values: { from: false, to: true }, start: 2.5, duration: 0, easing: "linear" },
-    ],
-    "direct add/remove/clear and animate reintroduction must share one Presence timeline",
-  );
-
-  assert.equal(position.length, 1);
-  assert.deepEqual(position[0].values.vec2, {
-    from: { x: 0, y: 0 },
-    to: { x: 0, y: 1 },
-  });
-  assert.equal(position[0].timing.start_time, 2.5);
-  assert.equal(position[0].timing.duration, 0.5);
-  assert.equal(position[0].timing.easing, "smooth");
-
   assert.equal(result.duration, 3);
-  const wire = JSON.stringify(result.retainedDocument);
-  for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
-    assert.ok(!wire.includes(forbidden), `retained lifecycle wire must not contain ${forbidden}`);
-  }
+  assert.equal(result.metrics.objectCount, 1, "animate must reintroduce the cleared Text root");
+  assert.ok(result.metrics.presentedFrames > 0, "shared Text lifecycle must render");
   assert.deepEqual(errors, [], `browser errors while testing retained Text lifecycle:\n${errors.join("\n")}`);
 
   console.log(
-    "Retained Text Scene lifecycle smoke passed: delayed add, remove, re-add, clear, and animate reintroduction share retained Presence state without placeholder geometry.",
+    "Retained Text Scene lifecycle smoke passed: delayed add, remove, re-add, clear, and animate reintroduction share one live semantic scene.",
   );
 } finally {
   await browser?.close();

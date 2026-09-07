@@ -52,6 +52,12 @@ class RetainedFamilyFade(Scene):
         holder.remove(detached)
         holder.add(detached)
 
+        unsupported = VGroup(
+            Text("Unsupported A", font_size=32),
+            Text("Unsupported B", font_size=32),
+        )
+
+        self.live_execution()
         self.wait(0.25)
         assert family not in self.mobjects
 
@@ -65,15 +71,11 @@ class RetainedFamilyFade(Scene):
         assert first not in self.mobjects
         assert second not in self.mobjects
 
-        unsupported = VGroup(
-            Text("Unsupported A", font_size=32),
-            Text("Unsupported B", font_size=32),
-        )
         try:
             self.play(FadeIn(unsupported, shift=UP), run_time=0.25)
             raise AssertionError("shifted retained family FadeIn must fail")
         except NotImplementedError as error:
-            assert "shared retained family layout semantics" in str(error)
+            assert "does not support shift, scale, or target_position" in str(error)
         assert unsupported not in self.mobjects
 `;
 
@@ -96,72 +98,13 @@ try {
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonManimCompat.ready());
 
-  const result = await page.evaluate((python) => window.noonManimCompat.run(python), source);
-  assert.equal(result.kind, "scene_document");
-  assert.equal(
-    result.document.objects.length,
-    0,
-    "retained Text family fades must not create legacy placeholder geometry",
-  );
-  assert.ok(result.retainedDocument, "family fade must emit retained authoring state");
-  assert.deepEqual(
-    result.retainedDocument.objects.map((object) => object.text.source),
-    ["Family A", "Family B"],
-  );
-
-  const tracks = result.retainedDocument.tracks ?? [];
-  assert.equal(
-    tracks.filter((track) => track.property === "position").length,
-    0,
-    "default family fades must not synthesize position tracks",
-  );
-  assert.equal(
-    tracks.filter((track) => track.property === "scale").length,
-    0,
-    "default family fades must not synthesize scale tracks",
-  );
-
-  for (const object of result.retainedDocument.objects) {
-    const objectTracks = tracks.filter((track) => track.object === object.object);
-    const presence = objectTracks.filter((track) => track.property === "presence");
-    const appearance = objectTracks.filter((track) => track.property === "appearance");
-    assert.deepEqual(
-      presence.map((track) => ({
-        values: track.values.bool,
-        start: track.timing.start_time,
-        duration: track.timing.duration,
-        easing: track.timing.easing,
-      })),
-      [
-        { values: { from: false, to: true }, start: 0.25, duration: 0, easing: "linear" },
-        { values: { from: true, to: false }, start: 1.5, duration: 0, easing: "linear" },
-      ],
-      `${object.text.source} must use leaf Presence lifecycle`,
-    );
-    assert.deepEqual(
-      appearance.map((track) => ({
-        values: track.values.scalar,
-        start: track.timing.start_time,
-        duration: track.timing.duration,
-        easing: track.timing.easing,
-      })),
-      [
-        { values: { from: 0, to: 1 }, start: 0.25, duration: 0.75, easing: "linear" },
-        { values: { from: 1, to: 0 }, start: 1, duration: 0.5, easing: "smooth" },
-        { values: { from: 0, to: 1 }, start: 1.5, duration: 0, easing: "linear" },
-      ],
-      `${object.text.source} must use leaf Appearance fade plus cleanup`,
-    );
-  }
-
+  const result = await page.evaluate((python) => window.noonManimCompat.runLive(python), source);
   assert.equal(result.duration, 1.5);
-  const wire = JSON.stringify(result.retainedDocument);
-  for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
-    assert.ok(!wire.includes(forbidden), `retained family fade wire must not contain ${forbidden}`);
-  }
+  assert.equal(result.metrics.objectCount, 0, "FadeOut must remove the family root");
+  assert.ok(result.metrics.presentedFrames > 0, "shared family fades must render");
   assert.deepEqual(errors, [], `browser errors while testing retained family fades:\n${errors.join("\n")}`);
   console.log(
-    "Retained Text family fade smoke passed: nested VGroup identity is shared, default FadeIn/FadeOut lower to leaf Presence/Appearance tracks, wrapper identity stays top-level, and unsupported family layout endpoints fail before mutation.",
+    "Retained Text family fade smoke passed: nested VGroup identity is shared, FadeIn/FadeOut execute through the shared runtime, wrapper identity stays top-level, and unsupported family layout endpoints fail before mutation.",
   );
 } finally {
   await browser?.close();

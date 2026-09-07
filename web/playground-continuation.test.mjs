@@ -40,6 +40,15 @@ test("playground tears down an early continuation when its run becomes stale", (
     runScene,
     /catch \(error\) \{\s*discardEarlyContinuationRuntime\(earlyContinuation\?\.attachedPlayer\)/,
   );
+
+  const discardStart = main.indexOf("function discardEarlyContinuationRuntime(");
+  const discardEnd = main.indexOf("function sameSemanticContinuation(", discardStart);
+  const discard = main.slice(discardStart, discardEnd);
+  assert.match(
+    discard,
+    /if \(attachedPlayer == null\) return;[\s\S]*attachedPlayer\.terminate\(\);[\s\S]*if \(player !== attachedPlayer\) return;[\s\S]*adoptRuntimeCanvas\(attachedPlayer\);[\s\S]*player = null;/,
+    "stale continuation teardown must publish the fresh replacement canvas before clearing its owner",
+  );
 });
 
 test("source-owned semantic runs do not expose unsupported playback controls", () => {
