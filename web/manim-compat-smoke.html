@@ -26,6 +26,7 @@
             async onSemanticContinuation(registration) {
               await execution.startSemanticExecution(registration.semanticExecution, {
                 authoringClient: client,
+                loopDurationSeconds: registration.duration,
                 transportMode: "transferable",
               });
             },

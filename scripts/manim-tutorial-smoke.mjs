@@ -214,57 +214,68 @@ try {
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonManimCompat.ready());
 
+  const entryFailures = [];
   for (const entry of ready) {
-    const source = readySources.get(entry.id);
-    assert.ok(source, `${entry.id}: exact source was not loaded`);
-    if (entry.qualification_mode === "shared-live") {
-      // Migrated animations execute through the shared semantic continuation;
-      // an export document is no longer their canonical behavior proof.
+    try {
+      const source = readySources.get(entry.id);
+      assert.ok(source, `${entry.id}: exact source was not loaded`);
+      if (entry.qualification_mode === "shared-live") {
+        // Migrated animations execute through the shared semantic continuation;
+        // an export document is no longer their canonical behavior proof.
+        const result = await page.evaluate(
+          (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+          source,
+        );
+        const expected = expectedDuration(entry);
+        assert.ok(
+          Math.abs(result.duration - expected) <= 1e-9,
+          `${entry.id}: expected duration ${expected}, got ${result.duration}`,
+        );
+        assert.ok(result.metrics.presentedFrames > 0, `${entry.id}: shared execution did not render`);
+        assert.equal(
+          result.metrics.objectCount,
+          entry.expected_object_count,
+          `${entry.id}: shared execution published the wrong object count`,
+        );
+        console.log(`[PASS] ${entry.id}`);
+        continue;
+      }
       const result = await page.evaluate(
-        (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+        (pythonSource) => window.noonManimCompat.run(pythonSource),
         source,
       );
-      const expected = expectedDuration(entry);
-      assert.ok(
-        Math.abs(result.duration - expected) <= 1e-9,
-        `${entry.id}: expected duration ${expected}, got ${result.duration}`,
+      assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
+      const retained = await page.evaluate(
+        ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
+        { result, label: entry.id },
       );
-      assert.ok(result.metrics.presentedFrames > 0, `${entry.id}: shared execution did not render`);
-      assert.equal(
-        result.metrics.objectCount,
-        entry.expected_object_count,
-        `${entry.id}: shared execution published the wrong object count`,
-      );
+      if (entry.id === completedRemovalId) {
+        assert.equal(authoredObjectCount(entry, result, retained), 0,
+          `${entry.id}: completed shared Shrink must export no live object`);
+      } else {
+        assert.ok(authoredObjectCount(entry, result, retained) > 0, `${entry.id}: expected scene objects`);
+      }
+      assertDurationContract(entry, result);
+      if (["parity-create-circle", "parity-square-to-circle"].includes(entry.id)) {
+        const reveal = result.document.tracks.find((track) => track.property === "reveal");
+        assert.ok(reveal, `${entry.id}: explicit export lost its Create reveal track`);
+        assert.deepEqual(reveal.values, { scalar: { from: 0, to: 1 } });
+        assert.equal(reveal.timing.start_time, 0);
+        assert.equal(reveal.timing.duration, 1);
+      }
       console.log(`[PASS] ${entry.id}`);
-      continue;
+    } catch (error) {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      entryFailures.push(`[FAIL] ${entry.id}\n${detail}`);
+      console.error(`[FAIL] ${entry.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const result = await page.evaluate(
-      (pythonSource) => window.noonManimCompat.run(pythonSource),
-      source,
-    );
-    assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
-    const retained = await page.evaluate(
-      ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
-      { result, label: entry.id },
-    );
-    if (entry.id === completedRemovalId) {
-      assert.equal(authoredObjectCount(entry, result, retained), 0,
-        `${entry.id}: completed shared Shrink must export no live object`);
-    } else {
-      assert.ok(authoredObjectCount(entry, result, retained) > 0, `${entry.id}: expected scene objects`);
-    }
-    assertDurationContract(entry, result);
-    if (["parity-create-circle", "parity-square-to-circle"].includes(entry.id)) {
-      const reveal = result.document.tracks.find((track) => track.property === "reveal");
-      assert.ok(reveal, `${entry.id}: explicit export lost its Create reveal track`);
-      assert.deepEqual(reveal.values, { scalar: { from: 0, to: 1 } });
-      assert.equal(reveal.timing.start_time, 0);
-      assert.equal(reveal.timing.duration, 1);
-    }
-    console.log(`[PASS] ${entry.id}`);
   }
 
-  assert.equal(browserErrors.length, 0, browserErrors.join("\n"));
+  assert.equal(
+    entryFailures.length + browserErrors.length,
+    0,
+    [...entryFailures, ...browserErrors].join("\n\n"),
+  );
   console.log(`${ready.length}/${ready.length} exact-source Manim examples passed`);
 } finally {
   if (browser !== null) await browser.close();
