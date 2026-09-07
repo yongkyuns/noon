@@ -37,7 +37,8 @@ pub fn session() -> Result<ExecutionSession, String> {
         object.set_fill(0.0, 0.0, 1.0, 0.35)?;
         object.set_stroke_color(1.0, 1.0, 1.0, 1.0)?;
         object.set_stroke_opacity(1.0)?;
-        object.set_stroke_width(2.0)?;
+        // Manim width 2 uses a 0.02 scene-unit stroke in the paired Python example.
+        object.set_stroke_width(0.02)?;
     }
     scene
         .add_many(
