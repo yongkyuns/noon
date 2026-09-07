@@ -2,7 +2,7 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
     validate_track_definition, AnimationOptions, ObjectId, PreparedSemanticMutationTransaction,
-    Property, RateFunction, SemanticFadeDirection, SemanticLoweringError, SemanticObjectProperty,
+    Property, RateFunction, SemanticLoweringError, SemanticObjectProperty,
     SemanticTransactionNodeRef, SemanticTransactionReadError, TimelineError, TrackDefinition,
     TrackId, TrackTiming, TrackValues,
 };
