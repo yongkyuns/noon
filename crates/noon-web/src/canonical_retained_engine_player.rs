@@ -563,7 +563,7 @@ mod tests {
         let initial: RetainedFamilyExecutionDeltaEnvelope =
             serde_json::from_str(&initial_json).unwrap();
         assert!(initial.retained.snapshot);
-        assert_eq!(initial.family_plans.len(), 1);
+        assert!(initial.family_plans.is_empty());
         assert!(!initial_json.contains("glyph"));
         let (outcome, changes) = mirror.apply_json(&initial_json).unwrap();
         assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
@@ -576,7 +576,7 @@ mod tests {
         let midpoint: RetainedFamilyExecutionDeltaEnvelope =
             serde_json::from_str(&midpoint_json).unwrap();
         assert!(!midpoint.retained.snapshot);
-        assert!(midpoint.family_plans.is_empty());
+        assert_eq!(midpoint.family_plans.len(), 1);
         mirror.apply_json(&midpoint_json).unwrap();
         assert_family_midpoint(&mirror, text_id, circle_id);
     }
@@ -650,9 +650,9 @@ mod tests {
         let initial = engine.initial_delta_json().unwrap();
         let initial_delta: RetainedFamilyExecutionDeltaEnvelope =
             serde_json::from_str(&initial).unwrap();
-        assert_eq!(initial_delta.family_plans.len(), 2);
+        assert!(initial_delta.family_plans.is_empty());
         mirror.apply_json(&initial).unwrap();
-        assert_eq!(mirror.family_plans().len(), 2);
+        assert!(mirror.family_plans().is_empty());
 
         let first = engine
             .seek_delta_json(2.0)

@@ -26,13 +26,11 @@ impl LiveContinuation for TextWrite {
                     .declare_and_activate_animation_composition(
                         SemanticAnimationCompositionKind::Parallel,
                         &[
-                            AnimationCompositionRequest::TransformTo(
-                                TransformToRequest::point_correspondence(
-                                    &self.moving,
-                                    &self.target,
-                                    options,
-                                ),
-                            ),
+                            AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                                &self.moving,
+                                &self.target,
+                                options,
+                            )),
                             AnimationCompositionRequest::TextWrite {
                                 target: &self.writing,
                                 reverse_member_order: false,

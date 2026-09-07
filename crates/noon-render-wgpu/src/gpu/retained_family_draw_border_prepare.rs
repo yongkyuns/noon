@@ -251,6 +251,7 @@ impl RetainedFramePreparer {
                         object_index_usize,
                         object_id,
                         run_index,
+                        false,
                     )? {
                         self.push_family_draw_border_glyph_run(
                             frame,
@@ -260,6 +261,7 @@ impl RetainedFramePreparer {
                             run_index,
                             texts,
                             fonts,
+                            false,
                         )?;
                     } else {
                         self.sources.push(SourceItem::FastGlyphRun {
@@ -281,6 +283,7 @@ impl RetainedFramePreparer {
         object_index: usize,
         object: ObjectId,
         run_index: u32,
+        stable_rows: bool,
     ) -> Result<bool, RetainedFamilyDrawBorderPrepareError> {
         let Some(members) =
             retained_family_draw_border_then_fill_members_for_object(frame, plan, object_index)?
@@ -289,7 +292,9 @@ impl RetainedFramePreparer {
         };
         for member in members {
             let member = member?;
-            if member.glyph.run_index == run_index {
+            if member.glyph.run_index == run_index
+                && (stable_rows || !matches!(member.phase, RetainedDrawBorderThenFillPhase::Fill { progress } if progress >= 1.0))
+            {
                 return Ok(true);
             }
             if member.object != object {
@@ -309,6 +314,7 @@ impl RetainedFramePreparer {
         run_index: u32,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
+        stable_rows: bool,
     ) -> Result<(), RetainedFamilyDrawBorderPrepareError> {
         let object = frame.retained.objects.get(object_index).ok_or(
             RetainedFamilyDrawBorderPrepareError::MissingSourceObject(object_id),
@@ -343,6 +349,9 @@ impl RetainedFramePreparer {
                 RetainedDrawBorderThenFillPhase::Outline { reveal } => reveal.max(0.0),
                 RetainedDrawBorderThenFillPhase::Fill { .. } => 1.0,
             };
+            if reveal <= 0.0 && !stable_rows {
+                continue;
+            }
             let positioned = run.glyphs.get(member.glyph.glyph_index as usize).ok_or(
                 RetainedFamilyDrawBorderPrepareError::InvalidTextGlyph {
                     object: object_id,

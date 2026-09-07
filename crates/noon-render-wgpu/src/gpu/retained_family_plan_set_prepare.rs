@@ -249,7 +249,7 @@ impl RetainedFramePreparer {
         let canonical_scratch_len = self.scratch.objects.len();
 
         self.prepared_generation_ready = false;
-        if let Err(error) = self.apply_family_plan_set_to_scratch(frame, plans, texts, fonts) {
+        if let Err(error) = self.apply_family_plan_set_to_scratch(frame, plans, texts, fonts, active_indices.is_some()) {
             self.scratch_ready = false;
             return Err(error);
         }
@@ -364,6 +364,7 @@ impl RetainedFramePreparer {
         plans: &[RetainedFamilyAnimationPlan],
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
+        stable_rows: bool,
     ) -> Result<(), RetainedFamilyPlanSetPrepareError> {
         if frame.family_animations.len() != frame.retained.objects.len()
             || frame.family_plan_indices.len() != frame.retained.objects.len()
@@ -462,7 +463,7 @@ impl RetainedFramePreparer {
                                     run_index,
                                     texts,
                                     fonts,
-                                )?;
+                                    )?;
                             } else {
                                 self.sources.push(SourceItem::FastGlyphRun {
                                     object_id,
@@ -478,6 +479,7 @@ impl RetainedFramePreparer {
                                 object_index_usize,
                                 object_id,
                                 run_index,
+                                stable_rows,
                             )? {
                                 self.push_family_draw_border_glyph_run(
                                     &family_frame,
@@ -487,6 +489,7 @@ impl RetainedFramePreparer {
                                     run_index,
                                     texts,
                                     fonts,
+                                    stable_rows,
                                 )?;
                             } else {
                                 self.sources.push(SourceItem::FastGlyphRun {
@@ -616,6 +619,7 @@ impl RetainedFramePreparer {
                         run_index,
                         texts,
                         fonts,
+                        true,
                     )?;
                 }
             }

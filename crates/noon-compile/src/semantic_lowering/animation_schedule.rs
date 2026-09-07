@@ -1598,7 +1598,11 @@ where
                 .ok_or(AnimationSchedulePlanError::InvalidTextWriteTarget { animation, target })?;
             let default_duration = if member_count < 15 { 1.0 } else { 2.0 };
             let default_lag_ratio = (4.0 / f64::from(member_count.max(1))).min(0.2);
-            let options = resolve_animation_options(
+            let reverse_rate_function = play_options
+                .reverse_rate_function
+                .or(state.options.reverse_rate_function)
+                .unwrap_or(false);
+            let mut options = resolve_animation_options(
                 AnimationDefaults {
                     run_time: default_duration,
                     rate_func: RateFunction::Linear,
@@ -1609,9 +1613,10 @@ where
                     introducer: !reverse_member_order,
                 },
                 state.options,
-                play_options,
+                play_options.reverse_rate_function(false),
             )
             .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            options.reverse_rate_function = reverse_rate_function;
             // Member order controls how glyph progress is distributed. Removal is
             // an independent completion policy and may be explicitly overridden.
             let lifecycle_matches = options.introducer == !reverse_member_order;
