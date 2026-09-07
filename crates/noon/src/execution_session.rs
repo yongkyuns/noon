@@ -24,7 +24,7 @@ use noon_compile::{
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
     lower_prepared_semantic_animation_schedule, lower_semantic_affine_animation_tracks,
     lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
-    lower_semantic_execution_root_with_animation_root, CompilePatchError,
+    lower_semantic_execution_root_with_animation_root_at, CompilePatchError,
     EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
     PreparedScalarAnimationTrackError, PreparedScalarSignalTimelineError,
     PreparedSemanticAnimationLoweringError, PreparedSemanticAnimationScheduleError,
@@ -777,13 +777,24 @@ impl ExecutionSession {
         root: SemanticNodeId,
         animation_root: SemanticNodeId,
     ) -> Result<Self, SemanticExecutionLoweringError> {
+        Self::from_semantic_root_with_animation_root_at(store, root, animation_root, 0.0)
+    }
+
+    /// Instantiate an initial animation graph at an explicit activation origin.
+    pub fn from_semantic_root_with_animation_root_at(
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        animation_root: SemanticNodeId,
+        origin: f64,
+    ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
         let reachability = SemanticExecutionReachability::from_root(store, root)?;
-        let lowered = lower_semantic_execution_root_with_animation_root(
+        let lowered = lower_semantic_execution_root_with_animation_root_at(
             store,
             root,
             &mut execution_index,
             animation_root,
+            origin,
         )?;
         Ok(Self::from_lowered(
             store.identity(),
@@ -2624,7 +2635,7 @@ impl ExecutionSession {
             .into_iter()
             .enumerate()
             .map(|(leaf_index, leaf)| {
-                let family_member = noon_core::SemanticTextWriteFamilyMember {
+                let family_member = noon_core::SemanticFamilyAnimationMember {
                     family: target,
                     leaf_index,
                 };

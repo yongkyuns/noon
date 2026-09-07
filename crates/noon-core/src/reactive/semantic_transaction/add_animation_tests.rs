@@ -1,10 +1,10 @@
 use super::*;
 use crate::{
-    AnimationOptions, CompositionTimeMapStep, NativeStateSource, RateFunction,
+    AnimationOptions, CompositionTimeMapStep, FamilyAnimationMode, NativeStateSource, RateFunction,
     SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticAnimationState,
-    SemanticFadeDirection, SemanticObjectState, SemanticObjectTrackProperty,
-    SemanticObjectTrackValues, SemanticVec3, StoredGeometry,
+    SemanticFadeDirection, SemanticFamilyAnimationMember, SemanticObjectState,
+    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticVec3, StoredGeometry,
 };
 
 fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
@@ -801,6 +801,73 @@ fn instant_add_accepts_zero_duration_without_relaxing_other_animation_leaves() {
             .run_time,
         Some(0.0)
     );
+}
+
+#[test]
+fn exact_family_members_accept_geometry_and_preserve_independent_reversal_and_lifecycle() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 0.5);
+    let family = store.insert_family();
+    store.add_semantic_family_member(family, target).unwrap();
+    let member = SemanticFamilyAnimationMember {
+        family,
+        leaf_index: 0,
+    };
+    let reveal_options = AnimationOptions::new()
+        .run_time(2.0)
+        .rate_func(RateFunction::RushInto)
+        .lag_ratio(0.25)
+        .reverse_rate_function(false)
+        .introducer(false)
+        .remover(false);
+    let border_options = AnimationOptions::new()
+        .run_time(3.0)
+        .rate_func(RateFunction::Smooth)
+        .lag_ratio(0.5)
+        .reverse_rate_function(true)
+        .introducer(false)
+        .remover(false);
+
+    let mut transaction = SemanticMutationTransaction::new();
+    let reveal = transaction.create_family_animation_member(
+        target,
+        FamilyAnimationMode::Reveal,
+        true,
+        member,
+        reveal_options,
+    );
+    let border = transaction.create_family_animation_member(
+        target,
+        FamilyAnimationMode::DrawBorderThenFill,
+        false,
+        member,
+        border_options,
+    );
+    let committed = transaction.apply(&mut store).unwrap();
+
+    for (token, mode, reverse_member_order, options) in [
+        (reveal, FamilyAnimationMode::Reveal, true, reveal_options),
+        (
+            border,
+            FamilyAnimationMode::DrawBorderThenFill,
+            false,
+            border_options,
+        ),
+    ] {
+        let animation = store
+            .semantic_animation_state(committed.resolve(token).unwrap())
+            .unwrap();
+        assert_eq!(
+            animation.intent(),
+            &SemanticAnimationIntent::TextGlyph {
+                target,
+                mode,
+                reverse_member_order,
+                family_member: Some(member),
+            }
+        );
+        assert_eq!(animation.options(), options);
+    }
 }
 
 #[test]

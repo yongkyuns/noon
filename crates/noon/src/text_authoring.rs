@@ -10,11 +10,11 @@ pub(crate) use semantic::{math_typst_state, native_text_state, typst_state};
 
 use std::sync::Arc;
 
-use noon_compile::{CompileError, CompiledScene};
+use noon_compile::{CompileError, CompiledObject, CompiledScene};
 use noon_core::{
     Color, FontResourceArena, FontResourceError, GeometryResource, GeometryResourceArena, ObjectId,
-    RetainedObjectDefinition, SceneDefinition, Style, TextResource, TextResourceArena,
-    TextResourceValidationError, TextSourceKind, TrackDefinition, Transform2D, Vec2, WHITE,
+    Rect, Style, TextResource, TextResourceArena, TextResourceValidationError, TextSourceKind,
+    Transform2D, Vec2, WHITE,
 };
 use noon_text_native::{
     NativeFontFace, NativeTextCompiler, NativeTextError, NativeTextOptions,
@@ -179,35 +179,29 @@ macro_rules! typst_object {
             fn compile(
                 self,
                 scene: &mut RetainedScene,
-            ) -> Result<RetainedObjectDefinition, TextAuthoringError> {
+            ) -> Result<CompiledObject, TextAuthoringError> {
                 self.validate()?;
                 let artifact = compile_typst_resource(self.0.source.as_ref(), $mode)?;
                 debug_assert_eq!(artifact.resource.kind, $kind);
+                let bounds = artifact.resource.bounds;
                 let handle = scene.import_typst_artifact(artifact)?;
                 let id = scene.allocate_object_id()?;
-                Ok(self.retained_definition(id, handle))
+                Ok(self.compiled_object(id, handle, bounds))
             }
 
-            fn compile_with_id(
-                self,
-                scene: &mut RetainedScene,
-                id: ObjectId,
-            ) -> Result<RetainedObjectDefinition, TextAuthoringError> {
-                self.validate()?;
-                let artifact = compile_typst_resource(self.0.source.as_ref(), $mode)?;
-                debug_assert_eq!(artifact.resource.kind, $kind);
-                let handle = scene.import_typst_artifact(artifact)?;
-                Ok(self.retained_definition(id, handle))
-            }
-
-            fn retained_definition(
+            fn compiled_object(
                 &self,
                 id: ObjectId,
                 handle: noon_core::TextResourceHandle,
-            ) -> RetainedObjectDefinition {
-                let mut object = RetainedObjectDefinition::text(id, handle);
-                object.transform = self.0.authored_transform();
-                object.style = self.0.presentation.style();
+                bounds: Rect,
+            ) -> CompiledObject {
+                let mut object = CompiledObject::new(
+                    id,
+                    handle,
+                    self.0.authored_transform(),
+                    self.0.presentation.style(),
+                );
+                object.text_bounds = Some(bounds);
                 object
             }
         }
@@ -337,38 +331,27 @@ impl Text {
         Ok(artifact)
     }
 
-    fn compile(
-        self,
-        scene: &mut RetainedScene,
-    ) -> Result<RetainedObjectDefinition, TextAuthoringError> {
+    fn compile(self, scene: &mut RetainedScene) -> Result<CompiledObject, TextAuthoringError> {
         let artifact = self.compile_artifact()?;
+        let bounds = artifact.resource.bounds;
         let handle = scene.import_native_text_artifact(artifact)?;
         let id = scene.allocate_object_id()?;
-        Ok(self.retained_definition(id, handle))
+        Ok(self.compiled_object(id, handle, bounds))
     }
 
-    fn compile_with_id(
-        self,
-        scene: &mut RetainedScene,
-        id: ObjectId,
-    ) -> Result<RetainedObjectDefinition, TextAuthoringError> {
-        let artifact = self.compile_artifact()?;
-        let handle = scene.import_native_text_artifact(artifact)?;
-        Ok(self.retained_definition(id, handle))
-    }
-
-    fn retained_definition(
+    fn compiled_object(
         &self,
         id: ObjectId,
         handle: noon_core::TextResourceHandle,
-    ) -> RetainedObjectDefinition {
-        let mut object = RetainedObjectDefinition::text(id, handle);
-        object.transform = self.presentation.transform;
-        object.transform.scale = object.transform.scale.component_mul(Vec2::new(
+        bounds: Rect,
+    ) -> CompiledObject {
+        let mut transform = self.presentation.transform;
+        transform.scale = transform.scale.component_mul(Vec2::new(
             NATIVE_POINT_TO_SCENE_SCALE,
             NATIVE_POINT_TO_SCENE_SCALE,
         ));
-        object.style = self.presentation.style();
+        let mut object = CompiledObject::new(id, handle, transform, self.presentation.style());
+        object.text_bounds = Some(bounds);
         object
     }
 }
@@ -400,7 +383,6 @@ pub enum TextAuthoringError {
     MissingGeometryResource,
     MissingFontResource,
     DuplicateObject(ObjectId),
-    InvalidPainterOrder { order: usize, object_count: usize },
     ObjectIdSpaceExhausted,
     NativeText(NativeTextError),
     Typst(TypstBackendError),
@@ -430,13 +412,6 @@ impl std::fmt::Display for TextAuthoringError {
             Self::DuplicateObject(id) => {
                 write!(formatter, "duplicate retained object id {}", id.get())
             }
-            Self::InvalidPainterOrder {
-                order,
-                object_count,
-            } => write!(
-                formatter,
-                "retained painter order {order} is invalid for {object_count} existing objects"
-            ),
             Self::ObjectIdSpaceExhausted => {
                 formatter.write_str("retained object ID space is exhausted")
             }
@@ -496,8 +471,7 @@ impl From<String> for Text {
 /// Public retained authoring container for resource-backed text/math objects.
 #[derive(Clone, Debug, Default)]
 pub struct RetainedScene {
-    objects: Vec<RetainedObjectDefinition>,
-    tracks: Vec<TrackDefinition>,
+    objects: Vec<CompiledObject>,
     texts: TextResourceArena,
     geometries: GeometryResourceArena,
     fonts: FontResourceArena,
@@ -507,32 +481,6 @@ pub struct RetainedScene {
 impl RetainedScene {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Lift an existing geometry-only scene into the retained object domain.
-    pub fn from_legacy(scene: &SceneDefinition) -> Result<Self, TextAuthoringError> {
-        let objects = scene
-            .objects()
-            .iter()
-            .map(RetainedObjectDefinition::from)
-            .collect::<Vec<_>>();
-        let next_object_id =
-            objects
-                .iter()
-                .map(|object| object.id.get())
-                .max()
-                .map_or(Ok(0), |id| {
-                    id.checked_add(1)
-                        .ok_or(TextAuthoringError::ObjectIdSpaceExhausted)
-                })?;
-        Ok(Self {
-            objects,
-            tracks: scene.tracks().to_vec(),
-            texts: TextResourceArena::default(),
-            geometries: GeometryResourceArena::default(),
-            fonts: FontResourceArena::default(),
-            next_object_id,
-        })
     }
 
     pub fn add_text(&mut self, object: Text) -> Result<RetainedMobject, TextAuthoringError> {
@@ -553,42 +501,8 @@ impl RetainedScene {
         Ok(self.push_object(object))
     }
 
-    /// Insert native Text at an exact global painter slot using a caller-owned semantic ID.
-    pub fn insert_native_text_at(
-        &mut self,
-        order: usize,
-        id: ObjectId,
-        object: Text,
-    ) -> Result<RetainedMobject, TextAuthoringError> {
-        self.insert_text_at(order, id, |scene| object.compile_with_id(scene, id))
-    }
-
-    /// Insert Typst at an exact global painter slot using a caller-owned semantic ID.
-    pub fn insert_typst_at(
-        &mut self,
-        order: usize,
-        id: ObjectId,
-        object: Typst,
-    ) -> Result<RetainedMobject, TextAuthoringError> {
-        self.insert_text_at(order, id, |scene| object.compile_with_id(scene, id))
-    }
-
-    /// Insert MathTypst at an exact global painter slot using a caller-owned semantic ID.
-    pub fn insert_math_typst_at(
-        &mut self,
-        order: usize,
-        id: ObjectId,
-        object: MathTypst,
-    ) -> Result<RetainedMobject, TextAuthoringError> {
-        self.insert_text_at(order, id, |scene| object.compile_with_id(scene, id))
-    }
-
-    pub fn objects(&self) -> &[RetainedObjectDefinition] {
+    pub fn objects(&self) -> &[CompiledObject] {
         &self.objects
-    }
-
-    pub fn tracks(&self) -> &[TrackDefinition] {
-        &self.tracks
     }
 
     pub const fn texts(&self) -> &TextResourceArena {
@@ -604,47 +518,10 @@ impl RetainedScene {
     }
 
     pub fn compile(&self) -> Result<CompiledScene, TextAuthoringError> {
-        let objects = self
-            .objects
-            .iter()
-            .map(|object| {
-                noon_compile::CompiledObject::new(
-                    object.id,
-                    object.content.clone(),
-                    object.transform,
-                    object.style,
-                )
-            })
-            .collect();
-        Ok(CompiledScene::compile_objects(objects, &self.tracks)?)
+        Ok(CompiledScene::compile_objects(self.objects.clone(), &[])?)
     }
 
-    fn insert_text_at<F>(
-        &mut self,
-        order: usize,
-        id: ObjectId,
-        compile: F,
-    ) -> Result<RetainedMobject, TextAuthoringError>
-    where
-        F: FnOnce(&mut Self) -> Result<RetainedObjectDefinition, TextAuthoringError>,
-    {
-        if order > self.objects.len() {
-            return Err(TextAuthoringError::InvalidPainterOrder {
-                order,
-                object_count: self.objects.len(),
-            });
-        }
-        if self.objects.iter().any(|object| object.id == id) {
-            return Err(TextAuthoringError::DuplicateObject(id));
-        }
-        let next_object_id = self.next_object_id_after(id)?;
-        let object = compile(self)?;
-        self.objects.insert(order, object);
-        self.next_object_id = next_object_id;
-        Ok(RetainedMobject { id })
-    }
-
-    fn push_object(&mut self, object: RetainedObjectDefinition) -> RetainedMobject {
+    fn push_object(&mut self, object: CompiledObject) -> RetainedMobject {
         let id = object.id;
         self.objects.push(object);
         RetainedMobject { id }
@@ -660,15 +537,6 @@ impl RetainedScene {
             .checked_add(1)
             .ok_or(TextAuthoringError::ObjectIdSpaceExhausted)?;
         Ok(id)
-    }
-
-    fn next_object_id_after(&self, id: ObjectId) -> Result<u64, TextAuthoringError> {
-        if id.get() < self.next_object_id {
-            return Ok(self.next_object_id);
-        }
-        id.get()
-            .checked_add(1)
-            .ok_or(TextAuthoringError::ObjectIdSpaceExhausted)
     }
 
     fn import_native_text_artifact(
@@ -718,7 +586,7 @@ impl RetainedScene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::{GeometryRef, ObjectContentRef, RateFunction, TrackTiming};
+    use noon_core::ObjectContentRef;
 
     #[test]
     fn native_text_authors_retained_plain_text_without_geometry_placeholder() {
@@ -784,7 +652,7 @@ mod tests {
             TextSourceKind::Typst
         );
         assert!(!scene.fonts().is_empty());
-        assert!(scene.objects()[0].style.fill.is_some());
+        assert!(scene.objects()[0].base_style.fill.is_some());
     }
 
     #[test]
@@ -807,8 +675,8 @@ mod tests {
                 Some(GeometryResource::VectorPath(_))
             ));
         }
-        assert!((scene.objects()[0].transform.scale.x - 0.075).abs() < 1e-6);
-        assert!((scene.objects()[0].transform.scale.y - 0.075).abs() < 1e-6);
+        assert!((scene.objects()[0].base_transform.scale.x - 0.075).abs() < 1e-6);
+        assert!((scene.objects()[0].base_transform.scale.y - 0.075).abs() < 1e-6);
     }
 
     #[test]
@@ -827,147 +695,6 @@ mod tests {
             .iter()
             .all(|object| object.text().is_some()));
         assert_eq!(scene.texts().len(), 3);
-    }
-
-    #[test]
-    fn legacy_scene_lifts_with_identity_tracks_and_order_intact() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.5));
-        let square = legacy.add(GeometryRef::rectangle(1.0, 1.0));
-        legacy
-            .animate_position(
-                circle,
-                Vec2::ZERO,
-                Vec2::new(2.0, 0.0),
-                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-            )
-            .unwrap();
-
-        let retained = RetainedScene::from_legacy(&legacy).unwrap();
-        assert_eq!(retained.objects().len(), 2);
-        assert_eq!(retained.objects()[0].id, circle);
-        assert_eq!(retained.objects()[1].id, square);
-        assert_eq!(retained.tracks(), legacy.tracks());
-        assert!(retained
-            .objects()
-            .iter()
-            .all(|object| object.content.geometry().is_some()));
-
-        let compiled = retained.compile().unwrap();
-        assert_eq!(compiled.object_index(circle), Some(0));
-        assert_eq!(compiled.object_index(square), Some(1));
-        assert_eq!(compiled.track_count(), legacy.tracks().len());
-    }
-
-    #[test]
-    fn explicit_native_text_insertion_reconstructs_mixed_global_painter_order() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.25));
-        let square = legacy.add(GeometryRef::rectangle(0.5, 0.5));
-        let text_id = ObjectId::new(1_u64 << 52);
-
-        let mut retained = RetainedScene::from_legacy(&legacy).unwrap();
-        let text = retained
-            .insert_native_text_at(1, text_id, Text::new("middle"))
-            .unwrap();
-
-        assert_eq!(text.id(), text_id);
-        assert_eq!(
-            retained
-                .objects()
-                .iter()
-                .map(|object| object.id)
-                .collect::<Vec<_>>(),
-            vec![circle, text_id, square]
-        );
-        let handle = retained.objects()[1].content.text().unwrap();
-        assert_eq!(
-            retained.texts().get(handle).unwrap().kind,
-            TextSourceKind::Plain
-        );
-    }
-
-    #[test]
-    fn explicit_typst_insertion_reconstructs_mixed_global_painter_order() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.25));
-        let square = legacy.add(GeometryRef::rectangle(0.5, 0.5));
-        let text_id = ObjectId::new(1_u64 << 52);
-
-        let mut retained = RetainedScene::from_legacy(&legacy).unwrap();
-        let text = retained
-            .insert_typst_at(1, text_id, Typst::new("middle").with_font_size(48.0))
-            .unwrap();
-
-        assert_eq!(text.id(), text_id);
-        assert_eq!(
-            retained
-                .objects()
-                .iter()
-                .map(|object| object.id)
-                .collect::<Vec<_>>(),
-            vec![circle, text_id, square]
-        );
-        assert!(retained.objects()[0].content.geometry().is_some());
-        assert!(retained.objects()[1].content.text().is_some());
-        assert!(retained.objects()[2].content.geometry().is_some());
-        assert_eq!(retained.texts().len(), 1);
-
-        let compiled = retained.compile().unwrap();
-        assert_eq!(compiled.object_index(circle), Some(0));
-        assert_eq!(compiled.object_index(text_id), Some(1));
-        assert_eq!(compiled.object_index(square), Some(2));
-    }
-
-    #[test]
-    fn explicit_math_typst_keeps_math_resource_identity() {
-        let mut legacy = SceneDefinition::new();
-        legacy.add(GeometryRef::circle(0.25));
-        let math_id = ObjectId::new((1_u64 << 52) + 1);
-        let mut retained = RetainedScene::from_legacy(&legacy).unwrap();
-        retained
-            .insert_math_typst_at(
-                1,
-                math_id,
-                MathTypst::new("sum_(k=1)^n k").with_font_size(72.0),
-            )
-            .unwrap();
-
-        let handle = retained.objects()[1].content.text().unwrap();
-        assert_eq!(
-            retained.texts().get(handle).unwrap().kind,
-            TextSourceKind::MathTypst
-        );
-    }
-
-    #[test]
-    fn rejected_explicit_insertion_does_not_compile_text_resources() {
-        let mut legacy = SceneDefinition::new();
-        let existing = legacy.add(GeometryRef::circle(0.25));
-        let mut retained = RetainedScene::from_legacy(&legacy).unwrap();
-
-        let order_error = retained
-            .insert_typst_at(2, ObjectId::new(1_u64 << 52), Typst::new("bad order"))
-            .unwrap_err();
-        assert_eq!(
-            order_error,
-            TextAuthoringError::InvalidPainterOrder {
-                order: 2,
-                object_count: 1,
-            }
-        );
-        assert!(retained.texts().is_empty());
-        assert!(retained.fonts().is_empty());
-
-        let duplicate_error = retained
-            .insert_native_text_at(1, existing, Text::new("duplicate"))
-            .unwrap_err();
-        assert_eq!(
-            duplicate_error,
-            TextAuthoringError::DuplicateObject(existing)
-        );
-        assert!(retained.texts().is_empty());
-        assert!(retained.fonts().is_empty());
     }
 
     #[test]

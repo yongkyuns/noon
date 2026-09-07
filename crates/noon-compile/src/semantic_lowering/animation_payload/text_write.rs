@@ -37,7 +37,7 @@ pub enum TextGlyphLoweringError {
     InvalidPlan(RetainedFamilyAnimationMemberPlanError),
     InvalidSpec(noon_core::FamilyAnimationError),
     InvalidTimeMap(noon_core::CompositionTimeMapError),
-    InvalidFamilyMember(noon_core::SemanticTextWriteFamilyMember),
+    InvalidFamilyMember(noon_core::SemanticFamilyAnimationMember),
     ConflictingObjectDrivers {
         target: ObjectId,
         first: SemanticTransactionNodeRef,
@@ -57,9 +57,9 @@ fn plan(
     store: &SemanticStore,
     semantic_target: SemanticNodeId,
     target: ObjectId,
-    family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+    family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     family_spans: &std::collections::HashMap<
-        noon_core::SemanticTextWriteFamilyMember,
+        noon_core::SemanticFamilyAnimationMember,
         (SemanticNodeId, u32, u32),
     >,
     spec: FamilyAnimationSpec,
@@ -69,9 +69,7 @@ fn plan(
         .semantic_object_state_checked(semantic_target)
         .map_err(|_| TextGlyphLoweringError::MissingSemanticTarget(semantic_target.into()))?;
     let content = match (spec.mode, state.content) {
-        (FamilyAnimationMode::Reveal, noon_core::SemanticObjectContent::Geometry(geometry))
-            if family_member.is_some() =>
-        {
+        (_, noon_core::SemanticObjectContent::Geometry(geometry)) if family_member.is_some() => {
             ObjectContentRef::Geometry(
                 lower_semantic_geometry_value(geometry, Some(store)).map_err(|_| {
                     TextGlyphLoweringError::MissingSemanticTarget(semantic_target.into())
@@ -122,12 +120,12 @@ fn resolve_family_spans(
     store: &SemanticStore,
     members: impl Iterator<
         Item = (
-            noon_core::SemanticTextWriteFamilyMember,
+            noon_core::SemanticFamilyAnimationMember,
             FamilyAnimationMode,
         ),
     >,
 ) -> Result<
-    std::collections::HashMap<noon_core::SemanticTextWriteFamilyMember, (SemanticNodeId, u32, u32)>,
+    std::collections::HashMap<noon_core::SemanticFamilyAnimationMember, (SemanticNodeId, u32, u32)>,
     TextGlyphLoweringError,
 > {
     let mut families = std::collections::HashMap::new();
@@ -146,15 +144,8 @@ fn resolve_family_spans(
                 .semantic_object_state_checked(*leaf)
                 .map_err(|_| TextGlyphLoweringError::MissingSemanticTarget((*leaf).into()))?;
             let content = match (mode, state.content) {
-                (FamilyAnimationMode::Reveal, noon_core::SemanticObjectContent::Geometry(_)) => {
-                    None
-                }
+                (_, noon_core::SemanticObjectContent::Geometry(_)) => None,
                 (_, noon_core::SemanticObjectContent::Text(handle)) => Some(handle),
-                _ => {
-                    return Err(TextGlyphLoweringError::MissingSemanticTarget(
-                        (*leaf).into(),
-                    ));
-                }
             };
             let count = match content {
                 Some(handle) => RetainedAnimationMembers::resolve(
@@ -169,7 +160,7 @@ fn resolve_family_spans(
             total = total
                 .checked_add(count)
                 .ok_or(TextGlyphLoweringError::InvalidFamilyMember(
-                    noon_core::SemanticTextWriteFamilyMember {
+                    noon_core::SemanticFamilyAnimationMember {
                         family,
                         leaf_index: counts.len() - 1,
                     },
@@ -177,7 +168,7 @@ fn resolve_family_spans(
         }
         for (leaf_index, (first, _)) in counts.into_iter().enumerate() {
             spans.insert(
-                noon_core::SemanticTextWriteFamilyMember { family, leaf_index },
+                noon_core::SemanticFamilyAnimationMember { family, leaf_index },
                 (leaves[leaf_index], first, total),
             );
         }
@@ -220,7 +211,7 @@ pub fn lower_semantic_text_glyph_animations(
             ))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    reject_conflicts(&drivers)?;
+    reject_family_driver_conflicts(&drivers)?;
     schedule
         .leaves()
         .iter()
@@ -295,7 +286,7 @@ pub fn lower_prepared_text_glyph_animations(
             ))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    reject_conflicts(&drivers)?;
+    reject_family_driver_conflicts(&drivers)?;
     schedule
         .leaves()
         .iter()
@@ -340,7 +331,7 @@ pub fn lower_prepared_text_glyph_animations(
         .collect()
 }
 
-fn reject_conflicts(
+pub(crate) fn reject_family_driver_conflicts(
     drivers: &[(SemanticTransactionNodeRef, ObjectId, (f64, f64), bool)],
 ) -> Result<(), TextGlyphLoweringError> {
     if !drivers.iter().any(|driver| driver.3) {
@@ -353,12 +344,12 @@ fn reject_conflicts(
     for (target, target_drivers) in &mut by_target {
         target_drivers.sort_by(|left, right| left.2 .0.total_cmp(&right.2 .0));
         let mut latest_any: Option<(f64, SemanticTransactionNodeRef)> = None;
-        let mut latest_text: Option<(f64, SemanticTransactionNodeRef)> = None;
-        for &(animation, _, (start, end), is_text_write) in target_drivers.iter() {
-            let conflicting = if is_text_write {
+        let mut latest_family: Option<(f64, SemanticTransactionNodeRef)> = None;
+        for &(animation, _, (start, end), is_family_animation) in target_drivers.iter() {
+            let conflicting = if is_family_animation {
                 latest_any.filter(|(latest_end, _)| start < *latest_end)
             } else {
-                latest_text.filter(|(latest_end, _)| start < *latest_end)
+                latest_family.filter(|(latest_end, _)| start < *latest_end)
             };
             if let Some((_, first)) = conflicting {
                 return Err(TextGlyphLoweringError::ConflictingObjectDrivers {
@@ -370,8 +361,8 @@ fn reject_conflicts(
             if latest_any.is_none_or(|(latest_end, _)| end > latest_end) {
                 latest_any = Some((end, animation));
             }
-            if is_text_write && latest_text.is_none_or(|(latest_end, _)| end > latest_end) {
-                latest_text = Some((end, animation));
+            if is_family_animation && latest_family.is_none_or(|(latest_end, _)| end > latest_end) {
+                latest_family = Some((end, animation));
             }
         }
     }
@@ -580,6 +571,91 @@ mod tests {
     }
 
     #[test]
+    fn neutral_mixed_family_members_preserve_global_order_and_independent_reversal() {
+        for mode in [
+            FamilyAnimationMode::Reveal,
+            FamilyAnimationMode::DrawBorderThenFill,
+        ] {
+            let mut store = SemanticStore::new();
+            let text = plain_text_source(&mut store, "AB", false);
+            let geometry = store.insert_semantic_object(SemanticObjectState::new(
+                noon_core::StoredGeometry::Circle { radius: 1.0 },
+            ));
+            let family = store.insert_family();
+            store.add_semantic_family_member(family, text).unwrap();
+            store.add_semantic_family_member(family, geometry).unwrap();
+            store.attach_to_scene(family).unwrap();
+            let index = index(&store);
+
+            let options = AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(noon_core::RateFunction::Linear)
+                .lag_ratio(0.25)
+                .reverse_rate_function(true)
+                .introducer(false)
+                .remover(false);
+            let mut transaction = SemanticMutationTransaction::new();
+            let text_leaf = transaction.create_family_animation_member(
+                text,
+                mode,
+                true,
+                noon_core::SemanticFamilyAnimationMember {
+                    family,
+                    leaf_index: 0,
+                },
+                options,
+            );
+            let geometry_leaf = transaction.create_family_animation_member(
+                geometry,
+                mode,
+                true,
+                noon_core::SemanticFamilyAnimationMember {
+                    family,
+                    leaf_index: 1,
+                },
+                options,
+            );
+            let root = transaction.create_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                [text_leaf, geometry_leaf],
+                AnimationOptions::new().rate_func(noon_core::RateFunction::Linear),
+            );
+            let prepared = transaction.prepare(&mut store).unwrap();
+            let lowered = lower_prepared_semantic_animation_composition(
+                &prepared,
+                &index,
+                root,
+                -0.5,
+                AnimationOptions::new(),
+                |_| Option::<EffectiveAnimationProperties>::None,
+            )
+            .unwrap();
+
+            assert_eq!(lowered.family_animations().len(), 2);
+            let text_plan = &lowered.family_animations()[0];
+            let geometry_plan = &lowered.family_animations()[1];
+            assert_eq!(text_plan.plan.member_plan().total_member_count(), 3);
+            assert_eq!(geometry_plan.plan.member_plan().total_member_count(), 3);
+            assert_eq!(text_plan.plan.member_plan().leaves()[0].first_member, 0);
+            assert_eq!(text_plan.plan.member_plan().leaves()[0].member_count, 2);
+            assert_eq!(geometry_plan.plan.member_plan().leaves()[0].first_member, 2);
+            assert_eq!(geometry_plan.plan.member_plan().leaves()[0].member_count, 1);
+            for animation in lowered.family_animations() {
+                assert_eq!(animation.spec.mode, mode);
+                assert_eq!(animation.spec.start_time, -0.5);
+                assert_eq!(animation.spec.duration, 2.0);
+                assert_eq!(animation.spec.lag_ratio, 0.25);
+                assert_eq!(
+                    animation.spec.rate_function,
+                    noon_core::RateFunction::Linear
+                );
+                assert!(animation.spec.reverse_rate_function);
+                assert!(animation.spec.reverse_member_order);
+            }
+        }
+    }
+
+    #[test]
     fn family_text_write_projects_unequal_leaves_into_one_global_glyph_order() {
         let mut store = SemanticStore::new();
         let first = plain_text_source(&mut store, "A", false);
@@ -603,7 +679,7 @@ mod tests {
                 transaction.create_family_text_write_member_animation(
                     target,
                     false,
-                    noon_core::SemanticTextWriteFamilyMember { family, leaf_index },
+                    noon_core::SemanticFamilyAnimationMember { family, leaf_index },
                     options,
                 )
             })

@@ -56,7 +56,7 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         mode: crate::FamilyAnimationMode,
         reverse_member_order: bool,
-        family_member: Option<crate::SemanticTextWriteFamilyMember>,
+        family_member: Option<crate::SemanticFamilyAnimationMember>,
     },
     Rotate {
         target: SemanticTransactionNodeRef,

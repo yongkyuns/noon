@@ -12,11 +12,17 @@ use crate::{
 
 use super::{
     compiled_scene::{lower_semantic_geometry_value, SemanticGeometryValueError},
+    lower_semantic_animation_schedule, lower_semantic_text_glyph_animations,
     projection::{lower_semantic_style, lower_semantic_transform, SemanticLoweringError},
+    reject_family_driver_conflicts, SemanticAnimationScheduleError,
+    SemanticScheduledAnimationPayload, TextGlyphLoweringError,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticInitialAnimationError {
+    InvalidOrigin(f64),
+    Schedule(SemanticAnimationScheduleError),
+    Family(TextGlyphLoweringError),
     Animation(SemanticAnimationError),
     InvalidRoot {
         animation: SemanticNodeId,
@@ -53,6 +59,9 @@ pub enum SemanticInitialAnimationError {
 impl std::fmt::Display for SemanticInitialAnimationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidOrigin(origin) => write!(formatter, "initial animation origin must be finite: {origin}"),
+            Self::Schedule(error) => error.fmt(formatter),
+            Self::Family(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
             Self::InvalidRoot { animation } => write!(
                 formatter,
@@ -62,7 +71,7 @@ impl std::fmt::Display for SemanticInitialAnimationError {
             ),
             Self::InvalidLeaf { animation } => write!(
                 formatter,
-                "initial animation child {}:{} must be an option-free object property track",
+                "initial animation child {}:{} must be an exact object track or neutral family composition",
                 animation.slot(),
                 animation.generation()
             ),
@@ -131,7 +140,11 @@ pub(super) fn install_initial_animation_root(
     index: &SemanticExecutionIndex,
     compiled: &mut CompiledScene,
     root: SemanticNodeId,
+    origin: f64,
 ) -> Result<(), SemanticInitialAnimationError> {
+    if !origin.is_finite() {
+        return Err(SemanticInitialAnimationError::InvalidOrigin(origin));
+    }
     let root_state = store
         .semantic_animation_state(root)
         .map_err(SemanticInitialAnimationError::Animation)?;
@@ -145,6 +158,8 @@ pub(super) fn install_initial_animation_root(
     }
 
     let mut definitions = Vec::new();
+    let mut family_animations = Vec::new();
+    let mut family_drivers = Vec::new();
     for &animation in children {
         let state = store
             .semantic_animation_state(animation)
@@ -157,7 +172,52 @@ pub(super) fn install_initial_animation_root(
             time_map,
         } = state.intent()
         else {
-            return Err(SemanticInitialAnimationError::InvalidLeaf { animation });
+            let schedule = lower_semantic_animation_schedule(
+                store,
+                index,
+                animation,
+                origin,
+                AnimationOptions::new(),
+            )
+            .map_err(SemanticInitialAnimationError::Schedule)?;
+            if !schedule.scalar_leaves().is_empty() || schedule.leaves().is_empty() {
+                return Err(SemanticInitialAnimationError::InvalidLeaf { animation });
+            }
+            for leaf in schedule.leaves() {
+                if !matches!(
+                    leaf.payload,
+                    SemanticScheduledAnimationPayload::TextGlyph { .. }
+                ) || leaf.options.introducer
+                    || leaf.options.remover
+                {
+                    return Err(SemanticInitialAnimationError::InvalidLeaf {
+                        animation: leaf.animation,
+                    });
+                }
+                if compiled.object_index(leaf.execution_object_id).is_none() {
+                    return Err(SemanticInitialAnimationError::TargetOutsideProjection {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                    });
+                }
+                let interval = noon_core::continuous_time_map_interval(leaf.timing, &leaf.time_map)
+                    .map_err(|error| {
+                        SemanticInitialAnimationError::Family(
+                            TextGlyphLoweringError::InvalidTimeMap(error),
+                        )
+                    })?;
+                family_drivers.push((
+                    leaf.animation.into(),
+                    leaf.execution_object_id,
+                    interval,
+                    true,
+                ));
+            }
+            family_animations.extend(
+                lower_semantic_text_glyph_animations(store, &schedule)
+                    .map_err(SemanticInitialAnimationError::Family)?,
+            );
+            continue;
         };
         if state.options() != AnimationOptions::new() {
             return Err(SemanticInitialAnimationError::InvalidLeaf { animation });
@@ -184,8 +244,14 @@ pub(super) fn install_initial_animation_root(
         });
     }
 
+    reject_family_driver_conflicts(&family_drivers)
+        .map_err(SemanticInitialAnimationError::Family)?;
     let transaction = ExecutionMutationTransaction::from_mutations(
-        definitions.into_iter().map(ExecutionPatch::AddTrack),
+        definitions.into_iter().map(ExecutionPatch::AddTrack).chain(
+            family_animations
+                .into_iter()
+                .map(ExecutionPatch::AddFamilyAnimation),
+        ),
     );
     compiled
         .preflight_execution_transaction(&transaction)
@@ -330,3 +396,6 @@ fn lower_transform_endpoint(
         style,
     })
 }
+
+#[cfg(test)]
+mod tests;

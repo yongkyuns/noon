@@ -24,7 +24,6 @@ mod live_program;
 mod live_session;
 mod native_signal_authoring;
 mod polygram_authoring;
-mod retained_family_authoring_lowering;
 mod rounded_rectangle_authoring;
 mod scalar_authoring;
 mod sector_authoring;
@@ -54,7 +53,6 @@ pub use noon_runtime::{
     EffectiveObjectProperties, EvaluationError, FrameChanges, FrameObjectState, FrameState,
     RendererPublication, RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
 };
-pub use retained_family_authoring_lowering::*;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use semantic_mobject::{ManimPrimitiveOptions, Mobject};
 mod scene;
