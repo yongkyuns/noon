@@ -59,10 +59,31 @@ const primaryManifest = {
     },
   ],
 };
+const compatibilityManifest = {
+  reference: { version: "0.21.0" },
+  entries: [
+    {
+      id: "compatible-example",
+      title: "Compatible example",
+      status: "ready",
+      reuse: "manim-compatible-parity-v0.21",
+      path: "python/examples/manim_compatible_example.py",
+      thumbnail: "thumbnails/manim/compatible-example.svg",
+      features: ["AnimationGroup", "Manim-compatible"],
+      category: "manim-compatible/composition",
+      parity_status: "candidate",
+      order: 20,
+    },
+  ],
+};
 const requests = [];
 const merged = await loadGalleryManifest(undefined, async (url) => {
   requests.push(url);
-  const manifest = url.endsWith("manim_stress_manifest.json") ? stressManifest : primaryManifest;
+  const manifest = url.endsWith("manim_stress_manifest.json")
+    ? stressManifest
+    : url.endsWith("manim_compatibility_manifest.json")
+      ? compatibilityManifest
+      : primaryManifest;
   return {
     ok: true,
     status: 200,
@@ -74,11 +95,12 @@ const merged = await loadGalleryManifest(undefined, async (url) => {
 assert.deepEqual(requests, [
   "./python/examples/manim_tutorial_manifest.json",
   "./python/examples/manim_stress_manifest.json",
+  "./python/examples/manim_compatibility_manifest.json",
 ]);
 assert.deepEqual(
   merged.examples.map((example) => example.id),
-  ["base-example", "manim-parity-stress-grid"],
-  "default gallery load must merge and order custom stress workloads with the Manim corpus",
+  ["base-example", "manim-parity-stress-grid", "compatible-example"],
+  "default gallery load must merge exact-source, stress, and Manim-compatible Noon-authored examples",
 );
 
-console.log("✓ custom Manim parity stress gallery contract");
+console.log("✓ custom Manim parity stress + compatibility gallery contract");
