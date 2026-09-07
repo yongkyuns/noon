@@ -3592,7 +3592,8 @@ mod structural_execution_delta_tests {
         );
         assert_eq!(prepared.circles[0].transform.translation, [2.0, 0.0]);
         assert_ne!(prepared.circles[0].style.opacity, 0.0);
-        assert_eq!(prepared.circle_dirty_ranges, &[0..1]);
+        assert_eq!(prepared.circle_dirty_ranges.len(), 1);
+        assert_eq!(prepared.circle_dirty_ranges[0], 0..1);
     }
 
     #[test]
