@@ -25,6 +25,7 @@ const {
   createDirectOrdinarySubsetDisplaySmokeRenderer,
   createDirectOrdinaryMembershipSmokeRenderer,
   createDirectOrdinaryTextWriteSmokeRenderer,
+  createDirectAutomaticWaitTextSmokeRenderer,
   createDirectTextFamilyFadeSmokeRenderer,
   createDirectTextFamilyRevealSmokeRenderer,
   createDirectTextFamilyWriteSmokeRenderer,
@@ -1250,6 +1251,46 @@ async function directTextFamilyFadeProof(expectedBackend) {
   }
 }
 
+async function directAutomaticWaitTextProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectAutomaticWaitTextSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const time of [0, 250, 500, 1000, 1500, 1750, 2000]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const rows = await textBrightnessByRow(canvas);
+      samples.push({ time, brightness: rows.upper + rows.lower, objects: renderer.objectCount() });
+    }
+    if (samples[0].brightness !== 0 || samples[0].objects !== 0
+        || samples[1].brightness !== 0 || samples[1].objects !== 0
+        || samples[2].brightness !== 0 || samples[2].objects !== 1
+        || samples[3].brightness <= 0 || samples[3].objects !== 1
+        || samples[4].brightness <= samples[3].brightness || samples[4].objects !== 1
+        || samples[5].brightness <= 0 || samples[5].brightness >= samples[4].brightness
+        || samples[5].objects !== 1
+        || samples[6].brightness !== 0 || samples[6].objects !== 0) {
+      throw new Error(`direct automatic-wait Text phases were incorrect: ${JSON.stringify(samples)}`);
+    }
+    renderer.advanceDirectRealtime(2250);
+    await settleDirectPublication(renderer, 2250);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(2250));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 0
+        || renderer.time() !== 2.25 || wake.cadence !== "idle") {
+      throw new Error("direct automatic-wait Text did not finish empty and idle");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directTextFamilyWriteProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectTextFamilyWriteSmokeRenderer(canvas);
@@ -2021,6 +2062,7 @@ async function start() {
   metrics.ordinaryMembership = await directOrdinaryMembershipProof(expectedBackend);
   metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);
   metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
+  metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);
   metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);
   metrics.textFamilyWrite = await directTextFamilyWriteProof(expectedBackend);
   metrics.textFamilyReveal = await directTextFamilyRevealProof(expectedBackend);

@@ -422,6 +422,22 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .create_text(text)
+        .map_err(|error| error.to_string())
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
@@ -3140,6 +3156,75 @@ mod tests {
         let before = player.clock.clone();
         assert!(player.set_loop_duration(2.0).is_err());
         assert_eq!(player.clock, before);
+    }
+
+    #[test]
+    fn text_created_after_empty_wait_publishes_resources_once_on_admission() {
+        let scene = noon::Scene::new();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.store()),
+            scene.root(),
+            2.0,
+            81,
+        )
+        .unwrap();
+        let mut mirror = crate::InstalledRetainedExecutionMirror::from_bundle_bytes(
+            &player.resource_bundle_bytes(),
+        )
+        .unwrap();
+        let initial = player.delta(true).unwrap().unwrap();
+        assert!(initial.retained.objects.is_empty());
+        assert!(initial.resource_additions.is_none());
+        mirror.apply_family(initial).unwrap();
+
+        player.live_wait(0.5).unwrap();
+        player.live_drive_segment_to_authored_time(0.5).unwrap();
+        player.live_complete_segment().unwrap();
+        if let Some(wait_delta) = player.delta(false).unwrap() {
+            assert!(wait_delta.retained.objects.is_empty());
+            assert!(wait_delta.resource_additions.is_none());
+            mirror.apply_family(wait_delta).unwrap();
+        }
+        let label = player.live_create_text(noon::Text::new("LATE")).unwrap();
+        assert!(!player.live_contains(&label).unwrap());
+        if let Some(detached_delta) = player.delta(false).unwrap() {
+            assert!(detached_delta.retained.objects.is_empty());
+            assert!(detached_delta.resource_additions.is_none());
+            mirror.apply_family(detached_delta).unwrap();
+        }
+
+        assert_eq!(
+            player
+                .live_declare_and_activate_fade(
+                    &label,
+                    noon_core::SemanticFadeDirection::In,
+                    noon::FadeEndpoint::default(),
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .unwrap(),
+            1.5,
+        );
+        let admitted = player.delta(false).unwrap().unwrap();
+        assert!(!admitted.retained.snapshot);
+        assert_eq!(admitted.retained.objects.len(), 1);
+        let additions = admitted.resource_additions.as_ref().unwrap();
+        assert_eq!(additions.text_count(), 1);
+        assert!(additions.font_count() > 0);
+        mirror.apply_family(admitted).unwrap();
+        let installed = mirror.frame().unwrap().objects[0].text().unwrap();
+        assert!(mirror.resources().texts().get(installed).is_some());
+        assert!(player.delta(false).unwrap().is_none());
+
+        player.live_drive_segment_to_authored_time(1.5).unwrap();
+        player.live_complete_segment().unwrap();
+        let completed = player.delta(false).unwrap().unwrap();
+        assert!(completed.resource_additions.is_none());
+        mirror.apply_family(completed).unwrap();
+        assert_eq!(mirror.frame().unwrap().objects[0].text(), Some(installed));
+        assert!(player.delta(false).unwrap().is_none());
     }
 
     #[test]

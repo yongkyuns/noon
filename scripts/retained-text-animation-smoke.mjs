@@ -79,7 +79,6 @@ from noon import *
 class TypedTextFade(Scene):
     def construct(self):
         label = Text("Fade", font_size=48).shift(LEFT)
-        self.live_execution()
 
         self.wait(0.5)
         assert label not in self.mobjects

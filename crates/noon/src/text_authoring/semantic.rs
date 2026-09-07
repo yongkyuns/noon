@@ -3,6 +3,27 @@ use super::{MathTypst, Text, TextAuthoringError, Typst, NATIVE_POINT_TO_SCENE_SC
 use noon_core::{GeometryResourceArena, Vec2};
 use noon_typst::{compile_typst_resource, TypstMode};
 
+pub(crate) fn native_text_state(
+    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    text: Text,
+) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
+    let mut transform = text.presentation.transform;
+    transform.scale = transform.scale.component_mul(Vec2::new(
+        NATIVE_POINT_TO_SCENE_SCALE,
+        NATIVE_POINT_TO_SCENE_SCALE,
+    ));
+    let artifact = text.compile_artifact_with_fill(None)?;
+    text_artifact_state(
+        store,
+        transform,
+        text.presentation.color,
+        text.presentation.opacity,
+        artifact.resource,
+        artifact.fonts,
+        GeometryResourceArena::new(),
+    )
+}
+
 impl crate::Scene {
     /// Create an ordinary detached native text Mobject in this scene's shared store.
     pub fn text(&self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
@@ -27,22 +48,8 @@ impl crate::Mobject {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: impl Into<Text>,
     ) -> Result<crate::Mobject, TextAuthoringError> {
-        let text = text.into();
-        let mut transform = text.presentation.transform;
-        transform.scale = transform.scale.component_mul(Vec2::new(
-            NATIVE_POINT_TO_SCENE_SCALE,
-            NATIVE_POINT_TO_SCENE_SCALE,
-        ));
-        let artifact = text.compile_artifact_with_fill(None)?;
-        Self::from_text_artifact(
-            store,
-            transform,
-            text.presentation.color,
-            text.presentation.opacity,
-            artifact.resource,
-            artifact.fonts,
-            GeometryResourceArena::new(),
-        )
+        let state = native_text_state(&store, text.into())?;
+        crate::Mobject::new(store, state).map_err(TextAuthoringError::Semantic)
     }
 
     /// Compile Typst into the shared retained text resource and return its ordinary semantic handle.
@@ -91,56 +98,71 @@ impl crate::Mobject {
         fonts: noon_core::FontResourceArena,
         geometries: GeometryResourceArena,
     ) -> Result<crate::Mobject, TextAuthoringError> {
-        let semantic_transform = noon_core::SemanticTransform2_5D {
-            translation: noon_core::SemanticVec3::new(
-                transform.translation.x as f64,
-                transform.translation.y as f64,
-                0.0,
-            ),
-            scale: noon_core::SemanticVec3::new(
-                transform.scale.x as f64,
-                transform.scale.y as f64,
-                1.0,
-            ),
-            rotation_z: transform.rotation as f64,
-        };
-        if !semantic_transform.translation.is_finite()
-            || !semantic_transform.scale.is_finite()
-            || !semantic_transform.rotation_z.is_finite()
-        {
-            return Err(TextAuthoringError::Semantic(
-                "text transform is not finite".into(),
-            ));
-        }
-        let style = noon_core::SemanticStyle {
-            fill: Some(noon_core::SemanticPaint::Solid(color)),
-            fill_opacity: 1.0,
-            stroke: None,
-            stroke_width: 0.0,
-            object_opacity: opacity as f64,
-            ..Default::default()
-        };
-        if !style.is_finite() {
-            return Err(TextAuthoringError::Semantic(
-                "text style is not finite".into(),
-            ));
-        }
-        let handle = store
-            .borrow_mut()
-            .import_text_resource(resource, &fonts, &geometries)
-            .map_err(TextAuthoringError::Semantic)?;
-        let mut state = noon_core::SemanticObjectState::new(handle);
-        state.transform = semantic_transform;
-        state.style = style;
+        let state = text_artifact_state(
+            &store, transform, color, opacity, resource, fonts, geometries,
+        )?;
         crate::Mobject::new(store, state).map_err(TextAuthoringError::Semantic)
     }
+}
+
+fn text_artifact_state(
+    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    transform: noon_core::Transform2D,
+    color: noon_core::Color,
+    opacity: f32,
+    resource: noon_core::TextResource,
+    fonts: noon_core::FontResourceArena,
+    geometries: GeometryResourceArena,
+) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
+    let semantic_transform = noon_core::SemanticTransform2_5D {
+        translation: noon_core::SemanticVec3::new(
+            transform.translation.x as f64,
+            transform.translation.y as f64,
+            0.0,
+        ),
+        scale: noon_core::SemanticVec3::new(
+            transform.scale.x as f64,
+            transform.scale.y as f64,
+            1.0,
+        ),
+        rotation_z: transform.rotation as f64,
+    };
+    if !semantic_transform.translation.is_finite()
+        || !semantic_transform.scale.is_finite()
+        || !semantic_transform.rotation_z.is_finite()
+    {
+        return Err(TextAuthoringError::Semantic(
+            "text transform is not finite".into(),
+        ));
+    }
+    let style = noon_core::SemanticStyle {
+        fill: Some(noon_core::SemanticPaint::Solid(color)),
+        fill_opacity: 1.0,
+        stroke: None,
+        stroke_width: 0.0,
+        object_opacity: opacity as f64,
+        ..Default::default()
+    };
+    if !style.is_finite() {
+        return Err(TextAuthoringError::Semantic(
+            "text style is not finite".into(),
+        ));
+    }
+    let handle = store
+        .borrow_mut()
+        .import_text_resource(resource, &fonts, &geometries)
+        .map_err(TextAuthoringError::Semantic)?;
+    let mut state = noon_core::SemanticObjectState::new(handle);
+    state.transform = semantic_transform;
+    state.style = style;
+    Ok(state)
 }
 
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, SemanticMutationTransaction, SemanticObjectProperty, SemanticVec3,
-        TextResourceLookup,
+        AnimationOptions, RateFunction, SemanticFadeDirection, SemanticMutationTransaction,
+        SemanticObjectProperty, SemanticVec3, TextResourceLookup,
     };
 
     #[test]
@@ -254,6 +276,90 @@ mod tests {
             .is_err());
         assert_eq!(scene.store().borrow().scene_revision(), before);
         assert_eq!(scene.store().borrow().text_resources().stats(), resources);
+    }
+
+    #[test]
+    fn live_text_created_after_an_empty_wait_enters_through_the_same_session() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+
+        let label = {
+            let mut live = scene.live(&mut session);
+            let wait = live.wait_segment(1.0).unwrap();
+            live.advance_segment_to(wait, wait.end_time()).unwrap();
+            live.complete_segment(wait).unwrap();
+            live.create_text(super::Text::new("Late")).unwrap()
+        };
+        let resource = label.state().unwrap().content.text().unwrap();
+        assert_eq!(session.frame().time, 1.0);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+        assert!(session.text_resources().get(resource).is_none());
+        assert_eq!(
+            scene.store().borrow().scene_revision(),
+            session.publication_context().scene_revision()
+        );
+
+        let fade = {
+            let mut live = scene.live(&mut session);
+            assert!(!live.contains(&label).unwrap());
+            let fade = live
+                .declare_and_activate_fade(
+                    &label,
+                    SemanticFadeDirection::In,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .unwrap();
+            assert_eq!(fade.start_time(), 1.0);
+            assert!(live.contains(&label).unwrap());
+            assert_eq!(live.effective(&label).unwrap().appearance, 0.0);
+            fade
+        };
+        assert_eq!(session.frame().objects.len(), 1);
+        assert!(session.text_resources().get(resource).is_some());
+        assert_eq!(session.take_frame_changes().added_indices(), &[0]);
+
+        let mut live = scene.live(&mut session);
+        live.advance_segment_to(fade, fade.end_time()).unwrap();
+        live.complete_segment(fade).unwrap();
+        assert!(live.contains(&label).unwrap());
+        assert_eq!(live.effective(&label).unwrap().appearance, 1.0);
+    }
+
+    #[test]
+    fn invalid_live_text_after_wait_changes_neither_resources_nor_publication() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        {
+            let mut live = scene.live(&mut session);
+            let wait = live.wait_segment(1.0).unwrap();
+            live.advance_segment_to(wait, wait.end_time()).unwrap();
+            live.complete_segment(wait).unwrap();
+        }
+        let revision = scene.store().borrow().scene_revision();
+        let resources = scene.store().borrow().text_resources().stats();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+
+        {
+            let mut live = scene.live(&mut session);
+            assert!(live
+                .create_text(super::Text::new("invalid scale").scale(f32::NAN))
+                .is_err());
+            assert!(live
+                .create_text(super::Text::new("invalid size").with_font_size(0.0))
+                .is_err());
+        }
+
+        assert_eq!(scene.store().borrow().scene_revision(), revision);
+        assert_eq!(scene.store().borrow().text_resources().stats(), resources);
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+        assert!(session.take_frame_changes().is_empty());
     }
 
     #[test]

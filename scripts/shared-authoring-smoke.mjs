@@ -1466,6 +1466,51 @@ try {
     await stopSampledSource(page);
   }
 
+  const automaticWaitTextSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_automatic_wait_text.py"), "utf8",
+  );
+  await startSampledSource(
+    page, automaticWaitTextSource, "scene-shared-automatic-wait-text", 960, 540,
+  );
+  try {
+    const canvas = page.locator("#scene-shared-automatic-wait-text");
+    const samples = [];
+    for (const time of [0, 0.25, 0.5, 1, 1.5, 1.75, 2]) {
+      if (time !== 0) {
+        await page.evaluate(async (sampleTime) => {
+          await window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime);
+        }, time);
+      }
+      const brightness = textBrightnessByRegion(await canvas.screenshot());
+      const metrics = await page.evaluate(async () =>
+        (await window.sharedAuthoringSmoke.sampledProof.execution.metrics()).metrics);
+      samples.push({
+        time,
+        brightness: brightness.left + brightness.right,
+        objects: metrics.objectCount,
+      });
+    }
+    assert.deepEqual(samples.slice(0, 2).map(({ brightness, objects }) => [brightness, objects]),
+      [[0, 0], [0, 0]], "initial wait must remain an empty shared execution");
+    assert.equal(samples[2].brightness, 0);
+    assert.equal(samples[2].objects, 1);
+    assert.ok(samples[3].brightness > 0 && samples[3].objects === 1);
+    assert.ok(samples[4].brightness > samples[3].brightness && samples[4].objects === 1);
+    assert.ok(samples[5].brightness > 0 && samples[5].brightness < samples[4].brightness
+        && samples[5].objects === 1);
+    assert.equal(samples[6].brightness, 0);
+    assert.equal(samples[6].objects, 0);
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(2.25), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 2.25);
+    assert.equal(result.metrics.objectCount, 0);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const textFamilyRevealSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_text_family_reveal.py"), "utf8",
   );

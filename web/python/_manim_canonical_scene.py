@@ -754,10 +754,22 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
 def _canonical_wait(
     scene: _base.Scene, duration: float = 1.0
 ) -> _base.Scene | _SemanticContinuationAwaitable:
+    if getattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False):
+        authority, _ = _timing_authority(scene)
+        if authority == "canonical":
+            try:
+                _context(scene).authoredWait(float(duration))
+            except Exception as error:
+                raise ValueError(str(error)) from None
+            return scene
+        return _ORIGINAL_WAIT(scene, duration)
     if (
         _default_synchronous_continuation_candidate(scene)
-        and not getattr(scene, "_legacy_geometry_materialized", False)
-        and getattr(scene, "_canonical_authoring_context", None) is not None
+        and (
+            _create_context is not None
+            or getattr(scene, "_canonical_authoring_context", None) is not None
+        )
+        and execution_context(scene) is not None
     ):
         _start_default_synchronous_continuation(scene)
     if _semantic_continuation_active(scene):
