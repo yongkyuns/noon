@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 8);
+assert.equal(gallery.examples.length, 9);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -25,6 +25,7 @@ assert.deepEqual(
     "compatible-scale-in-place",
     "compatible-indicate-square",
     "compatible-affine-lifecycle",
+    "compatible-text-write",
   ],
 );
 
@@ -61,6 +62,17 @@ for (const entry of readyEntries) {
       source,
       pattern,
       `${entry.id}: Manim-compatible source must not depend on Noon-only helper ${pattern}`,
+    );
+  }
+
+  if (entry.id === "compatible-text-write") {
+    assert.match(source, /Text\(/, "plain Text Write example must construct Text");
+    assert.match(source, /Write\(/, "plain Text Write example must exercise Write");
+    assert.match(source, /Unwrite\(/, "plain Text Write example must exercise Unwrite");
+    assert.doesNotMatch(
+      source,
+      /\b(?:VGroup|Group|Typst|MathTypst)\b/,
+      "plain Text Write gallery coverage must not claim deferred Text-group or Typst scheduling",
     );
   }
 }
