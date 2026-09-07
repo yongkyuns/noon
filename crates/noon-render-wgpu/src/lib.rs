@@ -2839,8 +2839,6 @@ mod tests {
             .collect();
         let frame = frame(objects);
         let mut preparer = FramePreparer::new();
-        let mut order = (0..OBJECT_COUNT as u32).collect::<Vec<_>>();
-        preparer.set_painter_order(&frame, &order);
 
         let prepared = preparer.prepare(&frame);
 
@@ -3162,6 +3160,8 @@ mod tests {
             .collect();
         let frame = frame(objects);
         let mut preparer = FramePreparer::new();
+        let mut order = (0..OBJECT_COUNT as u32).collect::<Vec<_>>();
+        preparer.set_painter_order(&frame, &order);
 
         let prepared = preparer.prepare(&frame);
 
