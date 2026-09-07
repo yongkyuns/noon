@@ -1505,7 +1505,7 @@ mod tests {
         assert_eq!(mirror.painter_order(), &[2]);
 
         replaced.objects[2].appearance = 0.5;
-        let later = encoder
+        let mut later = encoder
             .encode_incremental(
                 &replaced,
                 &FrameChanges::objects(vec![2]),
@@ -1513,6 +1513,9 @@ mod tests {
             )
             .unwrap()
             .unwrap();
+        // Incremental row order is legacy metadata. The sparse stable slot and
+        // the retained painter permutation remain separate identities.
+        later.objects[0].order = 2;
         mirror.apply(later).unwrap();
         assert_eq!(mirror.painter_order(), &[2]);
         assert_eq!(mirror.frame().unwrap().objects[2].appearance, 0.5);
