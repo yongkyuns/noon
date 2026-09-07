@@ -145,6 +145,8 @@ fn materialize_semantic_projection(
         object_indices,
         retired_object_indices: BTreeMap::new(),
         track_locators: BTreeMap::new(),
+        family_animation_plans: Vec::new(),
+        family_animations: Vec::new(),
         resources,
     })
 }

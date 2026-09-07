@@ -39,6 +39,23 @@ pub struct RetainedFamilyAnimationPlan {
 }
 
 impl RetainedFamilyAnimationPlan {
+    /// Build a retained plan for one semantic object whose content-local members were derived
+    /// directly from its immutable execution resource.
+    pub fn single_leaf(
+        target: SemanticNodeId,
+        object: ObjectId,
+        members: RetainedAnimationMembers,
+    ) -> Result<Self, RetainedFamilyAnimationMemberPlanError> {
+        let mut inner = FamilyAnimationMemberPlanBuilder::begin_ordered(target, vec![target])?;
+        inner.accept_leaf(target, object, members.member_count())?;
+        let member_plan = inner.finish()?;
+        let span = member_plan.leaves()[0];
+        Ok(Self {
+            member_plan,
+            leaves: vec![RetainedFamilyAnimationLeafPlan { span, members }],
+        })
+    }
+
     pub fn member_plan(&self) -> &FamilyAnimationMemberPlan {
         &self.member_plan
     }

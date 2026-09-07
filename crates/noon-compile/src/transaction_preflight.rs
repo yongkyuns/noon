@@ -350,6 +350,22 @@ pub(super) fn preflight_transaction_with_resources(
                     validate_presence_channel(scene, &mut overlay, object_index)?;
                 }
             }
+            ExecutionPatch::AddFamilyAnimation(animation) => {
+                if overlay.object_index(scene, animation.target).is_none() {
+                    return Err(CompilePatchError::UnknownObject(animation.target));
+                }
+                animation
+                    .spec
+                    .validate()
+                    .map_err(|_| CompilePatchError::InvalidFamilyAnimation)?;
+                animation
+                    .time_map
+                    .validate()
+                    .map_err(|_| CompilePatchError::InvalidFamilyAnimation)?;
+                if animation.plan.leaf_for_object(animation.target).is_none() {
+                    return Err(CompilePatchError::InvalidFamilyAnimation);
+                }
+            }
             ExecutionPatch::ReplaceTrack(track) => {
                 let old = overlay
                     .track(scene, track.id)

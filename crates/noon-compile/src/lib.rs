@@ -20,7 +20,8 @@ use noon_core::{
 use noon_core::{
     FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
     GeometryId, GeometryResource, GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef,
-    Rect, SemanticStore, TextResource, TextResourceHandle, TextResourceLookup,
+    Rect, RetainedFamilyAnimationPlan, SemanticStore, TextResource, TextResourceHandle,
+    TextResourceLookup,
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
@@ -411,6 +412,8 @@ pub struct CompiledScene {
     object_indices: BTreeMap<ObjectId, u32>,
     retired_object_indices: BTreeMap<ObjectId, u32>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
+    family_animation_plans: Vec<RetainedFamilyAnimationPlan>,
+    family_animations: Vec<CompiledFamilyAnimationChannel>,
     resources: CompiledResources,
 }
 
@@ -517,6 +520,8 @@ impl std::error::Error for CompileError {}
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
     TooManyObjects(usize),
+    TooManyFamilyAnimations,
+    InvalidFamilyAnimation,
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
     DuplicateTrack(TrackId),
@@ -562,6 +567,12 @@ impl std::fmt::Display for CompilePatchError {
         match self {
             Self::TooManyObjects(count) => {
                 write!(formatter, "scene contains too many objects: {count}")
+            }
+            Self::TooManyFamilyAnimations => {
+                formatter.write_str("scene contains too many family animation plans")
+            }
+            Self::InvalidFamilyAnimation => {
+                formatter.write_str("invalid family animation plan, timing, or mapping")
             }
             Self::DuplicateObject(id) => write!(formatter, "duplicate object id {}", id.get()),
             Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
@@ -794,6 +805,8 @@ impl CompiledScene {
             object_indices,
             retired_object_indices: BTreeMap::new(),
             track_locators,
+            family_animation_plans: Vec::new(),
+            family_animations: Vec::new(),
             resources: CompiledResources::default(),
         })
     }
@@ -809,6 +822,14 @@ impl CompiledScene {
 
     pub const fn resources(&self) -> &CompiledResources {
         &self.resources
+    }
+
+    pub fn family_animation_plans(&self) -> &[RetainedFamilyAnimationPlan] {
+        &self.family_animation_plans
+    }
+
+    pub fn family_animations(&self) -> &[CompiledFamilyAnimationChannel] {
+        &self.family_animations
     }
 
     pub fn text_resources(&self) -> &impl TextResourceLookup {
@@ -998,6 +1019,7 @@ impl CompiledScene {
             ExecutionPatch::CreateObject(_)
             | ExecutionPatch::RemoveObject(_)
             | ExecutionPatch::AddTrack(_)
+            | ExecutionPatch::AddFamilyAnimation(_)
             | ExecutionPatch::RemoveTrack(_) => true,
         }
     }
@@ -1140,6 +1162,29 @@ impl CompiledScene {
                 self.objects[locator.object_index as usize]
                     .dynamic
                     .mark(locator.property);
+            }
+            ExecutionPatch::AddFamilyAnimation(animation) => {
+                let object_index = self
+                    .object_index(animation.target)
+                    .ok_or(CompilePatchError::UnknownObject(animation.target))?;
+                animation
+                    .spec
+                    .validate()
+                    .map_err(|_| CompilePatchError::InvalidFamilyAnimation)?;
+                animation
+                    .time_map
+                    .validate()
+                    .map_err(|_| CompilePatchError::InvalidFamilyAnimation)?;
+                let plan_index = u32::try_from(self.family_animation_plans.len())
+                    .map_err(|_| CompilePatchError::TooManyFamilyAnimations)?;
+                self.family_animation_plans.push(animation.plan.clone());
+                self.family_animations.push(CompiledFamilyAnimationChannel {
+                    target: animation.target,
+                    object_index,
+                    plan_index,
+                    spec: animation.spec,
+                    time_map: animation.time_map.clone(),
+                });
             }
             ExecutionPatch::ReplaceTrack(track) => {
                 let old_locator = self

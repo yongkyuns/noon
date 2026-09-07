@@ -3,7 +3,7 @@ use noon_core::{
     Transform2D,
 };
 
-use crate::CompiledObject;
+use crate::{CompiledFamilyAnimation, CompiledObject};
 
 /// Renderer-independent mutations over the compiler-owned execution plan.
 ///
@@ -27,6 +27,7 @@ pub enum ExecutionPatch {
         style: Style,
     },
     AddTrack(TrackDefinition),
+    AddFamilyAnimation(CompiledFamilyAnimation),
     ReplaceTrack(TrackDefinition),
     RemoveTrack(TrackId),
     /// Release one completed timeline driver while retaining its deterministic history.
@@ -45,6 +46,7 @@ impl ExecutionPatch {
                 MutationImpact::Property
             }
             Self::AddTrack(_)
+            | Self::AddFamilyAnimation(_)
             | Self::ReplaceTrack(_)
             | Self::RemoveTrack(_)
             | Self::ReconcileTrack { .. } => MutationImpact::Timeline,

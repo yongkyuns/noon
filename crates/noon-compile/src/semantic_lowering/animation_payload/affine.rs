@@ -473,6 +473,12 @@ where
 
     for leaf in schedule.leaves() {
         validate_leaf_matches_declaration(store, leaf)?;
+        if matches!(
+            leaf.payload,
+            SemanticScheduledAnimationPayload::TextWrite { .. }
+        ) {
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::Indicate {
             scale_factor,
             color,
@@ -609,6 +615,7 @@ where
                 interpolation,
             } => (target_state, interpolation),
             SemanticScheduledAnimationPayload::Fade { .. }
+            | SemanticScheduledAnimationPayload::TextWrite { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
             | SemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
@@ -702,6 +709,17 @@ fn validate_leaf_matches_declaration(
                     stroke_width: *stroke_width,
                     stroke_color: *stroke_color,
                     phase_rate_function: *phase_rate_function,
+                } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::TextWrite {
+            target,
+            reverse_member_order,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::TextWrite {
+                    reverse_member_order: *reverse_member_order,
                 } =>
         {
             Ok(())

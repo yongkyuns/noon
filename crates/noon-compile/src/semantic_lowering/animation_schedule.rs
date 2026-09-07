@@ -82,6 +82,9 @@ pub enum SemanticScheduledAnimationPayload {
         count: usize,
         mode: noon_core::SemanticSubsetDisplayMode,
     },
+    TextWrite {
+        reverse_member_order: bool,
+    },
     Rotate {
         angle: f64,
     },
@@ -189,6 +192,9 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         count: usize,
         mode: noon_core::SemanticSubsetDisplayMode,
     },
+    TextWrite {
+        reverse_member_order: bool,
+    },
     Rotate {
         angle: f64,
     },
@@ -248,6 +254,10 @@ pub enum PreparedSemanticAnimationScheduleError {
         error: CompositionError,
     },
     MissingExecutionTarget {
+        animation: SemanticTransactionNodeRef,
+        target: SemanticTransactionNodeRef,
+    },
+    InvalidTextWriteTarget {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
     },
@@ -364,6 +374,10 @@ pub enum SemanticAnimationScheduleError {
         animation: SemanticNodeId,
         target: SemanticNodeId,
     },
+    InvalidTextWriteTarget {
+        animation: SemanticNodeId,
+        target: SemanticNodeId,
+    },
     UnsupportedCompositionLifecycle {
         animation: SemanticNodeId,
         remover: bool,
@@ -397,6 +411,14 @@ impl std::fmt::Display for SemanticAnimationScheduleError {
             Self::MissingExecutionTarget { animation, target } => write!(
                 formatter,
                 "semantic animation {}:{} targets object {}:{} outside the lowered execution membership",
+                animation.slot(),
+                animation.generation(),
+                target.slot(),
+                target.generation()
+            ),
+            Self::InvalidTextWriteTarget { animation, target } => write!(
+                formatter,
+                "semantic TextWrite animation {}:{} target {}:{} has no valid plain-Text glyph plan",
                 animation.slot(),
                 animation.generation(),
                 target.slot(),
@@ -591,6 +613,11 @@ fn published_payload(
         ScheduledAnimationPayload::SubsetDisplayMember { index, count, mode } => {
             SemanticScheduledAnimationPayload::SubsetDisplayMember { index, count, mode }
         }
+        ScheduledAnimationPayload::TextWrite {
+            reverse_member_order,
+        } => SemanticScheduledAnimationPayload::TextWrite {
+            reverse_member_order,
+        },
         ScheduledAnimationPayload::Fade {
             direction,
             endpoint,
@@ -645,6 +672,11 @@ fn prepared_payload(
         ScheduledAnimationPayload::SubsetDisplayMember { index, count, mode } => {
             PreparedSemanticScheduledAnimationPayload::SubsetDisplayMember { index, count, mode }
         }
+        ScheduledAnimationPayload::TextWrite {
+            reverse_member_order,
+        } => PreparedSemanticScheduledAnimationPayload::TextWrite {
+            reverse_member_order,
+        },
         ScheduledAnimationPayload::Fade {
             direction,
             endpoint,
@@ -695,6 +727,10 @@ enum AnimationDeclarationIntent<R> {
         count: usize,
         mode: noon_core::SemanticSubsetDisplayMode,
     },
+    TextWrite {
+        target: R,
+        reverse_member_order: bool,
+    },
     Rotate {
         target: R,
         angle: f64,
@@ -740,6 +776,8 @@ trait AnimationScheduleLookup {
     fn entering_execution_object_id(&self, _target: Self::Reference) -> Option<ObjectId> {
         None
     }
+
+    fn text_write_member_count(&self, target: Self::Reference) -> Option<u32>;
 }
 
 struct PublishedAnimationLookup<'a> {
@@ -822,6 +860,18 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     mode: *mode,
                 }
             }
+            SemanticAnimationIntent::TextWrite {
+                target,
+                reverse_member_order,
+            } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::TextWrite {
+                    target: *target,
+                    reverse_member_order: *reverse_member_order,
+                }
+            }
             SemanticAnimationIntent::Rotate { target, angle } => {
                 self.store
                     .semantic_object_state_checked(*target)
@@ -893,6 +943,20 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
 
     fn execution_object_id(&self, target: Self::Reference) -> Option<ObjectId> {
         self.index.execution_object_id(target)
+    }
+
+    fn text_write_member_count(&self, target: Self::Reference) -> Option<u32> {
+        let state = self.store.semantic_object_state_checked(target).ok()?;
+        let noon_core::SemanticObjectContent::Text(handle) = state.content else {
+            return None;
+        };
+        let resource = self.store.text_resources().get(handle)?;
+        u32::try_from(
+            noon_core::plain_text_animation_members(resource)
+                .ok()?
+                .len(),
+        )
+        .ok()
     }
 }
 
@@ -970,6 +1034,13 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         index: *index,
                         count: *count,
                         mode: *mode,
+                    },
+                    SemanticAnimationIntent::TextWrite {
+                        target,
+                        reverse_member_order,
+                    } => AnimationDeclarationIntent::TextWrite {
+                        target: (*target).into(),
+                        reverse_member_order: *reverse_member_order,
                     },
                     SemanticAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
@@ -1067,6 +1138,13 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         count: *count,
                         mode: *mode,
                     },
+                    SemanticTransactionAnimationIntent::TextWrite {
+                        target,
+                        reverse_member_order,
+                    } => AnimationDeclarationIntent::TextWrite {
+                        target: *target,
+                        reverse_member_order: *reverse_member_order,
+                    },
                     SemanticTransactionAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: *target,
@@ -1135,6 +1213,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
+            AnimationDeclarationIntent::TextWrite { target, .. } => {
+                self.prepared
+                    .object_state(*target)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
             AnimationDeclarationIntent::Fade { target, .. } => {
                 self.prepared
                     .object_state(*target)
@@ -1165,6 +1248,20 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
 
     fn entering_execution_object_id(&self, target: Self::Reference) -> Option<ObjectId> {
         target.existing().map(super::semantic_execution_object_id)
+    }
+
+    fn text_write_member_count(&self, target: Self::Reference) -> Option<u32> {
+        let state = self.prepared.object_state(target).ok()?;
+        let noon_core::SemanticObjectContent::Text(handle) = state.content else {
+            return None;
+        };
+        let resource = self.prepared.store().text_resources().get(handle)?;
+        u32::try_from(
+            noon_core::plain_text_animation_members(resource)
+                .ok()?
+                .len(),
+        )
+        .ok()
     }
 }
 
@@ -1217,6 +1314,9 @@ enum ScheduledAnimationPayload<R> {
         count: usize,
         mode: noon_core::SemanticSubsetDisplayMode,
     },
+    TextWrite {
+        reverse_member_order: bool,
+    },
     Rotate {
         angle: f64,
     },
@@ -1248,6 +1348,10 @@ enum AnimationSchedulePlanError<R, E> {
         error: CompositionError,
     },
     MissingExecutionTarget {
+        animation: R,
+        target: R,
+    },
+    InvalidTextWriteTarget {
         animation: R,
         target: R,
     },
@@ -1477,6 +1581,58 @@ where
                     target,
                     execution_object_id,
                     payload: ScheduledAnimationPayload::SubsetDisplayMember { index, count, mode },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::TextWrite {
+            target,
+            reverse_member_order,
+        } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let member_count = lookup
+                .text_write_member_count(target)
+                .ok_or(AnimationSchedulePlanError::InvalidTextWriteTarget { animation, target })?;
+            let default_duration = if member_count < 15 { 1.0 } else { 2.0 };
+            let default_lag_ratio = (4.0 / f64::from(member_count.max(1))).min(0.2);
+            let options = resolve_animation_options(
+                AnimationDefaults {
+                    run_time: default_duration,
+                    rate_func: RateFunction::Linear,
+                    lag_ratio: default_lag_ratio,
+                    path_arc: 0.0,
+                    reverse_rate_function: false,
+                    remover: reverse_member_order,
+                    introducer: !reverse_member_order,
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            // Member order controls how glyph progress is distributed. Removal is
+            // an independent completion policy and may be explicitly overridden.
+            let lifecycle_matches = options.introducer == !reverse_member_order;
+            if !lifecycle_matches || options.path_arc != 0.0 {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::TextWrite {
+                        reverse_member_order,
+                    },
                     options,
                 },
             })
@@ -1887,6 +2043,9 @@ fn published_schedule_error(
         AnimationSchedulePlanError::MissingExecutionTarget { animation, target } => {
             SemanticAnimationScheduleError::MissingExecutionTarget { animation, target }
         }
+        AnimationSchedulePlanError::InvalidTextWriteTarget { animation, target } => {
+            SemanticAnimationScheduleError::InvalidTextWriteTarget { animation, target }
+        }
         AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
             animation,
             remover,
@@ -1927,6 +2086,9 @@ fn prepared_schedule_error(
         }
         AnimationSchedulePlanError::MissingExecutionTarget { animation, target } => {
             PreparedSemanticAnimationScheduleError::MissingExecutionTarget { animation, target }
+        }
+        AnimationSchedulePlanError::InvalidTextWriteTarget { animation, target } => {
+            PreparedSemanticAnimationScheduleError::InvalidTextWriteTarget { animation, target }
         }
         AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
             animation,
