@@ -18,6 +18,7 @@ from typing import Any
 import _manim_retained_state as _retained_state
 import _manim_typst as _typst
 import _manim_animation_options as _options
+import _manim_animate as _animate
 import _manim_compat as _compat
 import _manim_composition as _composition
 import _manim_reactive as _reactive
@@ -692,6 +693,7 @@ def _canonical_affine_options(
     kwargs: dict[str, object],
     *,
     builder_args: dict[str, object] | None = None,
+    allow_family_lag: bool = False,
 ) -> object | None:
     """Resolve the existing Python play ergonomics before typed Rust preflight."""
     duration = kwargs.get("duration")
@@ -720,7 +722,11 @@ def _canonical_affine_options(
         )
     except NotImplementedError:
         return None
-    if resolved.lag_ratio != 0.0 or resolved.path_arc != 0.0 or resolved.reverse_rate_function:
+    if (
+        (resolved.lag_ratio != 0.0 and not allow_family_lag)
+        or resolved.path_arc != 0.0
+        or resolved.reverse_rate_function
+    ):
         return None
     return resolved
 
@@ -1479,7 +1485,7 @@ def _build_canonical_composition_candidate(
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
-            child = _canonical_affine_options(leaf, child_kwargs)
+            child = _canonical_affine_options(leaf, child_kwargs, allow_family_lag=True)
             if child is None or child.path_arc != 0.0 or child.reverse_rate_function:
                 raise NotImplementedError("unsupported canonical family Transform options")
             if child.rate_func not in ("linear", "smooth"):

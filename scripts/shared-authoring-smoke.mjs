@@ -1276,7 +1276,7 @@ try {
     }
     const result = await page.evaluate(async () => {
       const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
-      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(4.5), authored]);
+      const completed = await authored;
       return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
     });
     assert.equal(result.duration, 4.5);
