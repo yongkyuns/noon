@@ -401,6 +401,18 @@ impl ExecutionSession {
                     ExecutionPatch::AddTrack(_) | ExecutionPatch::AddFamilyAnimation(_)
                 )
             });
+        // Root-order targets and anchors remain visible in the proposed projection.
+        // Removing every possible old family exit would incorrectly retire a
+        // promoted survivor before validating its order patch.
+        let ordered_survivors: std::collections::HashSet<_> = order_patches
+            .iter()
+            .flatten()
+            .flat_map(|patch| match patch {
+                ExecutionPatch::ReorderObject { object, before } => [Some(*object), *before],
+                _ => [None, None],
+            })
+            .flatten()
+            .collect();
         let mut conservative_patches = execution_prefix.clone();
         conservative_patches.extend_from_slice(publication.value_transaction().mutations());
         conservative_patches.extend(
@@ -408,6 +420,7 @@ impl ExecutionSession {
                 .possible_exits()
                 .iter()
                 .copied()
+                .filter(|object| !ordered_survivors.contains(object))
                 .map(ExecutionPatch::RemoveObject),
         );
         if !execution_suffix.is_empty()

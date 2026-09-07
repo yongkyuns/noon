@@ -115,7 +115,9 @@ mod tests {
         let mut callbacks = RustHostCallbackTable::new();
         for (stage, count) in [2, 2, 1, 3, 2, 2, 0].into_iter().enumerate() {
             assert!(matches!(
-                program.resume().unwrap(),
+                program
+                    .resume()
+                    .unwrap_or_else(|error| panic!("membership stage {stage}: {error}")),
                 LiveProgramStatus::Awaiting(_)
             ));
             let visible =

@@ -121,7 +121,6 @@ pub struct SemanticPublicationPreparationStats {
 struct PreparedEntry {
     object: SemanticTransactionNodeRef,
     compiled: CompiledObject,
-    reentry: bool,
 }
 
 /// Fully fallible compiler work retained until transaction-local names become IDs.
@@ -367,12 +366,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
 
     let entries = possible_entry_refs
         .into_iter()
-        .map(|object| {
-            let reentry = object
-                .existing()
-                .is_some_and(|node| index.execution_object_id(node).is_some());
-            lower_prepared_entry(prepared, object, reentry, &mut resource_additions)
-        })
+        .map(|object| lower_prepared_entry(prepared, object, &mut resource_additions))
         .collect::<Result<Vec<_>, _>>()?;
 
     let possible_exits = possible_exit_nodes
@@ -413,7 +407,12 @@ fn collect_prepared_entry_leaves(
             }
             Ok(())
         }
-        Err(SemanticTransactionReadError::NotObject(_)) => {
+        Err(
+            SemanticTransactionReadError::NotObject(_)
+            | SemanticTransactionReadError::Existing(
+                noon_core::SemanticSceneOperationError::NotSemanticObject(_),
+            ),
+        ) => {
             for member in prepared.family_members(node)? {
                 collect_prepared_entry_leaves(prepared, member, reachability, seen, leaves)?;
             }
@@ -472,7 +471,6 @@ fn collect_existing_exit_leaves(
 fn lower_prepared_entry(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     object: SemanticTransactionNodeRef,
-    reentry: bool,
     resource_additions: &mut CompiledResources,
 ) -> Result<PreparedEntry, SemanticPublicationLoweringError> {
     let state = prepared.proposed_object_state(object)?;
@@ -511,11 +509,7 @@ fn lower_prepared_entry(
         .map_err(|error| SemanticPublicationLoweringError::PreparedValue { object, error })?;
     let mut compiled = CompiledObject::new(ObjectId::new(0), content, transform, style);
     compiled.text_bounds = text_bounds;
-    Ok(PreparedEntry {
-        object,
-        compiled,
-        reentry,
-    })
+    Ok(PreparedEntry { object, compiled })
 }
 
 /// Lower only changed content/transform/style values already in this execution domain.

@@ -460,7 +460,7 @@ fn root_reorder_publishes_painter_order_without_moving_frame_rows() {
         .map(|radius| {
             let node =
                 store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                    radius: radius as f64 + 1.0,
+                    radius: radius as f32 + 1.0,
                 }));
             store.add_member(root, node).unwrap();
             node

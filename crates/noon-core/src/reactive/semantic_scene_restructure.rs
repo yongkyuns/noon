@@ -149,9 +149,16 @@ fn plan_explicit_root_projection(
         }
     }
 
+    let retained_roots: HashSet<_> = append
+        .iter()
+        .copied()
+        .filter(|member| root_node.contains_member(*member))
+        .collect();
     let mut transaction = SemanticMutationTransaction::new();
     for (root, _, _) in &plans {
-        transaction.remove_member(scene_root, *root);
+        if !retained_roots.contains(root) {
+            transaction.remove_member(scene_root, *root);
+        }
     }
     for (_, replacements, _) in &plans {
         for replacement in replacements {
@@ -159,7 +166,9 @@ fn plan_explicit_root_projection(
         }
     }
     for member in append {
-        transaction.add_member(scene_root, *member);
+        if !retained_roots.contains(member) {
+            transaction.add_member(scene_root, *member);
+        }
     }
     // Plans are in authoritative order within each affected run. Moving each
     // replacement block before the run's first surviving successor preserves it.
@@ -169,6 +178,11 @@ fn plan_explicit_root_projection(
             transaction.reorder_member(scene_root, *replacement, anchor);
             anchor = Some(*replacement);
         }
+    }
+    let mut anchor = None;
+    for member in append.iter().rev() {
+        transaction.reorder_member(scene_root, *member, anchor);
+        anchor = Some(*member);
     }
     Ok(transaction)
 }
@@ -208,151 +222,6 @@ fn validated_distinct_nodes(
         }
     }
     Ok(ids.to_vec())
-}
-
-fn projected_occurrences(
-    store: &SemanticStore,
-    current: SemanticNodeId,
-    target: SemanticNodeId,
-) -> Result<usize, SemanticSceneOperationError> {
-    let node = target_node_checked(store, current)?;
-    if current == target {
-        return Ok(1);
-    }
-    if !matches!(node.kind(), SemanticNodeKind::Family) {
-        return Ok(0);
-    }
-    node.members()
-        .iter()
-        .map(|member| projected_occurrences(store, *member, target))
-        .sum()
-}
-
-fn plan_root_projection(
-    store: &SemanticStore,
-    scene_root: SemanticNodeId,
-    current: &[SemanticNodeId],
-    remove_set: &HashSet<SemanticNodeId>,
-    replacement: Option<(SemanticNodeId, SemanticNodeId)>,
-    append: &[SemanticNodeId],
-) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
-    let affected = affected_family_nodes(store, remove_set)?;
-    let direct_roots = current.iter().copied().collect::<HashSet<_>>();
-    let mut plans = Vec::new();
-    let mut globally_promoted = HashSet::new();
-    for (index, &root) in current.iter().enumerate() {
-        if !affected.contains(&root) && !remove_set.contains(&root) {
-            continue;
-        }
-        let mut local = HashSet::new();
-        let mut replacements = Vec::new();
-        collect_projected_replacements(
-            store,
-            root,
-            root,
-            &direct_roots,
-            remove_set,
-            &affected,
-            replacement,
-            &mut local,
-            &mut replacements,
-        )?;
-        for &promoted in &replacements {
-            if !globally_promoted.insert(promoted) {
-                return Err(SemanticSceneOperationError::AmbiguousCrossRootAlias(
-                    promoted,
-                ));
-            }
-        }
-        let before = current[index + 1..]
-            .iter()
-            .copied()
-            .find(|candidate| !affected.contains(candidate) && !remove_set.contains(candidate));
-        plans.push((root, replacements, before));
-    }
-
-    let mut transaction = SemanticMutationTransaction::new();
-    for (root, _, _) in &plans {
-        transaction.remove_member(scene_root, *root);
-    }
-    for (_, replacements, _) in &plans {
-        for replacement in replacements {
-            transaction.add_member(scene_root, *replacement);
-        }
-    }
-    for member in append {
-        transaction.add_member(scene_root, *member);
-    }
-    for (_, replacements, before) in plans.iter().rev() {
-        let mut anchor = *before;
-        for replacement in replacements.iter().rev() {
-            transaction.reorder_member(scene_root, *replacement, anchor);
-            anchor = Some(*replacement);
-        }
-    }
-    Ok(transaction)
-}
-
-fn affected_family_nodes(
-    store: &SemanticStore,
-    remove_set: &HashSet<SemanticNodeId>,
-) -> Result<HashSet<SemanticNodeId>, SemanticSceneOperationError> {
-    let mut affected = remove_set.clone();
-    let mut stack = remove_set.iter().copied().collect::<Vec<_>>();
-    while let Some(node) = stack.pop() {
-        for parent in target_node_checked(store, node)?.parents() {
-            if affected.insert(*parent) {
-                stack.push(*parent);
-            }
-        }
-    }
-    Ok(affected)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn collect_projected_replacements(
-    store: &SemanticStore,
-    current: SemanticNodeId,
-    branch_root: SemanticNodeId,
-    direct_roots: &HashSet<SemanticNodeId>,
-    remove_set: &HashSet<SemanticNodeId>,
-    affected: &HashSet<SemanticNodeId>,
-    replacement: Option<(SemanticNodeId, SemanticNodeId)>,
-    promoted: &mut HashSet<SemanticNodeId>,
-    output: &mut Vec<SemanticNodeId>,
-) -> Result<(), SemanticSceneOperationError> {
-    if replacement.is_some_and(|(old, _)| current == old) {
-        let new = replacement.expect("replacement checked above").1;
-        if promoted.insert(new) {
-            output.push(new);
-        }
-        return Ok(());
-    }
-    if remove_set.contains(&current) {
-        return Ok(());
-    }
-    let node = target_node_checked(store, current)?;
-    if current != branch_root && direct_roots.contains(&current) {
-        return Ok(());
-    }
-    if affected.contains(&current) && matches!(node.kind(), SemanticNodeKind::Family) {
-        for member in node.members() {
-            collect_projected_replacements(
-                store,
-                *member,
-                branch_root,
-                direct_roots,
-                remove_set,
-                affected,
-                replacement,
-                promoted,
-                output,
-            )?;
-        }
-    } else if promoted.insert(current) {
-        output.push(current);
-    }
-    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

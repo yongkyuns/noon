@@ -22,6 +22,7 @@ enum OwnedSceneMembershipMember {
         wrapper_id: Option<ObjectId>,
         handle: noon::Mobject,
     },
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Family(noon::MobjectFamily),
 }
 
@@ -205,20 +206,6 @@ impl CanonicalAuthoringScene {
         self.bindings.insert(id, node);
         self.identities.insert(node, id);
         Ok(frame)
-    }
-
-    fn bind_node(&mut self, id: ObjectId, node: noon_core::SemanticNodeId) -> Result<(), String> {
-        if self.bindings.contains_key(&id) || self.identities.contains_key(&node) {
-            return Err(format!("canonical object {} is already bound", id.get()));
-        }
-        let mut transaction = noon_core::SemanticMutationTransaction::new();
-        transaction.add_member(self.scene.root(), node);
-        transaction
-            .apply(&mut self.scene.store().borrow_mut())
-            .map_err(|error| error.to_string())?;
-        self.bindings.insert(id, node);
-        self.identities.insert(node, id);
-        Ok(())
     }
 
     /// Snapshot import is an explicit compatibility boundary, never the typed bind path.
@@ -2329,6 +2316,7 @@ impl CanonicalAuthoringScene {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(target_arch = "wasm32")]
     fn root_membership_leaf_keys(&self) -> Result<Vec<String>, String> {
         noon::semantic_family_leaf_ids(&self.scene.store().borrow(), self.scene.root()).map(
             |members| {

@@ -3612,6 +3612,8 @@ mod structural_execution_delta_tests {
     #[test]
     fn painter_reorder_rebuilds_only_draw_metadata() {
         let frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: (0..4).map(circle).collect(),
             presences: vec![true; 4],

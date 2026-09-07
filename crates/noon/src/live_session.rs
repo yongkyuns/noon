@@ -2635,7 +2635,7 @@ mod tests {
 
     #[test]
     fn affine_removal_rejects_another_live_reachable_parent() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let live_family = {
             let mut store = scene.store().borrow_mut();
@@ -2643,8 +2643,12 @@ mod tests {
             store.add_member(family, square.node_id()).unwrap();
             family
         };
-        scene.add_node(live_family).unwrap();
-        scene.add(&square).unwrap();
+        // Build an intentionally aliased root to exercise removal preflight;
+        // standard membership authoring dissolves this redundant projection.
+        let mut membership = SemanticMutationTransaction::new();
+        membership.add_member(scene.root(), live_family);
+        membership.add_member(scene.root(), square.node_id());
+        membership.apply(&mut scene.store().borrow_mut()).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();

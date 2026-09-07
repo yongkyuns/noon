@@ -10,7 +10,7 @@ pub use signal_timeline::SignalTimelineAppendError;
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
 use signal_timeline::SignalTimelineSchedule;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::execution_segment::{
     ExecutionSegment, ExecutionSegmentError, ExecutionSegmentSequence, ExecutionSegmentToken,

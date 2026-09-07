@@ -2290,7 +2290,7 @@ mod tests {
     }
 
     #[test]
-    fn membership_snapshot_omits_retired_rows_and_preserves_incremental_order() {
+    fn membership_deltas_omit_unchanged_rows_and_preserve_incremental_order() {
         let mut scene = noon::Scene::new();
         let anchor = scene.circle(0.5).unwrap();
         let toggled = scene.circle(1.0).unwrap();
@@ -2311,17 +2311,16 @@ mod tests {
         mirror.apply(initial.retained).unwrap();
         player.live_remove(&toggled).unwrap();
         let retired = player.delta(false).unwrap().unwrap();
-        assert!(retired.retained.snapshot);
-        assert_eq!(retired.retained.objects.len(), 1);
+        assert!(!retired.retained.snapshot);
+        assert!(retired.retained.objects.is_empty());
+        assert_eq!(retired.retained.removed_slots.len(), 1);
         mirror.apply(retired.retained).unwrap();
         player.live_add(&toggled).unwrap();
         assert!(player.session.execution_slot_for_frame_index(1).is_some());
         let snapshot = player.delta(false).unwrap().unwrap();
-        assert!(snapshot.retained.snapshot);
-        assert_eq!(snapshot.retained.objects.len(), 2);
-        assert_eq!(snapshot.retained.objects[1].slot.slot, 1);
-        assert_eq!(snapshot.retained.objects[1].slot.generation, 0);
-        assert_eq!(snapshot.retained.objects[1].order, 1);
+        assert!(!snapshot.retained.snapshot);
+        assert_eq!(snapshot.retained.objects.len(), 1);
+        assert_eq!(snapshot.retained.objects[0].order, 1);
         mirror.apply(snapshot.retained).unwrap();
         player.live_set_translation(&toggled, 2.0, -1.0).unwrap();
         let delta = player.delta(false).unwrap().unwrap();

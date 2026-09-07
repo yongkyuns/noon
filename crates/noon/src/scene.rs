@@ -145,16 +145,6 @@ impl Scene {
         ]))
         .map(|_| ())
     }
-    /// Integration entry point for retained feature nodes in the same store.
-    /// Callers must first establish that `node` originated in `store()`.
-    pub(crate) fn add_node(&mut self, node: SemanticNodeId) -> Result<(), String> {
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_member(self.root, node);
-        transaction
-            .apply(&mut self.store.borrow_mut())
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    }
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), String> {
         if !Rc::ptr_eq(&self.store, object.store()) {
             return Err("mobject belongs to another scene store".into());
