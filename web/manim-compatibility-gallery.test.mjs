@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 9);
+assert.equal(gallery.examples.length, 10);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -26,6 +26,7 @@ assert.deepEqual(
     "compatible-indicate-square",
     "compatible-affine-lifecycle",
     "compatible-text-write",
+    "compatible-text-family-fade",
   ],
 );
 
@@ -56,7 +57,7 @@ for (const entry of readyEntries) {
   await access(new URL(`./${entry.thumbnail}`, import.meta.url));
 
   const source = await readFile(new URL(`./${entry.path}`, import.meta.url), "utf8");
-  assert.match(source, /from noon import \*/, `${entry.id}: public source must import Noon`);
+  assert.match(source, /from noon import\b/, `${entry.id}: public source must import Noon`);
   for (const pattern of noonOnlyPatterns) {
     assert.doesNotMatch(
       source,
@@ -72,7 +73,20 @@ for (const entry of readyEntries) {
     assert.doesNotMatch(
       source,
       /\b(?:VGroup|Group|Typst|MathTypst)\b/,
-      "plain Text Write gallery coverage must not claim deferred Text-group or Typst scheduling",
+      "plain Text Write gallery coverage must not claim Text-family or Typst scheduling",
+    );
+  }
+
+  if (entry.id === "compatible-text-family-fade") {
+    assert.match(source, /VGroup\(/, "Text family fade example must construct a VGroup");
+    assert.match(source, /FadeIn\(/, "Text family fade example must exercise FadeIn");
+    assert.match(source, /FadeOut\(/, "Text family fade example must exercise FadeOut");
+    assert.match(source, /Write\(/, "Text family fade example must compose with Write");
+    assert.match(source, /lag_ratio\s*=\s*0\.25/, "Text family fade must exercise lagged family timing");
+    assert.doesNotMatch(
+      source,
+      /\b(?:Typst|MathTypst)\b/,
+      "Text family fade gallery coverage must not claim deferred Typst family scheduling",
     );
   }
 }
