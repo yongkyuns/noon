@@ -3002,14 +3002,15 @@ mod tests {
         live.advance_segment_to(wait, wait.end_time()).unwrap();
         let target = live.target_editor(&square).unwrap();
         live.set_translation(&target, 3.0, -1.0).unwrap();
+        let request = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+            &square,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        ));
         let segment = live
-            .declare_and_activate_transform_to(
-                &square,
-                &target,
-                AnimationOptions::new()
-                    .run_time(1.0)
-                    .rate_func(RateFunction::Linear),
-            )
+            .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
 
         assert!(live.contains(&square).unwrap());
@@ -3055,7 +3056,7 @@ mod tests {
         }
 
         assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
-        assert_eq!(session.frame().objects.len(), 4);
+        assert_eq!(session.frame().objects.len(), 3);
     }
 
     #[test]

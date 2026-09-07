@@ -1,4 +1,4 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use noon_core::{
     validate_track_definition, AnimationOptions, CompositionTimeMapStep, ObjectId,
@@ -223,6 +223,13 @@ where
     let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
+    let admitted = prepared
+        .candidate_mutations()
+        .filter_map(|mutation| match mutation {
+            noon_core::SemanticMutation::AddMember { member, .. } => Some(*member),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
 
     for leaf in schedule.leaves() {
         let source = prepared.object_state(leaf.target).map_err(|error| {
@@ -249,7 +256,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -278,7 +285,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -319,7 +326,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -363,7 +370,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -455,7 +462,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -499,7 +506,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -595,7 +602,7 @@ where
 fn capture_effective<F>(
     leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
     source: &noon_core::SemanticObjectState,
-    index: &SemanticExecutionIndex,
+    admitted: bool,
     captures: &mut HashMap<ObjectId, EffectiveAnimationProperties>,
     effective_properties: &mut F,
 ) -> Result<EffectiveAnimationProperties, PreparedSemanticAnimationLoweringError>
@@ -607,12 +614,7 @@ where
     }
     let captured = if let Some(captured) = effective_properties(leaf.execution_object_id) {
         captured
-    } else if leaf
-        .target
-        .existing()
-        .and_then(|node| index.execution_object_id(node))
-        .is_none()
-    {
+    } else if admitted {
         EffectiveAnimationProperties {
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
                 |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {

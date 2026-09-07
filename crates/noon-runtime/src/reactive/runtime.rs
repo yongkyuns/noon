@@ -883,16 +883,18 @@ mod tests {
                 noon_core::ObjectDefinition::new(object, GeometryRef::rectangle(2.0, 1.0)),
             ))
             .expect("same identity may be recreated after removal");
-        assert_eq!(instance.frame().objects.len(), 2);
-        assert!(!instance.frame().presences[0]);
-        assert_eq!(instance.frame().objects[1].id, object);
-        assert!(instance.frame().presences[1]);
+        assert_eq!(instance.frame().objects.len(), 1);
+        assert_eq!(instance.frame().objects[0].id, object);
+        assert_eq!(
+            instance.frame().objects[0].geometry().cloned(),
+            Some(GeometryRef::rectangle(2.0, 1.0))
+        );
+        assert!(instance.frame().presences[0]);
 
         instance
             .set_reactive_input(visible, false)
             .expect("rebound target update must apply");
         assert!(!instance.frame().presences[0]);
-        assert!(!instance.frame().presences[1]);
         assert_eq!(instance.last_reactive_stats().dense_targets_applied, 1);
     }
 }
