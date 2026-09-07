@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import { chromium } from "playwright";
 import pngjs from "pngjs";
+import { verifySample, verifySquareToCircle, verifyFreshRun } from "./semantic-preview-observations.mjs";
 const { PNG } = pngjs;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,6 +23,7 @@ let serverError = "";
 server.stderr.on("data", (chunk) => { serverError = (serverError + chunk).slice(-4096); });
 server.on("error", (error) => { serverError = String(error); });
 let browser;
+let activeBackend;
 const observations = [];
 
 async function pageReady() {
@@ -52,33 +54,29 @@ function foreground(bytes) {
 }
 
 async function captureSquareToCircle(label) {
-  const samples = [];
   const source = await readFile(path.join(root, "web/python/examples/manim_parity_square_to_circle.py"), "utf8");
+  const expectedBackend = activeBackend === "webgpu" ? "WebGPU" : "WebGL2";
   const page = await pageReady();
+  const frames = new Map();
   try {
     const loaded = await page.evaluate((code) => window.noonHostRaster.load(code, 4), source);
     assert.equal(loaded.kind, "semantic_execution");
+    assert.equal(loaded.rendererBackend, expectedBackend);
     const frameTimes = Array.from({ length: 91 }, (_, frame) => frame / 30);
-    const images = new Map();
     for (const frameIndex of [0, 30, 45, 60, 90]) {
       const sample = await page.evaluate(({ frameIndex, frameTimes }) => window.noonHostRaster.renderThrough(frameIndex, frameTimes), { frameIndex, frameTimes });
+      verifySample(sample, frameIndex, expectedBackend);
       const bytes = await page.locator("#scene").screenshot();
-      await writeFile(path.join(artifacts, `${label}-frame-${frameIndex}.png`), bytes);
-      images.set(frameIndex, foreground(bytes));
-      samples.push(sample);
-      observations.push({ label, frameIndex, sample, sourceSha256: hash(source), imageSha256: hash(bytes) });
+      await writeFile(path.join(artifacts, `${activeBackend}-${label}-frame-${frameIndex}.png`), bytes);
+      const frame = { backend: activeBackend, label, frameIndex, sample,
+        sourceSha256: hash(source), imageSha256: hash(bytes), foreground: foreground(bytes) };
+      frames.set(frameIndex, frame);
+      observations.push(frame);
     }
-    assert.equal(samples[1].objectCount, 1);
-    assert.equal(samples[3].objectCount, 1);
-    assert.equal(samples[4].objectCount, 0);
-    const square = images.get(30), circle = images.get(60);
-    assert.ok(square.count > 20 && circle.count > 20, "both shape endpoints must be visible");
-    assert.ok(square.centerDistance < 12, "the initial square must remain hollow, not be the filled target circle");
-    assert.ok(circle.centerDistance > 24, "the transformed circle must have its authored pink fill");
-    assert.ok(square.width > circle.width * 1.2, "the rotated square must be wider than the endpoint circle");
-    assert.equal(images.get(90).count, 0, "FadeOut must leave an empty final frame");
+    verifySquareToCircle(frames);
     await page.evaluate(() => window.noonHostRaster.close());
     assert.equal(await page.evaluate(() => window.noonHostRaster.status().state), "closed");
+    return frames;
   } finally {
     await page.close();
   }
@@ -90,7 +88,6 @@ async function cancelRunningSource() {
     await page.evaluate(() => {
       const source = "from noon import *\nclass Stuck(Scene):\n    def construct(self):\n        self.add(Circle())\n        self.wait(0.1)\n        while True:\n            pass\n";
       window.previewOpening = window.noonHostRaster.load(source, 4);
-      // Install the rejection handler immediately, including for startup failure.
       window.previewOpening.catch(() => {});
     });
     await page.evaluate(() => window.previewOpening);
@@ -106,10 +103,21 @@ async function cancelRunningSource() {
     const state = await page.evaluate(() => window.noonHostRaster.status());
     assert.equal(state.state, "closed");
     assert.equal(state.sourceState, "canceled");
-    observations.push({ cancellation: state });
+    assert.deepEqual(state.cleanupErrors, []);
+    observations.push({ backend: activeBackend, cancellation: state });
   } finally {
     await page.close();
   }
+}
+
+function browserArgs(backend) {
+  if (backend === "webgpu") return [
+    "--enable-unsafe-webgpu", "--enable-unsafe-swiftshader", "--use-webgpu-adapter=swiftshader",
+    "--use-gpu-in-tests", "--ignore-gpu-blocklist", "--enable-features=Vulkan",
+    "--use-gl=angle", "--use-angle=swiftshader", "--use-vulkan=swiftshader",
+  ];
+  return ["--disable-features=WebGPU", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
+    "--use-gl=angle", "--use-angle=swiftshader"];
 }
 
 try {
@@ -122,16 +130,21 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(ready, `preview test server did not start: ${serverError}`);
-  browser = await chromium.launch({ headless: true, args: [
-    "--disable-features=WebGPU", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
-    "--use-gl=angle", "--use-angle=swiftshader",
-  ] });
-  await captureSquareToCircle("before-cancel");
-  await cancelRunningSource();
-  // A fresh page/run must work after cancellation, with no shared session state.
-  await captureSquareToCircle("after-cancel");
-  console.log("Semantic preview: square/morph/circle/fade frames, worker cancellation, and fresh-run recovery passed");
-
+  for (const backend of ["webgl", "webgpu"]) {
+    activeBackend = backend;
+    browser = await chromium.launch({ headless: true, args: browserArgs(backend) });
+    try {
+      const before = await captureSquareToCircle("before-cancel");
+      await cancelRunningSource();
+      const after = await captureSquareToCircle("after-cancel");
+      // Equality is required only within one backend/environment, never across GPUs.
+      verifyFreshRun(before, after);
+      console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation and identical fresh-run frames passed`);
+    } finally {
+      await browser.close();
+      browser = null;
+    }
+  }
 } finally {
   try {
     let revision = null;
