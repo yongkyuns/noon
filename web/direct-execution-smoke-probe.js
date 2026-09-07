@@ -25,6 +25,7 @@ const {
   createDirectOrdinarySubsetDisplaySmokeRenderer,
   createDirectOrdinaryMembershipSmokeRenderer,
   createDirectOrdinaryTextWriteSmokeRenderer,
+  createDirectTextFamilyFadeSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -1174,6 +1175,59 @@ async function directOrdinaryTextWriteProof(expectedBackend) {
   }
 }
 
+async function textBrightnessByRow(canvas) {
+  const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
+  const reader = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = reader.getContext("2d", { willReadFrequently: true });
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const result = { upper: 0, lower: 0 };
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    const brightness = Math.max(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+    if (brightness < 24) continue;
+    const y = Math.floor(offset / 4 / canvas.width);
+    result[y < canvas.height / 2 ? "upper" : "lower"] += brightness;
+  }
+  return result;
+}
+
+async function directTextFamilyFadeProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectTextFamilyFadeSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const time of [0, 1000, 2000, 2500, 3000]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      samples.push({ time, ...(await textBrightnessByRow(canvas)) });
+    }
+    if (samples[0].upper !== 0 || samples[0].lower !== 0
+        || samples[1].upper <= 0 || samples[1].lower <= 0
+        || samples[2].upper <= samples[1].upper || samples[2].lower <= 0
+        || samples[3].upper >= samples[2].upper || samples[3].lower <= 0
+        || samples[4].upper !== 0 || samples[4].lower <= 0) {
+      throw new Error(`direct Text family Fade did not preserve its shared phases: ${JSON.stringify(samples)}`);
+    }
+    renderer.advanceDirectRealtime(3250);
+    await settleDirectPublication(renderer, 3250);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3250));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 1
+        || renderer.time() !== 3.25 || wake.cadence !== "idle") {
+      throw new Error("direct Text family Fade did not complete with only Write present");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directOrdinaryMembershipProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinaryMembershipSmokeRenderer(canvas);
@@ -1869,6 +1923,7 @@ async function start() {
   metrics.ordinaryMembership = await directOrdinaryMembershipProof(expectedBackend);
   metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);
   metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
+  metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);
