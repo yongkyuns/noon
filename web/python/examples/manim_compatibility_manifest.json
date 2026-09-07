@@ -80,6 +80,51 @@
       "thumbnail_alt": "Colored circle rows illustrating increasing and one-by-one subset display",
       "thumbnail_time": 4.0,
       "order": 1050
+    },
+    {
+      "id": "compatible-scale-in-place",
+      "title": "ScaleInPlace",
+      "summary": "Scale a geometry object around its own center using the Manim-compatible ScaleInPlace animation.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_scale_in_place.py",
+      "category": "manim-compatible/transform",
+      "features": ["ScaleInPlace", "Square", "transform", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-scale-in-place.svg",
+      "thumbnail_alt": "Blue square shown before and after an in-place scale",
+      "thumbnail_time": 0.5,
+      "order": 1060
+    },
+    {
+      "id": "compatible-indicate-square",
+      "title": "IndicateSquare",
+      "summary": "Pulse a geometry object with Manim-compatible Indicate semantics.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_indicate_square.py",
+      "category": "manim-compatible/indication",
+      "features": ["Indicate", "Square", "indication", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-indicate-square.svg",
+      "thumbnail_alt": "Blue square with a surrounding indication pulse",
+      "thumbnail_time": 0.5,
+      "order": 1070
+    },
+    {
+      "id": "compatible-affine-lifecycle",
+      "title": "SpinInShrinkToCenter",
+      "summary": "Spin a square in from nothing, then remove it with ShrinkToCenter.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_affine_lifecycle.py",
+      "category": "manim-compatible/creation",
+      "features": ["SpinInFromNothing", "ShrinkToCenter", "Square", "lifecycle", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-affine-lifecycle.svg",
+      "thumbnail_alt": "Blue square illustrating spin-in and shrink-to-center lifecycle",
+      "thumbnail_time": 1.0,
+      "order": 1080
     }
   ]
 }
