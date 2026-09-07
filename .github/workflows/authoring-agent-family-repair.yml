@@ -2,7 +2,7 @@ name: Prepare reviewed agent family repair
 on:
   push:
     branches: [codex/noon-agent-family-repair]
-    paths: [.github/workflows/authoring-agent-family-repair.yml, .agent-family-repair.patch]
+    paths: [.github/workflows/authoring-agent-family-repair.yml, .agent-family-repair.patch, .agent-family-dedup.patch]
 permissions:
   contents: write
 jobs:
@@ -23,20 +23,21 @@ jobs:
           ref: 7c1d834ab0272761ee546ad379a6c24909c47253
           path: source
           persist-credentials: false
-      - name: Apply the reviewed patch to the exact PR head
+      - name: Apply the reviewed patches to the exact PR head
         working-directory: source
         run: |
           test "$(git rev-parse HEAD)" = 7c1d834ab0272761ee546ad379a6c24909c47253
           echo '5d6f58a67179d3b653f8a8718d153fa25137e7b9f88e13e393798fe7ed8ccfe0  ../control/.agent-family-repair.patch' | sha256sum --check
-          git apply --check ../control/.agent-family-repair.patch
-          git apply ../control/.agent-family-repair.patch
+          echo 'f9865039789cc9298fff9ed151687529b85ac6156211d7170b192e50cf4b8a1c  ../control/.agent-family-dedup.patch' | sha256sum --check
+          git apply --check ../control/.agent-family-repair.patch ../control/.agent-family-dedup.patch
+          git apply ../control/.agent-family-repair.patch ../control/.agent-family-dedup.patch
       - name: Format Rust and validate patch scope
         working-directory: source
         run: |
           cargo fmt --all
           python3 - <<'PY'
           import subprocess
-          expected = {'crates/noon-web/src/canonical_authoring_scene.rs', 'scripts/semantic-preview-smoke.mjs', 'web/python/_manim_semantic_handles.py', 'web/python/test_manim_live_family_construction.py'}
+          expected = {'crates/noon/src/live_session.rs', 'crates/noon-web/src/canonical_authoring_scene.rs', 'scripts/semantic-preview-smoke.mjs', 'web/python/_manim_semantic_handles.py', 'web/python/test_manim_live_family_construction.py'}
           modified = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
           added = set(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], text=True).splitlines())
           assert modified | added == expected, (modified, added)
@@ -64,10 +65,10 @@ jobs:
         run: |
           git config user.name 'Noon agent repair'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/noon-web/src/canonical_authoring_scene.rs scripts/semantic-preview-smoke.mjs web/python/_manim_semantic_handles.py web/python/test_manim_live_family_construction.py
+          git add crates/noon/src/live_session.rs crates/noon-web/src/canonical_authoring_scene.rs scripts/semantic-preview-smoke.mjs web/python/_manim_semantic_handles.py web/python/test_manim_live_family_construction.py
           git diff --cached --check
           git diff --cached > "$RUNNER_TEMP/noon-family-validated.patch"
-          git commit -m 'Publish live Python family construction through the canonical session' -m 'Refs #1197 and #1202. Reuse the shared live family API; preserve revision validation and canonical raster gates. Includes wrapper, Rust publication, and late-construction browser regressions.'
+          git commit -m 'Publish live Python family construction through the canonical session' -m 'Refs #1197 and #1202. Reuse shared live family semantics, including ordered duplicate suppression; preserve revision validation and canonical raster gates. Includes wrapper, Rust publication, and late-construction browser regressions.'
           git rev-parse HEAD 'HEAD^{tree}' | tee "$RUNNER_TEMP/noon-family-result.txt"
           auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/codex/noon-agent-family-result
