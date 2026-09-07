@@ -24,7 +24,7 @@ use noon_core::{
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeId,
     SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
-    SemanticVec3, Style, Transform2D,
+    SemanticSubsetDisplayMode, SemanticVec3, Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -66,6 +66,7 @@ pub enum AffineLifecycleEndpoint {
 }
 
 pub type AffineLifecycleDirection = SemanticAffineLifecycleDirection;
+pub type SubsetDisplayMode = SemanticSubsetDisplayMode;
 
 /// Outline style and local phase easing for shared DrawBorderThenFill semantics.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -232,6 +233,11 @@ pub enum AnimationCompositionRequest<'a> {
     FamilyDrawBorderThenFill {
         target: &'a MobjectFamily,
         outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    },
+    FamilySubsetDisplay {
+        target: &'a MobjectFamily,
+        mode: SubsetDisplayMode,
         options: AnimationOptions,
     },
     Rotate {
@@ -803,6 +809,35 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
+    /// Display an ordered family through the shared floor/ceil subset thresholds.
+    pub fn declare_and_activate_family_subset_display(
+        &mut self,
+        target: &MobjectFamily,
+        mode: SubsetDisplayMode,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::FamilySubsetDisplay {
+            target,
+            mode,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Atomically hide every direct member before activating a subset display.
+    pub fn prepare_family_subset_display(
+        &mut self,
+        target: &MobjectFamily,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(target)?;
+        let transaction = {
+            let store = self.store.borrow();
+            crate::family_authoring::prepare_subset_display_transaction(&store, target.node_id())
+                .map_err(LiveSessionError::Mobject)?
+        };
+        self.apply(transaction)
+    }
+
     /// Atomically append and activate one scalar tracker interval at the current
     /// session time. The returned segment uses the same completion barrier as
     /// object-property animation tracks.
@@ -1121,6 +1156,18 @@ impl<'a> LiveSession<'a> {
                 Request::FamilyDrawBorderThenFill {
                     target: target.node_id(),
                     outline: *outline,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilySubsetDisplay {
+                target,
+                mode,
+                options,
+            } => {
+                self.require_family(target)?;
+                Request::FamilySubsetDisplay {
+                    target: target.node_id(),
+                    mode: *mode,
                     options: *options,
                 }
             }
@@ -4044,5 +4091,327 @@ mod recursive_composition_tests {
         assert_eq!(restored.fill, Some(Color::ORANGE));
         assert_eq!(restored.stroke, Some(Color::BLUE));
         assert_eq!(restored.stroke_width, 0.06);
+    }
+
+    #[test]
+    fn increasing_subsets_uses_absolute_floor_thresholds_and_retains_members() {
+        let scene = Scene::new();
+        let mut first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        first.set_fill_opacity(0.35).unwrap();
+        let family = scene.family(&[&first, &second]).unwrap();
+        family.prepare_subset_display().unwrap();
+        assert_eq!(first.state().unwrap().style.fill_opacity, 0.0);
+        assert_eq!(second.state().unwrap().style.fill_opacity, 0.0);
+
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_family_subset_display(
+                &family,
+                SubsetDisplayMode::IncreasingFloor,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        live.advance_segment_to(segment, segment.start_time())
+            .unwrap();
+        assert_eq!(
+            live.effective(&first).unwrap().style.fill.unwrap().alpha,
+            0.0
+        );
+        assert_eq!(
+            live.effective(&second).unwrap().style.fill.unwrap().alpha,
+            0.0
+        );
+        live.advance_segment_to(segment, segment.start_time() + 1.0)
+            .unwrap();
+        assert_eq!(
+            live.effective(&first).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+        assert_eq!(
+            live.effective(&second).unwrap().style.fill.unwrap().alpha,
+            0.0
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.effective(&first).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+        assert_eq!(
+            live.effective(&second).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+    }
+
+    #[test]
+    fn one_by_one_default_smooth_keeps_the_prior_member_at_the_exact_boundary() {
+        let scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        let family = scene.family(&[&first, &second]).unwrap();
+        family.prepare_subset_display().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_family_subset_display(
+                &family,
+                SubsetDisplayMode::OneByOneCeil,
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 1.0)
+            .unwrap();
+        assert_eq!(
+            live.effective(&first).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+        assert_eq!(
+            live.effective(&second).unwrap().style.fill.unwrap().alpha,
+            0.0
+        );
+        live.advance_segment_to(segment, segment.start_time() + 1.001)
+            .unwrap();
+        assert_eq!(
+            live.effective(&first).unwrap().style.fill.unwrap().alpha,
+            0.0
+        );
+        assert_eq!(
+            live.effective(&second).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(first.state().unwrap().style.fill_opacity, 0.0);
+        assert_eq!(second.state().unwrap().style.fill_opacity, 1.0);
+    }
+
+    #[test]
+    fn one_by_one_preserves_the_strict_boundary_through_nested_smooth_maps() {
+        let scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        let family = scene.family(&[&first, &second]).unwrap();
+        family.prepare_subset_display().unwrap();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children: vec![AnimationCompositionRequest::FamilySubsetDisplay {
+                target: &family,
+                mode: SubsetDisplayMode::OneByOneCeil,
+                options: AnimationOptions::new(),
+            }],
+            options: AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Smooth),
+        };
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 1.0)
+            .unwrap();
+        assert_eq!(
+            live.effective(&first).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+        assert_eq!(
+            live.effective(&second).unwrap().style.fill.unwrap().alpha,
+            0.0
+        );
+        live.advance_segment_to(segment, segment.start_time() + 1.001)
+            .unwrap();
+        assert_eq!(
+            live.effective(&first).unwrap().style.fill.unwrap().alpha,
+            0.0
+        );
+        assert_eq!(
+            live.effective(&second).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+    }
+
+    #[test]
+    fn three_member_one_by_one_keeps_prior_member_at_fractional_boundaries() {
+        let scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        let third = scene.square(1.0).unwrap();
+        let family = scene.family(&[&first, &second, &third]).unwrap();
+        family.prepare_subset_display().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+
+        let wait = live.wait_segment(3.0).unwrap();
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        live.complete_segment(wait).unwrap();
+        let segment = live
+            .declare_and_activate_family_subset_display(
+                &family,
+                SubsetDisplayMode::OneByOneCeil,
+                AnimationOptions::new()
+                    .run_time(3.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(segment.start_time(), 3.0);
+
+        live.advance_segment_to(segment, 4.0).unwrap();
+        assert_eq!(
+            [
+                live.effective(&first).unwrap().style.fill.unwrap().alpha,
+                live.effective(&second).unwrap().style.fill.unwrap().alpha,
+                live.effective(&third).unwrap().style.fill.unwrap().alpha,
+            ],
+            [1.0, 0.0, 0.0]
+        );
+        live.advance_segment_to(segment, 4.001).unwrap();
+        assert_eq!(
+            [
+                live.effective(&first).unwrap().style.fill.unwrap().alpha,
+                live.effective(&second).unwrap().style.fill.unwrap().alpha,
+                live.effective(&third).unwrap().style.fill.unwrap().alpha,
+            ],
+            [0.0, 1.0, 0.0]
+        );
+        live.advance_segment_to(segment, 5.0).unwrap();
+        assert_eq!(
+            [
+                live.effective(&first).unwrap().style.fill.unwrap().alpha,
+                live.effective(&second).unwrap().style.fill.unwrap().alpha,
+                live.effective(&third).unwrap().style.fill.unwrap().alpha,
+            ],
+            [0.0, 1.0, 0.0]
+        );
+        live.advance_segment_to(segment, 5.001).unwrap();
+        assert_eq!(
+            [
+                live.effective(&first).unwrap().style.fill.unwrap().alpha,
+                live.effective(&second).unwrap().style.fill.unwrap().alpha,
+                live.effective(&third).unwrap().style.fill.unwrap().alpha,
+            ],
+            [0.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn live_subset_preparation_is_one_atomic_style_publication() {
+        let mut scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        scene.add(&first).unwrap();
+        scene.add(&second).unwrap();
+        let family = scene.family(&[&first, &second]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let result = scene
+            .live(&mut session)
+            .prepare_family_subset_display(&family)
+            .unwrap();
+        assert_eq!(result.impacts().len(), 2);
+        assert_eq!(
+            session.publication_context().scene_revision().get(),
+            before.scene_revision().get() + 1
+        );
+        assert_eq!(session.frame().objects[0].style.fill.unwrap().alpha, 0.0);
+        assert_eq!(session.frame().objects[1].style.fill.unwrap().alpha, 0.0);
+    }
+
+    #[test]
+    fn live_created_detached_family_prepares_and_enters_after_wait() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.25).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+
+        let wait = live.wait_segment(1.0).unwrap();
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        let first = live
+            .create_manim_primitive(crate::ManimPrimitiveOptions::square(0.5).unwrap())
+            .unwrap();
+        let second = live
+            .create_manim_primitive(crate::ManimPrimitiveOptions::circle(0.25).unwrap())
+            .unwrap();
+        let family = live
+            .family(&[
+                MobjectFamilyMember::Mobject(&first),
+                MobjectFamilyMember::Mobject(&second),
+            ])
+            .unwrap();
+
+        live.prepare_family_subset_display(&family).unwrap();
+        assert_eq!(live.authored(&first).unwrap().style.fill_opacity, 0.0);
+        assert_eq!(live.authored(&second).unwrap().style.fill_opacity, 0.0);
+        let segment = live
+            .declare_and_activate_family_subset_display(
+                &family,
+                SubsetDisplayMode::IncreasingFloor,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        assert_eq!(segment.start_time(), wait.end_time());
+        assert!(live.contains(&first).unwrap());
+        assert!(live.contains(&second).unwrap());
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.effective(&first).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+        assert_eq!(
+            live.effective(&second).unwrap().style.fill.unwrap().alpha,
+            1.0
+        );
+    }
+
+    #[test]
+    fn subset_preparation_rejects_nested_families_without_partial_style_changes() {
+        let scene = Scene::new();
+        let mut first = scene.square(1.0).unwrap();
+        first.set_fill_opacity(1.0).unwrap();
+        let nested_member = scene.square(1.0).unwrap();
+        let nested = scene.family(&[&nested_member]).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
+        transaction.add_member(outer, first.node_id());
+        transaction.add_member(outer, nested.node_id());
+        let result = transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        let outer =
+            MobjectFamily::from_node(Rc::clone(scene.store()), result.resolve(outer).unwrap())
+                .unwrap();
+
+        assert!(outer.prepare_subset_display().is_err());
+        assert_eq!(first.state().unwrap().style.fill_opacity, 1.0);
+
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        assert!(scene
+            .live(&mut session)
+            .declare_and_activate_family_subset_display(
+                &outer,
+                SubsetDisplayMode::IncreasingFloor,
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert_eq!(session.publication_context(), before);
+        assert!(scene
+            .store()
+            .borrow()
+            .semantic_family_members_checked(scene.root())
+            .unwrap()
+            .is_empty());
     }
 }

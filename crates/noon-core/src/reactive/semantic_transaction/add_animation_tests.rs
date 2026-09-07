@@ -169,6 +169,54 @@ fn invalid_draw_border_then_fill_outline_rolls_back_before_identity_allocation()
 }
 
 #[test]
+fn prepared_subset_member_preserves_shared_index_and_threshold_mode() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = transaction.create_subset_display_member_animation(
+        target,
+        1,
+        3,
+        crate::SemanticSubsetDisplayMode::OneByOneCeil,
+        AnimationOptions::new().introducer(true),
+    );
+    let result = transaction.apply(&mut store).unwrap();
+    assert_eq!(
+        store
+            .semantic_animation_state(result.resolve(local).unwrap())
+            .unwrap()
+            .intent(),
+        &SemanticAnimationIntent::SubsetDisplayMember {
+            target,
+            index: 1,
+            count: 3,
+            mode: crate::SemanticSubsetDisplayMode::OneByOneCeil,
+        }
+    );
+}
+
+#[test]
+fn invalid_subset_member_rolls_back_before_identity_allocation() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let before_len = store.len();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.create_subset_display_member_animation(
+        target,
+        2,
+        2,
+        crate::SemanticSubsetDisplayMode::IncreasingFloor,
+        AnimationOptions::new(),
+    );
+    assert!(matches!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidSubsetDisplayMember { index: 0 })
+    ));
+    assert_eq!(store.len(), before_len);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+}
+
+#[test]
 fn add_animation_preserves_composition_order_and_unresolved_options() {
     let mut store = SemanticStore::new();
     let first = transform(&mut store, 1.0);

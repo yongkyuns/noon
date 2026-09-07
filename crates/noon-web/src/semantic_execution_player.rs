@@ -1162,6 +1162,29 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    /// Apply subset-display constructor preparation through the active retained
+    /// session so semantic and runtime publication remain one transaction.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn prepare_family_subset_display(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<(), String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .prepare_family_subset_display(family)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, String> {
         self.require_completed_live_segment()?;

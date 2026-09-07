@@ -77,6 +77,11 @@ pub enum SemanticScheduledAnimationPayload {
         stroke_color: Option<noon_core::Color>,
         phase_rate_function: RateFunction,
     },
+    SubsetDisplayMember {
+        index: usize,
+        count: usize,
+        mode: noon_core::SemanticSubsetDisplayMode,
+    },
     Rotate {
         angle: f64,
     },
@@ -178,6 +183,11 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         stroke_width: f64,
         stroke_color: Option<noon_core::Color>,
         phase_rate_function: RateFunction,
+    },
+    SubsetDisplayMember {
+        index: usize,
+        count: usize,
+        mode: noon_core::SemanticSubsetDisplayMode,
     },
     Rotate {
         angle: f64,
@@ -578,6 +588,9 @@ fn published_payload(
             stroke_color,
             phase_rate_function,
         },
+        ScheduledAnimationPayload::SubsetDisplayMember { index, count, mode } => {
+            SemanticScheduledAnimationPayload::SubsetDisplayMember { index, count, mode }
+        }
         ScheduledAnimationPayload::Fade {
             direction,
             endpoint,
@@ -629,6 +642,9 @@ fn prepared_payload(
             stroke_color,
             phase_rate_function,
         },
+        ScheduledAnimationPayload::SubsetDisplayMember { index, count, mode } => {
+            PreparedSemanticScheduledAnimationPayload::SubsetDisplayMember { index, count, mode }
+        }
         ScheduledAnimationPayload::Fade {
             direction,
             endpoint,
@@ -672,6 +688,12 @@ enum AnimationDeclarationIntent<R> {
         stroke_width: f64,
         stroke_color: Option<noon_core::Color>,
         phase_rate_function: RateFunction,
+    },
+    SubsetDisplayMember {
+        target: R,
+        index: usize,
+        count: usize,
+        mode: noon_core::SemanticSubsetDisplayMode,
     },
     Rotate {
         target: R,
@@ -782,6 +804,22 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     stroke_width: *stroke_width,
                     stroke_color: *stroke_color,
                     phase_rate_function: *phase_rate_function,
+                }
+            }
+            SemanticAnimationIntent::SubsetDisplayMember {
+                target,
+                index,
+                count,
+                mode,
+            } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::SubsetDisplayMember {
+                    target: *target,
+                    index: *index,
+                    count: *count,
+                    mode: *mode,
                 }
             }
             SemanticAnimationIntent::Rotate { target, angle } => {
@@ -922,6 +960,17 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         stroke_color: *stroke_color,
                         phase_rate_function: *phase_rate_function,
                     },
+                    SemanticAnimationIntent::SubsetDisplayMember {
+                        target,
+                        index,
+                        count,
+                        mode,
+                    } => AnimationDeclarationIntent::SubsetDisplayMember {
+                        target: (*target).into(),
+                        index: *index,
+                        count: *count,
+                        mode: *mode,
+                    },
                     SemanticAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: (*target).into(),
@@ -1007,6 +1056,17 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         stroke_color: *stroke_color,
                         phase_rate_function: *phase_rate_function,
                     },
+                    SemanticTransactionAnimationIntent::SubsetDisplayMember {
+                        target,
+                        index,
+                        count,
+                        mode,
+                    } => AnimationDeclarationIntent::SubsetDisplayMember {
+                        target: *target,
+                        index: *index,
+                        count: *count,
+                        mode: *mode,
+                    },
                     SemanticTransactionAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: *target,
@@ -1069,7 +1129,8 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
             }
             AnimationDeclarationIntent::Rotate { target, .. }
             | AnimationDeclarationIntent::Indicate { target, .. }
-            | AnimationDeclarationIntent::DrawBorderThenFill { target, .. } => {
+            | AnimationDeclarationIntent::DrawBorderThenFill { target, .. }
+            | AnimationDeclarationIntent::SubsetDisplayMember { target, .. } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
@@ -1150,6 +1211,11 @@ enum ScheduledAnimationPayload<R> {
         stroke_width: f64,
         stroke_color: Option<noon_core::Color>,
         phase_rate_function: RateFunction,
+    },
+    SubsetDisplayMember {
+        index: usize,
+        count: usize,
+        mode: noon_core::SemanticSubsetDisplayMode,
     },
     Rotate {
         angle: f64,
@@ -1372,6 +1438,45 @@ where
                         stroke_color,
                         phase_rate_function,
                     },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::SubsetDisplayMember {
+            target,
+            index,
+            count,
+            mode,
+        } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options = resolve_animation_options(
+                AnimationDefaults {
+                    introducer: true,
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            if options.remover {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::SubsetDisplayMember { index, count, mode },
                     options,
                 },
             })

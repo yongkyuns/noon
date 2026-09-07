@@ -761,6 +761,31 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage one ordered member of a shared family subset display.
+    pub fn create_subset_display_member_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        index: usize,
+        count: usize,
+        mode: crate::SemanticSubsetDisplayMode,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::SubsetDisplayMember {
+                    target: target.into(),
+                    index,
+                    count,
+                    mode,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a single-leaf fade declaration and return its transaction-local token.
     pub fn create_fade_animation(
         &mut self,
@@ -2055,6 +2080,9 @@ pub enum SemanticMutationTransactionError {
     InvalidDrawBorderThenFillOutline {
         index: usize,
     },
+    InvalidSubsetDisplayMember {
+        index: usize,
+    },
     InvalidFadeEndpoint {
         index: usize,
     },
@@ -2435,6 +2463,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidDrawBorderThenFillOutline { index } => write!(
                 formatter,
                 "semantic mutation {index} has an invalid DrawBorderThenFill outline"
+            ),
+            Self::InvalidSubsetDisplayMember { index } => write!(
+                formatter,
+                "semantic mutation {index} has an invalid subset display member index/count"
             ),
             Self::InvalidFadeEndpoint { index } => write!(
                 formatter,

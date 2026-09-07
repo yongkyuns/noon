@@ -14,7 +14,6 @@
     {"path": "web/python/_manim_animate.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_compat.py", "token": "copy.deepcopy", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "copy.deepcopy", "maximum": 3, "migration_issue": "#61"},
-    {"path": "web/python/_manim_lifecycle.py", "token": "copy.deepcopy", "maximum": 4, "migration_issue": "#61"},
     {"path": "web/python/_manim_lifecycle.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_rotate.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_semantic_handles.py", "token": "copy.deepcopy", "maximum": 1, "migration_issue": "#61"},
@@ -233,11 +232,19 @@
       "reason": "Python coerces Manim outline options and wrapper identity. Rust derives the activation-effective outline and final style, owns both phases and family lag scheduling, and publishes detached families atomically."
     },
     {
+      "id": "animation.subset-display",
+      "surface": "ShowIncreasingSubsets and ShowSubmobjectsOneByOne for ordinary direct-member families",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::prepare_family_subset_display/declare_and_activate_family_subset_display"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_lifecycle.py", "symbol": "ShowIncreasingSubsets/ShowSubmobjectsOneByOne"}],
+      "reason": "Python validates constructor ergonomics and passes one family handle and mode. Rust atomically prepares paint opacity, admits detached direct members, resolves exact ordered thresholds, lowers typed Fill/Stroke tracks, and reconciles absolute endpoints."
+    },
+    {
       "id": "animation.lifecycle",
       "surface": "Unconverted retained/group Create/Uncreate/FadeIn/FadeOut",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_lifecycle.py", "symbol": "_schedule_fade/_schedule_create/_subset_scene_play"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::append_create/append_fade_in/append_fade_out"},
+      "owner": {"language": "python", "path": "web/python/_manim_lifecycle.py", "symbol": "_schedule_fade/_schedule_create"},
+      "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_create/declare_and_activate_fade_with_endpoint"},
       "reason": "The remaining #959 retained/group migration path still constructs endpoint snapshots, presence tracks, and final handoff state in Python; canonical typed leaf fades use the shared Rust operation.",
       "replacement": "Move deterministic endpoint and lifecycle track lowering to the shared Rust facade.",
       "migration_issue": "#61"

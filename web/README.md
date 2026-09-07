@@ -26,6 +26,7 @@ Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `r
 | Create → SquareToCircle → FadeOut | `noon::example_scenes::ordinary_create_then_content_morph_program()` | None; native and direct-WASM hosts run the same typed content and lifecycle continuation |
 | Ordinary style play | `noon::example_scenes::ordinary_style_play()` | None; the typed Rust session owns fill/object-opacity interpolation, completion, and the following authored style edit |
 | Ordinary paint play | `noon::example_scenes::ordinary_paint_play()` | None; the typed Rust session owns fill/stroke color and paint-opacity interpolation, completion, and the following authored paint edit |
+| Ordered subset display | `noon::example_scenes::ordinary_subset_display::program()` | None; shared Rust owns family preparation, detached admission, exact increasing/one-by-one thresholds, and paint endpoints |
 | Native signals | `noon::example_scenes::live_native_signals()` | Typed pointer, Space-key, opacity-control, and ordered pointer-down occurrences; no scene JSON or semantic IDs |
 
 ## Curated examples

@@ -17,7 +17,7 @@ use crate::execution_segment::{
     PendingSegmentCompletion, PendingSegmentCompletionKind, ScalarSegmentCompletionEntry,
     SegmentCompletionEntry,
 };
-use crate::live_session::{DrawBorderThenFillOptions, IndicateOptions};
+use crate::live_session::{DrawBorderThenFillOptions, IndicateOptions, SubsetDisplayMode};
 use noon_compile::{
     derive_prepared_scalar_animation_tracks,
     lower_prepared_scalar_signal_timeline_entries_with_resolver,
@@ -113,6 +113,11 @@ pub(crate) enum SemanticCompositionRequest {
     FamilyDrawBorderThenFill {
         target: SemanticNodeId,
         outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    },
+    FamilySubsetDisplay {
+        target: SemanticNodeId,
+        mode: SubsetDisplayMode,
         options: AnimationOptions,
     },
     Rotate {
@@ -1756,6 +1761,74 @@ impl ExecutionSession {
                 let mut composition_options = *options;
                 composition_options.introducer = None;
                 composition_options.rate_func = Some(RateFunction::Linear);
+                Ok(declaration.create_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    children,
+                    composition_options,
+                ))
+            }
+            SemanticCompositionRequest::FamilySubsetDisplay {
+                target,
+                mode,
+                options,
+            } => {
+                if options.lag_ratio.is_some_and(|value| value != 0.0)
+                    || options.path_arc.is_some_and(|value| value != 0.0)
+                    || options.remover == Some(true)
+                    || options.reverse_rate_function == Some(true)
+                    || options.introducer == Some(false)
+                    || options.rate_func.is_some_and(|rate| {
+                        !matches!(
+                            rate,
+                            RateFunction::Linear
+                                | RateFunction::Smooth
+                                | RateFunction::RushInto
+                                | RateFunction::RushFrom
+                                | RateFunction::EaseInOutCubic
+                        )
+                    })
+                {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "subset display supports monotone rate functions and retained membership without lag, path arcs, or reversal".into(),
+                    ));
+                }
+                let leaves = store
+                    .semantic_family_members_checked(*target)
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?
+                    .to_vec();
+                if leaves.is_empty() {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "subset display requires at least one direct family member".into(),
+                    ));
+                }
+                let count = leaves.len();
+                let children = leaves
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, leaf)| {
+                        store.semantic_object_state_checked(leaf).map_err(|_| {
+                            ExecutionSessionAnimationError::InvalidComposition(
+                                "subset display supports direct object members, not nested families".into(),
+                            )
+                        })?;
+                        admit(leaf, declaration, admitted)?;
+                        Ok(declaration.create_subset_display_member_animation(
+                            leaf,
+                            index,
+                            count,
+                            *mode,
+                            AnimationOptions::new()
+                                .rate_func(RateFunction::Linear)
+                                .introducer(true),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ExecutionSessionAnimationError>>()?;
+                let mut composition_options = *options;
+                composition_options.introducer = None;
+                composition_options.rate_func =
+                    Some(options.rate_func.unwrap_or(RateFunction::Smooth));
                 Ok(declaration.create_animation_composition(
                     SemanticAnimationCompositionKind::Parallel,
                     children,

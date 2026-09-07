@@ -465,6 +465,41 @@ impl MobjectFamily {
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
+
+    /// Atomically hide every direct object member before a shared subset display.
+    pub fn prepare_subset_display(&self) -> Result<(), String> {
+        let transaction = {
+            let store = self.store.borrow();
+            prepare_subset_display_transaction(&store, self.node)?
+        };
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub(crate) fn prepare_subset_display_transaction(
+    store: &SemanticStore,
+    family: SemanticNodeId,
+) -> Result<SemanticMutationTransaction, String> {
+    let members = store
+        .semantic_family_members_checked(family)
+        .map_err(|error| error.to_string())?;
+    if members.is_empty() {
+        return Err("subset display requires at least one direct family member".into());
+    }
+    let mut transaction = SemanticMutationTransaction::new();
+    for member in members {
+        let mut style = store
+            .semantic_object_state_checked(member)
+            .map_err(|_| "subset display supports direct object members, not nested families")?
+            .style
+            .clone();
+        crate::semantic_mobject::edit_manim_opacity(&mut style, 0.0)?;
+        transaction.replace_style(member, style);
+    }
+    Ok(transaction)
 }
 
 #[cfg(test)]

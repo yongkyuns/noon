@@ -1,8 +1,8 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use noon_core::{
-    validate_track_definition, AnimationOptions, CompositionTimeMapStep, ObjectId,
-    PreparedSemanticMutationTransaction, Property, RateFunction, SemanticLoweringError,
+    validate_track_definition, AnimationOptions, CompositionTimeMapError, CompositionTimeMapStep,
+    ObjectId, PreparedSemanticMutationTransaction, Property, RateFunction, SemanticLoweringError,
     SemanticObjectProperty, SemanticTransactionNodeRef, SemanticTransactionReadError,
     TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues,
 };
@@ -13,9 +13,10 @@ use super::super::{
 };
 use super::affine::{
     affine_center_dependency_conflict, driver_key, lower_affine_lifecycle_channels,
-    lower_draw_border_then_fill_channels, lower_fade_channels, lower_transform_channels,
-    reserve_affine_center_dependencies, validate_affine_payload, AffinePayloadIssue,
-    EffectiveAnimationProperties, SemanticAnimationCompletion,
+    lower_draw_border_then_fill_channels, lower_fade_channels, lower_subset_display_phases,
+    lower_transform_channels, reserve_affine_center_dependencies, validate_affine_payload,
+    validate_subset_display_time_map, AffinePayloadIssue, EffectiveAnimationProperties,
+    SemanticAnimationCompletion,
 };
 
 use super::transform_payload::SemanticAffineAnimationField;
@@ -123,6 +124,10 @@ pub enum PreparedSemanticAnimationLoweringError {
     },
     UnsupportedAffineLifecycleOptions {
         animation: SemanticTransactionNodeRef,
+    },
+    InvalidSubsetDisplayTimeMap {
+        animation: SemanticTransactionNodeRef,
+        error: CompositionTimeMapError,
     },
     UnsupportedContentChange {
         animation: SemanticTransactionNodeRef,
@@ -423,6 +428,68 @@ where
                         .push(CompositionTimeMapStep::new(0.0, 0.5, RateFunction::Linear));
                     let transition_index = tracks.len() - 1;
                     tracks.insert(transition_index, hold);
+                }
+                continue;
+            }
+            PreparedSemanticScheduledAnimationPayload::SubsetDisplayMember {
+                index: member_index,
+                count,
+                mode,
+            } => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.remover
+                    || leaf.options.reverse_rate_function
+                    || leaf.options.rate_func != RateFunction::Linear
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                            animation: leaf.animation,
+                            remover: leaf.options.remover,
+                            introducer: leaf.options.introducer,
+                        },
+                    );
+                }
+                validate_subset_display_time_map(&leaf.time_map).map_err(|error| {
+                    PreparedSemanticAnimationLoweringError::InvalidSubsetDisplayTimeMap {
+                        animation: leaf.animation,
+                        error,
+                    }
+                })?;
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    admitted.contains(&leaf.target),
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                let phases = lower_subset_display_phases(source, from, member_index, count, mode)
+                    .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
+                for phase in phases {
+                    if phase.reserve_driver {
+                        push_prepared_channel(leaf, phase.channel, &mut driven, &mut tracks)?;
+                    } else {
+                        let previous = tracks
+                            .last()
+                            .expect("subset continuation follows its visible phase");
+                        tracks.push(PreparedSemanticAnimationTrack {
+                            animation: previous.animation,
+                            target: previous.target,
+                            execution_object_id: previous.execution_object_id,
+                            property: phase.channel.property,
+                            completion: phase.channel.completion,
+                            values: phase.channel.values,
+                            timing: leaf.timing,
+                            time_map: leaf.time_map.clone(),
+                        });
+                    }
+                    let track = tracks.last_mut().expect("pushed subset display phase");
+                    track.timing.easing = phase.easing;
+                    track.time_map.push(CompositionTimeMapStep::new(
+                        phase.start,
+                        phase.duration,
+                        RateFunction::Linear,
+                    ));
                 }
                 continue;
             }
@@ -797,8 +864,8 @@ mod tests {
     use noon_core::{
         Color, RateFunction, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
         SemanticAnimationCompositionKind, SemanticMutationTransaction,
-        SemanticMutationTransactionResult, SemanticNodeCreation, SemanticObjectState, SemanticVec3,
-        StoredGeometry, Transform2D, Vec2,
+        SemanticMutationTransactionResult, SemanticNodeCreation, SemanticObjectState,
+        SemanticSubsetDisplayMode, SemanticVec3, StoredGeometry, Transform2D, Vec2,
     };
 
     use super::*;
@@ -941,6 +1008,99 @@ mod tests {
             assert_eq!(prepared.timing, published.timing);
             assert_eq!(prepared.time_map, published.time_map);
         }
+    }
+
+    #[test]
+    fn published_and_prepared_subset_threshold_tracks_match() {
+        let mut store = noon_core::SemanticStore::new();
+        let target = visible_circle(&mut store);
+        let mut index = SemanticExecutionIndex::new();
+        index.lower_scene(&store).unwrap();
+        let execution_object_id = index.execution_object_id(target).unwrap();
+
+        let mut transaction = SemanticMutationTransaction::new();
+        let member = transaction.create_subset_display_member_animation(
+            target,
+            0,
+            2,
+            SemanticSubsetDisplayMode::OneByOneCeil,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        );
+        let root = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            [member],
+            AnimationOptions::new().rate_func(RateFunction::Smooth),
+        );
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let prepared_tracks = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            root,
+            3.0,
+            AnimationOptions::new().run_time(2.0),
+            |object| (object == execution_object_id).then_some(effective(Vec2::ZERO)),
+        )
+        .unwrap();
+
+        let committed = prepared.commit();
+        let published_root = committed.resolve(root).unwrap();
+        let published_schedule = lower_semantic_animation_schedule(
+            &store,
+            &index,
+            published_root,
+            3.0,
+            AnimationOptions::new().run_time(2.0),
+        )
+        .unwrap();
+        let published_tracks =
+            lower_semantic_affine_animation_tracks(&store, &published_schedule, |object| {
+                (object == execution_object_id).then_some(effective(Vec2::ZERO))
+            })
+            .unwrap();
+
+        assert_eq!(prepared_tracks.tracks().len(), 2);
+        assert_eq!(published_tracks.tracks().len(), 2);
+        for (prepared, published) in prepared_tracks
+            .tracks()
+            .iter()
+            .zip(published_tracks.tracks())
+        {
+            assert_eq!(resolve(prepared.animation, &committed), published.animation);
+            assert_eq!(resolve(prepared.target, &committed), published.target);
+            assert_eq!(prepared.execution_object_id, published.execution_object_id);
+            assert_eq!(prepared.property, published.property);
+            assert_eq!(prepared.completion, published.completion);
+            assert_eq!(prepared.values, published.values);
+            assert_eq!(prepared.timing, published.timing);
+            assert_eq!(prepared.time_map, published.time_map);
+        }
+
+        let visible_threshold = published_tracks.tracks()[0]
+            .time_map
+            .steps
+            .last()
+            .copied()
+            .unwrap();
+        assert_eq!(visible_threshold.start, 0.0);
+        assert_eq!(visible_threshold.duration, 0.5);
+        assert_eq!(
+            published_tracks.tracks()[0].timing.easing,
+            RateFunction::StepStart
+        );
+        let hide_threshold = published_tracks.tracks()[1]
+            .time_map
+            .steps
+            .last()
+            .copied()
+            .unwrap();
+        assert_eq!(hide_threshold.start, 0.5);
+        assert_eq!(hide_threshold.duration, 0.5);
+        assert_eq!(
+            published_tracks.tracks()[1].timing.easing,
+            RateFunction::StepStart
+        );
     }
 
     #[test]
