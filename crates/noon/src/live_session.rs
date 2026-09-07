@@ -1409,16 +1409,20 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::Mobject)?;
         plan.observe_leaf_bounds(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-            self.effective_layout(&mobject)
-                .map(|layout| {
-                    Some(Bounds2D64 {
+            if !self.session.semantic_object_is_reachable(leaf) {
+                return mobject.layout_bounds();
+            }
+            self.effective_layout(&mobject).map_or_else(
+                |error| Err(error.to_string()),
+                |layout| {
+                    Ok(Some(Bounds2D64 {
                         min_x: layout.center.0 - layout.width * 0.5,
                         min_y: layout.center.1 - layout.height * 0.5,
                         max_x: layout.center.0 + layout.width * 0.5,
                         max_y: layout.center.1 + layout.height * 0.5,
-                    })
-                })
-                .map_err(|error| error.to_string())
+                    }))
+                },
+            )
         })
         .map_err(LiveSessionError::Mobject)?;
         let shifts = plan
@@ -3786,12 +3790,10 @@ mod recursive_composition_tests {
     }
 
     #[test]
-    fn live_family_arrange_uses_effective_bounds_in_one_publication() {
-        let mut scene = Scene::new();
+    fn live_family_arrange_uses_detached_authored_bounds_in_one_publication() {
+        let scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
-        scene.add(&first).unwrap();
-        scene.add(&second).unwrap();
         let family = scene.family(&[&first, &second]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
@@ -3799,8 +3801,8 @@ mod recursive_composition_tests {
 
         live.arrange_family(&family, 1.0, 0.0, 0.2, true).unwrap();
         let publication = live.publication_context();
-        let first_center = live.effective_layout(&first).unwrap().center;
-        let second_center = live.effective_layout(&second).unwrap().center;
+        let first_center = first.center().unwrap();
+        let second_center = second.center().unwrap();
 
         assert_ne!(publication, before);
         assert_eq!(
