@@ -1063,7 +1063,18 @@ def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):
     # codec is store-derived at finalization, so geometry materialization must
     # not force it through a geometry-only legacy document.
     materialize_legacy_geometry(self)
-    return _ORIGINAL_PLAY(self, *args, **kwargs)
+    result = _ORIGINAL_PLAY(self, *args, **kwargs)
+    # The #959 exporter retains removed objects so its presence tracks can refer
+    # to them. Standard Scene membership is now the shared semantic root, so
+    # reflect the completed public remover behavior there after legacy track
+    # authoring succeeds. This changes wrapper membership only; it does not make
+    # Python the execution lifecycle authority.
+    for animation in args:
+        if isinstance(animation, (_base.Uncreate, _base.FadeOut)) and bool(
+            getattr(animation, "remover", True)
+        ):
+            self.remove(animation.target)
+    return result
 
 
 def _play_canonical_affine(
