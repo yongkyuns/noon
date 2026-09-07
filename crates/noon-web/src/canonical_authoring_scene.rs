@@ -2318,16 +2318,18 @@ impl CanonicalAuthoringScene {
             .map_err(|error| error.to_string())
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn root_membership_leaf_keys(&self) -> Result<Vec<String>, String> {
-        noon::semantic_family_leaf_ids(&self.scene.store().borrow(), self.scene.root()).map(
-            |members| {
-                members
-                    .iter()
-                    .map(|node| format!("{}:{}", node.slot(), node.generation()))
-                    .collect()
-            },
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn contains_mobject(&self, target: &noon::Mobject) -> Result<bool, String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        target.validate()?;
+        noon_core::semantic_scene_root_contains(
+            &self.scene.store().borrow(),
+            self.scene.root(),
+            target.node_id(),
         )
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -4226,9 +4228,16 @@ mod wasm {
             self.inner.root_membership_keys().map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = rootMembershipLeafKeys)]
-        pub fn root_membership_leaf_keys(&self) -> Result<Vec<String>, JsValue> {
-            self.inner.root_membership_leaf_keys().map_err(js_error)
+        /// Query authoritative recursive membership without enumerating the scene.
+        #[wasm_bindgen(js_name = containsMobject)]
+        pub fn contains_mobject(
+            &self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<bool, JsValue> {
+            target.id_in_store(self.inner.scene.store(), "scene membership query")?;
+            self.inner
+                .contains_mobject(target.semantic_mobject())
+                .map_err(js_error)
         }
 
         /// Evaluate one callback-local rotation without mutating authored scene state.

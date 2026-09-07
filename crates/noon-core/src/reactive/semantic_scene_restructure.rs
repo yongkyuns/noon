@@ -17,6 +17,37 @@ pub enum SemanticSceneMembershipRequest<'a> {
     },
 }
 
+/// Return whether `target` is reachable below one explicit semantic scene root.
+///
+/// Membership is derived from the authoritative family edges by walking only the
+/// target's ancestor closure. Aliased paths are de-duplicated and no unrelated
+/// scene roots or descendants are visited.
+pub fn semantic_scene_root_contains(
+    store: &SemanticStore,
+    scene_root: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<bool, SemanticSceneOperationError> {
+    let root = target_node_checked(store, scene_root)?;
+    if !matches!(root.kind(), SemanticNodeKind::Family) {
+        return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
+    }
+    target_node_checked(store, target)?;
+    let mut visited = HashSet::new();
+    let mut stack = vec![target];
+    while let Some(node) = stack.pop() {
+        if !visited.insert(node) {
+            continue;
+        }
+        for &parent in target_node_checked(store, node)?.parents() {
+            if parent == scene_root {
+                return Ok(true);
+            }
+            stack.push(parent);
+        }
+    }
+    Ok(false)
+}
+
 /// Plan a family-aware scene membership edit without mutating the semantic store.
 ///
 /// Only affected root branches are removed/promoted/reordered. Family edges and
@@ -820,5 +851,24 @@ mod tests {
         assert_eq!(store.last_mutation_stats().slots_written, 3);
         assert_eq!(store.node(root).unwrap().first_member(), Some(survivor));
         assert_eq!(store.node(root).unwrap().member_count(), 10_001);
+    }
+
+    #[test]
+    fn root_contains_follows_alias_ancestors_and_observes_detach() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let left = store.insert_family();
+        let right = store.insert_family();
+        let leaf = object(&mut store, 1.0);
+        store.add_semantic_family_member(left, leaf).unwrap();
+        store.add_semantic_family_member(right, leaf).unwrap();
+        store.add_semantic_family_member(root, left).unwrap();
+        store.add_semantic_family_member(root, right).unwrap();
+
+        assert!(semantic_scene_root_contains(&store, root, leaf).unwrap());
+        store.remove_semantic_family_member(root, left).unwrap();
+        assert!(semantic_scene_root_contains(&store, root, leaf).unwrap());
+        store.remove_semantic_family_member(root, right).unwrap();
+        assert!(!semantic_scene_root_contains(&store, root, leaf).unwrap());
     }
 }
