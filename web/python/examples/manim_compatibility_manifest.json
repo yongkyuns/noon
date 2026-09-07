@@ -1,0 +1,85 @@
+{
+  "reference": {
+    "project": "Manim Community",
+    "version": "0.21.0",
+    "license": "MIT"
+  },
+  "policy": "These are Noon-authored public examples intentionally limited to the Manim-compatible API surface. They are not copied upstream Manim documentation examples, so they remain separate from the exact-source tutorial manifest.",
+  "entries": [
+    {
+      "id": "compatible-affine-fade",
+      "title": "AffineFade",
+      "summary": "Manim-compatible FadeIn/FadeOut using shift, scale, and target_position.",
+      "status": "ready",
+      "path": "python/examples/manim_compatible_affine_fade.py",
+      "category": "manim-compatible/fading",
+      "features": ["FadeIn", "FadeOut", "shift", "scale", "target_position", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-affine-fade.svg",
+      "thumbnail_alt": "Blue circle illustrating shifted and scaled fade endpoints",
+      "thumbnail_time": 1.0,
+      "order": 1010
+    },
+    {
+      "id": "compatible-family-transform-indicate",
+      "title": "FamilyTransformIndicate",
+      "summary": "Manim-compatible VGroup transform with lag_ratio followed by an Indicate pulse.",
+      "status": "ready",
+      "path": "python/examples/manim_compatible_family_indicate.py",
+      "category": "manim-compatible/transform",
+      "features": ["VGroup", "animate", "Indicate", "lag_ratio", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-family-indicate.svg",
+      "thumbnail_alt": "Pink square and blue circle with an indicate pulse",
+      "thumbnail_time": 2.5,
+      "order": 1020
+    },
+    {
+      "id": "compatible-timed-composition",
+      "title": "TimedComposition",
+      "summary": "Nested Succession with timed Add/Wait steps, then a LaggedStart of FadeOut animations.",
+      "status": "ready",
+      "path": "python/examples/ordinary_timed_composition.py",
+      "category": "manim-compatible/composition",
+      "features": ["Succession", "Add", "Wait", "LaggedStart", "FadeOut", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-timed-composition.svg",
+      "thumbnail_alt": "Three blue squares illustrating nested timed composition",
+      "thumbnail_time": 0.7,
+      "order": 1030
+    },
+    {
+      "id": "compatible-family-write",
+      "title": "FamilyWrite",
+      "summary": "Write a styled VGroup with lag_ratio so its members reveal in order.",
+      "status": "ready",
+      "path": "python/examples/manim_compatible_family_write.py",
+      "category": "manim-compatible/creation",
+      "features": ["Write", "VGroup", "lag_ratio", "style", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-family-write.svg",
+      "thumbnail_alt": "Styled orange square and pink circle being written as a family",
+      "thumbnail_time": 1.5,
+      "order": 1040
+    },
+    {
+      "id": "compatible-subset-display",
+      "title": "SubsetDisplay",
+      "summary": "ShowIncreasingSubsets followed by ShowSubmobjectsOneByOne on ordered VGroups.",
+      "status": "ready",
+      "path": "python/examples/ordinary_subset_display.py",
+      "category": "manim-compatible/creation",
+      "features": ["ShowIncreasingSubsets", "ShowSubmobjectsOneByOne", "VGroup", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-subset-display.svg",
+      "thumbnail_alt": "Colored circle rows illustrating increasing and one-by-one subset display",
+      "thumbnail_time": 4.0,
+      "order": 1050
+    }
+  ]
+}
