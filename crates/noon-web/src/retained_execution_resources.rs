@@ -140,6 +140,16 @@ impl InstalledRetainedExecutionMirror {
         &mut self,
         mut delta: RetainedFamilyExecutionDeltaEnvelope,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        if self.wire.session() == Some(delta.retained.session)
+            && self
+                .wire
+                .applied_sequence()
+                .is_some_and(|sequence| delta.retained.sequence <= sequence)
+        {
+            // Preserve the base transport's header checks and stale-drop contract
+            // before revalidating already-installed resources or family plans.
+            return Ok(self.wire.apply(delta.retained)?);
+        }
         delta.validate()?;
         if let Some(bundle) = delta.resource_additions.take() {
             return self.apply_family_with_resource_additions(delta, bundle);
@@ -457,6 +467,26 @@ mod tests {
         );
         assert!(mirror.resources().texts().get(local).is_some());
         assert!(mirror.family_frame().unwrap().is_none());
+    }
+
+    #[test]
+    fn stale_resource_additions_are_dropped_before_duplicate_resource_validation() {
+        let mut engine = engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let initial = engine.initial_delta_json().unwrap();
+        mirror.apply_json(&initial).unwrap();
+        let before = mirror.frame().unwrap().clone();
+        let mut replay: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&initial).unwrap();
+        replay.resource_additions =
+            Some(RetainedResourceBundle::decode_binary(engine.resource_bundle_bytes()).unwrap());
+        let (outcome, changes) = mirror.apply_family(replay).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::DroppedStale);
+        assert!(!changes.is_all());
+        assert!(changes.object_indices().is_empty());
+        assert_eq!(mirror.frame().unwrap(), &before);
     }
 
     #[test]
