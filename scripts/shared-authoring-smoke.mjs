@@ -335,8 +335,10 @@ async function startSampledSource(page, source, canvasId, width = 640, height = 
     authored.then(() => rejectAttached(new Error(`${canvasId} did not register a continuation`)), rejectAttached);
     harness.sampledProof = { execution, authored };
     await attached;
-    await execution.sampleToAuthoredTime(0);
   }, { source, canvasId, width, height });
+  console.log(`Attached sampled source ${canvasId}`);
+  await page.evaluate(() => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0));
+  console.log(`Sampled ${canvasId} at 0s`);
 }
 
 async function stopSampledSource(page) {
@@ -1366,36 +1368,41 @@ try {
   await startSampledSource(page, subsetDisplaySource, "scene-shared-subset-display");
   try {
     const canvas = page.locator("#scene-shared-subset-display");
-    for (const [time, row, expected] of [
-      [0.5, 0.7, []],
-      [1, 0.7, [-1]],
-      [2, 0.7, [-1, 0]],
-      [3, 0.7, [-1, 0, 1]],
-      [3, -0.7, []],
-      [3.5, -0.7, [-1]],
-      [4, -0.7, [-1]],
-      [4.5, -0.7, [0]],
-      [5, -0.7, [0]],
-      [5.5, -0.7, [1]],
-      [6, -0.7, [1]],
+    for (const [time, rows] of [
+      [0.5, [[0.7, []]]],
+      [1, [[0.7, [-1]]]],
+      [2, [[0.7, [-1, 0]]]],
+      [3, [[0.7, [-1, 0, 1]], [-0.7, []]]],
+      [3.5, [[-0.7, [-1]]]],
+      [4, [[-0.7, [-1]]]],
+      [4.5, [[-0.7, [0]]]],
+      [5, [[-0.7, [0]]]],
+      [5.5, [[-0.7, [1]]]],
+      [6, [[-0.7, [1]]]],
     ]) {
+      console.log(`Sampling shared subset display at ${time}s`);
       await page.evaluate(
         (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
         time,
       );
       const pixels = await canvas.screenshot();
-      for (const x of [-1, 0, 1]) {
-        const color = renderedWorldPixel(pixels, x, row);
-        const visible = Math.max(color.red, color.green, color.blue) > 70;
-        assert.equal(visible, expected.includes(x),
-          `shared subset display threshold mismatch at ${time}s, x=${x}: ${JSON.stringify(color)}`);
+      for (const [row, expected] of rows) {
+        for (const x of [-1, 0, 1]) {
+          const color = renderedWorldPixel(pixels, x, row);
+          const visible = Math.max(color.red, color.green, color.blue) > 70;
+          assert.equal(visible, expected.includes(x),
+            `shared subset display threshold mismatch at ${time}s, x=${x}: ${JSON.stringify(color)}`);
+        }
       }
+      console.log(`Sampled shared subset display at ${time}s`);
     }
+    console.log("Completing shared subset display at 6.25s");
     const result = await page.evaluate(async () => {
       const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
       const [, completed] = await Promise.all([execution.sampleToAuthoredTime(6.25), authored]);
       return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
     });
+    console.log("Completed shared subset display at 6.25s");
     assert.equal(result.duration, 6.25);
     assert.equal(result.metrics.objectCount, 6);
   } finally {
