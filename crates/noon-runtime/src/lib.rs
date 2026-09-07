@@ -2405,10 +2405,12 @@ mod tests {
     use noon_compile::{CompiledFamilyAnimation, CompiledObject, CompiledScene};
     use noon_core::TrackId;
     use noon_core::{
-        Color, CompositionTimeMap, CompositionTimeMapStep, Easing, FamilyAnimationMode,
-        FamilyAnimationSpec, GeometryRef, Property, RateFunction,
-        RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SceneDefinition,
-        SemanticStore, Style, TextResourceArena, TrackDefinition, TrackTiming,
+        Color, CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, Property,
+        RateFunction, SceneDefinition, Style, TrackDefinition, TrackTiming,
+    };
+    use noon_core::{
+        FamilyAnimationMode, FamilyAnimationSpec, RetainedAnimationMembers,
+        RetainedFamilyAnimationPlan, SemanticStore, TextResourceArena,
     };
 
     use super::*;
@@ -2429,25 +2431,18 @@ mod tests {
 
     #[test]
     fn shared_family_channel_uses_main_scheduler_and_sparse_active_publication() {
-        let object =
-            RetainedObjectDefinition::geometry(ObjectId::new(40), GeometryRef::circle(1.0));
-        let compiled = CompiledScene::compile_objects(
-            vec![CompiledObject::new(
-                object.id,
-                object.content.clone(),
-                object.transform,
-                object.style,
-            )],
-            &[],
-        )
-        .unwrap();
+        let object = CompiledObject::new(
+            ObjectId::new(40),
+            ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let compiled = CompiledScene::compile_objects(vec![object.clone()], &[]).unwrap();
         let mut semantics = SemanticStore::new();
         let leaf = semantics.insert_authoring_object();
-        let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, leaf).unwrap();
-        builder
-            .accept_leaf(leaf, &object, &TextResourceArena::new())
-            .unwrap();
-        let plan = builder.finish().unwrap();
+        let members =
+            RetainedAnimationMembers::resolve(&object.content, &TextResourceArena::new()).unwrap();
+        let plan = RetainedFamilyAnimationPlan::single_leaf(leaf, object.id, members).unwrap();
         let spec = FamilyAnimationSpec::new(
             FamilyAnimationMode::DrawBorderThenFill,
             0.0,
