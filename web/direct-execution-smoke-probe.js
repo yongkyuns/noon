@@ -1193,13 +1193,17 @@ async function directOrdinaryMembershipProof(expectedBackend) {
         throw new Error(`direct membership stage ${stage}: count=${renderer.objectCount()}, color=${JSON.stringify(color)}`);
       }
       samples.push({ time, count, color });
+      // Complete each logical wait before sampling its successor. Rust source
+      // resumes at publication barriers; late host presentation must not be
+      // mistaken for authored time carried across an unexecuted continuation.
+      const endpoint = (stage + 1) * 500;
+      renderer.advanceDirectRealtime(endpoint);
+      await settleDirectPublication(renderer, endpoint);
     }
-    renderer.advanceDirectRealtime(3500);
-    await settleDirectPublication(renderer, 3500);
     const wake = JSON.parse(renderer.directWakeDirectiveJson(3500));
     if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 0
         || renderer.time() !== 3.5 || wake.cadence !== "idle") {
-      throw new Error("direct membership did not finish with an empty, idle scene");
+      throw new Error(`direct membership did not finish empty/idle: count=${renderer.objectCount()}, time=${renderer.time()}, wake=${JSON.stringify(wake)}`);
     }
     return samples;
   } finally {
