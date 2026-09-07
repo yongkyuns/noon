@@ -181,6 +181,8 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
 
 
 def _semantic_wrapper_key(value: object) -> str:
+    if not isinstance(value, (_base.Mobject, _compat.Group)):
+        raise TypeError("Scene membership accepts Mobjects and Groups")
     handle = getattr(value, "_semantic_family_handle", None)
     if handle is None:
         handle = getattr(value, "_semantic_handle", None)
