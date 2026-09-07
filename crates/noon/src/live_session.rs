@@ -432,7 +432,7 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Apply one supported semantic transaction and publish it into the same
-    /// runtime. Unsupported content, ordering, and structural work fails before
+    /// runtime. Unsupported content and structural work fails before
     /// either layer commits.
     pub fn apply(
         &mut self,
@@ -440,7 +440,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         let mut store = self.store.borrow_mut();
         self.session
-            .apply_semantic_transaction(&mut store, transaction)
+            .apply_semantic_transaction_at_root(&mut store, self.root, transaction)
             .map_err(Into::into)
     }
 

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use noon_core::{
     ObjectId, PreparedSemanticMutationTransaction, SemanticMutation, SemanticMutationTransaction,
     SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
-    SemanticPresentation, SemanticTransactionNodeRef, SemanticTransactionReadError,
+    SemanticTransactionNodeRef, SemanticTransactionReadError,
 };
 
 use super::{
@@ -47,10 +47,8 @@ pub enum SemanticPublicationLoweringError {
         object: SemanticTransactionNodeRef,
         error: SemanticCompiledSceneError,
     },
-    PainterOrderInterleaving {
-        object: SemanticTransactionNodeRef,
-        order: (i32, u64),
-        live_tail: (i32, u64),
+    PainterOrderRootRequired {
+        family: SemanticTransactionNodeRef,
     },
     Read(SemanticTransactionReadError),
     Value(SemanticLoweringError),
@@ -91,13 +89,9 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
             Self::PreparedContent { object, error } => {
                 write!(f, "semantic object {object:?} content cannot lower for publication: {error}")
             }
-            Self::PainterOrderInterleaving {
-                object,
-                order,
-                live_tail,
-            } => write!(
+            Self::PainterOrderRootRequired { family } => write!(
                 f,
-                "semantic object {object:?} painter order {order:?} precedes live tail {live_tail:?}; incremental insertion is append-only"
+                "semantic family {family:?} reorder requires an explicit execution root"
             ),
             Self::Read(error) => error.fmt(f),
             Self::Value(error) => error.fmt(f),
@@ -127,7 +121,6 @@ pub struct SemanticPublicationPreparationStats {
 struct PreparedEntry {
     object: SemanticTransactionNodeRef,
     compiled: CompiledObject,
-    presentation: SemanticPresentation,
     reentry: bool,
 }
 
@@ -253,6 +246,7 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceStyle { .. }
                 | SemanticMutation::AddMember { .. }
                 | SemanticMutation::RemoveMember { .. }
+                | SemanticMutation::ReorderMember { .. }
                 | SemanticMutation::AddNode { .. }
                 | SemanticMutation::AddAnimation { .. }
                 | SemanticMutation::RemoveNode { .. }
@@ -277,15 +271,8 @@ pub fn prepare_semantic_publication(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     index: &SemanticExecutionIndex,
     reachability: &SemanticExecutionReachability,
-    live_painter_tail: Option<(i32, u64)>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
-    prepare_semantic_publication_with_handled_scalar_signals(
-        prepared,
-        index,
-        reachability,
-        live_painter_tail,
-        None,
-    )
+    prepare_semantic_publication_with_handled_scalar_signals(prepared, index, reachability, None)
 }
 
 /// Prepare ordinary publication while accepting only scalar mutations whose
@@ -294,14 +281,12 @@ pub fn prepare_semantic_publication_with_scalar_timeline(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     index: &SemanticExecutionIndex,
     reachability: &SemanticExecutionReachability,
-    live_painter_tail: Option<(i32, u64)>,
     handled_scalar_signals: &HashSet<SemanticNodeId>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
     prepare_semantic_publication_with_handled_scalar_signals(
         prepared,
         index,
         reachability,
-        live_painter_tail,
         Some(handled_scalar_signals),
     )
 }
@@ -310,7 +295,6 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     index: &SemanticExecutionIndex,
     reachability: &SemanticExecutionReachability,
-    live_painter_tail: Option<(i32, u64)>,
     handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations(), handled_scalar_signals)?;
@@ -381,7 +365,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         }
     }
 
-    let mut entries = possible_entry_refs
+    let entries = possible_entry_refs
         .into_iter()
         .map(|object| {
             let reentry = object
@@ -390,19 +374,6 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
             lower_prepared_entry(prepared, object, reentry, &mut resource_additions)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.presentation.order_key());
-    if let (Some(tail), Some(entry)) = (
-        live_painter_tail,
-        entries.iter().find(|entry| !entry.reentry),
-    ) {
-        if entry.presentation.order_key() <= tail {
-            return Err(SemanticPublicationLoweringError::PainterOrderInterleaving {
-                object: entry.object,
-                order: entry.presentation.order_key(),
-                live_tail: tail,
-            });
-        }
-    }
 
     let possible_exits = possible_exit_nodes
         .into_iter()
@@ -543,7 +514,6 @@ fn lower_prepared_entry(
     Ok(PreparedEntry {
         object,
         compiled,
-        presentation: state.presentation(),
         reentry,
     })
 }
@@ -585,6 +555,7 @@ fn lower_semantic_publication(
             }
             SemanticMutation::AddMember { .. }
             | SemanticMutation::RemoveMember { .. }
+            | SemanticMutation::ReorderMember { .. }
             | SemanticMutation::AddNode { .. }
             | SemanticMutation::AddAnimation { .. }
             | SemanticMutation::RemoveNode { .. }

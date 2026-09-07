@@ -13,6 +13,12 @@ use crate::{CompiledFamilyAnimation, CompiledObject};
 pub enum ExecutionPatch {
     CreateObject(CompiledObject),
     RemoveObject(ObjectId),
+    /// Move one live object in the derived painter order without relocating its
+    /// stable execution row. `before=None` moves it to the live tail.
+    ReorderObject {
+        object: ObjectId,
+        before: Option<ObjectId>,
+    },
     SetContent {
         object: ObjectId,
         content: ObjectContentRef,
@@ -50,7 +56,9 @@ impl ExecutionPatch {
             | Self::ReplaceTrack(_)
             | Self::RemoveTrack(_)
             | Self::ReconcileTrack { .. } => MutationImpact::Timeline,
-            Self::CreateObject(_) | Self::RemoveObject(_) => MutationImpact::Structure,
+            Self::CreateObject(_) | Self::RemoveObject(_) | Self::ReorderObject { .. } => {
+                MutationImpact::Structure
+            }
         }
     }
 }

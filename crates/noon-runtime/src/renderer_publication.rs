@@ -21,6 +21,7 @@ pub struct RendererPublication<'a> {
     geometry_resources: &'a dyn GeometryResourceLookup,
     family_animation_plans: &'a [RetainedFamilyAnimationPlan],
     active_family_animation_indices: &'a BTreeSet<usize>,
+    painter_order: &'a [u32],
 }
 
 impl RendererPublication<'_> {
@@ -64,6 +65,10 @@ impl RendererPublication<'_> {
         self.active_family_animation_indices
     }
 
+    pub const fn painter_order(&self) -> &[u32] {
+        self.painter_order
+    }
+
     /// Escalate an acquired redraw to a full renderer invalidation while retaining
     /// this publication's exact frame, resources, and revision context.
     pub fn invalidate_all(&mut self) {
@@ -82,6 +87,7 @@ impl<'a> RendererPublication<'a> {
         geometry_resources: &'a dyn GeometryResourceLookup,
         family_animation_plans: &'a [RetainedFamilyAnimationPlan],
         active_family_animation_indices: &'a BTreeSet<usize>,
+        painter_order: &'a [u32],
     ) -> Self {
         Self {
             context,
@@ -92,6 +98,7 @@ impl<'a> RendererPublication<'a> {
             geometry_resources,
             family_animation_plans,
             active_family_animation_indices,
+            painter_order,
         }
     }
 }

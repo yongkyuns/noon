@@ -81,6 +81,12 @@ impl RetainedFramePreparer {
                 .map_err(Into::into);
         }
 
+        if self.last_applied_publication.is_none() || publication.changes().is_all() {
+            self.set_painter_order(publication.painter_order());
+        } else if let Some(range) = publication.changes().painter_order_range() {
+            self.set_painter_order_range(publication.painter_order(), range);
+        }
+
         let prepared = self.prepare_family_plan_set_with_changes_inner(
             device,
             queue,

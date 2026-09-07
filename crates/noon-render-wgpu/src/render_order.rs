@@ -101,6 +101,36 @@ impl std::fmt::Display for VisibleRenderError {
 impl std::error::Error for VisibleRenderError {}
 
 impl FramePreparer {
+    /// Install the runtime-derived painter permutation without relocating or
+    /// re-realizing stable object slots. Callers need invoke this only for the
+    /// initial frame or a publication carrying a painter-order change.
+    pub fn set_painter_order(&mut self, frame: &FrameState, order: &[u32]) {
+        debug_assert!(order
+            .iter()
+            .all(|&object_index| (object_index as usize) < frame.objects.len()));
+        self.painter_order_indices.clear();
+        self.painter_order_indices.extend_from_slice(order);
+    }
+
+    /// Update only the changed portion of the runtime-derived painter permutation.
+    pub fn set_painter_order_range(
+        &mut self,
+        frame: &FrameState,
+        order: &[u32],
+        range: Range<usize>,
+    ) {
+        debug_assert!(range.start <= order.len());
+        debug_assert!(order[range.start..range.end.min(order.len())]
+            .iter()
+            .all(|&object_index| (object_index as usize) < frame.objects.len()));
+        let old_end = range.end.min(self.painter_order_indices.len());
+        let new_end = range.end.min(order.len());
+        self.painter_order_indices.splice(
+            range.start.min(old_end)..old_end,
+            order[range.start..new_end].iter().copied(),
+        );
+        debug_assert_eq!(self.painter_order_indices.len(), order.len());
+    }
     /// Prepare one incremental frame while limiting ordered draw submission to the
     /// supplied retained-visibility candidates.
     ///
@@ -284,9 +314,16 @@ impl FramePreparer {
             return;
         }
 
-        // Default painter order is already the semantic object-vector order.
-        // Walking slots directly avoids allocating/filling a temporary index
-        // vector on every full preparation or structural rebuild.
+        if !self.painter_order_indices.is_empty() {
+            for &object_index in &self.painter_order_indices {
+                if let Some(slot) = self.slots.get(object_index as usize).copied() {
+                    push_slot_batches(&mut self.render_batches, slot);
+                }
+            }
+            return;
+        }
+
+        // Legacy/default painter order is the semantic object-vector order.
         for slot in self.slots.iter().copied() {
             push_slot_batches(&mut self.render_batches, slot);
         }

@@ -286,6 +286,16 @@ pub(super) fn preflight_transaction_with_resources(
                     .insert(*id, ObjectOverlay::Removed { index });
                 overlay.remove_object_tracks(scene, index);
             }
+            ExecutionPatch::ReorderObject { object, before } => {
+                if overlay.object_index(scene, *object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+                if let Some(before) = before {
+                    if overlay.object_index(scene, *before).is_none() {
+                        return Err(CompilePatchError::UnknownObject(*before));
+                    }
+                }
+            }
             ExecutionPatch::SetContent {
                 object,
                 content,

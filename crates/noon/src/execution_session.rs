@@ -10,7 +10,7 @@ pub use signal_timeline::SignalTimelineAppendError;
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
 use signal_timeline::SignalTimelineSchedule;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use crate::execution_segment::{
     ExecutionSegment, ExecutionSegmentError, ExecutionSegmentSequence, ExecutionSegmentToken,
@@ -622,7 +622,6 @@ pub struct ExecutionSession {
     store_identity: noon_core::SemanticStoreIdentity,
     execution_index: SemanticExecutionIndex,
     reachability: SemanticExecutionReachability,
-    painter_order: SemanticPainterOrderIndex,
     slots: noon_runtime::ExecutionSlotTable,
     spatial_index: ExecutionSpatialIndex,
     last_spatial_update: SpatialIndexUpdateStats,
@@ -655,7 +654,6 @@ impl Clone for ExecutionSession {
             store_identity: self.store_identity.clone(),
             execution_index: self.execution_index.clone(),
             reachability: self.reachability.clone(),
-            painter_order: self.painter_order.clone(),
             slots: self.slots.clone(),
             spatial_index: self.spatial_index.clone(),
             last_spatial_update: self.last_spatial_update,
@@ -719,13 +717,11 @@ impl ExecutionSession {
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
         let reachability = SemanticExecutionReachability::from_store(store)?;
-        let painter_order = semantic_painter_order(store, &reachability);
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
         Ok(Self::from_lowered(
             store.identity(),
             execution_index,
             reachability,
-            painter_order,
             lowered,
         ))
     }
@@ -742,13 +738,11 @@ impl ExecutionSession {
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
         let reachability = SemanticExecutionReachability::from_root(store, root)?;
-        let painter_order = semantic_painter_order(store, &reachability);
         let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
         Ok(Self::from_lowered(
             store.identity(),
             execution_index,
             reachability,
-            painter_order,
             lowered,
         ))
     }
@@ -757,7 +751,6 @@ impl ExecutionSession {
         store_identity: noon_core::SemanticStoreIdentity,
         execution_index: SemanticExecutionIndex,
         reachability: SemanticExecutionReachability,
-        painter_order: SemanticPainterOrderIndex,
         lowered: SemanticExecutionLoweringOutput,
     ) -> Self {
         let camera_object = lowered.camera_object();
@@ -774,25 +767,17 @@ impl ExecutionSession {
         let callback_schedule = CallbackSchedule::new(lowered.host_callbacks().clone());
         let mut runtime = SceneInstance::from_semantic_execution(lowered);
         let mut spatial_index = ExecutionSpatialIndex::default();
-        let live_slots =
-            runtime
-                .frame()
-                .objects
-                .iter()
-                .enumerate()
-                .filter_map(|(index, object)| {
-                    if !runtime.object_slot_is_live(index) {
-                        return None;
-                    }
-                    slots.slot_for_object(object.id).map(|slot| (slot, index))
-                });
+        let live_slots = runtime.painter_order().iter().filter_map(|&index| {
+            let index = index as usize;
+            let object = runtime.frame().objects.get(index)?;
+            slots.slot_for_object(object.id).map(|slot| (slot, index))
+        });
         let last_spatial_update = spatial_index.rebuild(runtime.frame(), live_slots);
         let _ = runtime.take_spatial_changes();
         Self {
             store_identity,
             execution_index,
             reachability,
-            painter_order,
             slots,
             spatial_index,
             last_spatial_update,
@@ -933,20 +918,13 @@ impl ExecutionSession {
             return;
         }
         if changes.is_all() {
-            let live_slots =
-                self.runtime
-                    .frame()
-                    .objects
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, object)| {
-                        if !self.runtime.object_slot_is_live(index) {
-                            return None;
-                        }
-                        self.slots
-                            .slot_for_object(object.id)
-                            .map(|slot| (slot, index))
-                    });
+            let live_slots = self.runtime.painter_order().iter().filter_map(|&index| {
+                let index = index as usize;
+                let object = self.runtime.frame().objects.get(index)?;
+                self.slots
+                    .slot_for_object(object.id)
+                    .map(|slot| (slot, index))
+            });
             self.last_spatial_update = self.spatial_index.rebuild(self.runtime.frame(), live_slots);
             return;
         }
@@ -957,15 +935,35 @@ impl ExecutionSession {
             };
             if self.runtime.object_slot_is_live(index) {
                 if let Some(slot) = self.slots.slot_for_object(object.id) {
+                    let painter_order = self.runtime.painter_rank(index).unwrap_or(index as u32);
                     stats.merge_from(self.spatial_index.upsert_frame_slot(
                         self.runtime.frame(),
                         slot,
                         index,
-                        index as u64,
+                        painter_order as u64,
                     ));
                 }
             } else {
                 stats.merge_from(self.spatial_index.remove_object(object.id));
+            }
+        }
+        if let Some(range) = changes.painter_order_range() {
+            for rank in range {
+                let Some(&index) = self.runtime.painter_order().get(rank) else {
+                    continue;
+                };
+                let index = index as usize;
+                let Some(object) = self.runtime.frame().objects.get(index) else {
+                    continue;
+                };
+                if let Some(slot) = self.slots.slot_for_object(object.id) {
+                    stats.merge_from(self.spatial_index.upsert_frame_slot(
+                        self.runtime.frame(),
+                        slot,
+                        index,
+                        rank as u64,
+                    ));
+                }
             }
         }
         self.last_spatial_update = stats;
@@ -1003,6 +1001,11 @@ impl ExecutionSession {
     /// Consume renderer-facing invalidation state accumulated by the runtime.
     pub fn take_frame_changes(&mut self) -> FrameChanges {
         self.runtime.take_frame_changes()
+    }
+
+    /// Stable execution row indices in authoritative semantic painter order.
+    pub fn painter_order(&self) -> &[u32] {
+        self.runtime.painter_order()
     }
 
     /// Consume one coherent renderer publication from this typed session.
@@ -3011,48 +3014,6 @@ fn lower_live_scalar_value(value: f64) -> Result<f32, ExecutionSessionAnimationE
 fn execution_track_end_time(definition: &TrackDefinition) -> Result<f64, TimelineError> {
     let timing = noon_core::resolve_track_timing(definition)?;
     Ok(timing.start_time + timing.duration)
-}
-
-fn semantic_painter_order(
-    store: &SemanticStore,
-    reachability: &SemanticExecutionReachability,
-) -> SemanticPainterOrderIndex {
-    let mut index = SemanticPainterOrderIndex::default();
-    for node in reachability.reachable_objects() {
-        let state = store
-            .semantic_object_state_checked(node)
-            .expect("reachable semantic object was validated during initial lowering");
-        index.insert(node, state.presentation().order_key());
-    }
-    index
-}
-
-#[derive(Clone, Debug, Default)]
-struct SemanticPainterOrderIndex {
-    ordered: BTreeMap<(i32, u64), SemanticNodeId>,
-    keys: HashMap<SemanticNodeId, (i32, u64)>,
-}
-
-impl SemanticPainterOrderIndex {
-    fn tail(&self) -> Option<(i32, u64)> {
-        self.ordered.last_key_value().map(|(key, _)| *key)
-    }
-
-    fn insert(&mut self, node: SemanticNodeId, key: (i32, u64)) {
-        let previous_key = self.keys.insert(node, key);
-        let previous_node = self.ordered.insert(key, node);
-        debug_assert!(previous_key.is_none());
-        debug_assert!(previous_node.is_none());
-    }
-
-    fn remove(&mut self, node: SemanticNodeId) {
-        let key = self
-            .keys
-            .remove(&node)
-            .expect("exited execution object has a painter-order entry");
-        let removed = self.ordered.remove(&key);
-        debug_assert_eq!(removed, Some(node));
-    }
 }
 
 fn reactive_value_from_native(value: NativeInputValue) -> ReactiveValue {

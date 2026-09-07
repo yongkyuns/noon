@@ -457,6 +457,7 @@ pub struct FrameChanges {
     object_indices: Vec<usize>,
     added_indices: Vec<usize>,
     removed_indices: Vec<usize>,
+    painter_order_range: Option<std::ops::Range<usize>>,
 }
 
 impl FrameChanges {
@@ -466,6 +467,7 @@ impl FrameChanges {
             object_indices: Vec::new(),
             added_indices: Vec::new(),
             removed_indices: Vec::new(),
+            painter_order_range: None,
         }
     }
 
@@ -476,6 +478,7 @@ impl FrameChanges {
             object_indices,
             added_indices: Vec::new(),
             removed_indices: Vec::new(),
+            painter_order_range: None,
         }
     }
 
@@ -490,7 +493,14 @@ impl FrameChanges {
             object_indices,
             added_indices,
             removed_indices,
+            painter_order_range: None,
         }
+    }
+
+    pub fn painter_order(range: std::ops::Range<usize>) -> Self {
+        let mut changes = Self::default();
+        changes.insert_painter_order_range(range);
+        changes
     }
 
     pub fn with_structure(
@@ -508,6 +518,7 @@ impl FrameChanges {
             object_indices,
             added_indices,
             removed_indices,
+            painter_order_range: None,
         }
     }
 
@@ -547,8 +558,16 @@ impl FrameChanges {
         !self.added_indices.is_empty() || !self.removed_indices.is_empty()
     }
 
+    pub const fn has_painter_order_change(&self) -> bool {
+        self.painter_order_range.is_some()
+    }
+
     pub const fn is_empty(&self) -> bool {
-        !self.all && self.object_indices.is_empty()
+        !self.all && self.object_indices.is_empty() && self.painter_order_range.is_none()
+    }
+
+    pub fn painter_order_range(&self) -> Option<std::ops::Range<usize>> {
+        self.painter_order_range.clone()
     }
 
     fn invalidate_all(&mut self) {
@@ -556,6 +575,7 @@ impl FrameChanges {
         self.object_indices.clear();
         self.added_indices.clear();
         self.removed_indices.clear();
+        self.painter_order_range = None;
     }
 
     fn insert(&mut self, object_index: usize) {
@@ -576,6 +596,16 @@ impl FrameChanges {
         }
         insert_sorted_unique(&mut self.object_indices, object_index);
         insert_sorted_unique(&mut self.removed_indices, object_index);
+    }
+
+    fn insert_painter_order_range(&mut self, range: std::ops::Range<usize>) {
+        if self.all || range.is_empty() {
+            return;
+        }
+        self.painter_order_range = Some(match self.painter_order_range.take() {
+            Some(existing) => existing.start.min(range.start)..existing.end.max(range.end),
+            None => range,
+        });
     }
 }
 
@@ -815,6 +845,7 @@ impl SceneInstance {
             self.compiled.geometry_resources(),
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
+            self.compiled.painter_order(),
         )
     }
 
@@ -838,6 +869,11 @@ impl SceneInstance {
         self.spatial_changes.insert_removed(object_index);
     }
 
+    pub(crate) fn mark_painter_order_changed(&mut self, range: std::ops::Range<usize>) {
+        self.changes.insert_painter_order_range(range.clone());
+        self.spatial_changes.insert_painter_order_range(range);
+    }
+
     pub(crate) fn mark_all_changed(&mut self) {
         self.changes.invalidate_all();
         self.spatial_changes.invalidate_all();
@@ -849,6 +885,14 @@ impl SceneInstance {
 
     pub fn frame_index_for_object(&self, id: ObjectId) -> Option<usize> {
         self.compiled.object_index(id).map(|index| index as usize)
+    }
+
+    pub fn painter_order(&self) -> &[u32] {
+        self.compiled.painter_order()
+    }
+
+    pub fn painter_rank(&self, object_index: usize) -> Option<u32> {
+        self.compiled.painter_rank(object_index as u32)
     }
 
     pub fn object_has_effective_driver(&self, id: ObjectId) -> bool {
@@ -962,7 +1006,9 @@ impl SceneInstance {
 
         if matches!(
             patch,
-            ExecutionPatch::CreateObject(_) | ExecutionPatch::RemoveObject(_)
+            ExecutionPatch::CreateObject(_)
+                | ExecutionPatch::RemoveObject(_)
+                | ExecutionPatch::ReorderObject { .. }
         ) {
             self.apply_structural_patch(patch)?;
             return Ok(&self.frame);
@@ -972,6 +1018,14 @@ impl SceneInstance {
     }
 
     fn apply_structural_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
+        let previous_order_len = self.compiled.painter_order().len();
+        let previous_order_position = match patch {
+            ExecutionPatch::RemoveObject(object) | ExecutionPatch::ReorderObject { object, .. } => {
+                self.compiled.painter_position(*object)
+            }
+            ExecutionPatch::CreateObject(_) => None,
+            _ => unreachable!("structural patch helper accepts only create/remove/reorder"),
+        };
         let removed = match patch {
             ExecutionPatch::RemoveObject(object) => {
                 let object_index = self
@@ -981,6 +1035,7 @@ impl SceneInstance {
                 Some((object_index, self.compiled.object_channels(*object)))
             }
             ExecutionPatch::CreateObject(_) => None,
+            ExecutionPatch::ReorderObject { .. } => None,
             _ => unreachable!("structural patch helper accepts only create/remove"),
         };
 
@@ -1033,7 +1088,34 @@ impl SceneInstance {
                 self.active_family_animation_indices.remove(&object_index);
                 self.mark_removed(object_index);
             }
+            ExecutionPatch::ReorderObject { .. } => {}
             _ => unreachable!("structural patch helper accepts only create/remove"),
+        }
+
+        let next_position = match patch {
+            ExecutionPatch::CreateObject(object) => self.compiled.painter_position(object.id),
+            ExecutionPatch::ReorderObject { object, .. } => self.compiled.painter_position(*object),
+            ExecutionPatch::RemoveObject(_) => None,
+            _ => unreachable!("structural patch helper accepts only create/remove/reorder"),
+        };
+        if previous_order_position != next_position
+            || previous_order_len != self.compiled.painter_order().len()
+        {
+            let first = previous_order_position
+                .into_iter()
+                .chain(next_position)
+                .min()
+                .unwrap_or(previous_order_len.min(self.compiled.painter_order().len()));
+            let end = if previous_order_len == self.compiled.painter_order().len() {
+                previous_order_position
+                    .into_iter()
+                    .chain(next_position)
+                    .max()
+                    .map_or(first, |position| position + 1)
+            } else {
+                previous_order_len.max(self.compiled.painter_order().len())
+            };
+            self.mark_painter_order_changed(first..end);
         }
 
         self.last_stats = EvaluationStats::default();
@@ -3351,5 +3433,32 @@ mod tests {
         instance.advance_to(0.75).expect("valid time");
         assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
         assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn painter_reorder_keeps_dense_rows_and_publishes_only_shifted_order() {
+        let mut scene = SceneDefinition::new();
+        let first = scene.add(GeometryRef::circle(1.0));
+        let second = scene.add(GeometryRef::circle(2.0));
+        let third = scene.add(GeometryRef::circle(3.0));
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+        instance.take_frame_changes();
+
+        instance
+            .apply_execution_patch(&ExecutionPatch::ReorderObject {
+                object: third,
+                before: Some(first),
+            })
+            .expect("live objects can reorder");
+
+        assert_eq!(instance.painter_order(), &[2, 0, 1]);
+        assert_eq!(instance.frame().objects[0].id, first);
+        assert_eq!(instance.frame().objects[1].id, second);
+        assert_eq!(instance.frame().objects[2].id, third);
+        let changes = instance.take_frame_changes();
+        assert_eq!(changes.painter_order_range(), Some(0..3));
+        assert!(changes.object_indices().is_empty());
+        assert!(!changes.is_structural());
     }
 }

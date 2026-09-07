@@ -478,6 +478,8 @@ pub struct FramePreparer {
     visible_projection_key: Vec<VisibleProjectionKey>,
     visible_projection_stats: VisibleRenderProjectionStats,
     render_order_keys: Vec<RenderOrderKey>,
+    // Stable execution-row indices in the runtime's derived semantic painter order.
+    painter_order_indices: Vec<u32>,
     path_batch_cache_indices: Vec<usize>,
     path_mesh_cache: Vec<CachedPathMesh>,
     path_mesh_lookup: HashMap<PathMeshKey, Vec<usize>>,
@@ -686,6 +688,11 @@ impl FramePreparer {
                 }
                 PreparedSlot::Unsupported(_) => {}
             }
+        }
+
+        if changes.painter_order_range().is_some() {
+            self.rebuild_ordered_render_batches();
+            self.rebuild_mega_render_batches();
         }
 
         normalize_dirty_ranges(&mut self.circle_dirty_ranges);
@@ -3600,6 +3607,38 @@ mod structural_execution_delta_tests {
         assert_ne!(prepared.circles[0].style.opacity, 0.0);
         assert_eq!(prepared.circle_dirty_ranges.len(), 1);
         assert_eq!(prepared.circle_dirty_ranges[0], 0..1);
+    }
+
+    #[test]
+    fn painter_reorder_rebuilds_only_draw_metadata() {
+        let frame = FrameState {
+            time: 0.0,
+            objects: (0..4).map(circle).collect(),
+            presences: vec![true; 4],
+            reveals: vec![1.0; 4],
+            morphs: vec![0.0; 4],
+            render_geometries: vec![None; 4],
+            render_transforms: vec![None; 4],
+        };
+        let mut preparer = FramePreparer::new();
+        preparer.set_painter_order(&frame, &[0, 1, 2, 3]);
+        preparer.prepare(&frame);
+        preparer.set_painter_order_range(&frame, &[0, 2, 1, 3], 1..3);
+
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(1..3));
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.instances_repacked, 0);
+        assert_eq!(
+            prepared.circle_ids,
+            &[
+                ObjectId::new(0),
+                ObjectId::new(1),
+                ObjectId::new(2),
+                ObjectId::new(3)
+            ]
+        );
+        assert_eq!(preparer.painter_order_indices, vec![0, 2, 1, 3]);
     }
 
     #[test]

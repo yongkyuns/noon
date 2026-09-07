@@ -146,8 +146,13 @@ impl ExecutionSpatialIndex {
             full_rebuilds: 1,
             ..SpatialIndexUpdateStats::default()
         };
-        for (slot, frame_index) in live_slots {
-            stats.merge_from(self.upsert_frame_slot(frame, slot, frame_index, frame_index as u64));
+        for (painter_order, (slot, frame_index)) in live_slots.into_iter().enumerate() {
+            stats.merge_from(self.upsert_frame_slot(
+                frame,
+                slot,
+                frame_index,
+                painter_order as u64,
+            ));
         }
         stats
     }
