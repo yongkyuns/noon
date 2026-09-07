@@ -26,6 +26,7 @@ const {
   createDirectOrdinaryMembershipSmokeRenderer,
   createDirectOrdinaryTextWriteSmokeRenderer,
   createDirectTextFamilyFadeSmokeRenderer,
+  createDirectTextFamilyRevealSmokeRenderer,
   createDirectTextFamilyWriteSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
@@ -1287,6 +1288,44 @@ async function directTextFamilyWriteProof(expectedBackend) {
   }
 }
 
+async function directTextFamilyRevealProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectTextFamilyRevealSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const time of [0, 250, 1000, 2000, 2500, 3000]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      samples.push({ time, ...(await textBrightnessByRegion(canvas)) });
+    }
+    if (samples[0].left !== 0 || samples[0].right !== 0
+        || samples[1].left <= 0 || samples[1].right !== 0
+        || samples[2].left <= 0 || samples[2].right <= 0
+        || samples[3].left <= 0 || samples[3].right <= samples[2].right
+        || samples[4].left !== 0 || samples[4].right <= 0
+        || samples[4].right >= samples[3].right
+        || samples[5].left !== 0 || samples[5].right !== 0) {
+      throw new Error(`direct Text family Create/Uncreate lost global reveal order: ${JSON.stringify(samples)}`);
+    }
+    renderer.advanceDirectRealtime(3250);
+    await settleDirectPublication(renderer, 3250);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3250));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 1
+        || renderer.time() !== 3.25 || wake.cadence !== "idle") {
+      throw new Error("direct Text family reveal did not finish with only its disjoint sibling");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directOrdinaryMembershipProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinaryMembershipSmokeRenderer(canvas);
@@ -1984,6 +2023,7 @@ async function start() {
   metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
   metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);
   metrics.textFamilyWrite = await directTextFamilyWriteProof(expectedBackend);
+  metrics.textFamilyReveal = await directTextFamilyRevealProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);

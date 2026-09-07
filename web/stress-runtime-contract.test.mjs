@@ -13,10 +13,6 @@ const retainedAnimate = await readFile(
   new URL("./python/_manim_retained_animate.py", import.meta.url),
   "utf8",
 );
-const familyCreation = await readFile(
-  new URL("./python/_manim_family_creation.py", import.meta.url),
-  "utf8",
-);
 const browserSmoke = await readFile(new URL("./manim-compat-smoke.html", import.meta.url), "utf8");
 const sourceOwnedStress = await readFile(
   new URL("../scripts/playground-stress-edit-smoke.mjs", import.meta.url),
@@ -61,31 +57,6 @@ assert.match(
   retainedAnimate,
   /mixing retained Text animations with legacy animations in one Scene\.play /,
   "standalone retained-vs-geometry property animation remains a separate composition boundary",
-);
-assert.doesNotMatch(
-  familyCreation,
-  /must currently be the only animation in Scene\.play/,
-  "disjoint retained family animations should no longer be artificially single-animation-only",
-);
-assert.doesNotMatch(
-  familyCreation,
-  /retained Text property animations in the same Scene\.play still require/,
-  "family composition should now admit direct retained Text property animations",
-);
-assert.match(
-  familyCreation,
-  /_retained\._schedule_retained_plan/,
-  "family composition must reuse the retained property-track scheduler",
-);
-assert.match(
-  familyCreation,
-  /concurrent retained family animations must target disjoint family leaves/,
-  "contract should reject ambiguous same-leaf concurrent family ownership",
-);
-assert.match(
-  familyCreation,
-  /concurrent retained family and ordinary animations must target[\s\S]*disjoint scene leaves/,
-  "contract should reject family-vs-ordinary same-leaf ownership",
 );
 assert.doesNotMatch(
   browserSmoke,

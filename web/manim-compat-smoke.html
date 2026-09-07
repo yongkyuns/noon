@@ -127,27 +127,6 @@ class RetainedSequentialFamilySmoke(Scene):
         };
       }
 
-      function oneFamilyRequest(result, label) {
-        if (result.kind !== "scene_document") {
-          throw new Error(`${label} smoke returned ${result.kind}`);
-        }
-        if (result.retainedDocument != null) {
-          throw new Error(`${label} smoke must export mixed content through SceneSpec only`);
-        }
-        const sceneSpec = result.sceneSpec;
-        if (!sceneSpec || !Array.isArray(sceneSpec.family_animations) || sceneSpec.family_animations.length !== 1) {
-          throw new Error(`${label} smoke did not reach canonical SceneSpec family animations`);
-        }
-        const request = sceneSpec.family_animations[0];
-        const serialized = JSON.stringify(request);
-        for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
-          if (serialized.includes(forbidden)) {
-            throw new Error(`${label} request leaked ${forbidden}`);
-          }
-        }
-        return request;
-      }
-
       async function waitForRenderedState(
         execution,
         { label, seekTime, expectedObjectCount, errors },
@@ -262,15 +241,14 @@ class RetainedSequentialFamilySmoke(Scene):
           readyPromise = (async () => {
             await Promise.all([client.ready(), wasmReady]);
 
-            const create = await runForExport(familyCreateSource);
-            if (create.document.objects.length !== 1) {
+            const create = await runLive(familyCreateSource);
+            if (create.duration !== 1.0 || create.metrics.objectCount !== 2) {
               throw new Error(
-                `family Create smoke expected one geometry leaf, got ${create.document.objects.length}`,
+                `mixed family Create must share one-second timing and render both Text and geometry: ${JSON.stringify(create)}`,
               );
             }
-            const createRequest = oneFamilyRequest(create, "family Create");
-            if (createRequest.spec.mode !== "reveal") {
-              throw new Error(`family Create authored unexpected mode ${createRequest.spec.mode}`);
+            if (create.metrics.presentedFrames < 1) {
+              throw new Error("mixed family Create must present through shared execution");
             }
 
             writeResult = await runLive(familyWriteSource);

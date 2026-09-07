@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 10);
+assert.equal(gallery.examples.length, 11);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -27,6 +27,7 @@ assert.deepEqual(
     "compatible-affine-lifecycle",
     "compatible-text-write",
     "compatible-text-family-fade",
+    "compatible-text-family-reveal",
   ],
 );
 
@@ -87,6 +88,18 @@ for (const entry of readyEntries) {
       source,
       /\b(?:Typst|MathTypst)\b/,
       "Text family fade gallery coverage must not claim deferred Typst family scheduling",
+    );
+  }
+
+  if (entry.id === "compatible-text-family-reveal") {
+    assert.match(source, /VGroup\(/, "Text family reveal example must construct a VGroup");
+    assert.match(source, /Create\(/, "Text family reveal example must exercise Create");
+    assert.match(source, /Uncreate\(/, "Text family reveal example must exercise Uncreate");
+    assert.match(source, /lag_ratio\s*=\s*0\.25/, "Text family reveal must exercise global glyph timing");
+    assert.doesNotMatch(
+      source,
+      /\b(?:Typst|MathTypst)\b/,
+      "Text family reveal gallery coverage must not claim deferred Typst family scheduling",
     );
   }
 }

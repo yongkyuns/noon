@@ -475,7 +475,7 @@ where
         validate_leaf_matches_declaration(store, leaf)?;
         if matches!(
             leaf.payload,
-            SemanticScheduledAnimationPayload::TextWrite { .. }
+            SemanticScheduledAnimationPayload::TextGlyph { .. }
         ) {
             continue;
         }
@@ -615,7 +615,7 @@ where
                 interpolation,
             } => (target_state, interpolation),
             SemanticScheduledAnimationPayload::Fade { .. }
-            | SemanticScheduledAnimationPayload::TextWrite { .. }
+            | SemanticScheduledAnimationPayload::TextGlyph { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
             | SemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
@@ -713,13 +713,15 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
-        SemanticAnimationIntent::TextWrite {
+        SemanticAnimationIntent::TextGlyph {
             target,
+            mode,
             reverse_member_order,
             family_member,
         } if *target == leaf.target
             && leaf.payload
-                == SemanticScheduledAnimationPayload::TextWrite {
+                == SemanticScheduledAnimationPayload::TextGlyph {
+                    mode: *mode,
                     reverse_member_order: *reverse_member_order,
                     family_member: *family_member,
                 } =>

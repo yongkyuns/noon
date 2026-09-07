@@ -82,7 +82,8 @@ pub enum SemanticScheduledAnimationPayload {
         count: usize,
         mode: noon_core::SemanticSubsetDisplayMode,
     },
-    TextWrite {
+    TextGlyph {
+        mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     },
@@ -193,7 +194,8 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         count: usize,
         mode: noon_core::SemanticSubsetDisplayMode,
     },
-    TextWrite {
+    TextGlyph {
+        mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     },
@@ -623,10 +625,12 @@ fn published_payload(
         ScheduledAnimationPayload::SubsetDisplayMember { index, count, mode } => {
             SemanticScheduledAnimationPayload::SubsetDisplayMember { index, count, mode }
         }
-        ScheduledAnimationPayload::TextWrite {
+        ScheduledAnimationPayload::TextGlyph {
+            mode,
             reverse_member_order,
             family_member,
-        } => SemanticScheduledAnimationPayload::TextWrite {
+        } => SemanticScheduledAnimationPayload::TextGlyph {
+            mode,
             reverse_member_order,
             family_member,
         },
@@ -684,10 +688,12 @@ fn prepared_payload(
         ScheduledAnimationPayload::SubsetDisplayMember { index, count, mode } => {
             PreparedSemanticScheduledAnimationPayload::SubsetDisplayMember { index, count, mode }
         }
-        ScheduledAnimationPayload::TextWrite {
+        ScheduledAnimationPayload::TextGlyph {
+            mode,
             reverse_member_order,
             family_member,
-        } => PreparedSemanticScheduledAnimationPayload::TextWrite {
+        } => PreparedSemanticScheduledAnimationPayload::TextGlyph {
+            mode,
             reverse_member_order,
             family_member,
         },
@@ -741,8 +747,9 @@ enum AnimationDeclarationIntent<R> {
         count: usize,
         mode: noon_core::SemanticSubsetDisplayMode,
     },
-    TextWrite {
+    TextGlyph {
         target: R,
+        mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     },
@@ -795,6 +802,7 @@ trait AnimationScheduleLookup {
     fn text_write_member_count(
         &self,
         target: Self::Reference,
+        mode: noon_core::FamilyAnimationMode,
         family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     ) -> Option<u32>;
 }
@@ -802,9 +810,14 @@ trait AnimationScheduleLookup {
 fn cached_family_text_member_count(
     store: &SemanticStore,
     family: SemanticNodeId,
-    cache: &std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
+    mode: noon_core::FamilyAnimationMode,
+    cache: &std::cell::RefCell<std::collections::HashMap<(SemanticNodeId, bool), Option<u32>>>,
 ) -> Option<u32> {
-    if let Some(count) = cache.borrow().get(&family) {
+    let key = (
+        family,
+        matches!(mode, noon_core::FamilyAnimationMode::Reveal),
+    );
+    if let Some(count) = cache.borrow().get(&key) {
         return *count;
     }
     let count = (|| {
@@ -812,31 +825,38 @@ fn cached_family_text_member_count(
         let mut total = 0_u32;
         for leaf in leaves {
             let state = store.semantic_object_state_checked(leaf).ok()?;
-            let noon_core::SemanticObjectContent::Text(handle) = state.content else {
-                return None;
-            };
-            let resource = store.text_resources().get(handle)?;
-            if resource.kind != noon_core::TextSourceKind::Plain {
-                return None;
-            }
-            let count = u32::try_from(
-                noon_core::plain_text_animation_members(resource)
+            let count = match (mode, state.content) {
+                (
+                    noon_core::FamilyAnimationMode::Reveal,
+                    noon_core::SemanticObjectContent::Geometry(_),
+                ) => 1,
+                (_, noon_core::SemanticObjectContent::Text(handle)) => {
+                    let resource = store.text_resources().get(handle)?;
+                    if resource.kind != noon_core::TextSourceKind::Plain {
+                        return None;
+                    }
+                    u32::try_from(
+                        noon_core::plain_text_animation_members(resource)
+                            .ok()?
+                            .len(),
+                    )
                     .ok()?
-                    .len(),
-            )
-            .ok()?;
+                }
+                _ => return None,
+            };
             total = total.checked_add(count)?;
         }
         Some(total)
     })();
-    cache.borrow_mut().insert(family, count);
+    cache.borrow_mut().insert(key, count);
     count
 }
 
 struct PublishedAnimationLookup<'a> {
     store: &'a SemanticStore,
     index: &'a SemanticExecutionIndex,
-    family_text_counts: std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
+    family_text_counts:
+        std::cell::RefCell<std::collections::HashMap<(SemanticNodeId, bool), Option<u32>>>,
 }
 
 impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
@@ -914,16 +934,18 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     mode: *mode,
                 }
             }
-            SemanticAnimationIntent::TextWrite {
+            SemanticAnimationIntent::TextGlyph {
                 target,
+                mode,
                 reverse_member_order,
                 family_member,
             } => {
                 self.store
                     .semantic_object_state_checked(*target)
                     .map_err(SemanticAnimationError::Target)?;
-                AnimationDeclarationIntent::TextWrite {
+                AnimationDeclarationIntent::TextGlyph {
                     target: *target,
+                    mode: *mode,
                     reverse_member_order: *reverse_member_order,
                     family_member: *family_member,
                 }
@@ -1004,12 +1026,14 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
     fn text_write_member_count(
         &self,
         target: Self::Reference,
+        mode: noon_core::FamilyAnimationMode,
         family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     ) -> Option<u32> {
         if let Some(member) = family_member {
             return cached_family_text_member_count(
                 self.store,
                 member.family,
+                mode,
                 &self.family_text_counts,
             );
         }
@@ -1030,7 +1054,8 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
 struct PreparedAnimationLookup<'a, 'store> {
     prepared: &'a PreparedSemanticMutationTransaction<'store>,
     index: &'a SemanticExecutionIndex,
-    family_text_counts: std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
+    family_text_counts:
+        std::cell::RefCell<std::collections::HashMap<(SemanticNodeId, bool), Option<u32>>>,
 }
 
 impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
@@ -1103,12 +1128,14 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         count: *count,
                         mode: *mode,
                     },
-                    SemanticAnimationIntent::TextWrite {
+                    SemanticAnimationIntent::TextGlyph {
                         target,
+                        mode,
                         reverse_member_order,
                         family_member,
-                    } => AnimationDeclarationIntent::TextWrite {
+                    } => AnimationDeclarationIntent::TextGlyph {
                         target: (*target).into(),
+                        mode: *mode,
                         reverse_member_order: *reverse_member_order,
                         family_member: *family_member,
                     },
@@ -1208,12 +1235,14 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         count: *count,
                         mode: *mode,
                     },
-                    SemanticTransactionAnimationIntent::TextWrite {
+                    SemanticTransactionAnimationIntent::TextGlyph {
                         target,
+                        mode,
                         reverse_member_order,
                         family_member,
-                    } => AnimationDeclarationIntent::TextWrite {
+                    } => AnimationDeclarationIntent::TextGlyph {
                         target: *target,
+                        mode: *mode,
                         reverse_member_order: *reverse_member_order,
                         family_member: *family_member,
                     },
@@ -1285,7 +1314,7 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
-            AnimationDeclarationIntent::TextWrite { target, .. } => {
+            AnimationDeclarationIntent::TextGlyph { target, .. } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
@@ -1325,12 +1354,14 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
     fn text_write_member_count(
         &self,
         target: Self::Reference,
+        mode: noon_core::FamilyAnimationMode,
         family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     ) -> Option<u32> {
         if let Some(member) = family_member {
             return cached_family_text_member_count(
                 self.prepared.store(),
                 member.family,
+                mode,
                 &self.family_text_counts,
             );
         }
@@ -1397,7 +1428,8 @@ enum ScheduledAnimationPayload<R> {
         count: usize,
         mode: noon_core::SemanticSubsetDisplayMode,
     },
-    TextWrite {
+    TextGlyph {
+        mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     },
@@ -1669,8 +1701,9 @@ where
                 },
             })
         }
-        AnimationDeclarationIntent::TextWrite {
+        AnimationDeclarationIntent::TextGlyph {
             target,
+            mode,
             reverse_member_order,
             family_member,
         } => {
@@ -1679,10 +1712,16 @@ where
                 .or_else(|| lookup.entering_execution_object_id(target))
                 .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
             let member_count = lookup
-                .text_write_member_count(target, family_member)
+                .text_write_member_count(target, mode, family_member)
                 .ok_or(AnimationSchedulePlanError::InvalidTextWriteTarget { animation, target })?;
-            let default_duration = noon_core::text_write_default_duration(member_count);
-            let default_lag_ratio = noon_core::text_write_default_lag_ratio(member_count);
+            let (default_duration, default_rate, default_lag_ratio) = match mode {
+                noon_core::FamilyAnimationMode::DrawBorderThenFill => (
+                    noon_core::text_write_default_duration(member_count),
+                    RateFunction::Linear,
+                    noon_core::text_write_default_lag_ratio(member_count),
+                ),
+                noon_core::FamilyAnimationMode::Reveal => (1.0, RateFunction::Smooth, 1.0),
+            };
             let reverse_rate_function = play_options
                 .reverse_rate_function
                 .or(state.options.reverse_rate_function)
@@ -1690,12 +1729,14 @@ where
             let mut options = resolve_animation_options(
                 AnimationDefaults {
                     run_time: default_duration,
-                    rate_func: RateFunction::Linear,
+                    rate_func: default_rate,
                     lag_ratio: default_lag_ratio,
                     path_arc: 0.0,
                     reverse_rate_function: false,
-                    remover: reverse_member_order,
-                    introducer: !reverse_member_order,
+                    remover: matches!(mode, noon_core::FamilyAnimationMode::DrawBorderThenFill)
+                        && reverse_member_order,
+                    introducer: !matches!(mode, noon_core::FamilyAnimationMode::DrawBorderThenFill)
+                        || !reverse_member_order,
                 },
                 state.options,
                 play_options.reverse_rate_function(false),
@@ -1704,7 +1745,12 @@ where
             options.reverse_rate_function = reverse_rate_function;
             // Member order controls how glyph progress is distributed. Removal is
             // an independent completion policy and may be explicitly overridden.
-            let lifecycle_matches = options.introducer == !reverse_member_order;
+            let lifecycle_matches = match mode {
+                noon_core::FamilyAnimationMode::DrawBorderThenFill => {
+                    options.introducer == !reverse_member_order
+                }
+                noon_core::FamilyAnimationMode::Reveal => !reverse_member_order,
+            };
             if !lifecycle_matches || options.path_arc != 0.0 {
                 return Err(
                     AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
@@ -1720,7 +1766,8 @@ where
                 kind: PlannedAnimationKind::Leaf {
                     target,
                     execution_object_id,
-                    payload: ScheduledAnimationPayload::TextWrite {
+                    payload: ScheduledAnimationPayload::TextGlyph {
+                        mode,
                         reverse_member_order,
                         family_member,
                     },

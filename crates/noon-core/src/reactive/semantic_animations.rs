@@ -2,7 +2,7 @@ use super::{
     AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
     SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
 };
-use crate::{Color, RateFunction};
+use crate::{Color, FamilyAnimationMode, RateFunction};
 
 /// Ordered composition semantics authored before execution scheduling/lowering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,8 +176,9 @@ pub enum SemanticAnimationIntent {
         mode: SemanticSubsetDisplayMode,
     },
     /// Draw one plain Text object's derived glyph members in retained painter order.
-    TextWrite {
+    TextGlyph {
         target: SemanticNodeId,
+        mode: FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<SemanticTextWriteFamilyMember>,
     },
@@ -226,7 +227,7 @@ impl SemanticAnimationIntent {
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::SubsetDisplayMember { target, .. }
-            | Self::TextWrite { target, .. }
+            | Self::TextGlyph { target, .. }
             | Self::Rotate { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
@@ -244,7 +245,7 @@ impl SemanticAnimationIntent {
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
-            | Self::TextWrite { .. }
+            | Self::TextGlyph { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
@@ -261,7 +262,7 @@ impl SemanticAnimationIntent {
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
-            | Self::TextWrite { .. }
+            | Self::TextGlyph { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -279,7 +280,7 @@ impl SemanticAnimationIntent {
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
-            | Self::TextWrite { .. }
+            | Self::TextGlyph { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -615,32 +616,40 @@ impl SemanticStore {
         reverse_member_order: bool,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
-        self.insert_semantic_text_write_animation_with_family_member(
+        self.insert_semantic_text_glyph_animation(
             target,
+            FamilyAnimationMode::DrawBorderThenFill,
             reverse_member_order,
             None,
             options,
         )
     }
 
-    pub(crate) fn insert_semantic_text_write_animation_with_family_member(
+    pub(crate) fn insert_semantic_text_glyph_animation(
         &mut self,
         target: SemanticNodeId,
+        mode: FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<SemanticTextWriteFamilyMember>,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         let state = self.semantic_object_state_checked(target)?;
-        let crate::SemanticObjectContent::Text(handle) = &state.content else {
-            return Err(SemanticAnimationError::InvalidTextWriteTarget);
-        };
-        let resource = self
-            .text_resources()
-            .get(*handle)
-            .ok_or(SemanticAnimationError::InvalidTextWriteTarget)?;
-        if resource.kind != crate::TextSourceKind::Plain {
-            return Err(SemanticAnimationError::InvalidTextWriteTarget);
+        match (mode, state.content) {
+            (FamilyAnimationMode::Reveal, crate::SemanticObjectContent::Geometry(_))
+                if family_member.is_some() => {}
+            (_, crate::SemanticObjectContent::Text(handle)) => {
+                let resource = self
+                    .text_resources()
+                    .get(handle)
+                    .ok_or(SemanticAnimationError::InvalidTextWriteTarget)?;
+                if resource.kind != crate::TextSourceKind::Plain {
+                    return Err(SemanticAnimationError::InvalidTextWriteTarget);
+                }
+            }
+            _ => {
+                return Err(SemanticAnimationError::InvalidTextWriteTarget);
+            }
         }
         if let Some(member) = family_member {
             if !matches!(
@@ -655,8 +664,9 @@ impl SemanticStore {
         validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
-                SemanticAnimationIntent::TextWrite {
+                SemanticAnimationIntent::TextGlyph {
                     target,
+                    mode,
                     reverse_member_order,
                     family_member,
                 },

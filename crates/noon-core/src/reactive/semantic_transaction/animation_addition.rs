@@ -43,8 +43,9 @@ pub enum SemanticTransactionAnimationIntent {
         count: usize,
         mode: crate::SemanticSubsetDisplayMode,
     },
-    TextWrite {
+    TextGlyph {
         target: SemanticTransactionNodeRef,
+        mode: crate::FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<crate::SemanticTextWriteFamilyMember>,
     },
@@ -95,7 +96,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
             | Self::Add { target } => Some([Some(*target), None]),
-            Self::TextWrite {
+            Self::TextGlyph {
                 target,
                 family_member,
                 ..
@@ -112,7 +113,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
-            | Self::TextWrite { .. }
+            | Self::TextGlyph { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -202,12 +203,14 @@ impl SemanticTransactionAnimation {
                 count: *count,
                 mode: *mode,
             },
-            SemanticAnimationIntent::TextWrite {
+            SemanticAnimationIntent::TextGlyph {
                 target,
+                mode,
                 reverse_member_order,
                 family_member,
-            } => SemanticTransactionAnimationIntent::TextWrite {
+            } => SemanticTransactionAnimationIntent::TextGlyph {
                 target: (*target).into(),
+                mode: *mode,
                 reverse_member_order: *reverse_member_order,
                 family_member: *family_member,
             },
@@ -307,12 +310,14 @@ impl SemanticTransactionAnimation {
                 count: *count,
                 mode: *mode,
             },
-            SemanticTransactionAnimationIntent::TextWrite {
+            SemanticTransactionAnimationIntent::TextGlyph {
                 target,
+                mode,
                 reverse_member_order,
                 family_member,
-            } => SemanticAnimationIntent::TextWrite {
+            } => SemanticAnimationIntent::TextGlyph {
                 target: resolve_node_ref(*target, committed),
+                mode: *mode,
                 reverse_member_order: *reverse_member_order,
                 family_member: *family_member,
             },
@@ -487,15 +492,16 @@ pub(super) fn preflight_transaction_animation(
                 return Err(SemanticMutationTransactionError::InvalidSubsetDisplayMember { index });
             }
         }
-        SemanticTransactionAnimationIntent::TextWrite {
+        SemanticTransactionAnimationIntent::TextGlyph {
             target,
+            mode,
             family_member,
             ..
         } => {
             catalog.ensure_animation_target(*target, index)?;
             let state =
                 catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
-            catalog.ensure_plain_text_write_target(state, *family_member, *target, index)?;
+            catalog.ensure_text_glyph_target(state, *mode, *family_member, *target, index)?;
         }
         SemanticTransactionAnimationIntent::Fade {
             target, endpoint, ..
@@ -654,13 +660,15 @@ pub(super) fn commit_add_animation(
         } => store
             .insert_semantic_subset_display_member_animation(*target, *index, *count, *mode, options)
             .expect("preflighted subset display insertion must remain valid while transaction owns the store"),
-        SemanticAnimationIntent::TextWrite {
+        SemanticAnimationIntent::TextGlyph {
             target,
+            mode,
             reverse_member_order,
             family_member,
         } => store
-            .insert_semantic_text_write_animation_with_family_member(
+            .insert_semantic_text_glyph_animation(
                 *target,
+                *mode,
                 *reverse_member_order,
                 *family_member,
                 options,

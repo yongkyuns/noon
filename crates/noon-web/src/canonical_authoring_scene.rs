@@ -96,6 +96,18 @@ enum OrdinaryCompositionChild {
         reverse_member_order: bool,
         options: noon_core::AnimationOptions,
     },
+    TextReveal {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        reverse: bool,
+        options: noon_core::AnimationOptions,
+    },
+    FamilyReveal {
+        target: noon::MobjectFamily,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        reverse: bool,
+        options: noon_core::AnimationOptions,
+    },
     Rotate {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1496,6 +1508,26 @@ impl CanonicalAuthoringScene {
                     reverse_member_order: *reverse_member_order,
                     options: *options,
                 },
+                OrdinaryCompositionChild::TextReveal {
+                    target,
+                    reverse,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::TextReveal {
+                    target,
+                    reverse: *reverse,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::FamilyReveal {
+                    target,
+                    reverse,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::FamilyReveal {
+                    target,
+                    reverse: *reverse,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
@@ -1654,7 +1686,8 @@ impl CanonicalAuthoringScene {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::FamilyFade { entering, .. }
-                | OrdinaryCompositionChild::FamilyTextWrite { entering, .. } => {
+                | OrdinaryCompositionChild::FamilyTextWrite { entering, .. }
+                | OrdinaryCompositionChild::FamilyReveal { entering, .. } => {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::Add {
@@ -1663,6 +1696,15 @@ impl CanonicalAuthoringScene {
                     ..
                 } => output.push((*entering_id, target)),
                 OrdinaryCompositionChild::TextWrite {
+                    entering_id,
+                    target,
+                    ..
+                } => {
+                    if let Some(id) = entering_id {
+                        output.push((*id, target));
+                    }
+                }
+                OrdinaryCompositionChild::TextReveal {
                     entering_id,
                     target,
                     ..
@@ -1854,6 +1896,12 @@ impl CanonicalAuthoringScene {
                     entering,
                     options,
                     ..
+                }
+                | OrdinaryCompositionChild::FamilyReveal {
+                    target,
+                    entering,
+                    options,
+                    ..
                 } => {
                     if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
                         return Err(
@@ -1883,10 +1931,13 @@ impl CanonicalAuthoringScene {
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
-                        if matches!(child, OrdinaryCompositionChild::FamilyTextWrite { .. }) {
-                            // Text glyph realization owns reversal, as it does for
-                            // a single TextWrite. Preserve the authored option on
-                            // the request while preflighting the remaining shape.
+                        if matches!(
+                            child,
+                            OrdinaryCompositionChild::FamilyTextWrite { .. }
+                                | OrdinaryCompositionChild::FamilyReveal { .. }
+                        ) {
+                            // Text glyph realization owns reversal. Preserve the
+                            // authored option while preflighting the remaining shape.
                             noon_core::AnimationOptions::new().reverse_rate_function(false)
                         } else {
                             noon_core::AnimationOptions::new()
@@ -2062,6 +2113,12 @@ impl CanonicalAuthoringScene {
                     options,
                     ..
                 } => (*entering_id, target, *options),
+                OrdinaryCompositionChild::TextReveal {
+                    entering_id,
+                    target,
+                    options,
+                    ..
+                } => (*entering_id, target, *options),
                 OrdinaryCompositionChild::Fade {
                     entering_id,
                     target,
@@ -2096,7 +2153,11 @@ impl CanonicalAuthoringScene {
                 noon_core::resolve_animation_options(
                     noon_core::AnimationDefaults::MANIM,
                     options,
-                    if matches!(child, OrdinaryCompositionChild::TextWrite { .. }) {
+                    if matches!(
+                        child,
+                        OrdinaryCompositionChild::TextWrite { .. }
+                            | OrdinaryCompositionChild::TextReveal { .. }
+                    ) {
                         // Glyph realization owns reversal; keep the original child
                         // options for shared schedule lowering after shape validation.
                         noon_core::AnimationOptions::new().reverse_rate_function(false)
@@ -4087,6 +4148,104 @@ mod wasm {
             }
             entering.push((
                 parse_object_id("Text family object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
+            Ok(())
+        }
+
+        /// Append one plain-Text Create/Uncreate. Rust owns reveal membership,
+        /// lifecycle defaults, and glyph scheduling.
+        #[wasm_bindgen(js_name = appendTextReveal)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_text_reveal(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            reverse: bool,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            reverse_rate_function: Option<bool>,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(introducer) = introducer {
+                options = options.introducer(introducer);
+            }
+            if let Some(remover) = remover {
+                options = options.remover(remover);
+            }
+            if let Some(reverse_rate_function) = reverse_rate_function {
+                options = options.reverse_rate_function(reverse_rate_function);
+            }
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("Text reveal object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::TextReveal {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                reverse,
+                options,
+            });
+            Ok(())
+        }
+
+        /// Append one shared-family Create/Uncreate. Rust resolves authoritative
+        /// leaf order and member spans without frontend scheduling.
+        #[wasm_bindgen(js_name = appendFamilyReveal)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_family_reveal(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            reverse: bool,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            reverse_rate_function: Option<bool>,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(introducer) = introducer {
+                options = options.introducer(introducer);
+            }
+            if let Some(remover) = remover {
+                options = options.remover(remover);
+            }
+            if let Some(reverse_rate_function) = reverse_rate_function {
+                options = options.reverse_rate_function(reverse_rate_function);
+            }
+            self.children.push(OrdinaryCompositionChild::FamilyReveal {
+                target: target.semantic_family()?,
+                entering: Vec::new(),
+                reverse,
+                options,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyRevealEntering)]
+        pub fn append_family_reveal_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyReveal {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error("family entering member must follow FamilyReveal"));
+            };
+            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+                return Err(js_error(
+                    "family reveal member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("family reveal object ID", object_id)?,
                 member.semantic_mobject().clone(),
             ));
             Ok(())
@@ -7486,6 +7645,89 @@ mod tests {
         );
         assert!(!context.contains_mobject(&left).unwrap());
         assert!(!context.contains_mobject(&right).unwrap());
+    }
+
+    #[test]
+    fn ordinary_text_reveal_and_mixed_family_reveal_publish_recursive_membership() {
+        let mut context = CanonicalAuthoringScene::default();
+        let single = context.scene.text(noon::Text::new("SINGLE")).unwrap();
+        let text = context.scene.text(noon::Text::new("GROUP")).unwrap();
+        let circle = context.scene.circle(0.25).unwrap();
+        let family = context.scene.family(&[&text, &circle]).unwrap();
+        let create_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Smooth)
+            .lag_ratio(1.0)
+            .introducer(true);
+        let create = [
+            OrdinaryCompositionChild::TextReveal {
+                entering_id: Some(ObjectId::new(0)),
+                target: single.clone(),
+                reverse: false,
+                options: create_options,
+            },
+            OrdinaryCompositionChild::FamilyReveal {
+                target: family.clone(),
+                entering: vec![
+                    (ObjectId::new(1), text.clone()),
+                    (ObjectId::new(2), circle.clone()),
+                ],
+                reverse: false,
+                options: create_options,
+            },
+        ];
+
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &create,
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            1.0
+        );
+        for target in [&single, &text, &circle] {
+            assert!(context.contains_mobject(target).unwrap());
+        }
+        assert_eq!(context.bindings.len(), 3);
+
+        let uncreate_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Smooth)
+            .lag_ratio(1.0)
+            .introducer(false)
+            .remover(true)
+            .reverse_rate_function(true);
+        let uncreate = [
+            OrdinaryCompositionChild::TextReveal {
+                entering_id: None,
+                target: single.clone(),
+                reverse: true,
+                options: uncreate_options,
+            },
+            OrdinaryCompositionChild::FamilyReveal {
+                target: family,
+                entering: Vec::new(),
+                reverse: true,
+                options: uncreate_options,
+            },
+        ];
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &uncreate,
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            2.0
+        );
+        for target in [&single, &text, &circle] {
+            assert!(!context.contains_mobject(target).unwrap());
+        }
     }
 
     #[test]

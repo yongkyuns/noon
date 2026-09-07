@@ -84,21 +84,28 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
-    pub(super) fn ensure_plain_text_write_target(
+    pub(super) fn ensure_text_glyph_target(
         &self,
         state: &crate::SemanticObjectState,
+        mode: crate::FamilyAnimationMode,
         family_member: Option<crate::SemanticTextWriteFamilyMember>,
         target: super::SemanticTransactionNodeRef,
         index: usize,
     ) -> Result<(), SemanticMutationTransactionError> {
-        let crate::SemanticObjectContent::Text(handle) = &state.content else {
-            return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
-        };
-        let Some(resource) = self.store.text_resources().get(*handle) else {
-            return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
-        };
-        if resource.kind != crate::TextSourceKind::Plain {
-            return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+        match (mode, state.content) {
+            (crate::FamilyAnimationMode::Reveal, crate::SemanticObjectContent::Geometry(_))
+                if family_member.is_some() => {}
+            (_, crate::SemanticObjectContent::Text(handle)) => {
+                let Some(resource) = self.store.text_resources().get(handle) else {
+                    return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+                };
+                if resource.kind != crate::TextSourceKind::Plain {
+                    return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+                }
+            }
+            _ => {
+                return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+            }
         }
         if let Some(member) = family_member {
             let Some(target) = target.existing() else {

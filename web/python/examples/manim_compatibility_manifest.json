@@ -155,6 +155,21 @@
       "thumbnail_alt": "LEFT and RIGHT text fading in as a family while WRITE appears below",
       "thumbnail_time": 1.0,
       "order": 1100
+    },
+    {
+      "id": "compatible-text-family-reveal",
+      "title": "TextFamilyReveal",
+      "summary": "Create and Uncreate a VGroup of unequal plain Text leaves alongside a single Text and a moving Square.",
+      "status": "ready",
+      "path": "python/examples/ordinary_text_family_reveal.py",
+      "category": "manim-compatible/text",
+      "features": ["Text", "VGroup", "Create", "Uncreate", "animate", "lag_ratio", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-text-family-reveal.svg",
+      "thumbnail_alt": "I and LONG text revealing from left to right above a moving square",
+      "thumbnail_time": 1.0,
+      "order": 1110
     }
   ]
 }

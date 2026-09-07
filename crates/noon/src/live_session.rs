@@ -259,6 +259,16 @@ pub enum AnimationCompositionRequest<'a> {
         reverse_member_order: bool,
         options: AnimationOptions,
     },
+    TextReveal {
+        target: &'a Mobject,
+        reverse: bool,
+        options: AnimationOptions,
+    },
+    FamilyReveal {
+        target: &'a MobjectFamily,
+        reverse: bool,
+        options: AnimationOptions,
+    },
     Rotate {
         target: &'a Mobject,
         angle: f64,
@@ -922,6 +932,38 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
+    pub fn declare_and_activate_text_reveal(
+        &mut self,
+        target: &Mobject,
+        reverse: bool,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::TextReveal {
+                target,
+                reverse,
+                options,
+            },
+            AnimationOptions::new(),
+        )
+    }
+
+    pub fn declare_and_activate_family_reveal(
+        &mut self,
+        target: &MobjectFamily,
+        reverse: bool,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::FamilyReveal {
+                target,
+                reverse,
+                options,
+            },
+            AnimationOptions::new(),
+        )
+    }
+
     /// Atomically hide every direct member before activating a subset display.
     pub fn prepare_family_subset_display(
         &mut self,
@@ -1302,6 +1344,30 @@ impl<'a> LiveSession<'a> {
                 Request::FamilyTextWrite {
                     target: target.node_id(),
                     reverse_member_order: *reverse_member_order,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::TextReveal {
+                target,
+                reverse,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::TextReveal {
+                    target: target.node_id(),
+                    reverse: *reverse,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilyReveal {
+                target,
+                reverse,
+                options,
+            } => {
+                self.require_family(target)?;
+                Request::FamilyReveal {
+                    target: target.node_id(),
+                    reverse: *reverse,
                     options: *options,
                 }
             }
