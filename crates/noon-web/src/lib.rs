@@ -33,7 +33,6 @@ mod manim_shape_matcher_bridge;
 #[cfg(any(target_arch = "wasm32", test))]
 mod manim_shape_matcher_handle_bridge;
 mod renderer_observation;
-mod retained_authoring_player;
 #[cfg(feature = "renderer")]
 mod retained_execution_canvas;
 mod retained_execution_resources;
@@ -78,7 +77,6 @@ pub use manim_path_query_bridge::*;
 pub use manim_sector_bridge::*;
 pub use manim_shape_matcher_bridge::*;
 pub use renderer_observation::*;
-pub use retained_authoring_player::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_execution_canvas::*;
 pub use retained_execution_resources::*;

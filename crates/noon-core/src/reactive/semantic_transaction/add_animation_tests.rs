@@ -1,9 +1,10 @@
 use super::*;
 use crate::{
-    AnimationOptions, NativeStateSource, RateFunction, SemanticAffineLifecycleDirection,
-    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationIntent,
-    SemanticAnimationState, SemanticFadeDirection, SemanticObjectState, SemanticVec3,
-    StoredGeometry,
+    AnimationOptions, CompositionTimeMapStep, NativeStateSource, RateFunction,
+    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticAnimationState,
+    SemanticFadeDirection, SemanticObjectState, SemanticObjectTrackProperty,
+    SemanticObjectTrackValues, SemanticVec3, StoredGeometry,
 };
 
 fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
@@ -838,4 +839,156 @@ fn scalar_animation_rejects_native_and_non_finite_targets_atomically() {
         }) if actual == signal
     ));
     assert_eq!(store.scene_revision(), revision);
+}
+
+#[test]
+fn exact_object_tracks_retain_high_precision_timing_and_semantic_identity() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+        0.25,
+        0.5,
+        RateFunction::Smooth,
+    )]);
+    let timing = TrackTiming::new(-0.5, 3.0, RateFunction::RushInto);
+    let mut transaction = SemanticMutationTransaction::new();
+    let leaf = transaction.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::Position,
+        SemanticObjectTrackValues::Vec3 {
+            from: SemanticVec3::new(1.0 / 3.0, -2.0, 0.0),
+            to: SemanticVec3::new(4.0, 5.0, 0.0),
+        },
+        timing,
+        map.clone(),
+    );
+    let root = transaction.create_animation_composition(
+        SemanticAnimationCompositionKind::Parallel,
+        [leaf],
+        AnimationOptions::new(),
+    );
+
+    let result = transaction.apply(&mut store).unwrap();
+    let leaf = result.resolve(leaf).unwrap();
+    let root = result.resolve(root).unwrap();
+    assert_eq!(
+        store.semantic_animation_state(leaf).unwrap(),
+        &SemanticAnimationState::new(
+            SemanticAnimationIntent::ObjectPropertyTrack {
+                target,
+                property: SemanticObjectTrackProperty::Position,
+                values: SemanticObjectTrackValues::Vec3 {
+                    from: SemanticVec3::new(1.0 / 3.0, -2.0, 0.0),
+                    to: SemanticVec3::new(4.0, 5.0, 0.0),
+                },
+                timing,
+                time_map: map,
+            },
+            AnimationOptions::new(),
+        )
+    );
+    assert_eq!(
+        store
+            .semantic_animation_state(root)
+            .unwrap()
+            .intent()
+            .children(),
+        &[leaf]
+    );
+}
+
+#[test]
+fn exact_object_track_validation_is_atomic_and_checks_endpoint_provenance() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let from = object(&mut store, 2.0);
+    let to = object(&mut store, 3.0);
+    let revision = store.scene_revision();
+    let before_len = store.len();
+    let mut mismatch = SemanticMutationTransaction::new();
+    mismatch.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::Fill,
+        SemanticObjectTrackValues::Scalar { from: 0.0, to: 1.0 },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    assert!(matches!(
+        mismatch.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { .. })
+    ));
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.len(), before_len);
+
+    let family = store.insert_family();
+    store.add_semantic_family_member(family, to).unwrap();
+    let revision = store.scene_revision();
+    let mut attached_endpoint = SemanticMutationTransaction::new();
+    attached_endpoint.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::Transform,
+        SemanticObjectTrackValues::Object {
+            from: from.into(),
+            to: to.into(),
+        },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    assert!(matches!(
+        attached_endpoint.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { .. })
+    ));
+    assert_eq!(store.scene_revision(), revision);
+
+    let mut foreign = SemanticMutationTransaction::new();
+    let foreign_endpoint = foreign.create_node(SemanticNodeCreation::object(
+        SemanticObjectState::new(StoredGeometry::Circle { radius: 4.0 }),
+    ));
+    let mut wrong_transaction = SemanticMutationTransaction::new();
+    wrong_transaction.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::Transform,
+        SemanticObjectTrackValues::Object {
+            from: from.into(),
+            to: foreign_endpoint.into(),
+        },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    assert!(matches!(
+        wrong_transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::PendingNodeFromDifferentTransaction { .. })
+    ));
+    assert_eq!(store.scene_revision(), revision);
+
+    let mut local_endpoints = SemanticMutationTransaction::new();
+    let local_from = local_endpoints.create_node(SemanticNodeCreation::object(
+        SemanticObjectState::new(StoredGeometry::Circle { radius: 5.0 }),
+    ));
+    let local_to = local_endpoints.create_node(SemanticNodeCreation::object(
+        SemanticObjectState::new(StoredGeometry::Circle { radius: 6.0 }),
+    ));
+    let animation = local_endpoints.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::Transform,
+        SemanticObjectTrackValues::Object {
+            from: local_from.into(),
+            to: local_to.into(),
+        },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    let committed = local_endpoints.apply(&mut store).unwrap();
+    let SemanticAnimationIntent::ObjectPropertyTrack {
+        values: SemanticObjectTrackValues::Object { from, to },
+        ..
+    } = store
+        .semantic_animation_state(committed.resolve(animation).unwrap())
+        .unwrap()
+        .intent()
+    else {
+        panic!("expected exact object-valued track")
+    };
+    assert_eq!(*from, committed.resolve(local_from).unwrap());
+    assert_eq!(*to, committed.resolve(local_to).unwrap());
 }

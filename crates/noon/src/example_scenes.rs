@@ -3,6 +3,7 @@
 pub mod affine_fade;
 pub mod automatic_wait_text;
 pub mod draw_border_then_fill;
+pub mod exact_property_tracks;
 pub mod family_transform_indicate;
 pub mod mixed_scalar_composition;
 pub mod ordinary_membership;

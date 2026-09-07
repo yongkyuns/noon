@@ -5,6 +5,7 @@ use crate::{
     CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
     PatchError, SceneDefinition, TrackId, Vec2,
 };
+use crate::{GeometryRef, Style, Transform2D};
 
 /// Language-neutral animation rate functions shared by every authoring frontend.
 ///
@@ -134,6 +135,27 @@ pub enum TrackValueEndpoint {
     To,
 }
 
+/// An exact renderer-independent endpoint for an execution transform track.
+///
+/// Semantic lowering resolves authored object references into this value before
+/// runtime evaluation. It intentionally carries no authored object identity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TransformTrackEndpoint {
+    pub geometry: GeometryRef,
+    pub transform: Transform2D,
+    pub style: Style,
+}
+
+impl TransformTrackEndpoint {
+    pub fn new(geometry: GeometryRef) -> Self {
+        Self {
+            geometry,
+            transform: Transform2D::default(),
+            style: Style::default(),
+        }
+    }
+}
+
 impl std::fmt::Display for TrackValueEndpoint {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
@@ -173,8 +195,8 @@ pub enum TrackValues {
         render_transform: Option<crate::Transform2D>,
     },
     Object {
-        from: ObjectSnapshot,
-        to: ObjectSnapshot,
+        from: TransformTrackEndpoint,
+        to: TransformTrackEndpoint,
     },
 }
 
@@ -275,7 +297,7 @@ fn validate_object_track_value(
     object: ObjectId,
     property: Property,
     endpoint: TrackValueEndpoint,
-    snapshot: &ObjectSnapshot,
+    snapshot: &TransformTrackEndpoint,
 ) -> Result<(), TimelineError> {
     validate_geometry(object, &snapshot.geometry)
         .map_err(|error| invalid_object_track_value(property, endpoint, error))?;
@@ -600,6 +622,16 @@ impl SceneDefinition {
         to: ObjectSnapshot,
         timing: TrackTiming,
     ) -> Result<TrackId, TimelineError> {
+        let from = TransformTrackEndpoint {
+            geometry: from.geometry,
+            transform: from.transform,
+            style: from.style,
+        };
+        let to = TransformTrackEndpoint {
+            geometry: to.geometry,
+            transform: to.transform,
+            style: to.style,
+        };
         self.add_track(
             object,
             Property::Transform,

@@ -20,6 +20,15 @@ pub async fn create_direct_ordinary_membership_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct browser host for exact authored property tracks through the shared compiler/runtime.
+#[wasm_bindgen(js_name = createDirectExactPropertyTracksSmokeRenderer)]
+pub async fn create_direct_exact_property_tracks_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::exact_property_tracks::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Browser proof that static Typst uses the same direct semantic text-resource path.
 #[wasm_bindgen(js_name = createDirectTypstTextSmokeRenderer)]
 pub async fn create_direct_typst_text_smoke_renderer(

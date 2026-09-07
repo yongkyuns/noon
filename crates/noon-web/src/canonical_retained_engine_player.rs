@@ -1,12 +1,20 @@
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use noon::{DeclaredAnimation, Mobject, MobjectFamilyMember, Scene};
+use noon_core::{
+    AnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationIntent,
+    SemanticMutationTransaction, SemanticObjectRole, SemanticObjectTrackProperty,
+    SemanticObjectTrackValues, SemanticTransactionNodeRef, SemanticVec3,
+};
+use noon_ir::{ObjectSpec, ObjectSpecContent, TextSpecKind, TextSpecOptions};
 use noon_ir::{SceneSpec, SceneSpecError};
 
-use crate::retained_scene_spec_runtime::{
-    CanonicalRetainedAuthoringScene, MixedRetainedAuthoringError,
-};
+use crate::retained_scene_spec_runtime::{canonical_text_color, MixedRetainedAuthoringError};
 use crate::{
     CanonicalRetainedFamilyAnimationScene, CanonicalRetainedFamilyAnimationSceneError, ClockError,
-    PlaybackClock, RetainedAuthoringPlayer, RetainedAuthoringPlayerError,
-    RetainedFamilyExecutionPlayer, RetainedFamilyExecutionPlayerError,
+    PlaybackClock, RetainedFamilyExecutionPlayer, RetainedFamilyExecutionPlayerError,
+    SemanticExecutionPlayer,
 };
 
 /// Runtime selected behind the single canonical retained browser/WASM surface.
@@ -16,14 +24,14 @@ use crate::{
 /// expose the same clocked delta/resource API.
 #[derive(Debug)]
 enum CanonicalRetainedExecutionPlayer {
-    Ordinary(Box<RetainedAuthoringPlayer>),
+    Ordinary(Box<OrdinarySemanticExecution>),
     Family(Box<RetainedFamilyExecutionPlayer>),
 }
 
 impl CanonicalRetainedExecutionPlayer {
     fn resource_bundle_bytes(&self) -> &[u8] {
         match self {
-            Self::Ordinary(player) => player.resource_bundle_bytes(),
+            Self::Ordinary(player) => player.player.resource_bundle_slice(),
             Self::Family(player) => player.resource_bundle_bytes(),
         }
     }
@@ -34,11 +42,9 @@ impl CanonicalRetainedExecutionPlayer {
     ) -> Result<Option<String>, CanonicalRetainedEnginePlayerError> {
         match self {
             Self::Ordinary(player) => player
-                .evaluate_delta(time)?
-                .map(|delta| {
-                    serde_json::to_string(&delta).map_err(CanonicalRetainedEnginePlayerError::from)
-                })
-                .transpose(),
+                .player
+                .evaluate_delta_at(time)
+                .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer),
             Self::Family(player) => player
                 .evaluate_delta(time)?
                 .map(|delta| {
@@ -50,10 +56,279 @@ impl CanonicalRetainedExecutionPlayer {
 
     fn time(&self) -> f64 {
         match self {
-            Self::Ordinary(player) => player.frame().time,
+            Self::Ordinary(player) => player.player.time(),
             Self::Family(player) => player.frame().time,
         }
     }
+}
+
+struct OrdinarySemanticExecution {
+    _scene: Scene,
+    player: SemanticExecutionPlayer,
+}
+
+impl std::fmt::Debug for OrdinarySemanticExecution {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OrdinarySemanticExecution")
+            .finish_non_exhaustive()
+    }
+}
+
+fn import_ordinary_semantic_scene(
+    objects: Vec<ObjectSpec>,
+    tracks: Vec<noon_core::TrackDefinition>,
+    camera_object: Option<noon_core::ObjectId>,
+) -> Result<(Scene, Option<DeclaredAnimation>), CanonicalRetainedEnginePlayerError> {
+    let mut scene = Scene::new();
+    let mut external_objects = HashMap::with_capacity(objects.len());
+    let mut ordered = Vec::with_capacity(objects.len());
+    for object in objects {
+        let external_id = object.id;
+        let mobject = import_semantic_object(&scene, object, camera_object == Some(external_id))?;
+        external_objects.insert(external_id, mobject.clone());
+        ordered.push(mobject);
+    }
+    let members = ordered
+        .iter()
+        .map(MobjectFamilyMember::Mobject)
+        .collect::<Vec<_>>();
+    if !members.is_empty() {
+        scene.add_many(&members).map_err(|error| {
+            CanonicalRetainedEnginePlayerError::SemanticPlayer(error.to_string())
+        })?;
+    }
+    let animation_root = import_semantic_tracks(&scene, &external_objects, tracks)?;
+    Ok((scene, animation_root))
+}
+
+fn import_semantic_object(
+    scene: &Scene,
+    object: ObjectSpec,
+    camera: bool,
+) -> Result<Mobject, CanonicalRetainedEnginePlayerError> {
+    let ObjectSpec {
+        id,
+        content,
+        transform,
+        style,
+    } = object;
+    if camera && !matches!(&content, ObjectSpecContent::Geometry(_)) {
+        return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+            "camera object {} must contain geometry",
+            id.get()
+        )));
+    }
+    let mobject = match content {
+        ObjectSpecContent::Geometry(geometry) => {
+            let mut state = noon::semantic_object_state_from_compact(
+                &mut scene.store().borrow_mut(),
+                geometry,
+                transform,
+                style,
+            )
+            .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
+            if camera {
+                state.set_role(SemanticObjectRole::Camera2D);
+            }
+            Mobject::new(Rc::clone(scene.store()), state)
+                .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?
+        }
+        ObjectSpecContent::Text(text) => {
+            let color = canonical_text_color(id, transform, style)?;
+            match text.kind {
+                TextSpecKind::Plain => {
+                    let (font_family, line_spacing) = match text.options {
+                        TextSpecOptions::Default => {
+                            (noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY.to_owned(), -1.0)
+                        }
+                        TextSpecOptions::NativePlain {
+                            font_family,
+                            line_spacing,
+                        } => (font_family, line_spacing),
+                    };
+                    scene
+                        .text(
+                            noon::Text::new(text.source)
+                                .with_font(font_family)
+                                .with_font_size(text.font_size)
+                                .with_line_spacing(line_spacing)
+                                .color(color)
+                                .set_opacity(style.opacity)
+                                .move_to(transform.translation)
+                                .scale_xy(transform.scale)
+                                .rotate(transform.rotation),
+                        )
+                        .map_err(|error| {
+                            CanonicalRetainedEnginePlayerError::SemanticPlayer(error.to_string())
+                        })?
+                }
+                TextSpecKind::Typst | TextSpecKind::MathTypst => {
+                    if !matches!(text.options, TextSpecOptions::Default) {
+                        return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(
+                            "Typst objects require default source options".into(),
+                        ));
+                    }
+                    if text.kind == TextSpecKind::MathTypst {
+                        scene
+                            .math_typst(
+                                noon::MathTypst::new(text.source)
+                                    .with_font_size(text.font_size)
+                                    .color(color)
+                                    .set_opacity(style.opacity)
+                                    .move_to(transform.translation)
+                                    .scale_xy(transform.scale)
+                                    .rotate(transform.rotation),
+                            )
+                            .map_err(|error| {
+                                CanonicalRetainedEnginePlayerError::SemanticPlayer(
+                                    error.to_string(),
+                                )
+                            })?
+                    } else {
+                        scene
+                            .typst(
+                                noon::Typst::new(text.source)
+                                    .with_font_size(text.font_size)
+                                    .color(color)
+                                    .set_opacity(style.opacity)
+                                    .move_to(transform.translation)
+                                    .scale_xy(transform.scale)
+                                    .rotate(transform.rotation),
+                            )
+                            .map_err(|error| {
+                                CanonicalRetainedEnginePlayerError::SemanticPlayer(
+                                    error.to_string(),
+                                )
+                            })?
+                    }
+                }
+                TextSpecKind::Markup | TextSpecKind::Tex | TextSpecKind::MathTex => {
+                    return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                        "text object {} uses unsupported source kind {:?}",
+                        id.get(),
+                        text.kind
+                    )));
+                }
+            }
+        }
+    };
+    Ok(mobject)
+}
+
+fn import_semantic_tracks(
+    scene: &Scene,
+    objects: &HashMap<noon_core::ObjectId, Mobject>,
+    tracks: Vec<noon_core::TrackDefinition>,
+) -> Result<Option<DeclaredAnimation>, CanonicalRetainedEnginePlayerError> {
+    if tracks.is_empty() {
+        return Ok(None);
+    }
+    let mut transaction = SemanticMutationTransaction::new();
+    let mut children = Vec::with_capacity(tracks.len());
+    for track in tracks {
+        let target = objects.get(&track.object).ok_or_else(|| {
+            CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                "track targets unknown object {}",
+                track.object.get()
+            ))
+        })?;
+        let property = semantic_track_property(track.property);
+        let values = semantic_track_values(scene, track.values)?;
+        children.push(transaction.create_object_property_track(
+            target.node_id(),
+            property,
+            values,
+            track.timing,
+            track.time_map,
+        ));
+    }
+    let result = transaction
+        .apply(&mut scene.store().borrow_mut())
+        .map_err(|error| CanonicalRetainedEnginePlayerError::SemanticPlayer(error.to_string()))?;
+    let children = children
+        .into_iter()
+        .map(|child| {
+            result
+                .resolve(child)
+                .expect("committed property track resolves")
+        })
+        .collect();
+    scene
+        .declare_animation(
+            SemanticAnimationIntent::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                children,
+            },
+            AnimationOptions::new(),
+        )
+        .map(Some)
+        .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)
+}
+
+fn semantic_track_property(property: noon_core::Property) -> SemanticObjectTrackProperty {
+    match property {
+        noon_core::Property::Presence => SemanticObjectTrackProperty::Presence,
+        noon_core::Property::Transform => SemanticObjectTrackProperty::Transform,
+        noon_core::Property::Position => SemanticObjectTrackProperty::Position,
+        noon_core::Property::Rotation => SemanticObjectTrackProperty::Rotation,
+        noon_core::Property::Scale => SemanticObjectTrackProperty::Scale,
+        noon_core::Property::Fill => SemanticObjectTrackProperty::Fill,
+        noon_core::Property::Stroke => SemanticObjectTrackProperty::Stroke,
+        noon_core::Property::StrokeWidth => SemanticObjectTrackProperty::StrokeWidth,
+        noon_core::Property::Opacity => SemanticObjectTrackProperty::Opacity,
+        noon_core::Property::Appearance => SemanticObjectTrackProperty::Appearance,
+        noon_core::Property::Reveal => SemanticObjectTrackProperty::Reveal,
+        noon_core::Property::Morph => SemanticObjectTrackProperty::Morph,
+    }
+}
+
+fn semantic_track_values(
+    scene: &Scene,
+    values: noon_core::TrackValues,
+) -> Result<SemanticObjectTrackValues<SemanticTransactionNodeRef>, CanonicalRetainedEnginePlayerError>
+{
+    Ok(match values {
+        noon_core::TrackValues::Bool { from, to } => SemanticObjectTrackValues::Bool { from, to },
+        noon_core::TrackValues::Scalar { from, to } => SemanticObjectTrackValues::Scalar {
+            from: f64::from(from),
+            to: f64::from(to),
+        },
+        noon_core::TrackValues::Vec2 { from, to } => SemanticObjectTrackValues::Vec3 {
+            from: SemanticVec3::from_vec2(from),
+            to: SemanticVec3::from_vec2(to),
+        },
+        noon_core::TrackValues::Color { from, to } => SemanticObjectTrackValues::Color { from, to },
+        noon_core::TrackValues::Object { from, to } => {
+            let from_state = noon::semantic_object_state_from_compact(
+                &mut scene.store().borrow_mut(),
+                from.geometry,
+                from.transform,
+                from.style,
+            )
+            .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
+            let from = Mobject::new(Rc::clone(scene.store()), from_state)
+                .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
+            let to_state = noon::semantic_object_state_from_compact(
+                &mut scene.store().borrow_mut(),
+                to.geometry,
+                to.transform,
+                to.style,
+            )
+            .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
+            let to = Mobject::new(Rc::clone(scene.store()), to_state)
+                .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
+            SemanticObjectTrackValues::Object {
+                from: from.node_id().into(),
+                to: to.node_id().into(),
+            }
+        }
+        noon_core::TrackValues::PreparedMorph { .. } => {
+            return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(
+                "prepared morph execution payloads are not valid semantic authoring input".into(),
+            ));
+        }
+    })
 }
 
 /// Clocked retained execution owner constructed directly from canonical `SceneSpec`.
@@ -78,11 +353,27 @@ impl CanonicalRetainedEnginePlayer {
         let has_family_animations = !scene_spec.family_animations.is_empty();
         let scene_spec_json = scene_spec.to_json()?;
         let player = if !has_family_animations {
-            let materialized = CanonicalRetainedAuthoringScene::from_scene_spec(scene_spec)?;
-            CanonicalRetainedExecutionPlayer::Ordinary(Box::new(RetainedAuthoringPlayer::new(
-                materialized,
-                session,
-            )?))
+            scene_spec.validate()?;
+            let (scene, animation_root) = import_ordinary_semantic_scene(
+                scene_spec.objects,
+                scene_spec.tracks,
+                scene_spec.camera_object,
+            )?;
+            let execution = match animation_root {
+                Some(root) => scene
+                    .execution_session_with_animation_root(&root)
+                    .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?,
+                None => scene.execution_session().map_err(|error| {
+                    CanonicalRetainedEnginePlayerError::SemanticPlayer(error.to_string())
+                })?,
+            };
+            let semantic_player =
+                SemanticExecutionPlayer::from_session(execution, loop_duration_seconds, session)
+                    .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
+            CanonicalRetainedExecutionPlayer::Ordinary(Box::new(OrdinarySemanticExecution {
+                _scene: scene,
+                player: semantic_player,
+            }))
         } else {
             let lowered = CanonicalRetainedFamilyAnimationScene::from_scene_spec(scene_spec)?;
             let (scene, tracks, camera_object, animations) = lowered.into_parts();
@@ -182,7 +473,7 @@ impl CanonicalRetainedEnginePlayer {
 pub enum CanonicalRetainedEnginePlayerError {
     SceneSpec(SceneSpecError),
     Authoring(MixedRetainedAuthoringError),
-    Player(RetainedAuthoringPlayerError),
+    SemanticPlayer(String),
     FamilyScene(CanonicalRetainedFamilyAnimationSceneError),
     FamilyPlayer(RetainedFamilyExecutionPlayerError),
     MissingInitialSnapshot,
@@ -195,7 +486,7 @@ impl std::fmt::Display for CanonicalRetainedEnginePlayerError {
         match self {
             Self::SceneSpec(error) => error.fmt(formatter),
             Self::Authoring(error) => error.fmt(formatter),
-            Self::Player(error) => error.fmt(formatter),
+            Self::SemanticPlayer(error) => formatter.write_str(error),
             Self::FamilyScene(error) => error.fmt(formatter),
             Self::FamilyPlayer(error) => error.fmt(formatter),
             Self::MissingInitialSnapshot => formatter
@@ -217,12 +508,6 @@ impl From<SceneSpecError> for CanonicalRetainedEnginePlayerError {
 impl From<MixedRetainedAuthoringError> for CanonicalRetainedEnginePlayerError {
     fn from(value: MixedRetainedAuthoringError) -> Self {
         Self::Authoring(value)
-    }
-}
-
-impl From<RetainedAuthoringPlayerError> for CanonicalRetainedEnginePlayerError {
-    fn from(value: RetainedAuthoringPlayerError) -> Self {
-        Self::Player(value)
     }
 }
 
@@ -361,7 +646,7 @@ mod tests {
         let circle = scene.circle(0.25).unwrap();
         let text = scene.text(noon::Text::new(source)).unwrap();
         let mut context = CanonicalAuthoringScene::with_store(Rc::clone(scene.store()));
-        let circle_id = ObjectId::new(1);
+        let circle_id = ObjectId::new((1_u64 << 40) + 7);
         let text_id = ObjectId::new(1_u64 << 52);
         context.bind_mobject(circle_id, &circle).unwrap();
         context.bind_mobject(text_id, &text).unwrap();
@@ -504,8 +789,17 @@ mod tests {
 
         assert!(initial.snapshot);
         assert_eq!(initial.objects.len(), 2);
-        assert_eq!(initial.objects[0].object, circle);
-        assert_eq!(initial.objects[1].object, text_id);
+        assert_ne!(initial.objects[0].object, circle);
+        assert_ne!(initial.objects[1].object, text_id);
+        assert_ne!(initial.objects[0].object, initial.objects[1].object);
+        assert!(matches!(
+            initial.objects[0].content,
+            crate::TransportObjectContent::Geometry { .. }
+        ));
+        assert!(matches!(
+            initial.objects[1].content,
+            crate::TransportObjectContent::Text { .. }
+        ));
         assert!(!engine.resource_bundle_bytes().is_empty());
         assert_eq!(engine.scene_spec_json(), scene_spec_json);
     }

@@ -144,8 +144,11 @@ fn circle_to_rectangle_transform_uses_renderer_only_path_pair() {
     else {
         panic!("Transform must retain semantic object snapshots");
     };
-    assert_eq!(compiled_from, &from);
-    assert_eq!(compiled_to, &to);
+    for (compiled, authored) in [(compiled_from, &from), (compiled_to, &to)] {
+        assert_eq!(compiled.geometry, authored.geometry);
+        assert_eq!(compiled.transform, authored.transform);
+        assert_eq!(compiled.style, authored.style);
+    }
     assert!(matches!(compiled_from.geometry, GeometryRef::Circle { .. }));
     assert!(matches!(
         compiled_to.geometry,

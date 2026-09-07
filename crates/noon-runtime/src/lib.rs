@@ -31,8 +31,8 @@ use noon_core::{
     PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
 };
 use noon_core::{
-    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
-    StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D, Vec2, VectorPath,
+    Color, GeometryRef, ObjectId, PathCommand, Property, ScenePatch, StrokeWidthMode, Style,
+    TrackDefinition, TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
 };
 use noon_core::{ObjectContentRef, TextResourceHandle};
 
@@ -2196,8 +2196,8 @@ fn release_render_transform(
 
 fn screen_space_path_pair_relative_to_current(
     prepared: &GeometryRef,
-    from: &ObjectSnapshot,
-    to: &ObjectSnapshot,
+    from: &TransformTrackEndpoint,
+    to: &TransformTrackEndpoint,
     current: Transform2D,
 ) -> Option<GeometryRef> {
     let GeometryRef::VectorPath(source) = prepared else {
@@ -2264,8 +2264,8 @@ fn point_relative_to_current(
 fn apply_transform_geometry(
     current: &mut GeometryRef,
     plan: &TransformGeometryPlan,
-    from: &ObjectSnapshot,
-    to: &ObjectSnapshot,
+    from: &TransformTrackEndpoint,
+    to: &TransformTrackEndpoint,
     progress: f32,
 ) -> bool {
     match plan {

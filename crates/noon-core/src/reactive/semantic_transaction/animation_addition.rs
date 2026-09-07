@@ -3,14 +3,16 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     AnimationOptions, Color, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticAnimationState,
-    SemanticFadeDirection, SemanticFadeEndpoint, SemanticObjectState,
-    SemanticTransformInterpolation,
+    SemanticFadeDirection, SemanticFadeEndpoint, SemanticObjectState, SemanticObjectTrackProperty,
+    SemanticObjectTrackValues, SemanticTransformInterpolation,
 };
 
+use super::family_edges::FamilyEdgePreflight;
 use super::{
     SemanticLocalNodeToken, SemanticMutationTransactionError, SemanticNodeId, SemanticStore,
     SemanticTransactionNodeRef, TransactionNodeCatalog,
 };
+use crate::reactive::semantic_animations::validate_object_property_track;
 
 /// An authored animation intent whose references may name nodes staged by the
 /// same semantic transaction.
@@ -20,6 +22,13 @@ use super::{
 /// preflight and semantic identity allocation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticTransactionAnimationIntent {
+    ObjectPropertyTrack {
+        target: SemanticTransactionNodeRef,
+        property: SemanticObjectTrackProperty,
+        values: SemanticObjectTrackValues<SemanticTransactionNodeRef>,
+        timing: crate::TrackTiming,
+        time_map: crate::CompositionTimeMap,
+    },
     TransformTo {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
@@ -83,11 +92,17 @@ pub enum SemanticTransactionAnimationIntent {
 impl SemanticTransactionAnimationIntent {
     pub fn node_references(&self) -> impl Iterator<Item = SemanticTransactionNodeRef> + '_ {
         let leaf = match self {
+            Self::ObjectPropertyTrack { target, values, .. } => match values {
+                SemanticObjectTrackValues::Object { from, to } => {
+                    Some([Some(*target), Some(*from), Some(*to)])
+                }
+                _ => Some([Some(*target), None, None]),
+            },
             Self::TransformTo {
                 target,
                 target_state,
                 ..
-            } => Some([Some(*target), Some(*target_state)]),
+            } => Some([Some(*target), Some(*target_state), None]),
             Self::Rotate { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
@@ -95,7 +110,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
-            | Self::Add { target } => Some([Some(*target), None]),
+            | Self::Add { target } => Some([Some(*target), None, None]),
             Self::TextGlyph {
                 target,
                 family_member,
@@ -103,13 +118,15 @@ impl SemanticTransactionAnimationIntent {
             } => Some([
                 Some(*target),
                 family_member.map(|member| member.family.into()),
+                None,
             ]),
-            Self::SetScalar { signal, .. } => Some([Some((*signal).into()), None]),
+            Self::SetScalar { signal, .. } => Some([Some((*signal).into()), None, None]),
             Self::Wait | Self::Composition { .. } => None,
         };
         let children = match self {
             Self::Composition { children, .. } => children.as_slice(),
-            Self::TransformTo { .. }
+            Self::ObjectPropertyTrack { .. }
+            | Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
@@ -155,6 +172,19 @@ impl SemanticTransactionAnimation {
     pub(super) fn from_published(state: SemanticAnimationState) -> Self {
         let options = state.options();
         let intent = match state.intent() {
+            SemanticAnimationIntent::ObjectPropertyTrack {
+                target,
+                property,
+                values,
+                timing,
+                time_map,
+            } => SemanticTransactionAnimationIntent::ObjectPropertyTrack {
+                target: (*target).into(),
+                property: *property,
+                values: map_object_track_values(values, |node| (*node).into()),
+                timing: *timing,
+                time_map: time_map.clone(),
+            },
             SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
@@ -262,6 +292,19 @@ impl SemanticTransactionAnimation {
         committed: &std::collections::HashMap<SemanticLocalNodeToken, SemanticNodeId>,
     ) -> SemanticAnimationState {
         let intent = match &self.intent {
+            SemanticTransactionAnimationIntent::ObjectPropertyTrack {
+                target,
+                property,
+                values,
+                timing,
+                time_map,
+            } => SemanticAnimationIntent::ObjectPropertyTrack {
+                target: resolve_node_ref(*target, committed),
+                property: *property,
+                values: map_object_track_values(values, |node| resolve_node_ref(*node, committed)),
+                timing: *timing,
+                time_map: time_map.clone(),
+            },
             SemanticTransactionAnimationIntent::TransformTo {
                 target,
                 target_state,
@@ -368,6 +411,34 @@ impl SemanticTransactionAnimation {
     }
 }
 
+fn map_object_track_values<R, T>(
+    values: &SemanticObjectTrackValues<R>,
+    mut map: impl FnMut(&R) -> T,
+) -> SemanticObjectTrackValues<T> {
+    match values {
+        SemanticObjectTrackValues::Bool { from, to } => SemanticObjectTrackValues::Bool {
+            from: *from,
+            to: *to,
+        },
+        SemanticObjectTrackValues::Scalar { from, to } => SemanticObjectTrackValues::Scalar {
+            from: *from,
+            to: *to,
+        },
+        SemanticObjectTrackValues::Vec3 { from, to } => SemanticObjectTrackValues::Vec3 {
+            from: *from,
+            to: *to,
+        },
+        SemanticObjectTrackValues::Color { from, to } => SemanticObjectTrackValues::Color {
+            from: *from,
+            to: *to,
+        },
+        SemanticObjectTrackValues::Object { from, to } => SemanticObjectTrackValues::Object {
+            from: map(from),
+            to: map(to),
+        },
+    }
+}
+
 fn resolve_node_ref(
     node: SemanticTransactionNodeRef,
     committed: &std::collections::HashMap<SemanticLocalNodeToken, SemanticNodeId>,
@@ -378,6 +449,7 @@ fn resolve_node_ref(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn preflight_transaction_animation(
     catalog: &TransactionNodeCatalog<'_>,
     token: SemanticLocalNodeToken,
@@ -385,6 +457,7 @@ pub(super) fn preflight_transaction_animation(
     available_pending_animations: &mut HashSet<SemanticLocalNodeToken>,
     staged_objects: &mut HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
     staged_object_order: &mut Vec<SemanticTransactionNodeRef>,
+    family_edges: &FamilyEdgePreflight,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
     if matches!(
@@ -396,6 +469,37 @@ pub(super) fn preflight_transaction_animation(
         preflight_animation_options(animation.options(), index)?;
     }
     match animation.intent() {
+        SemanticTransactionAnimationIntent::ObjectPropertyTrack {
+            target,
+            property,
+            values,
+            timing,
+            time_map,
+        } => {
+            if animation.options() != AnimationOptions::new()
+                || validate_object_property_track(*property, values, *timing, time_map).is_err()
+            {
+                return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
+            }
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if let SemanticObjectTrackValues::Object { from, to } = values {
+                for endpoint in [*from, *to] {
+                    catalog.ensure_animation_target(endpoint, index)?;
+                    catalog.staged_object_state(
+                        staged_objects,
+                        staged_object_order,
+                        endpoint,
+                        index,
+                    )?;
+                    if !family_edges.is_detached(catalog, endpoint) {
+                        return Err(
+                            SemanticMutationTransactionError::InvalidObjectPropertyTrack { index },
+                        );
+                    }
+                }
+            }
+        }
         SemanticTransactionAnimationIntent::TransformTo {
             target,
             target_state,
@@ -609,6 +713,21 @@ pub(super) fn commit_add_animation(
 ) -> SemanticNodeId {
     let options = state.options();
     match state.intent() {
+        SemanticAnimationIntent::ObjectPropertyTrack {
+            target,
+            property,
+            values,
+            timing,
+            time_map,
+        } => store
+            .insert_semantic_object_property_track(
+                *target,
+                *property,
+                values.clone(),
+                *timing,
+                time_map.clone(),
+            )
+            .expect("preflighted object property track insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::TransformTo {
             target,
             target_state,

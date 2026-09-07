@@ -2320,6 +2320,18 @@ impl SemanticExecutionPlayer {
         self.resource_bundle.clone()
     }
 
+    pub(crate) fn resource_bundle_slice(&self) -> &[u8] {
+        &self.resource_bundle
+    }
+
+    /// Evaluate one absolute authored time for an outer codec-boundary clock.
+    pub(crate) fn evaluate_delta_at(&mut self, time: f64) -> Result<Option<String>, String> {
+        self.session
+            .evaluate(time)
+            .map_err(|error| error.to_string())?;
+        self.encoded_delta(false)
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = tickDeltaJson))]
     pub fn tick_delta_json(&mut self, timestamp_ms: f64) -> Result<Option<String>, String> {
         let mut clock = self.clock.clone();

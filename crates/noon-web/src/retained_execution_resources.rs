@@ -490,14 +490,15 @@ mod tests {
     fn family_snapshot(
         retained: RetainedExecutionDeltaEnvelope,
     ) -> RetainedFamilyExecutionDeltaEnvelope {
+        let first_object = retained.objects[0].object;
         RetainedFamilyExecutionDeltaEnvelope {
             retained,
             family_states: vec![RetainedFamilyExecutionObjectState::new(
-                ObjectId::new(8),
+                first_object,
                 Some(family_state(0.5)),
             )
             .unwrap()],
-            family_plans: vec![RetainedFamilyPlanTransport::new(vec![ObjectId::new(8)]).unwrap()],
+            family_plans: vec![RetainedFamilyPlanTransport::new(vec![first_object]).unwrap()],
             resource_additions: None,
         }
     }
@@ -510,6 +511,11 @@ mod tests {
                 .unwrap();
         let initial = engine.initial_delta_json().unwrap();
         let wire: RetainedExecutionDeltaEnvelope = serde_json::from_str(&initial).unwrap();
+        let wire_ids = wire
+            .objects
+            .iter()
+            .map(|object| object.object)
+            .collect::<Vec<_>>();
         let wire_text = match wire.objects[0].content {
             TransportObjectContent::Text { text } => text,
             TransportObjectContent::Geometry { .. } => panic!("expected text"),
@@ -519,8 +525,8 @@ mod tests {
         assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
         assert!(changes.is_all());
         let frame = mirror.frame().unwrap();
-        assert_eq!(frame.objects[0].id, ObjectId::new(8));
-        assert_eq!(frame.objects[1].id, ObjectId::new(21));
+        assert_eq!(frame.objects[0].id, wire_ids[0]);
+        assert_eq!(frame.objects[1].id, wire_ids[1]);
 
         let local = frame.objects[0].content.text().unwrap();
         assert_eq!(
@@ -679,7 +685,7 @@ mod tests {
                 painter_order: None,
             },
             family_states: vec![RetainedFamilyExecutionObjectState::planned(
-                ObjectId::new(8),
+                initial.objects[0].object,
                 Some(family_state(0.25)),
                 Some(0),
             )
@@ -730,7 +736,7 @@ mod tests {
         let frame = mirror.frame().unwrap();
         assert_eq!(frame.objects[0].transform.translation, Vec2::new(2.0, -1.0));
         assert_eq!(frame.objects[0].content.text().unwrap(), local_before);
-        assert_eq!(frame.objects[1].id, ObjectId::new(21));
+        assert_eq!(frame.objects[1].id, initial.objects[1].object);
     }
 
     #[test]

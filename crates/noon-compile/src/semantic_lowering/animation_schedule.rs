@@ -240,6 +240,7 @@ pub struct PreparedSemanticScheduledScalarLeaf {
 pub enum PreparedSemanticAnimationLookupError {
     Transaction(SemanticTransactionReadError),
     Existing(SemanticAnimationError),
+    InitialObjectPropertyTrack,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -869,6 +870,9 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
     ) -> Result<AnimationDeclaration<Self::Reference>, Self::Error> {
         let state = self.store.semantic_animation_state(animation)?;
         let intent = match state.intent() {
+            SemanticAnimationIntent::ObjectPropertyTrack { .. } => {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
             SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
@@ -1086,6 +1090,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .semantic_animation_state(node)
                     .map_err(PreparedSemanticAnimationLookupError::Existing)?;
                 let intent = match state.intent() {
+                    SemanticAnimationIntent::ObjectPropertyTrack { .. } => {
+                        return Err(
+                            PreparedSemanticAnimationLookupError::InitialObjectPropertyTrack,
+                        );
+                    }
                     SemanticAnimationIntent::TransformTo {
                         target,
                         target_state,
@@ -1193,6 +1202,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .pending_animation(token)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
                 let intent = match state.intent() {
+                    SemanticTransactionAnimationIntent::ObjectPropertyTrack { .. } => {
+                        return Err(
+                            PreparedSemanticAnimationLookupError::InitialObjectPropertyTrack,
+                        );
+                    }
                     SemanticTransactionAnimationIntent::TransformTo {
                         target,
                         target_state,

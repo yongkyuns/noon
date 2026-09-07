@@ -334,6 +334,13 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             }
         }
         SemanticNodeKind::Animation(state) => match state.intent() {
+            SemanticAnimationIntent::ObjectPropertyTrack { target, values, .. } => {
+                references.push((*target, SemanticReferenceKind::AnimationTarget));
+                if let crate::SemanticObjectTrackValues::Object { from, to } = values {
+                    references.push((*from, SemanticReferenceKind::AnimationTargetState));
+                    references.push((*to, SemanticReferenceKind::AnimationTargetState));
+                }
+            }
             SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,

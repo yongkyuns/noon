@@ -9,7 +9,8 @@ use super::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
     SemanticFadeDirection, SemanticFadeEndpoint, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectContent, SemanticObjectProperty, SemanticObjectState, SemanticScalarSignalHold,
+    SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
+    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
     SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
     SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
     SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
@@ -647,6 +648,32 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::AddAnimation {
             token,
             animation: SemanticTransactionAnimation::from_published(state),
+        });
+        token
+    }
+
+    /// Stage one exact object-channel animation under a new semantic animation identity.
+    pub fn create_object_property_track(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        property: SemanticObjectTrackProperty,
+        values: SemanticObjectTrackValues<SemanticTransactionNodeRef>,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::ObjectPropertyTrack {
+                    target: target.into(),
+                    property,
+                    values,
+                    timing,
+                    time_map,
+                },
+                AnimationOptions::new(),
+            ),
         });
         token
     }
@@ -1689,6 +1716,7 @@ impl SemanticMutationTransaction {
                         &mut available_pending_animations,
                         &mut staged_objects,
                         &mut staged_object_order,
+                        &family_edges,
                         index,
                     )?;
                     changed.push(!removed_pending.contains(token));
@@ -2212,6 +2240,9 @@ pub enum SemanticMutationTransactionError {
     InvalidAnimationPathArc {
         index: usize,
     },
+    InvalidObjectPropertyTrack {
+        index: usize,
+    },
     NonFinitePropertyValue {
         index: usize,
         object: SemanticNodeId,
@@ -2604,6 +2635,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidAnimationPathArc { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add animation with non-finite path_arc"
+            ),
+            Self::InvalidObjectPropertyTrack { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} has an invalid exact object property track"
             ),
             Self::NonFinitePropertyValue {
                 index,

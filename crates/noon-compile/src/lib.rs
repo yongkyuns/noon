@@ -1767,8 +1767,8 @@ mod tests {
     fn safe_filled_path_transform_compiles_to_fixed_path_pair() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::path(filled_loop()));
-        let mut from = noon_core::ObjectSnapshot::new(GeometryRef::path(filled_loop()));
-        let mut to = noon_core::ObjectSnapshot::new(GeometryRef::path(filled_star()));
+        let mut from = noon_core::TransformTrackEndpoint::new(GeometryRef::path(filled_loop()));
+        let mut to = noon_core::TransformTrackEndpoint::new(GeometryRef::path(filled_star()));
         from.style.fill = Some(noon_core::Color::WHITE);
         to.style.fill = Some(noon_core::Color::BLACK);
         scene
@@ -1790,8 +1790,8 @@ mod tests {
     fn filled_path_transform_rejects_fill_presence_change() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::path(filled_loop()));
-        let from = noon_core::ObjectSnapshot::new(GeometryRef::path(filled_loop()));
-        let mut to = noon_core::ObjectSnapshot::new(GeometryRef::path(filled_star()));
+        let from = noon_core::TransformTrackEndpoint::new(GeometryRef::path(filled_loop()));
+        let mut to = noon_core::TransformTrackEndpoint::new(GeometryRef::path(filled_star()));
         to.style.fill = None;
         let mut from = from;
         from.style.fill = Some(noon_core::Color::WHITE);
@@ -2441,8 +2441,8 @@ mod tests {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::circle(1.0));
         let compiled = CompiledScene::compile(&scene).expect("valid scene");
-        let from = noon_core::ObjectSnapshot::new(GeometryRef::circle(1.0));
-        let to = noon_core::ObjectSnapshot::new(GeometryRef::line(
+        let from = noon_core::TransformTrackEndpoint::new(GeometryRef::circle(1.0));
+        let to = noon_core::TransformTrackEndpoint::new(GeometryRef::line(
             Vec2::new(-1.0, 0.0),
             Vec2::new(1.0, 0.0),
         ));
