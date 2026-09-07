@@ -232,6 +232,14 @@
       "reason": "Python coerces Manim outline options and wrapper identity. Rust derives the activation-effective outline and final style, owns both phases and family lag scheduling, and publishes detached families atomically."
     },
     {
+      "id": "animation.text-write",
+      "surface": "Single plain Text Write and Unwrite, including mixed ordinary compositions",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_text_write"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_text_write_animation"}],
+      "reason": "Python passes a typed Text handle and explicit options. Rust derives glyph membership and defaults, validates composition conflicts and admission atomically, and publishes immutable glyph plans and sparse runtime state to the common renderer."
+    },
+    {
       "id": "animation.subset-display",
       "surface": "ShowIncreasingSubsets and ShowSubmobjectsOneByOne for ordinary direct-member families",
       "classification": "shared-rust",

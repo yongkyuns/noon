@@ -1362,6 +1362,37 @@ try {
     await stopSampledSource(page);
   }
 
+  const textWriteSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_text_write.py"), "utf8",
+  );
+  await startSampledSource(page, textWriteSource, "scene-shared-text-write", 960, 540);
+  try {
+    const canvas = page.locator("#scene-shared-text-write");
+    const samples = [];
+    for (const time of [0, 0.5, 1, 2, 2.5, 3]) {
+      await page.evaluate(
+        (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
+        time,
+      );
+      const stats = visiblePixelStats(await canvas.screenshot(),
+        (red, green, blue, _x, y) => y < 270 && red > 100 && green > 100 && blue > 100);
+      samples.push(stats.count);
+    }
+    assert.equal(samples[0], 0, "Text Write starts with hidden glyphs");
+    assert.ok(samples[1] > 0 && samples[2] > 0 && samples[3] > samples[2]
+        && samples[4] > 0 && samples[4] < samples[3] && samples[5] === 0,
+      `Text Write must reveal glyph outline/fill phases: ${JSON.stringify(samples)}`);
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.25), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3.25);
+    assert.equal(result.metrics.objectCount, 1);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const subsetDisplaySource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_subset_display.py"), "utf8",
   );
