@@ -1924,7 +1924,38 @@ def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) 
             raise ValueError("Group cannot contain itself")
 
 
+def _publish_live_family(
+    self: _compat.Group, mobjects: tuple[object, ...], context: object
+) -> None:
+    """Publish through Rust, then mirror its authoritative direct-member order."""
+    _validate_group_members(self, mobjects)
+    batch = context.beginMembershipBatch("add")
+    wrappers = {}
+    for member in mobjects:
+        kind, handle = _family_member_handle(member)
+        if handle is None:
+            raise RuntimeError("family member has no shared semantic identity")
+        # This is an identity-to-wrapper lookup, not Python membership planning.
+        key = (int(handle.semanticSlot), int(handle.semanticGeneration))
+        wrappers.setdefault(key, member)
+        if kind == "family":
+            batch.appendFamily(handle)
+        else:
+            batch.appendMobject("", handle)
+    family = context.createLiveFamily(batch)
+    mirrored = [
+        wrappers[(int(family.memberSlot(index)), int(family.memberGeneration(index)))]
+        for index in range(int(family.memberCount))
+    ]
+    self._semantic_family_handle = family
+    self.submobjects = mirrored
+
+
 def _group_init(self: _compat.Group, *mobjects: object) -> None:
+    context = _live_constructor_context("family")
+    if context is not None:
+        _publish_live_family(self, mobjects, context)
+        return
     self._semantic_family_handle = _create_family_handle()
     _ORIGINAL_GROUP_INIT(self, *mobjects)
 
@@ -2053,9 +2084,13 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
     # Constructor-based delegates may already have created a family handle. The
     # browser geometry delegate uses object.__new__ and therefore needs one here.
     if getattr(clone, "_semantic_family_handle", None) is None:
-        clone._semantic_family_handle = _create_family_handle()
-        for member in clone.submobjects:
-            _family_add_handle(clone._semantic_family_handle, member)
+        context = _live_constructor_context("family")
+        if context is not None:
+            _publish_live_family(clone, tuple(clone.submobjects), context)
+        else:
+            clone._semantic_family_handle = _create_family_handle()
+            for member in clone.submobjects:
+                _family_add_handle(clone._semantic_family_handle, member)
     return clone
 
 

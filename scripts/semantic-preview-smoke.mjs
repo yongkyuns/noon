@@ -82,6 +82,37 @@ async function captureSquareToCircle(label) {
   }
 }
 
+// This unmodified canonical fixture used to fail when a VGroup was created
+// after a completed segment. Select its class without rewriting construct().
+async function captureLateFamilyConstruction() {
+  const canonical = await readFile(path.join(root, "parity/manim-v0.21/quickstart.py"), "utf8");
+  const source = canonical.replace("from manim import *", "from noon import *") +
+    "\nfor _name, _cls in tuple(globals().items()):\n" +
+    "    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not AddWaitLaggedStartMap:\n" +
+    "        _cls.__module__ = 'preview_fixture_library'\ndel _cls\n";
+  const page = await pageReady();
+  try {
+    const loaded = await page.evaluate((code) => window.noonHostRaster.load(code, 5), source);
+    assert.equal(loaded.kind, "semantic_execution");
+    const frameTimes = Array.from({ length: 97 }, (_, frame) => frame / 30);
+    let final;
+    for (const frameIndex of [0, 30, 63, 96]) {
+      final = await page.evaluate(({ frameIndex, frameTimes }) =>
+        window.noonHostRaster.renderThrough(frameIndex, frameTimes), { frameIndex, frameTimes });
+      verifySample(final, frameIndex, activeBackend === "webgpu" ? "WebGPU" : "WebGL2");
+      const bytes = await page.locator("#scene").screenshot();
+      await writeFile(path.join(artifacts, `${activeBackend}-late-family-${frameIndex}.png`), bytes);
+      observations.push({ backend: activeBackend, fixture: "AddWaitLaggedStartMap", frameIndex,
+        sample: final, sourceSha256: hash(source), imageSha256: hash(bytes) });
+    }
+    assert.equal(final.objectCount, 4, "both original circles and late-created squares must remain");
+    assert.ok(Math.abs(final.authoredDuration - 3.2) < 1e-9, "source must finish the second composition");
+    await page.evaluate(() => window.noonHostRaster.close());
+  } finally {
+    await page.close();
+  }
+}
+
 async function cancelRunningSource() {
   const page = await pageReady();
   try {
@@ -139,6 +170,7 @@ try {
       const after = await captureSquareToCircle("after-cancel");
       // Equality is required only within one backend/environment, never across GPUs.
       verifyFreshRun(before, after);
+      await captureLateFamilyConstruction();
       console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation and identical fresh-run frames passed`);
     } finally {
       await browser.close();
