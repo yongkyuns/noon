@@ -930,34 +930,23 @@ mod tests {
 
     #[test]
     fn stroke_width_is_a_non_negative_scalar_timeline_property() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let track = scene
-            .add_track(
-                object,
-                Property::StrokeWidth,
-                TrackValues::Scalar { from: 1.0, to: 3.0 },
-                timing(),
-            )
-            .expect("valid stroke-width track");
-        assert_eq!(track, TrackId::new(0));
-        assert_eq!(scene.tracks()[0].property, Property::StrokeWidth);
-        assert_eq!(
-            scene.tracks()[0].values,
-            TrackValues::Scalar { from: 1.0, to: 3.0 }
-        );
+        let valid = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(4),
+            property: Property::StrokeWidth,
+            values: TrackValues::Scalar { from: 1.0, to: 3.0 },
+            timing: timing(),
+            time_map: CompositionTimeMap::identity(),
+        };
+        validate_track_definition(&valid).expect("valid stroke-width track");
 
-        let error = scene
-            .add_track(
-                object,
-                Property::StrokeWidth,
-                TrackValues::Scalar {
-                    from: 3.0,
-                    to: -1.0,
-                },
-                timing(),
-            )
-            .expect_err("negative stroke width must fail before insertion");
+        let mut invalid = valid.clone();
+        invalid.values = TrackValues::Scalar {
+            from: 3.0,
+            to: -1.0,
+        };
+        let error = validate_track_definition(&invalid)
+            .expect_err("negative stroke width must fail typed-track validation");
         assert_eq!(
             error,
             TimelineError::InvalidStrokeWidthValues {
@@ -965,18 +954,7 @@ mod tests {
                 to: -1.0,
             }
         );
-        assert_eq!(scene.tracks().len(), 1);
-        assert_eq!(
-            scene
-                .add_track(
-                    object,
-                    Property::StrokeWidth,
-                    TrackValues::Scalar { from: 3.0, to: 4.0 },
-                    timing(),
-                )
-                .expect("rejection must not consume a track id"),
-            TrackId::new(1)
-        );
+        validate_track_definition(&valid).expect("rejection does not mutate the typed track");
     }
 
     #[test]

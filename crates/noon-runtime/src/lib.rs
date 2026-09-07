@@ -2961,21 +2961,38 @@ mod tests {
 
     #[test]
     fn stroke_width_track_updates_only_its_style_row_and_spatial_bounds() {
-        let mut definition = SceneDefinition::new();
-        let mut target = noon_core::ObjectSnapshot::new(GeometryRef::rectangle(2.0, 2.0));
-        target.style.stroke = Some(Color::WHITE);
-        target.style.stroke_width = 0.0;
-        let target = definition.add_snapshot(target);
-        let untouched = definition.add(GeometryRef::circle(1.0));
-        definition
-            .add_track(
-                target,
-                Property::StrokeWidth,
-                TrackValues::Scalar { from: 0.0, to: 2.0 },
-                TrackTiming::new(0.0, 2.0, Easing::Linear),
-            )
-            .expect("valid stroke-width track");
-        let compiled = CompiledScene::compile(&definition).expect("scene must compile");
+        let target = ObjectId::new(4);
+        let untouched = ObjectId::new(9);
+        let style = Style {
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.0,
+            ..Style::default()
+        };
+        let compiled = CompiledScene::compile_objects(
+            vec![
+                CompiledObject::new(
+                    target,
+                    GeometryRef::rectangle(2.0, 2.0),
+                    Transform2D::IDENTITY,
+                    style,
+                ),
+                CompiledObject::new(
+                    untouched,
+                    GeometryRef::circle(1.0),
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                ),
+            ],
+            &[TrackDefinition {
+                id: TrackId::new(0),
+                object: target,
+                property: Property::StrokeWidth,
+                values: TrackValues::Scalar { from: 0.0, to: 2.0 },
+                timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        )
+        .expect("scene must compile");
         let mut instance = SceneInstance::new(compiled);
         instance.take_frame_changes();
         instance.take_spatial_changes();

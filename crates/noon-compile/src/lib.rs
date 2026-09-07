@@ -1817,17 +1817,24 @@ mod tests {
 
     #[test]
     fn stroke_width_tracks_mark_only_stroke_width_dynamic() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        scene
-            .add_track(
+        let object = ObjectId::new(7);
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
                 object,
-                Property::StrokeWidth,
-                TrackValues::Scalar { from: 1.0, to: 2.0 },
-                TrackTiming::new(0.0, 1.0, Easing::Linear),
-            )
-            .expect("valid stroke-width track");
-        let compiled = CompiledScene::compile(&scene).expect("scene must compile");
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )],
+            &[TrackDefinition {
+                id: TrackId::new(0),
+                object,
+                property: Property::StrokeWidth,
+                values: TrackValues::Scalar { from: 1.0, to: 2.0 },
+                timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        )
+        .expect("scene must compile");
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
