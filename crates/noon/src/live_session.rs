@@ -501,39 +501,41 @@ impl<'a> LiveSession<'a> {
             ));
         }
 
-        // A target created after bootstrap must start from the coherent effective row,
+        // A target for a reachable source starts from the coherent effective row,
         // rather than the authored base that an active driver or callback may have
-        // superseded. Immutable content remains authored. This subset intentionally
-        // rejects render-content and appearance overrides because SemanticObjectState
-        // has no exact authored representation for them.
+        // superseded. A detached source has no runtime row, so its authoritative
+        // authored state is already the exact capture. Immutable content remains
+        // authored. This subset intentionally rejects render-content and appearance
+        // overrides because SemanticObjectState has no exact representation for them.
         let mut state = source.state().map_err(LiveSessionError::Mobject)?;
         if !state.signal_bindings().is_empty() {
             return Err(LiveSessionError::Mobject(
                 "target editor cannot capture a reactive binding into a detached target".into(),
             ));
         }
-        let store = self.store.borrow();
-        let observed = self
-            .session
-            .effective_semantic_object(&store, source.node_id())?;
-        if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::Mobject(
-                "target editor requires effective authored content without reveal or morph overrides"
-                    .into(),
-            ));
+        if self.session.semantic_object_is_reachable(source.node_id()) {
+            let store = self.store.borrow();
+            let observed = self
+                .session
+                .effective_semantic_object(&store, source.node_id())?;
+            if !observed.authored_content_layout_applicable() {
+                return Err(LiveSessionError::Mobject(
+                    "target editor requires effective authored content without reveal or morph overrides"
+                        .into(),
+                ));
+            }
+            if observed.object.appearance != 1.0 {
+                return Err(LiveSessionError::Mobject(
+                    "target editor cannot represent a non-unit effective appearance".into(),
+                ));
+            }
+            state.transform.translation.x = f64::from(observed.object.transform.translation.x);
+            state.transform.translation.y = f64::from(observed.object.transform.translation.y);
+            state.transform.scale.x = f64::from(observed.object.transform.scale.x);
+            state.transform.scale.y = f64::from(observed.object.transform.scale.y);
+            state.transform.rotation_z = f64::from(observed.object.transform.rotation);
+            state.style = target_style_from_effective(&state.style, observed.object.style)?;
         }
-        if observed.object.appearance != 1.0 {
-            return Err(LiveSessionError::Mobject(
-                "target editor cannot represent a non-unit effective appearance".into(),
-            ));
-        }
-        state.transform.translation.x = f64::from(observed.object.transform.translation.x);
-        state.transform.translation.y = f64::from(observed.object.transform.translation.y);
-        state.transform.scale.x = f64::from(observed.object.transform.scale.x);
-        state.transform.scale.y = f64::from(observed.object.transform.scale.y);
-        state.transform.rotation_z = f64::from(observed.object.transform.rotation);
-        state.style = target_style_from_effective(&state.style, observed.object.style)?;
-        drop(store);
 
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(noon_core::SemanticNodeCreation::object(state));
@@ -2986,6 +2988,42 @@ mod tests {
     }
 
     #[test]
+    fn detached_target_editor_after_wait_uses_authored_state_and_enters_with_transform() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let mut square = scene.square(1.0).unwrap();
+        square.set_translation(-2.0, 0.5).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+
+        let wait = live.wait_segment(1.0).unwrap();
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        let target = live.target_editor(&square).unwrap();
+        live.set_translation(&target, 3.0, -1.0).unwrap();
+        let segment = live
+            .declare_and_activate_transform_to(
+                &square,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(segment.start_time(), 1.0);
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.effective(&square).unwrap().transform.translation,
+            noon_core::Vec2::new(3.0, -1.0)
+        );
+    }
+
+    #[test]
     fn live_membership_detaches_readds_and_appends_without_changing_unrelated_slots() {
         let mut scene = Scene::new();
         let anchor = scene.circle(1.0).unwrap();
@@ -3267,19 +3305,44 @@ mod recursive_composition_tests {
     #[test]
     fn composed_fade_out_completion_detaches_and_reenters_the_same_handle() {
         let mut scene = Scene::new();
-        let anchor = scene.circle(0.5).unwrap();
         let fading = scene.circle(1.0).unwrap();
-        scene.add(&anchor).unwrap();
+        let companion = scene.square(1.0).unwrap();
         scene.add(&fading).unwrap();
+        scene.add(&companion).unwrap();
+        for radius in [0.5, 0.6, 0.7] {
+            let retained = scene.circle(radius).unwrap();
+            scene.add(&retained).unwrap();
+        }
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let options = linear(0.2);
+        let fading_id = session.execution_object_id(fading.node_id()).unwrap();
+        let companion_id = session.execution_object_id(companion.node_id()).unwrap();
+        let fading_row = session
+            .frame()
+            .objects
+            .iter()
+            .position(|object| object.id == fading_id)
+            .unwrap();
+        let companion_row = session
+            .frame()
+            .objects
+            .iter()
+            .position(|object| object.id == companion_id)
+            .unwrap();
+        let row_count = session.frame().objects.len();
 
         let fade_out = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
             children: vec![
                 AnimationCompositionRequest::Fade {
                     target: &fading,
+                    direction: SemanticFadeDirection::Out,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+                AnimationCompositionRequest::Fade {
+                    target: &companion,
                     direction: SemanticFadeDirection::Out,
                     endpoint: FadeEndpoint::default(),
                     options,
@@ -3297,6 +3360,7 @@ mod recursive_composition_tests {
         live.complete_segment(segment).unwrap();
 
         assert!(!live.contains(&fading).unwrap());
+        assert!(!live.contains(&companion).unwrap());
         assert!(fading
             .store()
             .borrow()
@@ -3304,23 +3368,55 @@ mod recursive_composition_tests {
             .unwrap()
             .parents()
             .is_empty());
-        assert!(live.session.execution_object_id(fading.node_id()).is_none());
+        assert_eq!(
+            live.session.execution_object_id(fading.node_id()),
+            Some(fading_id)
+        );
+        assert_eq!(
+            live.session.execution_object_id(companion.node_id()),
+            Some(companion_id)
+        );
 
         let fade_in = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
-            children: vec![AnimationCompositionRequest::Fade {
-                target: &fading,
-                direction: SemanticFadeDirection::In,
-                endpoint: FadeEndpoint::default(),
-                options,
-            }],
+            children: vec![
+                AnimationCompositionRequest::Fade {
+                    target: &fading,
+                    direction: SemanticFadeDirection::In,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+                AnimationCompositionRequest::Fade {
+                    target: &companion,
+                    direction: SemanticFadeDirection::In,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+            ],
             options: AnimationOptions::new().rate_func(RateFunction::Linear),
         };
         let reentry = live
             .declare_and_activate_composition(&fade_in, AnimationOptions::new())
             .unwrap();
         assert!(live.contains(&fading).unwrap());
-        assert!(live.session.execution_object_id(fading.node_id()).is_some());
+        assert!(live.contains(&companion).unwrap());
+        assert_eq!(live.session.frame().objects.len(), row_count);
+        assert_eq!(
+            live.session
+                .frame()
+                .objects
+                .iter()
+                .position(|object| object.id == fading_id),
+            Some(fading_row)
+        );
+        assert_eq!(
+            live.session
+                .frame()
+                .objects
+                .iter()
+                .position(|object| object.id == companion_id),
+            Some(companion_row)
+        );
         live.advance_segment_to(reentry, reentry.end_time())
             .unwrap();
         live.complete_segment(reentry).unwrap();

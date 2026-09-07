@@ -143,6 +143,7 @@ fn materialize_semantic_projection(
         tracks: BTreeMap::new(),
         track_count: 0,
         object_indices,
+        retired_object_indices: BTreeMap::new(),
         track_locators: BTreeMap::new(),
         resources,
     })

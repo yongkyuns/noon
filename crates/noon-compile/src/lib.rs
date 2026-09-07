@@ -374,6 +374,7 @@ pub struct CompiledPatchStats {
     /// Global/unrelated track payload movement. This must remain zero for local edits.
     pub unrelated_track_slots_shifted: usize,
     pub object_slots_appended: usize,
+    pub object_slots_reactivated: usize,
     pub object_slots_retired: usize,
     pub object_indices_rewritten: usize,
     pub track_object_indices_rewritten: usize,
@@ -397,8 +398,9 @@ pub struct CompiledTransactionPreflightStats {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
-    // Stable append-only slot storage. Removal tombstones a slot instead of shifting it.
-    // A future compaction generation may reclaim retired capacity off the live-edit path.
+    // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
+    // of the same execution identity revives that row in place. A future compaction
+    // generation may reclaim other retired capacity off the live-edit path.
     objects: Vec<CompiledObject>,
     live_object_count: usize,
     /// Tracks are segmented by stable execution channel. Mutating one channel never
@@ -407,6 +409,7 @@ pub struct CompiledScene {
     tracks: BTreeMap<CompiledChannelKey, Vec<CompiledTrack>>,
     track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
+    retired_object_indices: BTreeMap<ObjectId, u32>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
     resources: CompiledResources,
 }
@@ -789,6 +792,7 @@ impl CompiledScene {
             tracks: tracks_by_channel,
             track_count,
             object_indices,
+            retired_object_indices: BTreeMap::new(),
             track_locators,
             resources: CompiledResources::default(),
         })
@@ -1016,8 +1020,6 @@ impl CompiledScene {
                 if self.object_indices.contains_key(&object.id) {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
-                let index = u32::try_from(self.objects.len())
-                    .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
                 validate_compiled_object(object)?;
                 validate_execution_content_resource(
                     &self.resources,
@@ -1029,6 +1031,16 @@ impl CompiledScene {
                 let mut object = object.clone();
                 object.dynamic = DynamicProperties::default();
                 object.live = true;
+                if let Some(index) = self.retired_object_indices.remove(&object.id) {
+                    self.objects[index as usize] = object;
+                    self.object_indices
+                        .insert(self.objects[index as usize].id, index);
+                    self.live_object_count += 1;
+                    stats.object_slots_reactivated = 1;
+                    return Ok(stats);
+                }
+                let index = u32::try_from(self.objects.len())
+                    .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
                 self.live_object_count += 1;
@@ -1054,6 +1066,7 @@ impl CompiledScene {
                 object.live = false;
                 object.dynamic = DynamicProperties::default();
                 self.object_indices.remove(id);
+                self.retired_object_indices.insert(*id, index);
                 self.live_object_count -= 1;
                 stats.object_slots_retired = 1;
                 // No unrelated object or track payload changes storage location.
@@ -2485,5 +2498,35 @@ mod tests {
         assert!(inserted.live);
         assert_eq!(inserted.dynamic, DynamicProperties::default());
         assert_eq!(compiled.live_object_count(), 1);
+    }
+
+    #[test]
+    fn typed_create_reactivates_the_same_retired_row() {
+        let returning = ObjectId::new(45);
+        let later = ObjectId::new(46);
+        let object = |id| {
+            CompiledObject::new(
+                id,
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        };
+        let mut compiled =
+            CompiledScene::compile_objects(vec![object(returning), object(later)], &[]).unwrap();
+
+        compiled
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(returning))
+            .unwrap();
+        let stats = compiled
+            .apply_execution_patch_with_stats(&ExecutionPatch::CreateObject(object(returning)))
+            .unwrap();
+
+        assert_eq!(compiled.object_index(returning), Some(0));
+        assert_eq!(compiled.object_index(later), Some(1));
+        assert_eq!(compiled.objects().len(), 2);
+        assert_eq!(compiled.live_object_count(), 2);
+        assert_eq!(stats.object_slots_reactivated, 1);
+        assert_eq!(stats.object_slots_appended, 0);
     }
 }

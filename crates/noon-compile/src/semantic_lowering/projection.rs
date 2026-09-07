@@ -37,21 +37,19 @@ impl SemanticExecutionIndex {
         self.object_ids.is_empty()
     }
 
-    /// Return the existing execution compatibility key for one indexed semantic
-    /// object. Detached or never-lowered nodes are absent until reachability or scene
-    /// lowering observes them.
+    /// Return the stable execution compatibility key for one previously indexed
+    /// semantic object. Never-lowered nodes are absent; detachment retains the key so
+    /// a later admission can reactivate the same compiled/runtime row. Current scene
+    /// membership remains authoritative in [`SemanticExecutionReachability`].
     pub fn execution_object_id(&self, semantic_id: SemanticNodeId) -> Option<ObjectId> {
         self.object_ids.get(&semantic_id).copied()
     }
 
-    /// Keep execution identities aligned with incremental reachability.
+    /// Install execution identities for objects reaching execution for the first time.
     pub fn apply_reachability_update(
         &mut self,
         update: &super::SemanticExecutionReachabilityUpdate,
     ) {
-        for node in update.exited_objects() {
-            self.object_ids.remove(node);
-        }
         for node in update.entered_objects() {
             self.ensure_object(*node);
         }
@@ -62,10 +60,11 @@ impl SemanticExecutionIndex {
     ///
     /// Detached object creation does not install an execution identity. A transaction
     /// that also admits the object installs it through [`Self::apply_reachability_update`]
-    /// after commit. Structural removal deletes exactly the identities reported by the
-    /// semantic transaction's reverse-reference cleanup. Property/content/subscription
-    /// and family-order impacts do not change identity and therefore require no index
-    /// mutation.
+    /// after commit. Later detachment retains that derived identity so re-entry can
+    /// reactivate the same stable execution row. Structural removal deletes exactly
+    /// the identities reported by the semantic transaction's reverse-reference
+    /// cleanup. Property/content/subscription and family-order impacts do not change
+    /// identity and therefore require no index mutation.
     pub fn apply_transaction_result(
         &mut self,
         store: &SemanticStore,

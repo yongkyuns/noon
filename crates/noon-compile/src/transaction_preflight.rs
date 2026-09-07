@@ -76,7 +76,7 @@ fn effective_track_interval(
 #[derive(Clone, Copy)]
 enum ObjectOverlay {
     Present { index: u32, is_text: bool },
-    Removed,
+    Removed { index: u32 },
 }
 
 /// A transaction-local sparse overlay. It reads untouched identity and channel
@@ -108,7 +108,7 @@ impl PreflightOverlay {
     fn object_index(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<u32> {
         match self.objects.get(&id).copied() {
             Some(ObjectOverlay::Present { index, .. }) => Some(index),
-            Some(ObjectOverlay::Removed) => None,
+            Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied();
                 if index.is_some() {
@@ -122,7 +122,7 @@ impl PreflightOverlay {
     fn object_is_text(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<bool> {
         match self.objects.get(&id).copied() {
             Some(ObjectOverlay::Present { is_text, .. }) => Some(is_text),
-            Some(ObjectOverlay::Removed) => None,
+            Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied()?;
                 self.seen_objects.insert(id);
@@ -248,8 +248,6 @@ pub(super) fn preflight_transaction_with_resources(
                 if overlay.object_index(scene, object.id).is_some() {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
-                let index = u32::try_from(overlay.next_object_index)
-                    .map_err(|_| CompilePatchError::TooManyObjects(overlay.next_object_index))?;
                 validate_compiled_object(object)?;
                 validate_execution_content_resource(
                     &scene.resources,
@@ -258,7 +256,19 @@ pub(super) fn preflight_transaction_with_resources(
                     &object.content,
                     object.text_bounds,
                 )?;
-                overlay.next_object_index += 1;
+                let index = match overlay.objects.get(&object.id).copied() {
+                    Some(ObjectOverlay::Removed { index }) => index,
+                    _ => match scene.retired_object_indices.get(&object.id).copied() {
+                        Some(index) => index,
+                        None => {
+                            let index = u32::try_from(overlay.next_object_index).map_err(|_| {
+                                CompilePatchError::TooManyObjects(overlay.next_object_index)
+                            })?;
+                            overlay.next_object_index += 1;
+                            index
+                        }
+                    },
+                };
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
@@ -271,7 +281,9 @@ pub(super) fn preflight_transaction_with_resources(
                 let index = overlay
                     .object_index(scene, *id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
-                overlay.objects.insert(*id, ObjectOverlay::Removed);
+                overlay
+                    .objects
+                    .insert(*id, ObjectOverlay::Removed { index });
                 overlay.remove_object_tracks(scene, index);
             }
             ExecutionPatch::SetContent {

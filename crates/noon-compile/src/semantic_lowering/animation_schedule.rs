@@ -421,9 +421,11 @@ impl std::error::Error for SemanticAnimationScheduleError {}
 /// execution timing without creating another scheduler or evaluator.
 ///
 /// The caller supplies the activation start and `Scene.play`-style root overrides.
-/// Detached declarations are therefore never scheduled merely because they exist in
-/// the semantic store. Target membership is read from the already-established
-/// semantic-to-execution index; this function never allocates execution object identity.
+/// Never-admitted declarations are therefore not scheduled merely because they exist
+/// in the semantic store. The index supplies stable derived identity for objects
+/// admitted at least once; current membership is validated by the execution-session
+/// reachability authority before activation. This function never allocates execution
+/// object identity.
 pub fn lower_semantic_animation_schedule(
     store: &SemanticStore,
     index: &SemanticExecutionIndex,

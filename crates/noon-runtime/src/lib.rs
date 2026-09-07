@@ -641,6 +641,7 @@ pub struct RuntimePatchStats {
     pub objects_recomputed: usize,
     pub groups_evaluated: usize,
     pub object_slots_appended: usize,
+    pub object_slots_reactivated: usize,
     pub object_slots_retired: usize,
     pub track_locators_removed: usize,
     pub full_group_rebuilds: usize,
@@ -959,6 +960,7 @@ impl SceneInstance {
         let compiled_stats = self.compiled.apply_execution_patch_with_stats(patch)?;
         let mut patch_stats = RuntimePatchStats {
             object_slots_appended: compiled_stats.object_slots_appended,
+            object_slots_reactivated: compiled_stats.object_slots_reactivated,
             object_slots_retired: compiled_stats.object_slots_retired,
             track_locators_removed: compiled_stats.track_locators_removed,
             ..RuntimePatchStats::default()
@@ -971,11 +973,17 @@ impl SceneInstance {
                     .object_index(object.id)
                     .expect("compiled create must expose its appended slot")
                     as usize;
-                debug_assert_eq!(object_index, self.frame.objects.len());
-                append_object_frame(&self.compiled, &mut self.frame, object_index);
+                if compiled_stats.object_slots_reactivated == 1 {
+                    let time = self.frame.time;
+                    reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
+                    self.mark_changed(object_index);
+                } else {
+                    debug_assert_eq!(object_index, self.frame.objects.len());
+                    append_object_frame(&self.compiled, &mut self.frame, object_index);
+                    self.mark_added(object_index);
+                }
                 self.rebind_reactive_object(object.id, object_index);
                 self.reapply_reactive_for_object(object_index);
-                self.mark_added(object_index);
             }
             ExecutionPatch::RemoveObject(_) => {
                 let (object_index, old_channels) = removed.expect("remove context captured above");

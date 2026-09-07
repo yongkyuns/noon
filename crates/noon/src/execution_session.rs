@@ -1577,7 +1577,7 @@ impl ExecutionSession {
                     error: ExecutionSessionCreateError::ReactiveBindingsUnsupported,
                 });
             }
-            if self.execution_index.execution_object_id(target).is_some() {
+            if self.reachability.is_object_reachable(target) {
                 return Ok(());
             }
             let node = store
@@ -1864,14 +1864,14 @@ impl ExecutionSession {
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         match request {
             SemanticCompositionRequest::TransformTo { source, target_state, interpolation, options } => {
-                if self.execution_index.execution_object_id(*source).is_none() {
+                if !self.reachability.is_object_reachable(*source) {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *source, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *options))
             }
             SemanticCompositionRequest::Rotate { target, angle, options } => {
-                if self.execution_index.execution_object_id(*target).is_none() {
+                if !self.reachability.is_object_reachable(*target) {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
                 Ok(declaration.create_rotate_animation(*target, *angle, *options))
@@ -2141,7 +2141,7 @@ impl ExecutionSession {
             .expect("validated semantic object has a live node");
         if node.is_scene_owned()
             || !node.parents().is_empty()
-            || self.execution_index.execution_object_id(target).is_some()
+            || self.reachability.is_object_reachable(target)
         {
             return Err(ExecutionSessionAnimationError::CreateTarget {
                 target,
@@ -2166,7 +2166,7 @@ impl ExecutionSession {
         let direct_root_member = store
             .node(target)
             .is_some_and(|node| node.parents() == [root])
-            && self.execution_index.execution_object_id(target).is_some();
+            && self.reachability.is_object_reachable(target);
         if direct_root_member {
             self.require_fade_target(store, root, target, SemanticFadeDirection::Out)?;
             return Ok(false);
@@ -2190,7 +2190,7 @@ impl ExecutionSession {
             SemanticFadeDirection::In => {
                 if node.is_scene_owned()
                     || !node.parents().is_empty()
-                    || self.execution_index.execution_object_id(target).is_some()
+                    || self.reachability.is_object_reachable(target)
                 {
                     return Err(ExecutionSessionAnimationError::FadeTarget {
                         target,
@@ -2205,9 +2205,7 @@ impl ExecutionSession {
                         error: ExecutionSessionFadeError::TargetIsAliased,
                     });
                 }
-                if node.parents() != [root]
-                    || self.execution_index.execution_object_id(target).is_none()
-                {
+                if node.parents() != [root] || !self.reachability.is_object_reachable(target) {
                     return Err(ExecutionSessionAnimationError::FadeTarget {
                         target,
                         error: ExecutionSessionFadeError::TargetIsNotDirectRootMember,
@@ -2233,7 +2231,7 @@ impl ExecutionSession {
                 .parents()
                 .iter()
                 .any(|parent| *parent == root || self.reachability.is_reachable(*parent));
-        if !in_root || self.execution_index.execution_object_id(target).is_none() {
+        if !in_root || !self.reachability.is_object_reachable(target) {
             return Err(ExecutionSessionAnimationError::FadeTarget {
                 target,
                 error: ExecutionSessionFadeError::TargetIsNotDirectRootMember,
@@ -2285,8 +2283,8 @@ impl ExecutionSession {
         let node = store
             .node(target)
             .expect("validated semantic object has a live node");
-        let execution_object = self.execution_index.execution_object_id(target);
-        if execution_object.is_none() && !node.is_scene_owned() {
+        let target_reachable = self.reachability.is_object_reachable(target);
+        if !target_reachable && !node.is_scene_owned() {
             return Ok(true);
         }
         match direction {
@@ -2307,7 +2305,7 @@ impl ExecutionSession {
                         error: ExecutionSessionFadeError::TargetIsAliased,
                     });
                 }
-                if node.parents().contains(&root) && execution_object.is_some() {
+                if node.parents().contains(&root) && target_reachable {
                     Ok(false)
                 } else {
                     Err(ExecutionSessionAnimationError::FadeTarget {
@@ -2394,7 +2392,7 @@ impl ExecutionSession {
         declaration: &mut SemanticMutationTransaction,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         self.validate_indicate_options(indication, options)?;
-        if self.execution_index.execution_object_id(target).is_none() {
+        if !self.reachability.is_object_reachable(target) {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
                 "Indicate requires an object already present in the execution domain".into(),
             ));
@@ -2834,9 +2832,15 @@ impl ExecutionSession {
         Ok(self.runtime.frame())
     }
 
-    /// Resolve an authoritative semantic object identity to its current execution key.
+    /// Resolve an authoritative semantic object identity to its stable execution key.
+    /// The key survives detachment so the same semantic handle can reactivate its
+    /// retained execution row; use scene membership APIs to query current presence.
     pub fn execution_object_id(&self, node: SemanticNodeId) -> Option<ObjectId> {
         self.execution_index.execution_object_id(node)
+    }
+
+    pub(crate) fn semantic_object_is_reachable(&self, node: SemanticNodeId) -> bool {
+        self.reachability.is_object_reachable(node)
     }
 
     fn apply_reactive_input_batch(
