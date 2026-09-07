@@ -1924,6 +1924,21 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn live_shift_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        match self.live_execution_ownership() {
+            "active" | "returned" => self.active_live_player()?.live_shift_family(family, x, y),
+            "none" => Err("live family shift requires an active canonical session".into()),
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn finish_live_family_target_members(
         &mut self,
         target_members: &[noon_core::SemanticNodeId],
@@ -5261,6 +5276,24 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveShiftFamily)]
+        pub fn live_shift_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), family.store()) {
+                return Err(js_error(
+                    "family and canonical context belong to different authoring stores",
+                ));
+            }
+            self.inner
+                .live_shift_family(&family, x, y)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetScale)]
         pub fn live_set_scale(
             &mut self,
@@ -6033,17 +6066,7 @@ mod tests {
             .unwrap();
 
         let left_target = context.live_target_editor(&left).unwrap();
-        context
-            .active_live_player()
-            .unwrap()
-            .live_set_translation(&left_target, -0.25, 1.0)
-            .unwrap();
         let right_target = context.live_target_editor(&right).unwrap();
-        context
-            .active_live_player()
-            .unwrap()
-            .live_set_translation(&right_target, 0.25, 1.0)
-            .unwrap();
         let mut editor = crate::FrontendFamilyTargetEditor::begin(
             &context.scene.store().borrow(),
             pair.node_id(),
@@ -6067,6 +6090,7 @@ mod tests {
         let target_pair = context
             .finish_live_family_target_members(editor.target_members().unwrap())
             .unwrap();
+        context.live_shift_family(&target_pair, 0.0, 1.0).unwrap();
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
             source: pair,
@@ -6092,7 +6116,7 @@ mod tests {
                 .unwrap()
                 .transform
                 .translation,
-            Vec2::new(-0.25, 1.0)
+            Vec2::new(0.0, 1.0)
         );
         assert_eq!(
             context
@@ -6102,7 +6126,7 @@ mod tests {
                 .unwrap()
                 .transform
                 .translation,
-            Vec2::new(0.25, 1.0)
+            Vec2::new(0.0, 1.0)
         );
     }
 

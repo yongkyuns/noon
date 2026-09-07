@@ -1361,6 +1361,38 @@ impl<'a> LiveSession<'a> {
         self.set_property(mobject, SemanticObjectProperty::Translation, translation)
     }
 
+    /// Shift every ordinary leaf of one semantic family in a single publication.
+    ///
+    /// Family traversal and alias handling stay in the shared semantic store. This
+    /// is also the live-safe edit path for a detached family target: its authored
+    /// leaves change without leaving the execution session on an older revision.
+    pub fn shift_family(
+        &mut self,
+        family: &MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        let leaves = self
+            .store
+            .borrow()
+            .ordered_family_leaf_pairs(family.node_id(), family.node_id())
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?
+            .into_iter()
+            .map(|(leaf, _)| leaf)
+            .collect::<Vec<_>>();
+        let mut transaction = SemanticMutationTransaction::new();
+        for leaf in leaves {
+            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
+                .map_err(LiveSessionError::Mobject)?;
+            let mut translation = self.authored(&mobject)?.transform.translation;
+            translation.x += x;
+            translation.y += y;
+            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+        }
+        self.apply(transaction)
+    }
+
     /// Move an object's effective layout center to one point through a single
     /// shared translation publication. Layout evaluation is bounded to this
     /// object; the caller never reconstructs geometry or an affine offset.

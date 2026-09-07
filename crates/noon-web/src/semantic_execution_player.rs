@@ -577,6 +577,17 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_shift_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|session| session.shift_family(family, x, y))
+            .map(|_| ())
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_scale(
         &mut self,

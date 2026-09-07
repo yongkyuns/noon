@@ -1573,6 +1573,14 @@ def _apply_family_translation(
 
 
 def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
+    context = _group_target_context(self)
+    if context is not None:
+        offset = _base._as_vec2(direction)
+        try:
+            context.liveShiftFamily(self._semantic_family_handle, offset.x, offset.y)
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return self
     shared = _shared_family_layout_session(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_SHIFT(self, direction)
