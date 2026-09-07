@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Family Transform and Indicate demo</title>
+  <desc id="desc">A pink square and blue circle moving together with an indicate pulse.</desc>
+  <rect width="640" height="360" fill="#10141d"/>
+  <rect x="195" y="125" width="110" height="110" rx="8" fill="#d147bd"/>
+  <circle cx="410" cy="180" r="58" fill="#58c4dd"/>
+  <circle cx="410" cy="180" r="82" fill="none" stroke="#f7d96f" stroke-width="8" opacity="0.7"/>
+  <rect x="173" y="103" width="154" height="154" rx="18" fill="none" stroke="#f7d96f" stroke-width="8" opacity="0.45"/>
+</svg>
