@@ -2214,7 +2214,9 @@ mod tests {
         )
         .unwrap();
         let mut mirror = RetainedExecutionFrameMirror::default();
-        mirror.apply(player.delta(true).unwrap().unwrap()).unwrap();
+        let initial = player.delta(true).unwrap().unwrap();
+        assert_eq!(initial.objects[1].slot.generation, 0);
+        mirror.apply(initial).unwrap();
         player.live_remove(&toggled).unwrap();
         player.live_add(&toggled).unwrap();
         assert!(player.session.execution_slot_for_frame_index(1).is_some());
@@ -2222,6 +2224,7 @@ mod tests {
         assert!(snapshot.snapshot);
         assert_eq!(snapshot.objects.len(), 2);
         assert_eq!(snapshot.objects[1].slot.slot, 1);
+        assert_eq!(snapshot.objects[1].slot.generation, 1);
         assert_eq!(snapshot.objects[1].order, 1);
         mirror.apply(snapshot).unwrap();
         player.live_set_translation(&toggled, 2.0, -1.0).unwrap();

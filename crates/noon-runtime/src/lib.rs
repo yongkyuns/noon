@@ -976,7 +976,7 @@ impl SceneInstance {
                 if compiled_stats.object_slots_reactivated == 1 {
                     let time = self.frame.time;
                     reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
-                    self.mark_changed(object_index);
+                    self.mark_added(object_index);
                 } else {
                     debug_assert_eq!(object_index, self.frame.objects.len());
                     append_object_frame(&self.compiled, &mut self.frame, object_index);
