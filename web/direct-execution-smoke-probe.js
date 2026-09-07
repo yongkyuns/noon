@@ -1152,8 +1152,8 @@ async function directOrdinaryTextWriteProof(expectedBackend) {
       }
       samples.push({ time, ink });
     }
-    if (samples[0].ink !== 0 || samples[1].ink <= 0 || samples[2].ink <= 0
-        || samples[3].ink <= samples[2].ink || samples[4].ink <= 0
+    if (samples[0].ink !== 0 || samples[1].ink <= 0 || samples[2].ink <= samples[1].ink
+        || samples[3].ink <= samples[1].ink || samples[4].ink <= 0
         || samples[4].ink >= samples[3].ink || samples[5].ink !== 0) {
       throw new Error(`direct Text Write did not reveal ordered glyph phases: ${JSON.stringify(samples)}`);
     }

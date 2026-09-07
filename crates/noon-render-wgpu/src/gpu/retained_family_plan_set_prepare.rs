@@ -577,11 +577,11 @@ impl RetainedFramePreparer {
                 &family_frame,
                 plan,
                 object_index,
-            )? else {
+            ).map_err(RetainedFamilyDrawBorderPrepareError::from)? else {
                 continue;
             };
             for member in members {
-                let member = member?;
+                let member = member.map_err(RetainedFamilyDrawBorderPrepareError::from)?;
                 let Some(&scratch_slot) = slots.get(&member.glyph) else {
                     // Glyphs with empty outlines deliberately have no geometry row.
                     continue;

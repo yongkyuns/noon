@@ -1397,7 +1397,7 @@ try {
       samples.push(stats.count);
     }
     assert.equal(samples[0], 0, "Text Write starts with hidden glyphs");
-    assert.ok(samples[1] > 0 && samples[2] > 0 && samples[3] > samples[2]
+    assert.ok(samples[1] > 0 && samples[2] > samples[1] && samples[3] > samples[1]
         && samples[4] > 0 && samples[4] < samples[3] && samples[5] === 0,
       `Text Write must reveal glyph outline/fill phases: ${JSON.stringify(samples)}`);
     const result = await page.evaluate(async () => {

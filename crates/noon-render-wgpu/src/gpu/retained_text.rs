@@ -851,7 +851,7 @@ pub struct RetainedFramePreparer {
     // signature is sparse and the mapped scratch rows let in-flight glyph phases
     // update only their target paths after the one structural transition.
     family_plan_active_signature: Vec<(usize, u32)>,
-    family_plan_scratch_slots: HashMap<usize, HashMap<TextAnimationGlyphRef, usize>>,
+    family_plan_scratch_slots: HashMap<usize, HashMap<noon_core::TextAnimationGlyphRef, usize>>,
 }
 
 impl Default for RetainedFramePreparer {
