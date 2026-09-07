@@ -906,5 +906,9 @@ mod tests {
         // Remove the affected root, add its survivor, and place that survivor
         // before the root's existing O(1)-resolved successor.
         assert_eq!(transaction.mutations().len(), 3);
+        transaction.apply(&mut store).unwrap();
+        assert_eq!(store.last_mutation_stats().slots_written, 3);
+        assert_eq!(store.node(root).unwrap().first_member(), Some(survivor));
+        assert_eq!(store.node(root).unwrap().member_count(), 10_001);
     }
 }
