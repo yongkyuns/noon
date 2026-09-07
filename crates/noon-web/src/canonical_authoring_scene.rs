@@ -6040,6 +6040,7 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let first = context.scene.circle(0.5).unwrap();
         let second = context.scene.square(0.5).unwrap();
+        assert!(!context.contains_mobject(&first).unwrap());
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
@@ -6053,6 +6054,8 @@ mod tests {
                 ],
             })
             .unwrap();
+        assert!(context.contains_mobject(&first).unwrap());
+        assert!(context.contains_mobject(&second).unwrap());
         assert_eq!(
             context.root_membership_keys().unwrap(),
             vec![
