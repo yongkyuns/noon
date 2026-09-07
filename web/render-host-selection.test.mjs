@@ -4,21 +4,43 @@ import { resetRenderHostSelectionForTests, selectExecutionRenderHost } from "./r
 
 function browserHosts(t, { worker = true, main = true, constructorError = false } = {}) {
   const saved = new Map();
-  const counts = { transfers: 0, terminated: 0, released: 0, revoked: 0 };
-  for (const [name, value] of Object.entries({
-    HTMLCanvasElement: class { transferControlToOffscreen() {} },
-    document: { createElement() {
-      return { transferControlToOffscreen() {
-        counts.transfers += 1;
-        return { getContext(kind) {
-          return kind === "webgl2" && main ? {
-            getExtension() { return { loseContext() { counts.released += 1; } }; },
-          } : null;
-        } };
+  const counts = {
+    transfers: 0,
+    terminated: 0,
+    released: 0,
+    revoked: 0,
+    appended: 0,
+    removed: 0,
+    mainContextOptions: null,
+    workerOptions: null,
+    workerSource: "",
+  };
+  const Canvas = class {
+    transferControlToOffscreen() {
+      counts.transfers += 1;
+      return { getContext(kind, options) {
+        if (kind === "webgl2") counts.mainContextOptions = options;
+        return kind === "webgl2" && main ? {
+          getExtension() { return { loseContext() { counts.released += 1; } }; },
+        } : null;
       } };
-    } },
+    }
+    remove() { counts.removed += 1; }
+  };
+  for (const [name, value] of Object.entries({
+    HTMLCanvasElement: Canvas,
+    document: {
+      body: { append() { counts.appended += 1; } },
+      createElement() { return new Canvas(); },
+    },
+    Blob: class {
+      constructor(parts) { counts.workerSource = parts.join(""); }
+    },
     Worker: class {
-      constructor() { if (constructorError) throw new Error("blob worker denied"); }
+      constructor(_url, options) {
+        counts.workerOptions = options;
+        if (constructorError) throw new Error("blob worker denied");
+      }
       postMessage() { queueMicrotask(() => this.onmessage({ data: { ok: worker } })); }
       terminate() { counts.terminated += 1; }
     },
@@ -50,6 +72,13 @@ test("automatic selection prefers and caches the usable worker host", async (t) 
   assert.equal(counts.transfers, 1);
   assert.equal(counts.terminated, 1);
   assert.equal(counts.revoked, 1);
+  assert.equal(counts.appended, 1);
+  assert.equal(counts.removed, 1);
+  assert.deepEqual(counts.workerOptions, {
+    type: "module",
+    name: "noon-render-capability-probe",
+  });
+  assert.match(counts.workerSource, /getContext\("webgl2", \{ antialias: false \}\)/);
 });
 
 test("unusable worker surface falls back and releases the disposable main-thread context", async (t) => {
@@ -57,6 +86,9 @@ test("unusable worker surface falls back and releases the disposable main-thread
   assert.equal(await selectExecutionRenderHost(), "main-thread");
   assert.equal(counts.transfers, 2);
   assert.equal(counts.released, 1);
+  assert.equal(counts.appended, 2);
+  assert.equal(counts.removed, 2);
+  assert.deepEqual(counts.mainContextOptions, { antialias: false });
 });
 
 test("worker construction failure still probes the main-thread host", async (t) => {

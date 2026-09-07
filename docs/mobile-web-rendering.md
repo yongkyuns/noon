@@ -54,7 +54,7 @@ Before the production canvas is transferred, it probes disposable surfaces:
 2. if that fails, try a main-thread transferred `OffscreenCanvas` for WebGPU or WebGL2
 3. fail if neither surface configuration is available; a later attempt may probe again
 
-Probe worker construction failures also reach the main-thread check, and disposable probe contexts are released.
+Probes use DOM-connected disposable canvases, a module worker, and the same antialias-disabled WebGL2 context settings as wgpu. Probe worker construction failures also reach the main-thread check. Disposable contexts are released and canvases removed after probing. Renderer initialization errors retain browser surface-creation diagnostics.
 
 This is intentionally a lightweight browser-surface preflight, not a second implementation of `wgpu` adapter selection. The definitive renderer check still occurs when the real Rust/`wgpu` renderer initializes; browser CI exercises that path end-to-end.
 

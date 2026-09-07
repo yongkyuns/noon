@@ -52,6 +52,7 @@ export function createAuthoringRenderController(host) {
   let resourceBytes = null;
   let reconnectResourceBundlePending = false;
   let canvas = null;
+  let surfaceCreationError = null;
   let width = 1;
   let height = 1;
   let bootstrapQueue = [];
@@ -170,7 +171,12 @@ export function createAuthoringRenderController(host) {
     await initializeWasmModule();
     if (stopped) return false;
     canvas.addEventListener("webglcontextrestored", wakeAfterWebGlContextRestored);
+    canvas.addEventListener("webglcontextcreationerror", recordSurfaceCreationError);
     return true;
+  }
+
+  function recordSurfaceCreationError(event) {
+    surfaceCreationError = event.statusMessage || "WebGL context creation failed";
   }
 
   function wakeAfterWebGlContextRestored() {
@@ -339,6 +345,7 @@ export function createAuthoringRenderController(host) {
     transitionFrameLoopWasRunning = false;
     detachRenderPort();
     canvas?.removeEventListener?.("webglcontextrestored", wakeAfterWebGlContextRestored);
+    canvas?.removeEventListener?.("webglcontextcreationerror", recordSurfaceCreationError);
     disposeRenderer();
     canvas = null;
     host?.close?.();
@@ -563,6 +570,7 @@ export function createAuthoringRenderController(host) {
 
   async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null) {
     const bootstrapGeneration = frameLoopGeneration;
+    surfaceCreationError = null;
     try {
       let createdRenderer;
       if (mode === MODE_RETAINED) {
@@ -640,7 +648,9 @@ export function createAuthoringRenderController(host) {
       const requestId = transitionRequestId;
       transitionRequestId = null;
       transitionResponseType = null;
-      fail(error, requestId);
+      fail(surfaceCreationError === null ? error : new Error(
+        `${error instanceof Error ? error.message : String(error)}; ${surfaceCreationError}`,
+      ), requestId);
     } finally {
       bootstrapPromise = null;
     }

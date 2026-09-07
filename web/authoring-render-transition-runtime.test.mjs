@@ -34,10 +34,12 @@ const harnessSource = unwrapControllerFactory(executableSource);
 
 function deferred() {
   let resolve;
-  const promise = new Promise((accept) => {
+  let reject;
+  const promise = new Promise((accept, decline) => {
     resolve = accept;
+    reject = decline;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function flushTasks() {
@@ -648,4 +650,14 @@ test("retained renderer forwards one observation only after its matching present
     ],
   );
   assert.deepEqual(JSON.parse(messages[0].json), result);
+});
+
+
+test("renderer startup reports browser surface creation diagnostics", async () => {
+  const harness = createWorkerHarness();
+  vm.runInContext('recordSurfaceCreationError({ statusMessage: "GPU surface unavailable" })', harness.context);
+  harness.creation.reject(new Error("renderer initialization failed"));
+  await flushTasks();
+  assert.ok(harness.mainMessages.some((message) =>
+    message.type === "error" && message.message.includes("GPU surface unavailable")));
 });

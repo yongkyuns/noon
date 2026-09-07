@@ -3,6 +3,11 @@ export const RENDER_HOST_MAIN_THREAD = "main-thread";
 
 let cachedAutomaticSelection = null;
 
+// Keep the capability probe aligned with wgpu-hal's WebGL surface creation.
+// A context created with the browser defaults does not prove that the renderer's
+// antialias-disabled context can be created in the same host.
+const WEBGL_CONTEXT_OPTIONS = Object.freeze({ antialias: false });
+
 // Return a host immediately when the answer is explicit or probing is unavailable.
 // Browser capability probing remains asynchronous, which lets ExecutionWorkerClient
 // preserve its historical synchronous startup contract in unit/non-browser realms.
@@ -71,7 +76,7 @@ async function probeWorkerGpuSurface() {
         let context = null;
         try { context = canvas.getContext("webgpu"); } catch {}
         if (context === null) {
-          try { context = canvas.getContext("webgl2"); } catch {}
+          try { context = canvas.getContext("webgl2", { antialias: false }); } catch {}
         }
         const ok = context !== null;
         context?.unconfigure?.();
@@ -85,12 +90,18 @@ async function probeWorkerGpuSurface() {
   let workerUrl = null;
   let worker = null;
   let timeout = null;
+  let htmlCanvas = null;
   try {
     workerUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    worker = new Worker(`${workerUrl}#noon-render-capability-probe`);
-    const htmlCanvas = document.createElement("canvas");
+    worker = new Worker(`${workerUrl}#noon-render-capability-probe`, {
+      type: "module",
+      name: "noon-render-capability-probe",
+    });
+    htmlCanvas = document.createElement("canvas");
     htmlCanvas.width = 2;
     htmlCanvas.height = 2;
+    htmlCanvas.hidden = true;
+    document.body?.append(htmlCanvas);
     const offscreen = htmlCanvas.transferControlToOffscreen();
     const result = await new Promise((resolve) => {
       timeout = setTimeout(() => resolve({ ok: false }), 3000);
@@ -110,6 +121,7 @@ async function probeWorkerGpuSurface() {
   } finally {
     clearTimeout(timeout);
     worker?.terminate();
+    htmlCanvas?.remove();
     if (workerUrl !== null) URL.revokeObjectURL(workerUrl);
   }
 }
@@ -118,16 +130,19 @@ function probeMainThreadGpuSurface() {
   if (typeof HTMLCanvasElement.prototype.transferControlToOffscreen !== "function") {
     return false;
   }
+  let htmlCanvas = null;
   try {
-    const htmlCanvas = document.createElement("canvas");
+    htmlCanvas = document.createElement("canvas");
     htmlCanvas.width = 2;
     htmlCanvas.height = 2;
+    htmlCanvas.hidden = true;
+    document.body?.append(htmlCanvas);
     const surface = htmlCanvas.transferControlToOffscreen();
     try {
       if (surface.getContext("webgpu") !== null) return true;
     } catch {}
     try {
-      const context = surface.getContext("webgl2");
+      const context = surface.getContext("webgl2", WEBGL_CONTEXT_OPTIONS);
       if (context === null) return false;
       context.getExtension?.("WEBGL_lose_context")?.loseContext();
       return true;
@@ -136,5 +151,7 @@ function probeMainThreadGpuSurface() {
     }
   } catch {
     return false;
+  } finally {
+    htmlCanvas?.remove();
   }
 }

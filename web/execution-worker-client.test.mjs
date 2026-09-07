@@ -11,6 +11,8 @@ class FakeCanvas {
   replacement = null;
   transfers = 0;
 
+  remove() {}
+
   transferControlToOffscreen() {
     this.transfers += 1;
     return { width: this.width, height: this.height };
