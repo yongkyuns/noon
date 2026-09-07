@@ -377,8 +377,13 @@ where
                         tracks
                             .last_mut()
                             .expect("pushed DrawBorderThenFill reveal")
+                            .timing
+                            .easing = phase_rate_function;
+                        tracks
+                            .last_mut()
+                            .expect("pushed DrawBorderThenFill reveal")
                             .time_map
-                            .push(CompositionTimeMapStep::new(0.0, 0.5, phase_rate_function));
+                            .push(CompositionTimeMapStep::new(0.0, 0.5, RateFunction::Linear));
                         continue;
                     }
 
@@ -397,13 +402,15 @@ where
                     let transition = tracks
                         .last_mut()
                         .expect("pushed DrawBorderThenFill style transition");
+                    transition.timing.easing = phase_rate_function;
                     transition.time_map.push(CompositionTimeMapStep::new(
                         0.5,
                         0.5,
-                        phase_rate_function,
+                        RateFunction::Linear,
                     ));
                     let mut hold = transition.clone();
                     hold.values = hold_values;
+                    hold.timing.easing = RateFunction::Linear;
                     hold.time_map = leaf.time_map.clone();
                     hold.time_map
                         .push(CompositionTimeMapStep::new(0.0, 0.5, RateFunction::Linear));
@@ -1091,7 +1098,8 @@ mod tests {
             let phase = track.time_map.steps[0];
             if track.property == Property::Reveal {
                 assert_eq!((phase.start, phase.duration), (0.0, 0.5));
-                assert_eq!(phase.rate_func, RateFunction::Smooth);
+                assert_eq!(phase.rate_func, RateFunction::Linear);
+                assert_eq!(track.timing.easing, RateFunction::Smooth);
                 assert_eq!(track.values, TrackValues::Scalar { from: 0.0, to: 1.0 });
             } else if phase.start == 0.0 {
                 assert_eq!((phase.start, phase.duration), (0.0, 0.5));
@@ -1103,7 +1111,8 @@ mod tests {
                 }
             } else {
                 assert_eq!((phase.start, phase.duration), (0.5, 0.5));
-                assert_eq!(phase.rate_func, RateFunction::Smooth);
+                assert_eq!(phase.rate_func, RateFunction::Linear);
+                assert_eq!(track.timing.easing, RateFunction::Smooth);
             }
         }
         assert!(activation.tracks().iter().any(|track| {

@@ -1244,10 +1244,13 @@ impl CompiledScene {
                     if other.id == *track {
                         continue;
                     }
-                    let other_end = other.timing.start_time + other.timing.duration;
-                    if compiled.timing.start_time < other_end
-                        && other.timing.start_time < actual_end
-                    {
+                    let (compiled_start, compiled_end) =
+                        continuous_time_map_interval(compiled.timing, &compiled.time_map)
+                            .expect("compiled track has a valid composition time map");
+                    let (other_start, other_end) =
+                        continuous_time_map_interval(other.timing, &other.time_map)
+                            .expect("compiled track has a valid composition time map");
+                    if compiled_start < other_end && other_start < compiled_end {
                         return Err(CompilePatchError::OverlappingTrackReconciliation {
                             track: *track,
                             other: other.id,

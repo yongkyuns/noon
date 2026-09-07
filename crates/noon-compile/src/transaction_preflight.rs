@@ -412,7 +412,8 @@ pub(super) fn preflight_transaction_with_resources(
                         continue;
                     }
                     let other_end = other.start_time + other.duration;
-                    if reconciled.start_time < other_end && other.start_time < actual_end {
+                    let reconciled_end = reconciled.start_time + reconciled.duration;
+                    if reconciled.start_time < other_end && other.start_time < reconciled_end {
                         return Err(CompilePatchError::OverlappingTrackReconciliation {
                             track: *track,
                             other: other.id,
