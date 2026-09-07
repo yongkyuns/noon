@@ -79,7 +79,7 @@ class Demo(Scene):
 const phaseBSource = `
 from noon import *
 
-class GroupAndSceneMembership(Scene):
+class GroupMembershipExport(Scene):
     def construct(self):
         left = Circle(radius=0.35, color=BLUE)
         right = Square(side_length=0.7, color=PINK)
@@ -102,7 +102,8 @@ class GroupAndSceneMembership(Scene):
         self.add(pair)
         assert len(self.mobjects) == 1 and self.mobjects[0] is pair
 
-        self.play(pair.animate.shift(UP).scale(0.8), run_time=0.5, rate_func=smooth)
+        # Family transforms are qualified by the live AnimateParity case below.
+        self.wait(0.5)
         self.remove(pair)
         assert self.mobjects == []
 
@@ -180,6 +181,8 @@ class AnimateParity(Scene):
             Circle(radius=0.15, color=GREEN),
             Square(side_length=0.3, color=RED),
         ).arrange(RIGHT, buff=0.15)
+        for member in pair:
+            self.live().add(member)
         self.play(pair.animate(run_time=1.2, lag_ratio=0.5).shift(UP))
 
         override = Circle(radius=0.2, color=PURPLE)
@@ -435,11 +438,22 @@ try {
   assert.equal(uncreateRemovals[1].timing.start_time, 4.0);
 
   const phaseB = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
     phaseBSource,
   );
-  assert.ok(Math.abs(phaseB.duration - 1.5) < 1e-9);
-  assert.ok(phaseB.metrics.presentedFrames > 0, "shared family lifecycle must render");
+  assert.equal(phaseB.kind, "scene_document");
+  assert.equal(phaseB.document.objects.length, 5, "groups should lower to flat runtime member objects");
+  const phaseBProperties = phaseB.document.tracks.map((track) => track.property);
+  assert.equal(
+    phaseBProperties.filter((property) => property === "transform").length,
+    1,
+    "the remaining exported scalar transform should lower once",
+  );
+  assert.equal(
+    phaseBProperties.filter((property) => property === "presence").length,
+    12,
+    "scene membership and grouped fades should lower to deterministic presence events",
+  );
 
   const defaultVmobjectStyle = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),

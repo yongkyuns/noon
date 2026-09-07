@@ -1291,6 +1291,9 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         if type(animation) is _rotate.Rotate:
             return "parallel", args, None
         affine = _canonical_affine_animation(scene, animation)
+        if affine is not None and affine[0]._scene is None:
+            # Detached affine leaves use the same atomic admission as mixed plays.
+            return "parallel", args, None
         if affine is not None and type(animation) in (
             _base._AnimationBuilder,
             _compat._CompatAnimationBuilder,
