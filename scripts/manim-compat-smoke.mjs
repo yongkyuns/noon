@@ -182,7 +182,7 @@ class AnimateParity(Scene):
             Square(side_length=0.3, color=RED),
         ).arrange(RIGHT, buff=0.15)
         for member in pair:
-            self.live().add(member)
+            self.live_execution().add(member)
         self.play(pair.animate(run_time=1.2, lag_ratio=0.5).shift(UP))
 
         override = Circle(radius=0.2, color=PURPLE)
