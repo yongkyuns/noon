@@ -833,6 +833,7 @@ pub struct RetainedFramePreparer {
     sources: Vec<SourceItem>,
     render_items: Vec<RetainedRenderItem>,
     painter_order_indices: Vec<u32>,
+    painter_order_installed: bool,
     render_item_ranges: HashMap<ObjectId, std::ops::Range<usize>>,
     visible_render_items: Vec<RetainedRenderItem>,
     visible_projection_ready: bool,
@@ -884,6 +885,7 @@ impl Default for RetainedFramePreparer {
             sources: Vec::new(),
             render_items: Vec::new(),
             painter_order_indices: Vec::new(),
+            painter_order_installed: false,
             render_item_ranges: HashMap::new(),
             visible_render_items: Vec::new(),
             visible_projection_ready: false,
@@ -915,6 +917,7 @@ impl RetainedFramePreparer {
     pub fn set_painter_order(&mut self, order: &[u32]) {
         self.painter_order_indices.clear();
         self.painter_order_indices.extend_from_slice(order);
+        self.painter_order_installed = true;
     }
 
     /// Apply one compact transport-decoded painter-order replacement range.
@@ -925,6 +928,7 @@ impl RetainedFramePreparer {
             range.start.min(old_end)..old_end,
             order[range.start..new_end].iter().copied(),
         );
+        self.painter_order_installed = true;
         debug_assert_eq!(self.painter_order_indices.len(), order.len());
     }
 
@@ -1293,7 +1297,8 @@ impl RetainedFramePreparer {
         reorder_mixed_items(
             &mut self.render_items,
             frame,
-            &self.painter_order_indices,
+            self.painter_order_installed
+                .then_some(self.painter_order_indices.as_slice()),
         );
         rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         if let Some(indices) = visible_object_indices {
@@ -1641,7 +1646,8 @@ impl RetainedFramePreparer {
             reorder_mixed_items(
                 &mut self.render_items,
                 frame,
-                &self.painter_order_indices,
+                self.painter_order_installed
+                    .then_some(self.painter_order_indices.as_slice()),
             );
             rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
             self.incremental_stats.mixed_order_rebuilds = self
@@ -1748,13 +1754,13 @@ fn rebuild_render_item_ranges(
 }
 
 fn reorder_mixed_items(
-    items: &mut [RetainedRenderItem],
+    items: &mut Vec<RetainedRenderItem>,
     frame: &FrameState,
-    painter_order: &[u32],
+    painter_order: Option<&[u32]>,
 ) {
-    if painter_order.is_empty() {
+    let Some(painter_order) = painter_order else {
         return;
-    }
+    };
     let ranks = painter_order
         .iter()
         .enumerate()
@@ -1765,6 +1771,7 @@ fn reorder_mixed_items(
                 .map(|object| (object.id, rank))
         })
         .collect::<HashMap<_, _>>();
+    items.retain(|item| ranks.contains_key(&item.object_id()));
     items.sort_by_key(|item| ranks.get(&item.object_id()).copied().unwrap_or(usize::MAX));
 }
 
@@ -3736,6 +3743,57 @@ mod tests {
             baseline_incremental.mixed_order_rebuilds,
             "camera-only visibility changes must reuse canonical painter order"
         );
+    }
+
+    #[test]
+    fn worker_painter_order_removal_drops_retired_text_draw_items() {
+        let (mut frame, texts, fonts, geometries) = mixed_text_frame();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        preparer.set_painter_order(&[0, 1]);
+
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert!(prepared
+                .render_items
+                .iter()
+                .any(|item| item.object_id() == ObjectId::new(2)));
+        }
+
+        frame.presences[1] = false;
+        preparer.set_painter_order_range(&[0], 1..2);
+        let changes =
+            FrameChanges::with_structure(vec![1], Vec::new(), vec![1]).with_painter_order(1..2);
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &changes,
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert!(!prepared.render_items.is_empty());
+        assert!(prepared
+            .render_items
+            .iter()
+            .all(|item| item.object_id() == ObjectId::new(1)));
+        assert_eq!(prepared.stats.glyph_batches, 0);
     }
 
     #[test]
