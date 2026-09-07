@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 5);
+assert.equal(gallery.examples.length, 8);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -22,6 +22,9 @@ assert.deepEqual(
     "compatible-timed-composition",
     "compatible-family-write",
     "compatible-subset-display",
+    "compatible-scale-in-place",
+    "compatible-indicate-square",
+    "compatible-affine-lifecycle",
   ],
 );
 
