@@ -6,9 +6,28 @@ class FakeCanvas {
   clientHeight = 360;
   width = 640;
   height = 360;
+  replacement = null;
+  transferred = false;
 
   transferControlToOffscreen() {
+    if (this.transferred) {
+      throw new Error("canvas was transferred twice");
+    }
+    this.transferred = true;
     return { width: this.width, height: this.height };
+  }
+
+  cloneNode() {
+    const clone = new FakeCanvas();
+    clone.clientWidth = this.clientWidth;
+    clone.clientHeight = this.clientHeight;
+    clone.width = this.width;
+    clone.height = this.height;
+    return clone;
+  }
+
+  replaceWith(replacement) {
+    this.replacement = replacement;
   }
 }
 

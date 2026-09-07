@@ -772,8 +772,10 @@ async function discardSemanticExecution(authored, client) {
 }
 
 function discardEarlyContinuationRuntime(attachedPlayer) {
-  attachedPlayer?.terminate();
+  if (attachedPlayer == null) return;
+  attachedPlayer.terminate();
   if (player !== attachedPlayer) return;
+  adoptRuntimeCanvas(attachedPlayer);
   playbackControls?.destroy();
   playbackControls = null;
   player = null;

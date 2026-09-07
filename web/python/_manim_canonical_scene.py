@@ -337,6 +337,10 @@ def _sync_membership_wrapper_attachments(
             continue
         seen.add(semantic_key)
         if kind == "clear" or not bool(context.containsMobject(wrapper._semantic_handle)):
+            # A removed wrapper keeps its stable semantic identity. Preserve the
+            # session that owns that identity so a later copy/animate target and
+            # its edits publish through the same semantic/runtime revision.
+            wrapper._canonical_live_target_context = context
             wrapper._scene = None
 
 
