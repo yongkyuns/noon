@@ -67,8 +67,10 @@ class SharedAuthoringSmoke(Scene):
         circle.set_fill(BLUE, opacity=0.4)
         live = self.live_execution()
 
-        # Real Rust rejection must not consume an export identity or force a
-        # whole-Python-scene checkpoint. Successful append uses the same path.
+        # A detached handle created before the initially attached objects keeps
+        # its semantic identity when live membership assigns a stable execution
+        # slot. Neither admission nor removal may scan or checkpoint the whole
+        # Python scene.
         class LocalKeys(dict):
             def values(self):
                 raise AssertionError("typed binding scanned every object key")
@@ -77,16 +79,12 @@ class SharedAuthoringSmoke(Scene):
         self._object_keys = LocalKeys(self._object_keys)
         self._authoring_checkpoint = reject_checkpoint
         next_id = self._next_object_id
-        try:
-            live.add(earlier)
-        except Exception:
-            pass
-        else:
-            raise AssertionError("interleaved live membership unexpectedly succeeded")
-        assert self._next_object_id == next_id
-        assert earlier._scene is None
+        live.add(earlier)
+        assert earlier.id == next_id
+        assert earlier._scene is self
+        live.remove(earlier)
         live.add(appended)
-        assert appended.id == next_id
+        assert appended.id == next_id + 1
         live.remove(appended)
 
         live.set_translation(circle, 2.0, -1.0)
