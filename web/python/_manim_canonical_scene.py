@@ -2038,8 +2038,8 @@ def _build_canonical_composition_candidate(
                 entering_id,
                 passing_flash._semantic_handle,
                 float(animation.time_width),
-                float("nan") if child_run_time is None else child_run_time,
-                "" if rate_function is None else rate_function,
+                child_run_time,
+                rate_function,
             )
             removals.append(passing_flash)
             return

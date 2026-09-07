@@ -1,12 +1,12 @@
 """Exact-Line PassingFlash through the shared semantic composition path."""
 
-from noon import CYAN, PI, Line, Scene, ShowPassingFlash, linear
+from noon import Color, PI, Line, Scene, ShowPassingFlash, linear
 
 
 class LinePassingFlash(Scene):
     def construct(self):
         line = (
-            Line((-2.0, 0.0), (2.0, 0.0), color=CYAN, stroke_width=8.0)
+            Line((-2.0, 0.0), (2.0, 0.0), color=Color(0.0, 1.0, 1.0), stroke_width=8.0)
             .scale((1.25, 0.75))
             .rotate(PI / 6.0)
             .shift((0.5, -0.5))

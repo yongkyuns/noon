@@ -3757,8 +3757,8 @@ mod wasm {
             object_id: &str,
             target: &crate::WasmAuthoringMobjectHandle,
             time_width: f64,
-            child_run_time: f64,
-            rate_function: &str,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
         ) -> Result<(), JsValue> {
             let entering_id = if object_id.is_empty() {
                 None
@@ -3769,7 +3769,7 @@ mod wasm {
                 entering_id,
                 target: target.semantic_mobject().clone(),
                 time_width,
-                options: Self::options(child_run_time, rate_function)?
+                options: Self::optional_options(child_run_time, rate_function)?
                     .introducer(true)
                     .remover(true),
             });
