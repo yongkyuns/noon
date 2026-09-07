@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use super::semantic_animations::{normalize_text_reveal_options, normalize_text_write_options};
 use super::semantic_declarations::{
     close_all_updater_registrations, close_first_updater_registration, insert_updater_registration,
     UpdaterRegistrationEditError,
@@ -17,16 +18,6 @@ use super::{
     SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
 };
 use crate::{CompositionTimeMap, TrackTiming};
-
-fn normalize_text_reveal_options(reverse: bool, mut options: AnimationOptions) -> AnimationOptions {
-    options.run_time.get_or_insert(1.0);
-    options.rate_func.get_or_insert(crate::RateFunction::Smooth);
-    options.lag_ratio.get_or_insert(1.0);
-    options.reverse_rate_function.get_or_insert(reverse);
-    options.introducer.get_or_insert(!reverse);
-    options.remover.get_or_insert(reverse);
-    options
-}
 
 mod prepared;
 pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
@@ -830,20 +821,13 @@ impl SemanticMutationTransaction {
         reverse_member_order: bool,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
-        let token = self.allocate_local_node_token();
-        self.mutations.push(SemanticMutation::AddAnimation {
-            token,
-            animation: SemanticTransactionAnimation::new(
-                SemanticTransactionAnimationIntent::TextGlyph {
-                    target: target.into(),
-                    mode: crate::FamilyAnimationMode::DrawBorderThenFill,
-                    reverse_member_order,
-                    family_member: None,
-                },
-                options,
-            ),
-        });
-        token
+        self.create_text_glyph_animation(
+            target,
+            crate::FamilyAnimationMode::DrawBorderThenFill,
+            reverse_member_order,
+            None,
+            normalize_text_write_options(reverse_member_order, options),
+        )
     }
 
     /// Stage one plain-Text leaf in a globally indexed family Write plan.
@@ -851,23 +835,16 @@ impl SemanticMutationTransaction {
         &mut self,
         target: SemanticNodeId,
         reverse_member_order: bool,
-        family_member: crate::SemanticTextWriteFamilyMember,
+        family_member: crate::SemanticFamilyAnimationMember,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
-        let token = self.allocate_local_node_token();
-        self.mutations.push(SemanticMutation::AddAnimation {
-            token,
-            animation: SemanticTransactionAnimation::new(
-                SemanticTransactionAnimationIntent::TextGlyph {
-                    target: target.into(),
-                    mode: crate::FamilyAnimationMode::DrawBorderThenFill,
-                    reverse_member_order,
-                    family_member: Some(family_member),
-                },
-                options,
-            ),
-        });
-        token
+        self.create_family_animation_member(
+            target,
+            crate::FamilyAnimationMode::DrawBorderThenFill,
+            reverse_member_order,
+            family_member,
+            normalize_text_write_options(reverse_member_order, options),
+        )
     }
 
     /// Stage one plain Text Create/Uncreate through the shared glyph Reveal mode.
@@ -891,15 +868,38 @@ impl SemanticMutationTransaction {
         &mut self,
         target: SemanticNodeId,
         reverse: bool,
-        family_member: crate::SemanticTextWriteFamilyMember,
+        family_member: crate::SemanticFamilyAnimationMember,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        self.create_family_animation_member(
+            target,
+            crate::FamilyAnimationMode::Reveal,
+            false,
+            family_member,
+            normalize_text_reveal_options(reverse, options),
+        )
+    }
+
+    /// Stage one exact member of a retained family animation.
+    ///
+    /// The caller owns explicit timing, reversal, and lifecycle options. Unlike
+    /// the Write/Create conveniences, this constructor applies no lifecycle
+    /// defaults and keeps member-order reversal independent from local-rate
+    /// reversal.
+    pub fn create_family_animation_member(
+        &mut self,
+        target: SemanticNodeId,
+        mode: crate::FamilyAnimationMode,
+        reverse_member_order: bool,
+        family_member: crate::SemanticFamilyAnimationMember,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
         self.create_text_glyph_animation(
             target,
-            crate::FamilyAnimationMode::Reveal,
-            false,
+            mode,
+            reverse_member_order,
             Some(family_member),
-            normalize_text_reveal_options(reverse, options),
+            options,
         )
     }
 
@@ -908,7 +908,7 @@ impl SemanticMutationTransaction {
         target: SemanticNodeId,
         mode: crate::FamilyAnimationMode,
         reverse_member_order: bool,
-        family_member: Option<crate::SemanticTextWriteFamilyMember>,
+        family_member: Option<crate::SemanticFamilyAnimationMember>,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
         let token = self.allocate_local_node_token();

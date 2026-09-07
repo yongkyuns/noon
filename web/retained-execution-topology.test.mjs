@@ -38,11 +38,26 @@ for (const filename of [
   "retained_authoring_tracks.rs",
   "retained_authoring_wire_scene.rs",
   "retained_authoring_player.rs",
+  "canonical_family_animation.rs",
+  "retained_family_execution_player.rs",
+  "retained_scene_spec_runtime.rs",
+  "authoring_semantics.rs",
 ]) {
   await assert.rejects(
     access(new URL(`../crates/noon-web/src/${filename}`, import.meta.url)),
     (error) => error?.code === "ENOENT",
     `the split authoring schema module must stay deleted: ${filename}`,
+  );
+}
+
+for (const path of [
+  "noon/src/retained_family_authoring_lowering.rs",
+  "noon-runtime/src/reactive/family_plan_set_runtime.rs",
+]) {
+  await assert.rejects(
+    access(new URL(`../crates/${path}`, import.meta.url)),
+    (error) => error?.code === "ENOENT",
+    `the separate family execution owner must stay deleted: ${path}`,
   );
 }
 

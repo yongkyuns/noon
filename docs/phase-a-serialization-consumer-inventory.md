@@ -35,8 +35,8 @@ This makes `noon-web` the current production concentration point for scene-docum
 | Seam / consumer | Current use | Classification | Version compatibility requirement | Exit condition / owner |
 | --- | --- | --- | --- | --- |
 | `crates/noon-ir/src/{legacy,mixed,semantic*}.rs` | overlapping serializable scene/interchange families | migration model + codec crate | **not presumed**; greenfield internal formats are not compatibility commitments | #959/A4.5 decides whether any independent external interchange remains; otherwise delete crate after callers move |
-| `crates/noon-web/src/retained_scene_spec_runtime.rs` | remaining family worker branch materializes retained input; ordinary worker import now constructs a canonical Scene and explicit semantic animation root | family migration-only in-process bridge | none | reconstruct family topology with fresh semantic identities and shared lowering, then delete the remaining materializer (#959/A4.2-A4.3) |
-| `crates/noon/src/text_authoring.rs::RetainedScene::from_legacy` | lifts geometry-only `SceneDefinition` into retained compiler input | migration compatibility constructor | none | remove after production callers use Semantic Scene / target semantic object state; test-only callers must not keep it alive (#959) |
+| `crates/noon-web/src/canonical_retained_engine_player.rs` | imports external objects/tracks and flat family bindings into a canonical Scene and explicit semantic animation root | external worker input codec; shared engine after import | none | replace remaining overlapping source codecs with shared mutation commands at the worker edge (#959/A4.3-A4.5) |
+| `crates/noon/src/text_authoring.rs::RetainedScene` | text-only resource construction for explicit Typst raster and resource fixtures | explicit rendering/resource boundary | none | legacy geometry lifting, exact-slot insertion, and retained timeline storage are deleted; preserve only genuine text-resource consumers (#959) |
 | `crates/noon-core/src/object_content.rs::{ObjectContentRef,RetainedObjectDefinition}` | legacy retained compiler/frontend payload | migration-only object model (explicitly marked #959-owned) | none | delete after compiler/frontend consumers move to target semantic content/state and lowering owns compact execution values (#959, dependent on A1 progress) |
 | `crates/noon-web/src/execution_transport.rs` execution-delta envelope/codec | transfers runtime deltas for browser worker rendering and supports typed mirror application plus JSON wrappers | genuine cross-context transport **when crossing workers** | define only for the explicit worker protocol; do not promote it to engine ABI | retain/narrow codec at worker edge; direct Rust/WASM same-context path from #969 must bypass it |
 | `web/execution-engine-worker.js` + render-worker `MessagePort`/shared/transferable transport | real Web Worker boundary between execution and rendering contexts | genuine cross-context transport | protocol versioning may be required for this boundary; scope it to worker messages, not semantic scene authority | keep transport only if architecture continues to use separate contexts; #969 owns direct Rust/WASM host path |
@@ -45,13 +45,15 @@ This makes `noon-web` the current production concentration point for scene-docum
 | `web/wire-contracts.test.mjs` and related wire/JSON fixtures | validates current serialized envelopes | test fixtures / migration contract tests | tests do not create a compatibility promise by themselves | keep only fixtures that protect an intentional external/worker boundary; delete migration-format goldens with their production seam (#959/A4.8) |
 | Rust tests/examples/parity paths importing `noon-ir` | round-trip/compatibility proof around migration scene documents | test/example migration consumers | none unless tied to an explicitly retained external codec | migrate to typed semantic construction; retain serialized fixtures only for explicit codec tests (#959/A4.7-A4.8) |
 
-## Ordinary worker import cut
+## Shared worker import cut
 
-The ordinary worker branch now consumes external object IDs at its codec edge into a canonical `Scene`, preserves authored painter order and camera role, and lowers an explicit semantic animation root before constructing the shared execution session. Absolute property tracks use the existing animation identity graph and runtime evaluator. `RetainedAuthoringPlayer` is deleted.
+The worker importer now consumes external object IDs at its codec edge into a canonical `Scene`, preserves authored painter order and camera role, and lowers an explicit semantic animation root before constructing the shared execution session. Absolute property tracks use the existing animation identity graph and runtime evaluator. `RetainedAuthoringPlayer` is deleted.
 
 Exact transform tracks carry compact execution endpoints derived from detached semantic state nodes. These values are separate from legacy authored snapshots; they carry no semantic identity, scene membership, or scheduling authority. Constant domains, general path transforms, and endpoint geometry continue to use the existing transform evaluator.
 
-The family branch still needs ordered topology and external binding remapping into fresh semantic IDs. It must not replay semantic IDs allocated by the exporting store. #959 owns this remaining deletion and the existing legacy authoring/codec methods that still materialize execution endpoints.
+Family requests reconstruct detached alias families with fresh semantic identities and preserve the external binding order without changing root painter order. Their neutral member intents lower through the same compiler and runtime, including negative starts and independent member/rate reversal. Repeated family keys must describe identical topology, and overlapping family drivers fail before execution is published. The separate family materializer, player, lowering session, and runtime wrapper are deleted.
+
+The flat family request remains only at the external input codec. It does not install exported semantic IDs or become an engine authority. #959 owns deletion of the remaining overlapping input/export codecs and legacy authoring methods; the genuine execution-to-render worker transport remains.
 
 ## Important separation: real transport versus accidental engine boundary
 
@@ -84,8 +86,8 @@ The latter is migration debt. Direct native and direct Rust/WASM paths must stay
 The safest deletion order from the current tree is:
 
 1. **Stop creating new scene-document consumers.** `noon-core`, `noon-compile`, and `noon-runtime` must remain free of `noon-ir` dependencies.
-2. **Remove the canonical retained lowering detour.** Replace the production `SceneSpec -> SceneDefinition -> RetainedScene::from_legacy` path in `retained_scene_spec_runtime.rs` once the target Semantic Scene/lowering input is available.
-3. **Remove `RetainedScene::from_legacy` production use.** Test-only uses must migrate rather than extending this constructor's lifetime.
+2. **Keep the canonical retained lowering detour deleted.** Worker inputs now enter the shared semantic compiler/runtime; do not restore separate ordinary/family materializers or players.
+3. **Keep legacy retained-scene lifting deleted.** The retained text-resource container no longer owns geometry import, exact-slot insertion, or a second timeline.
 4. **Keep web producer normalization deleted.** Frontends now target shared semantic operations; do not restore the removed `legacy geometry + retained sidecar -> SceneSpec` bridge.
 5. **Narrow browser serialization to actual worker protocols.** Keep execution/host transport codecs only where a cross-context boundary still exists; #969's direct same-context Rust/WASM path must not require them.
 6. **Delete overlapping `noon-ir` document families and then the crate if no independent interchange consumer remains.** Do not keep it merely because migration tests import it.

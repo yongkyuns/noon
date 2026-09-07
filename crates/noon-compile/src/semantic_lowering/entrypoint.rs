@@ -178,17 +178,28 @@ pub fn lower_semantic_execution_root(
     finish_semantic_execution(store, &[root], index, staged_index, projection, None)
 }
 
-/// Lower one selected semantic scene family with an explicit exact-track animation root.
+/// Lower one scene and an explicit initial animation root at time zero.
 ///
-/// The animation root must be an option-free parallel composition of exact object
-/// property tracks. Its tracks enter the ordinary compiled timeline before reactive
-/// validation, so reactive driver conflicts and runtime behavior use the same typed
-/// execution domain as every other initial track.
+/// Exact property tracks retain their absolute timing. Neutral family animation
+/// compositions use the shared scheduler before runtime construction.
 pub fn lower_semantic_execution_root_with_animation_root(
     store: &SemanticStore,
     root: SemanticNodeId,
     index: &mut SemanticExecutionIndex,
     animation_root: SemanticNodeId,
+) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
+    lower_semantic_execution_root_with_animation_root_at(store, root, index, animation_root, 0.0)
+}
+
+/// Activate initial family compositions at an explicit finite origin.
+/// Negative origins allow an imported animation to be in progress at time zero.
+/// Exact property tracks already own absolute timing and are not shifted by this origin.
+pub fn lower_semantic_execution_root_with_animation_root_at(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+    index: &mut SemanticExecutionIndex,
+    animation_root: SemanticNodeId,
+    origin: f64,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let mut staged_index = index.clone();
     let projection = staged_index.lower_root(store, root)?;
@@ -198,7 +209,7 @@ pub fn lower_semantic_execution_root_with_animation_root(
         index,
         staged_index,
         projection,
-        Some(animation_root),
+        Some((animation_root, origin)),
     )
 }
 
@@ -208,16 +219,22 @@ fn finish_semantic_execution(
     index: &mut SemanticExecutionIndex,
     staged_index: SemanticExecutionIndex,
     projection: SemanticExecutionProjection,
-    animation_root: Option<SemanticNodeId>,
+    animation_root: Option<(SemanticNodeId, f64)>,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection_for_roots(store, &projection, roots)?;
     let host_callbacks = lower_semantic_host_callbacks(store, roots);
     let mut compiled =
         CompiledScene::from_semantic_projection_after_reactive_lowering(&projection, store)?;
-    if let Some(animation_root) = animation_root {
-        super::install_initial_animation_root(store, &staged_index, &mut compiled, animation_root)
-            .map_err(SemanticExecutionLoweringError::InitialAnimation)?;
+    if let Some((animation_root, origin)) = animation_root {
+        super::install_initial_animation_root(
+            store,
+            &staged_index,
+            &mut compiled,
+            animation_root,
+            origin,
+        )
+        .map_err(SemanticExecutionLoweringError::InitialAnimation)?;
     }
     let camera_object = validate_camera_object(camera, &compiled)?;
     let program = ReactiveProgram::compile_for_execution_domain(

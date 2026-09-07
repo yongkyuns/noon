@@ -15,33 +15,6 @@ use noon_core::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Lower the compatibility retained scene at the web boundary into the unified
-/// compiled runtime input. Text bounds are immutable resource metadata, captured
-/// from the same scene-owned arena that supplies the renderer bundle.
-pub(crate) fn compile_retained_scene(
-    scene: &noon::RetainedScene,
-    tracks: &[noon_core::TrackDefinition],
-) -> Result<noon_compile::CompiledScene, noon_compile::CompileError> {
-    let objects = scene
-        .objects()
-        .iter()
-        .map(|object| {
-            let mut compiled = noon_compile::CompiledObject::new(
-                object.id,
-                object.content.clone(),
-                object.transform,
-                object.style,
-            );
-            compiled.text_bounds = object
-                .content
-                .text()
-                .and_then(|handle| scene.texts().get(handle).map(|resource| resource.bounds));
-            compiled
-        })
-        .collect();
-    noon_compile::CompiledScene::compile_objects(objects, tracks)
-}
-
 use crate::TransportTextResourceHandle;
 
 /// One-shot resource channel paired with `noon.execution.retained`.
@@ -93,6 +66,7 @@ impl RenderGeometryPreparation {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn compiled_render_geometry_preparations(
     compiled: &noon_compile::CompiledScene,
     geometries: &[Arc<GeometryRef>],
@@ -138,6 +112,7 @@ pub(crate) fn compiled_render_geometry_preparations(
         .collect())
 }
 
+#[cfg(test)]
 pub(crate) fn compiled_render_geometries(
     compiled: &noon_compile::CompiledScene,
 ) -> Arc<[Arc<GeometryRef>]> {
@@ -341,6 +316,7 @@ impl RetainedResourceBundle {
         self.texts.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn set_render_geometries(
         &mut self,
         session: u32,

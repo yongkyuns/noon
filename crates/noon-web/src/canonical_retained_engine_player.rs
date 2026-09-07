@@ -1,67 +1,23 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use noon::{DeclaredAnimation, Mobject, MobjectFamilyMember, Scene};
+use noon::{DeclaredAnimation, Mobject, MobjectFamily, MobjectFamilyMember, Scene};
 use noon_core::{
-    AnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationIntent,
-    SemanticMutationTransaction, SemanticObjectRole, SemanticObjectTrackProperty,
-    SemanticObjectTrackValues, SemanticTransactionNodeRef, SemanticVec3,
+    AnimationOptions, Color, FamilyAnimationRequest, RateFunction,
+    SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticFamilyAnimationMember,
+    SemanticMutationTransaction, SemanticNodeId, SemanticObjectRole, SemanticObjectTrackProperty,
+    SemanticObjectTrackValues, SemanticTransactionNodeRef, SemanticVec3, Style, Transform2D,
 };
 use noon_ir::{ObjectSpec, ObjectSpecContent, TextSpecKind, TextSpecOptions};
 use noon_ir::{SceneSpec, SceneSpecError};
 
-use crate::retained_scene_spec_runtime::{canonical_text_color, MixedRetainedAuthoringError};
-use crate::{
-    CanonicalRetainedFamilyAnimationScene, CanonicalRetainedFamilyAnimationSceneError, ClockError,
-    PlaybackClock, RetainedFamilyExecutionPlayer, RetainedFamilyExecutionPlayerError,
-    SemanticExecutionPlayer,
-};
+use crate::{ClockError, PlaybackClock, SemanticExecutionPlayer};
 
-/// Runtime selected behind the single canonical retained browser/WASM surface.
+/// Shared semantic execution retained behind the canonical browser/WASM codec surface.
 ///
-/// Frontends and workers do not branch on family scheduling. Canonical source content
-/// determines the Rust execution owner once at construction, after which both variants
-/// expose the same clocked delta/resource API.
-#[derive(Debug)]
-enum CanonicalRetainedExecutionPlayer {
-    Ordinary(Box<OrdinarySemanticExecution>),
-    Family(Box<RetainedFamilyExecutionPlayer>),
-}
-
-impl CanonicalRetainedExecutionPlayer {
-    fn resource_bundle_bytes(&self) -> &[u8] {
-        match self {
-            Self::Ordinary(player) => player.player.resource_bundle_slice(),
-            Self::Family(player) => player.resource_bundle_bytes(),
-        }
-    }
-
-    fn evaluate_delta_json(
-        &mut self,
-        time: f64,
-    ) -> Result<Option<String>, CanonicalRetainedEnginePlayerError> {
-        match self {
-            Self::Ordinary(player) => player
-                .player
-                .evaluate_delta_at(time)
-                .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer),
-            Self::Family(player) => player
-                .evaluate_delta(time)?
-                .map(|delta| {
-                    serde_json::to_string(&delta).map_err(CanonicalRetainedEnginePlayerError::from)
-                })
-                .transpose(),
-        }
-    }
-
-    fn time(&self) -> f64 {
-        match self {
-            Self::Ordinary(player) => player.player.time(),
-            Self::Family(player) => player.frame().time,
-        }
-    }
-}
-
+/// The source codec maps ordinary objects, exact tracks, and family requests into one
+/// semantic scene before lowering. The worker observes only the normal clocked shared
+/// execution delta and resource APIs.
 struct OrdinarySemanticExecution {
     _scene: Scene,
     player: SemanticExecutionPlayer,
@@ -78,8 +34,19 @@ impl std::fmt::Debug for OrdinarySemanticExecution {
 fn import_ordinary_semantic_scene(
     objects: Vec<ObjectSpec>,
     tracks: Vec<noon_core::TrackDefinition>,
+    family_requests: Vec<FamilyAnimationRequest>,
     camera_object: Option<noon_core::ObjectId>,
-) -> Result<(Scene, Option<DeclaredAnimation>), CanonicalRetainedEnginePlayerError> {
+) -> Result<(Scene, Option<DeclaredAnimation>, f64), CanonicalRetainedEnginePlayerError> {
+    validate_family_topologies(&objects, &family_requests)?;
+    let origin = tracks
+        .iter()
+        .map(|track| track.timing.start_time)
+        .chain(
+            family_requests
+                .iter()
+                .map(|request| request.spec().start_time),
+        )
+        .fold(0.0_f64, f64::min);
     let mut scene = Scene::new();
     let mut external_objects = HashMap::with_capacity(objects.len());
     let mut ordered = Vec::with_capacity(objects.len());
@@ -98,8 +65,117 @@ fn import_ordinary_semantic_scene(
             CanonicalRetainedEnginePlayerError::SemanticPlayer(error.to_string())
         })?;
     }
-    let animation_root = import_semantic_tracks(&scene, &external_objects, tracks)?;
-    Ok((scene, animation_root))
+    let mut families = HashMap::new();
+    for request in &family_requests {
+        let external_family = request.target();
+        let std::collections::hash_map::Entry::Vacant(entry) = families.entry(external_family)
+        else {
+            continue;
+        };
+        let members = request
+            .bindings()
+            .iter()
+            .map(|binding| {
+                external_objects.get(&binding.object).ok_or_else(|| {
+                    CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                        "family target {} references unknown object {}",
+                        external_family.slot(),
+                        binding.object.get()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let family = scene
+            .family(&members)
+            .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
+        entry.insert(family);
+    }
+    let animation_root = import_semantic_animations(
+        &scene,
+        &external_objects,
+        &families,
+        tracks,
+        family_requests,
+        origin,
+    )?;
+    Ok((scene, animation_root, origin))
+}
+
+fn validate_family_topologies(
+    objects: &[ObjectSpec],
+    requests: &[FamilyAnimationRequest],
+) -> Result<(), CanonicalRetainedEnginePlayerError> {
+    let object_ids = objects
+        .iter()
+        .map(|object| object.id)
+        .collect::<HashSet<_>>();
+    let family_ids = requests
+        .iter()
+        .map(FamilyAnimationRequest::target)
+        .collect::<HashSet<_>>();
+    let mut topologies = HashMap::new();
+    let mut objects_by_leaf = HashMap::new();
+    let mut leaves_by_object = HashMap::new();
+    for request in requests {
+        request.validate().map_err(|error| {
+            CanonicalRetainedEnginePlayerError::SemanticPlayer(error.to_string())
+        })?;
+        if request.bindings().is_empty() {
+            return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                "family target {} has no bound leaves",
+                request.target().slot()
+            )));
+        }
+        let topology = request
+            .bindings()
+            .iter()
+            .map(|binding| (binding.semantic_leaf, binding.object))
+            .collect::<Vec<_>>();
+        for (leaf, object) in &topology {
+            if family_ids.contains(leaf) {
+                return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                    "external semantic key {} is both a family and a leaf",
+                    leaf.slot()
+                )));
+            }
+            if !object_ids.contains(object) {
+                return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                    "family target {} references unknown object {}",
+                    request.target().slot(),
+                    object.get()
+                )));
+            }
+            if let Some(existing) = objects_by_leaf.insert(*leaf, *object) {
+                if existing != *object {
+                    return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                        "external leaf {} maps to inconsistent objects",
+                        leaf.slot()
+                    )));
+                }
+            }
+            if let Some(existing) = leaves_by_object.insert(*object, *leaf) {
+                if existing != *leaf {
+                    return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                        "object {} maps to inconsistent external leaves",
+                        object.get()
+                    )));
+                }
+            }
+        }
+        match topologies.entry(request.target()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(topology);
+            }
+            std::collections::hash_map::Entry::Occupied(entry) if entry.get() != &topology => {
+                return Err(CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                    "family target {} has inconsistent ordered topology",
+                    request.target().slot()
+                )));
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {}
+        }
+    }
+    Ok(())
 }
 
 fn import_semantic_object(
@@ -216,16 +292,69 @@ fn import_semantic_object(
     Ok(mobject)
 }
 
-fn import_semantic_tracks(
+fn canonical_text_color(
+    id: noon_core::ObjectId,
+    transform: Transform2D,
+    style: Style,
+) -> Result<Color, CanonicalRetainedEnginePlayerError> {
+    let Some(color) = style.fill else {
+        return Err(invalid_semantic_import(format!(
+            "text object {} has no fill color",
+            id.get()
+        )));
+    };
+    if style.stroke.is_some() {
+        return Err(invalid_semantic_import(format!(
+            "text object {} requests text stroke before canonical stroke lowering is available",
+            id.get()
+        )));
+    }
+    if !style.opacity.is_finite() || !(0.0..=1.0).contains(&style.opacity) {
+        return Err(invalid_semantic_import(format!(
+            "text object {} has invalid opacity {}",
+            id.get(),
+            style.opacity
+        )));
+    }
+    let values = [
+        transform.translation.x,
+        transform.translation.y,
+        transform.scale.x,
+        transform.scale.y,
+        transform.rotation,
+        color.red,
+        color.green,
+        color.blue,
+        color.alpha,
+    ];
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(invalid_semantic_import(format!(
+            "text object {} has non-finite transform/color state",
+            id.get()
+        )));
+    }
+    Ok(color)
+}
+
+fn invalid_semantic_import(error: impl std::fmt::Display) -> CanonicalRetainedEnginePlayerError {
+    CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+        "invalid canonical scene input: {error}"
+    ))
+}
+
+fn import_semantic_animations(
     scene: &Scene,
     objects: &HashMap<noon_core::ObjectId, Mobject>,
+    families: &HashMap<SemanticNodeId, MobjectFamily>,
     tracks: Vec<noon_core::TrackDefinition>,
+    family_requests: Vec<FamilyAnimationRequest>,
+    origin: f64,
 ) -> Result<Option<DeclaredAnimation>, CanonicalRetainedEnginePlayerError> {
-    if tracks.is_empty() {
+    if tracks.is_empty() && family_requests.is_empty() {
         return Ok(None);
     }
     let mut transaction = SemanticMutationTransaction::new();
-    let mut children = Vec::with_capacity(tracks.len());
+    let mut children = Vec::with_capacity(tracks.len() + family_requests.len());
     for track in tracks {
         let target = objects.get(&track.object).ok_or_else(|| {
             CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
@@ -242,6 +371,58 @@ fn import_semantic_tracks(
             track.timing,
             track.time_map,
         ));
+    }
+    for request in family_requests {
+        let family = families.get(&request.target()).ok_or_else(|| {
+            CanonicalRetainedEnginePlayerError::SemanticPlayer(format!(
+                "family target {} was not imported",
+                request.target().slot()
+            ))
+        })?;
+        let spec = request.spec();
+        let options = AnimationOptions::new()
+            .run_time(spec.duration)
+            .rate_func(spec.rate_function)
+            .lag_ratio(spec.lag_ratio)
+            .reverse_rate_function(spec.reverse_rate_function)
+            .introducer(false)
+            .remover(false);
+        let members = request
+            .bindings()
+            .iter()
+            .enumerate()
+            .map(|(leaf_index, binding)| {
+                let target = objects
+                    .get(&binding.object)
+                    .expect("validated family object is imported");
+                transaction.create_family_animation_member(
+                    target.node_id(),
+                    spec.mode,
+                    spec.reverse_member_order,
+                    SemanticFamilyAnimationMember {
+                        family: family.node_id(),
+                        leaf_index,
+                    },
+                    options,
+                )
+            })
+            .collect::<Vec<_>>();
+        let request_root = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            members,
+            AnimationOptions::new().rate_func(RateFunction::Linear),
+        );
+        let delay = spec.start_time - origin;
+        if delay > 0.0 {
+            let wait = transaction.create_wait_animation(delay);
+            children.push(transaction.create_animation_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                [wait, request_root],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            ));
+        } else {
+            children.push(request_root);
+        }
     }
     let result = transaction
         .apply(&mut scene.store().borrow_mut())
@@ -331,15 +512,13 @@ fn semantic_track_values(
     })
 }
 
-/// Clocked retained execution owner constructed directly from canonical `SceneSpec`.
+/// Clocked shared semantic execution constructed at the canonical external codec boundary.
 ///
-/// Compatibility adapters may still produce `SceneSpec` from older payloads, but this
-/// execution boundary has no legacy geometry document or retained-text sidecar. Family
-/// animation requests are likewise consumed entirely inside Rust: the WASM class and
-/// browser worker remain one canonical protocol regardless of selected execution owner.
+/// Ordinary objects, exact tracks, and family requests are imported into one typed scene.
+/// The original encoded source is retained only for explicit roundtrip inspection.
 #[derive(Debug)]
 pub struct CanonicalRetainedEnginePlayer {
-    player: CanonicalRetainedExecutionPlayer,
+    player: OrdinarySemanticExecution,
     clock: PlaybackClock,
     scene_spec_json: String,
 }
@@ -350,46 +529,28 @@ impl CanonicalRetainedEnginePlayer {
         loop_duration_seconds: f64,
         session: u32,
     ) -> Result<Self, CanonicalRetainedEnginePlayerError> {
-        let has_family_animations = !scene_spec.family_animations.is_empty();
         let scene_spec_json = scene_spec.to_json()?;
-        let player = if !has_family_animations {
-            scene_spec.validate()?;
-            let (scene, animation_root) = import_ordinary_semantic_scene(
-                scene_spec.objects,
-                scene_spec.tracks,
-                scene_spec.camera_object,
-            )?;
-            let execution = match animation_root {
-                Some(root) => scene
-                    .execution_session_with_animation_root(&root)
-                    .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?,
-                None => scene.execution_session().map_err(|error| {
-                    CanonicalRetainedEnginePlayerError::SemanticPlayer(error.to_string())
-                })?,
-            };
-            let semantic_player =
-                SemanticExecutionPlayer::from_session(execution, loop_duration_seconds, session)
-                    .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
-            CanonicalRetainedExecutionPlayer::Ordinary(Box::new(OrdinarySemanticExecution {
-                _scene: scene,
-                player: semantic_player,
-            }))
-        } else {
-            let lowered = CanonicalRetainedFamilyAnimationScene::from_scene_spec(scene_spec)?;
-            let (scene, tracks, camera_object, animations) = lowered.into_parts();
-            let animations = animations
-                .into_iter()
-                .map(|animation| animation.into_parts())
-                .collect();
-            CanonicalRetainedExecutionPlayer::Family(Box::new(
-                RetainedFamilyExecutionPlayer::new_many_with_tracks(
-                    scene,
-                    &tracks,
-                    animations,
-                    camera_object,
-                    session,
-                )?,
-            ))
+        scene_spec.validate()?;
+        let (scene, animation_root, origin) = import_ordinary_semantic_scene(
+            scene_spec.objects,
+            scene_spec.tracks,
+            scene_spec.family_animations,
+            scene_spec.camera_object,
+        )?;
+        let execution = match animation_root {
+            Some(root) => scene
+                .execution_session_with_animation_root_at(&root, origin)
+                .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?,
+            None => scene.execution_session().map_err(|error| {
+                CanonicalRetainedEnginePlayerError::SemanticPlayer(error.to_string())
+            })?,
+        };
+        let semantic_player =
+            SemanticExecutionPlayer::from_session(execution, loop_duration_seconds, session)
+                .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
+        let player = OrdinarySemanticExecution {
+            _scene: scene,
+            player: semantic_player,
         };
 
         Ok(Self {
@@ -416,12 +577,14 @@ impl CanonicalRetainedEnginePlayer {
     }
 
     pub fn resource_bundle_bytes(&self) -> &[u8] {
-        self.player.resource_bundle_bytes()
+        self.player.player.resource_bundle_slice()
     }
 
     pub fn initial_delta_json(&mut self) -> Result<String, CanonicalRetainedEnginePlayerError> {
         self.player
-            .evaluate_delta_json(0.0)?
+            .player
+            .evaluate_delta_at(0.0)
+            .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?
             .ok_or(CanonicalRetainedEnginePlayerError::MissingInitialSnapshot)
     }
 
@@ -430,7 +593,10 @@ impl CanonicalRetainedEnginePlayer {
         timestamp_ms: f64,
     ) -> Result<Option<String>, CanonicalRetainedEnginePlayerError> {
         let scene_time = self.clock.scene_time(timestamp_ms)?;
-        self.player.evaluate_delta_json(scene_time)
+        self.player
+            .player
+            .evaluate_delta_at(scene_time)
+            .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)
     }
 
     pub fn set_loop_duration(
@@ -455,7 +621,11 @@ impl CanonicalRetainedEnginePlayer {
     ) -> Result<Option<String>, CanonicalRetainedEnginePlayerError> {
         let mut clock = self.clock.clone();
         clock.seek(scene_time)?;
-        let delta = self.player.evaluate_delta_json(scene_time)?;
+        let delta = self
+            .player
+            .player
+            .evaluate_delta_at(scene_time)
+            .map_err(CanonicalRetainedEnginePlayerError::SemanticPlayer)?;
         self.clock = clock;
         Ok(delta)
     }
@@ -465,17 +635,14 @@ impl CanonicalRetainedEnginePlayer {
     }
 
     pub fn time(&self) -> f64 {
-        self.player.time()
+        self.player.player.time()
     }
 }
 
 #[derive(Debug)]
 pub enum CanonicalRetainedEnginePlayerError {
     SceneSpec(SceneSpecError),
-    Authoring(MixedRetainedAuthoringError),
     SemanticPlayer(String),
-    FamilyScene(CanonicalRetainedFamilyAnimationSceneError),
-    FamilyPlayer(RetainedFamilyExecutionPlayerError),
     MissingInitialSnapshot,
     Clock(ClockError),
     Json(serde_json::Error),
@@ -485,10 +652,7 @@ impl std::fmt::Display for CanonicalRetainedEnginePlayerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SceneSpec(error) => error.fmt(formatter),
-            Self::Authoring(error) => error.fmt(formatter),
             Self::SemanticPlayer(error) => formatter.write_str(error),
-            Self::FamilyScene(error) => error.fmt(formatter),
-            Self::FamilyPlayer(error) => error.fmt(formatter),
             Self::MissingInitialSnapshot => formatter
                 .write_str("canonical retained execution did not emit its initial snapshot"),
             Self::Clock(error) => error.fmt(formatter),
@@ -502,24 +666,6 @@ impl std::error::Error for CanonicalRetainedEnginePlayerError {}
 impl From<SceneSpecError> for CanonicalRetainedEnginePlayerError {
     fn from(value: SceneSpecError) -> Self {
         Self::SceneSpec(value)
-    }
-}
-
-impl From<MixedRetainedAuthoringError> for CanonicalRetainedEnginePlayerError {
-    fn from(value: MixedRetainedAuthoringError) -> Self {
-        Self::Authoring(value)
-    }
-}
-
-impl From<CanonicalRetainedFamilyAnimationSceneError> for CanonicalRetainedEnginePlayerError {
-    fn from(value: CanonicalRetainedFamilyAnimationSceneError) -> Self {
-        Self::FamilyScene(value)
-    }
-}
-
-impl From<RetainedFamilyExecutionPlayerError> for CanonicalRetainedEnginePlayerError {
-    fn from(value: RetainedFamilyExecutionPlayerError) -> Self {
-        Self::FamilyPlayer(value)
     }
 }
 
@@ -676,7 +822,14 @@ mod tests {
     }
 
     fn family_scene_json(
-        additional: Option<(f64, f64, FamilyAnimationMode)>,
+        additional: Option<(f64, f64, FamilyAnimationMode, bool)>,
+    ) -> (String, ObjectId, ObjectId) {
+        family_scene_json_with_start(1.0, additional)
+    }
+
+    fn family_scene_json_with_start(
+        start_time: f64,
+        additional: Option<(f64, f64, FamilyAnimationMode, bool)>,
     ) -> (String, ObjectId, ObjectId) {
         let scene = noon::Scene::new();
         let circle = scene.circle(0.25).unwrap();
@@ -689,7 +842,7 @@ mod tests {
         context.bind_mobject(text_id, &text).unwrap();
         let family_spec = FamilyAnimationSpec::new(
             FamilyAnimationMode::Reveal,
-            1.0,
+            start_time,
             2.0,
             1.0,
             RateFunction::Linear,
@@ -710,7 +863,7 @@ mod tests {
             binding(),
         )
         .unwrap()];
-        if let Some((start_time, duration, mode)) = additional {
+        if let Some((start_time, duration, mode, inconsistent_topology)) = additional {
             let spec = FamilyAnimationSpec::new(
                 mode,
                 start_time,
@@ -721,15 +874,17 @@ mod tests {
                 false,
             )
             .unwrap();
-            requests.push(
+            requests.push(if inconsistent_topology {
+                FamilyAnimationRequest::new(family.node_id(), binding().to_vec(), spec).unwrap()
+            } else {
                 FamilyAnimationRequest::from_semantic_bindings(
                     &scene.store().borrow(),
                     family.node_id(),
                     spec,
                     binding(),
                 )
-                .unwrap(),
-            );
+                .unwrap()
+            });
         }
         let json = context
             .finalize(vec![position_track(circle_id, 4.0, 4.0)], requests, None)
@@ -739,39 +894,49 @@ mod tests {
         (json, text_id, circle_id)
     }
 
-    fn assert_family_midpoint(
-        mirror: &InstalledRetainedExecutionMirror,
-        text_id: ObjectId,
-        circle_id: ObjectId,
-    ) {
-        let plan = mirror.family_plan().unwrap().unwrap();
-        assert_eq!(plan.leaves()[0].span().object, text_id);
-        assert_eq!(plan.leaves()[1].span().object, circle_id);
-
+    fn family_object_indices(mirror: &InstalledRetainedExecutionMirror) -> (usize, usize) {
         let retained = mirror.frame().unwrap();
         let text_index = retained
             .objects
             .iter()
-            .position(|object| object.id == text_id)
+            .position(|object| object.content.text().is_some())
             .unwrap();
         let circle_index = retained
             .objects
             .iter()
-            .position(|object| object.id == circle_id)
+            .position(|object| object.content.geometry().is_some())
             .unwrap();
-        assert_eq!((circle_index, text_index), (0, 1));
+        (text_index, circle_index)
+    }
 
-        let family_frame = mirror.family_frame().unwrap().unwrap();
+    fn assert_family_midpoint(mirror: &InstalledRetainedExecutionMirror) {
+        let retained = mirror.frame().unwrap();
+        let (text_index, circle_index) = family_object_indices(mirror);
+        assert_eq!((circle_index, text_index), (0, 1));
+        let family_frame = mirror.planned_family_frame().unwrap().unwrap();
+        let text_plan_index = family_frame.family_plan_index(text_index).unwrap() as usize;
+        let circle_plan_index = family_frame.family_plan_index(circle_index).unwrap() as usize;
+        let text_plan = &mirror.family_plans()[text_plan_index];
+        let circle_plan = &mirror.family_plans()[circle_plan_index];
+        let text_span = text_plan.leaves()[0].span();
+        let circle_span = circle_plan.leaves()[0].span();
+        assert_eq!(text_span.object, retained.objects[text_index].id);
+        assert_eq!((text_span.first_member, text_span.member_count), (0, 2));
+        assert_eq!(text_plan.member_plan().total_member_count(), 3);
+        assert_eq!(circle_span.object, retained.objects[circle_index].id);
+        assert_eq!((circle_span.first_member, circle_span.member_count), (2, 1));
+        assert_eq!(circle_plan.member_plan().total_member_count(), 3);
+
         let text = family_frame
-            .planned_family_leaf(plan, text_index)
+            .planned_family_leaf(mirror.family_plans(), text_index)
             .unwrap()
             .unwrap();
         let circle = family_frame
-            .planned_family_leaf(plan, circle_index)
+            .planned_family_leaf(mirror.family_plans(), circle_index)
             .unwrap()
             .unwrap();
         assert_eq!(text.member_progress(0).unwrap(), 1.0);
-        assert_eq!(text.member_progress(1).unwrap(), 0.5);
+        assert!((text.member_progress(1).unwrap() - 0.5).abs() < 1e-6);
         assert_eq!(circle.member_progress(0).unwrap(), 0.0);
 
         let circle = &retained.objects[circle_index];
@@ -844,8 +1009,8 @@ mod tests {
     }
 
     #[test]
-    fn canonical_engine_selects_family_execution_and_preserves_tracks() {
-        let (scene_spec_json, text_id, circle_id) = family_scene_json(None);
+    fn canonical_engine_imports_family_into_shared_execution_and_preserves_tracks() {
+        let (scene_spec_json, _, _) = family_scene_json(None);
         let mut engine =
             CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 51).unwrap();
         assert_eq!(engine.scene_spec_json(), scene_spec_json);
@@ -870,14 +1035,14 @@ mod tests {
         let midpoint: RetainedFamilyExecutionDeltaEnvelope =
             serde_json::from_str(&midpoint_json).unwrap();
         assert!(!midpoint.retained.snapshot);
-        assert_eq!(midpoint.family_plans.len(), 1);
+        assert_eq!(midpoint.family_plans.len(), 2);
         mirror.apply_json(&midpoint_json).unwrap();
-        assert_family_midpoint(&mirror, text_id, circle_id);
+        assert_family_midpoint(&mirror);
     }
 
     #[test]
     fn canonical_family_direct_seek_matches_forward_state() {
-        let (scene_spec_json, text_id, circle_id) = family_scene_json(None);
+        let (scene_spec_json, _, _) = family_scene_json(None);
 
         let mut forward =
             CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 61).unwrap();
@@ -910,8 +1075,8 @@ mod tests {
         assert!(direct_delta.retained.snapshot);
         direct_mirror.apply_json(&direct_json).unwrap();
 
-        assert_family_midpoint(&forward_mirror, text_id, circle_id);
-        assert_family_midpoint(&direct_mirror, text_id, circle_id);
+        assert_family_midpoint(&forward_mirror);
+        assert_family_midpoint(&direct_mirror);
         let forward_frame = forward_mirror.frame().unwrap();
         let direct_frame = direct_mirror.frame().unwrap();
         assert_eq!(
@@ -936,8 +1101,12 @@ mod tests {
 
     #[test]
     fn canonical_engine_runs_sequential_family_requests_with_exact_plan_identity() {
-        let (scene_spec_json, text_id, circle_id) =
-            family_scene_json(Some((3.0, 1.0, FamilyAnimationMode::Reveal)));
+        let (scene_spec_json, _, _) = family_scene_json(Some((
+            3.0,
+            1.0,
+            FamilyAnimationMode::DrawBorderThenFill,
+            false,
+        )));
         let mut engine =
             CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 5.0, 71).unwrap();
         let mut mirror =
@@ -956,20 +1125,18 @@ mod tests {
             .unwrap()
             .expect("first family request state");
         mirror.apply_json(&first).unwrap();
-        let retained = mirror.frame().unwrap();
-        let text_index = retained
-            .objects
-            .iter()
-            .position(|object| object.id == text_id)
-            .unwrap();
-        let circle_index = retained
-            .objects
-            .iter()
-            .position(|object| object.id == circle_id)
-            .unwrap();
+        let (text_index, circle_index) = family_object_indices(&mirror);
         let first_frame = mirror.planned_family_frame().unwrap().unwrap();
-        assert_eq!(first_frame.family_plan_index(text_index), Some(0));
-        assert_eq!(first_frame.family_plan_index(circle_index), Some(0));
+        let first_text_plan = first_frame.family_plan_index(text_index).unwrap() as usize;
+        let first_circle_plan = first_frame.family_plan_index(circle_index).unwrap() as usize;
+        assert_ne!(first_text_plan, first_circle_plan);
+        let text_target = mirror.family_plans()[first_text_plan]
+            .member_plan()
+            .target();
+        let circle_target = mirror.family_plans()[first_circle_plan]
+            .member_plan()
+            .target();
+        assert_family_midpoint(&mirror);
 
         let second = engine
             .seek_delta_json(3.5)
@@ -977,24 +1144,66 @@ mod tests {
             .expect("second family request state");
         mirror.apply_json(&second).unwrap();
         let second_frame = mirror.planned_family_frame().unwrap().unwrap();
-        assert_eq!(second_frame.family_plan_index(text_index), Some(1));
-        assert_eq!(second_frame.family_plan_index(circle_index), Some(1));
+        let second_text_plan = second_frame.family_plan_index(text_index).unwrap() as usize;
+        let second_circle_plan = second_frame.family_plan_index(circle_index).unwrap() as usize;
+        assert_ne!(second_text_plan, second_circle_plan);
+        assert_ne!(second_text_plan, first_text_plan);
+        assert_ne!(second_circle_plan, first_circle_plan);
+        assert_eq!(
+            mirror.family_plans()[second_text_plan]
+                .member_plan()
+                .target(),
+            text_target
+        );
+        assert_eq!(
+            mirror.family_plans()[second_circle_plan]
+                .member_plan()
+                .target(),
+            circle_target
+        );
     }
 
     #[test]
     fn canonical_engine_rejects_overlapping_family_ownership_on_same_object() {
         let (scene_spec_json, _, _) =
-            family_scene_json(Some((2.5, 1.0, FamilyAnimationMode::Reveal)));
+            family_scene_json(Some((2.5, 1.0, FamilyAnimationMode::Reveal, false)));
         let error =
             CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 72).unwrap_err();
         assert!(matches!(
             error,
-            CanonicalRetainedEnginePlayerError::FamilyPlayer(
-                RetainedFamilyExecutionPlayerError::Runtime(
-                    noon_runtime::RetainedFamilyPlanSetRuntimeError::OverlappingAnimations { .. }
-                )
-            )
+            CanonicalRetainedEnginePlayerError::SemanticPlayer(message)
+                if message.to_ascii_lowercase().contains("conflict")
         ));
+    }
+
+    #[test]
+    fn canonical_engine_rejects_reused_family_key_with_different_order() {
+        let (scene_spec_json, _, _) =
+            family_scene_json(Some((3.0, 1.0, FamilyAnimationMode::Reveal, true)));
+        let error =
+            CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 73).unwrap_err();
+        assert!(matches!(
+            error,
+            CanonicalRetainedEnginePlayerError::SemanticPlayer(message)
+                if message.contains("inconsistent ordered topology")
+        ));
+    }
+
+    #[test]
+    fn negative_family_start_is_in_progress_at_time_zero() {
+        let (scene_spec_json, _, _) = family_scene_json_with_start(-1.0, None);
+        let mut engine =
+            CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 74).unwrap();
+        let initial = engine.initial_delta_json().unwrap();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        mirror.apply_json(&initial).unwrap();
+        let family = mirror.family_frame().unwrap().unwrap();
+        let state = family
+            .family_animation(family_object_indices(&mirror).0)
+            .unwrap();
+        assert_eq!(state.overall_progress, 0.5);
     }
 
     #[test]

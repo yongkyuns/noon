@@ -262,6 +262,7 @@ impl RetainedExecutionDeltaEncoder {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_render_geometries(
         session: u32,
         geometries: Arc<[Arc<GeometryRef>]>,

@@ -85,7 +85,7 @@ pub enum SemanticScheduledAnimationPayload {
     TextGlyph {
         mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
-        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+        family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     },
     Rotate {
         angle: f64,
@@ -197,7 +197,7 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     TextGlyph {
         mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
-        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+        family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     },
     Rotate {
         angle: f64,
@@ -473,7 +473,7 @@ pub fn lower_semantic_animation_schedule(
     let lookup = PublishedAnimationLookup {
         store,
         index,
-        family_text_counts: std::cell::RefCell::new(std::collections::HashMap::new()),
+        family_animation_member_counts: std::cell::RefCell::new(std::collections::HashMap::new()),
     };
     let projection = lower_animation_schedule(&lookup, root, start_time, play_options)
         .map_err(published_schedule_error)?;
@@ -540,7 +540,7 @@ pub fn lower_prepared_semantic_animation_schedule(
     let lookup = PreparedAnimationLookup {
         prepared,
         index,
-        family_text_counts: std::cell::RefCell::new(std::collections::HashMap::new()),
+        family_animation_member_counts: std::cell::RefCell::new(std::collections::HashMap::new()),
     };
     let projection = lower_animation_schedule(&lookup, root, start_time, play_options)
         .map_err(prepared_schedule_error)?;
@@ -752,7 +752,7 @@ enum AnimationDeclarationIntent<R> {
         target: R,
         mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
-        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+        family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     },
     Rotate {
         target: R,
@@ -800,15 +800,15 @@ trait AnimationScheduleLookup {
         None
     }
 
-    fn text_write_member_count(
+    fn family_animation_member_count(
         &self,
         target: Self::Reference,
         mode: noon_core::FamilyAnimationMode,
-        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+        family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     ) -> Option<u32>;
 }
 
-fn cached_family_text_member_count(
+fn cached_family_animation_member_count(
     store: &SemanticStore,
     family: SemanticNodeId,
     mode: noon_core::FamilyAnimationMode,
@@ -827,10 +827,7 @@ fn cached_family_text_member_count(
         for leaf in leaves {
             let state = store.semantic_object_state_checked(leaf).ok()?;
             let count = match (mode, state.content) {
-                (
-                    noon_core::FamilyAnimationMode::Reveal,
-                    noon_core::SemanticObjectContent::Geometry(_),
-                ) => 1,
+                (_, noon_core::SemanticObjectContent::Geometry(_)) => 1,
                 (_, noon_core::SemanticObjectContent::Text(handle)) => {
                     let resource = store.text_resources().get(handle)?;
                     if resource.kind != noon_core::TextSourceKind::Plain {
@@ -843,7 +840,6 @@ fn cached_family_text_member_count(
                     )
                     .ok()?
                 }
-                _ => return None,
             };
             total = total.checked_add(count)?;
         }
@@ -856,7 +852,7 @@ fn cached_family_text_member_count(
 struct PublishedAnimationLookup<'a> {
     store: &'a SemanticStore,
     index: &'a SemanticExecutionIndex,
-    family_text_counts:
+    family_animation_member_counts:
         std::cell::RefCell<std::collections::HashMap<(SemanticNodeId, bool), Option<u32>>>,
 }
 
@@ -1027,18 +1023,18 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
         self.index.execution_object_id(target)
     }
 
-    fn text_write_member_count(
+    fn family_animation_member_count(
         &self,
         target: Self::Reference,
         mode: noon_core::FamilyAnimationMode,
-        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+        family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     ) -> Option<u32> {
         if let Some(member) = family_member {
-            return cached_family_text_member_count(
+            return cached_family_animation_member_count(
                 self.store,
                 member.family,
                 mode,
-                &self.family_text_counts,
+                &self.family_animation_member_counts,
             );
         }
         let state = self.store.semantic_object_state_checked(target).ok()?;
@@ -1058,7 +1054,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
 struct PreparedAnimationLookup<'a, 'store> {
     prepared: &'a PreparedSemanticMutationTransaction<'store>,
     index: &'a SemanticExecutionIndex,
-    family_text_counts:
+    family_animation_member_counts:
         std::cell::RefCell<std::collections::HashMap<(SemanticNodeId, bool), Option<u32>>>,
 }
 
@@ -1365,18 +1361,18 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
         target.existing().map(super::semantic_execution_object_id)
     }
 
-    fn text_write_member_count(
+    fn family_animation_member_count(
         &self,
         target: Self::Reference,
         mode: noon_core::FamilyAnimationMode,
-        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+        family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     ) -> Option<u32> {
         if let Some(member) = family_member {
-            return cached_family_text_member_count(
+            return cached_family_animation_member_count(
                 self.prepared.store(),
                 member.family,
                 mode,
-                &self.family_text_counts,
+                &self.family_animation_member_counts,
             );
         }
         let state = self.prepared.object_state(target).ok()?;
@@ -1445,7 +1441,7 @@ enum ScheduledAnimationPayload<R> {
     TextGlyph {
         mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
-        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+        family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     },
     Rotate {
         angle: f64,
@@ -1726,7 +1722,7 @@ where
                 .or_else(|| lookup.entering_execution_object_id(target))
                 .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
             let member_count = lookup
-                .text_write_member_count(target, mode, family_member)
+                .family_animation_member_count(target, mode, family_member)
                 .ok_or(AnimationSchedulePlanError::InvalidTextWriteTarget { animation, target })?;
             let (default_duration, default_rate, default_lag_ratio) = match mode {
                 noon_core::FamilyAnimationMode::DrawBorderThenFill => (
@@ -1747,10 +1743,12 @@ where
                     lag_ratio: default_lag_ratio,
                     path_arc: 0.0,
                     reverse_rate_function: false,
-                    remover: matches!(mode, noon_core::FamilyAnimationMode::DrawBorderThenFill)
+                    remover: family_member.is_none()
+                        && matches!(mode, noon_core::FamilyAnimationMode::DrawBorderThenFill)
                         && reverse_member_order,
-                    introducer: !matches!(mode, noon_core::FamilyAnimationMode::DrawBorderThenFill)
-                        || !reverse_member_order,
+                    introducer: family_member.is_none()
+                        && (!matches!(mode, noon_core::FamilyAnimationMode::DrawBorderThenFill)
+                            || !reverse_member_order),
                 },
                 state.options,
                 play_options.reverse_rate_function(false),
@@ -1759,12 +1757,13 @@ where
             options.reverse_rate_function = reverse_rate_function;
             // Member order controls how glyph progress is distributed. Removal is
             // an independent completion policy and may be explicitly overridden.
-            let lifecycle_matches = match mode {
-                noon_core::FamilyAnimationMode::DrawBorderThenFill => {
-                    options.introducer == !reverse_member_order
-                }
-                noon_core::FamilyAnimationMode::Reveal => !reverse_member_order,
-            };
+            let lifecycle_matches = family_member.is_some()
+                || match mode {
+                    noon_core::FamilyAnimationMode::DrawBorderThenFill => {
+                        options.introducer == !reverse_member_order
+                    }
+                    noon_core::FamilyAnimationMode::Reveal => !reverse_member_order,
+                };
             if !lifecycle_matches || options.path_arc != 0.0 {
                 return Err(
                     AnimationSchedulePlanError::UnsupportedCompositionLifecycle {

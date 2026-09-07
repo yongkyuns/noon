@@ -116,9 +116,9 @@ pub enum SemanticSubsetDisplayMode {
     OneByOneCeil,
 }
 
-/// Authoritative family position used to derive a leaf's global Write span.
+/// Authoritative family position used to derive a leaf's global member span.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SemanticTextWriteFamilyMember {
+pub struct SemanticFamilyAnimationMember {
     pub family: SemanticNodeId,
     pub leaf_index: usize,
 }
@@ -135,6 +135,28 @@ pub const fn text_write_default_duration(member_count: u32) -> f64 {
 /// Manim Write's shared lag default for one globally ordered glyph sequence.
 pub fn text_write_default_lag_ratio(member_count: u32) -> f64 {
     (4.0 / f64::from(member_count.max(1))).min(0.2)
+}
+
+pub(crate) fn normalize_text_write_options(
+    reverse_member_order: bool,
+    mut options: AnimationOptions,
+) -> AnimationOptions {
+    options.introducer.get_or_insert(!reverse_member_order);
+    options.remover.get_or_insert(reverse_member_order);
+    options
+}
+
+pub(crate) fn normalize_text_reveal_options(
+    reverse: bool,
+    mut options: AnimationOptions,
+) -> AnimationOptions {
+    options.run_time.get_or_insert(1.0);
+    options.rate_func.get_or_insert(crate::RateFunction::Smooth);
+    options.lag_ratio.get_or_insert(1.0);
+    options.reverse_rate_function.get_or_insert(reverse);
+    options.introducer.get_or_insert(!reverse);
+    options.remover.get_or_insert(reverse);
+    options
 }
 
 /// Directional translation of a faded affine endpoint relative to activation state.
@@ -278,7 +300,7 @@ pub enum SemanticAnimationIntent {
         target: SemanticNodeId,
         mode: FamilyAnimationMode,
         reverse_member_order: bool,
-        family_member: Option<SemanticTextWriteFamilyMember>,
+        family_member: Option<SemanticFamilyAnimationMember>,
     },
     /// Rotate one centered 2D object along an angular path. This remains distinct
     /// from TransformTo point correspondence even when both share affine endpoints.
@@ -815,7 +837,7 @@ impl SemanticStore {
             FamilyAnimationMode::DrawBorderThenFill,
             reverse_member_order,
             None,
-            options,
+            normalize_text_write_options(reverse_member_order, options),
         )
     }
 
@@ -824,14 +846,13 @@ impl SemanticStore {
         target: SemanticNodeId,
         mode: FamilyAnimationMode,
         reverse_member_order: bool,
-        family_member: Option<SemanticTextWriteFamilyMember>,
+        family_member: Option<SemanticFamilyAnimationMember>,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         let state = self.semantic_object_state_checked(target)?;
         match (mode, state.content) {
-            (FamilyAnimationMode::Reveal, crate::SemanticObjectContent::Geometry(_))
-                if family_member.is_some() => {}
+            (_, crate::SemanticObjectContent::Geometry(_)) if family_member.is_some() => {}
             (_, crate::SemanticObjectContent::Text(handle)) => {
                 let resource = self
                     .text_resources()
@@ -1439,5 +1460,26 @@ mod tests {
         assert_eq!(text_write_default_lag_ratio(0), 0.2);
         assert_eq!(text_write_default_lag_ratio(5), 0.2);
         assert_eq!(text_write_default_lag_ratio(40), 0.1);
+    }
+
+    #[test]
+    fn text_conveniences_normalize_lifecycle_without_overriding_explicit_reversal() {
+        let write = normalize_text_write_options(true, AnimationOptions::new().remover(false));
+        assert_eq!(write.introducer, Some(false));
+        assert_eq!(write.remover, Some(false));
+
+        let reveal = normalize_text_reveal_options(
+            true,
+            AnimationOptions::new()
+                .reverse_rate_function(false)
+                .introducer(true)
+                .remover(false),
+        );
+        assert_eq!(reveal.run_time, Some(1.0));
+        assert_eq!(reveal.rate_func, Some(RateFunction::Smooth));
+        assert_eq!(reveal.lag_ratio, Some(1.0));
+        assert_eq!(reveal.reverse_rate_function, Some(false));
+        assert_eq!(reveal.introducer, Some(true));
+        assert_eq!(reveal.remover, Some(false));
     }
 }

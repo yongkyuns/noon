@@ -35,18 +35,6 @@ struct StagedPlanMappings {
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
-    pub(crate) fn with_render_geometries(
-        session: u32,
-        geometries: std::sync::Arc<[std::sync::Arc<noon_core::GeometryRef>]>,
-    ) -> Self {
-        Self {
-            retained: RetainedExecutionDeltaEncoder::with_render_geometries(session, geometries),
-            plan_index_remap: HashMap::new(),
-            published_plan_count: 0,
-            observed_plan_count: 0,
-            resources: RetainedResourceInventory::default(),
-        }
-    }
     pub fn new(session: u32) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
