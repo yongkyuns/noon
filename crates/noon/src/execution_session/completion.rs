@@ -319,9 +319,15 @@ impl ExecutionSession {
                 | SemanticAnimationCompletion::Release => {}
             }
             // Discrete channels have no active driver to release or endpoint to
-            // bake into authored state. Retain their event history so seeking an
-            // already completed composition still reproduces membership timing.
-            if !entry.property.is_instant() {
+            // bake into authored state. A kept reveal lifecycle likewise has no
+            // semantic reveal field to receive its endpoint, so its completed
+            // execution track remains the authoritative persistent reveal history.
+            if !entry.property.is_instant()
+                && !matches!(
+                    &entry.completion,
+                    SemanticAnimationCompletion::RevealLifecycle { remove: false }
+                )
+            {
                 release.push(ExecutionPatch::ReconcileTrack {
                     track: entry.track,
                     object: entry.execution_object,

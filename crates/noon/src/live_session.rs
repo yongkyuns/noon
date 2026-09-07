@@ -2776,6 +2776,7 @@ mod tests {
         );
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
+        assert_eq!(live.session.frame().reveal(0), 0.0);
         live.complete_segment(segment).unwrap();
         assert!(live.contains(&square).unwrap());
         assert_eq!(live.session.frame().reveal(0), 0.0);
