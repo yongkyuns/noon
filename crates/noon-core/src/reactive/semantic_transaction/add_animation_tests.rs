@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    AnimationOptions, NativeStateSource, SemanticAffineLifecycleDirection,
+    AnimationOptions, NativeStateSource, RateFunction, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationIntent,
     SemanticAnimationState, SemanticFadeDirection, SemanticObjectState, SemanticVec3,
     StoredGeometry,

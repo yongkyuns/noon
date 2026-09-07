@@ -1066,7 +1066,8 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
             AnimationDeclarationIntent::Rotate { target, .. }
-            | AnimationDeclarationIntent::Indicate { target, .. } => {
+            | AnimationDeclarationIntent::Indicate { target, .. }
+            | AnimationDeclarationIntent::DrawBorderThenFill { target, .. } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;

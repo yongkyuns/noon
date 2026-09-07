@@ -1,8 +1,8 @@
 use super::{
-    AnimationOptions, AnimationOptionsError, RateFunction, SemanticNodeId, SemanticNodeKind,
+    AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
     SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
 };
-use crate::Color;
+use crate::{Color, RateFunction};
 
 /// Ordered composition semantics authored before execution scheduling/lowering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
