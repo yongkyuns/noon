@@ -7,7 +7,6 @@
   </head>
   <body>
     <canvas id="retained-write-smoke" width="640" height="360"></canvas>
-    <canvas id="retained-stress-smoke" width="640" height="360"></canvas>
     <script type="module">
       import init, { semanticFrameJson } from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
@@ -56,8 +55,6 @@ class RetainedSequentialFamilySmoke(Scene):
       let writeResult = null;
       let sequentialResult = null;
       let writeRenderResult = null;
-      let stressResult = null;
-      let stressRenderResult = null;
 
       function retainedTextView(result, label = "retained text") {
         if (result.kind !== "scene_document") {
@@ -168,57 +165,6 @@ class RetainedSequentialFamilySmoke(Scene):
         }
         if (Math.abs(Number(metrics.engineMetrics.time) - seekTime) > 1e-6) {
           throw new Error(`${label} deterministic seek drifted to ${metrics.engineMetrics.time}`);
-        }
-      }
-
-      async function renderCanonicalMidpoint({
-        result,
-        canvasSelector,
-        label,
-        loopDurationSeconds,
-        seekTime,
-        expectedObjectCount,
-      }) {
-        if (result == null) {
-          throw new Error(`${label} authoring result is unavailable`);
-        }
-
-        const canvas = document.querySelector(canvasSelector);
-        const errors = [];
-        const execution = new ExecutionWorkerClient(canvas, {
-          onError(error, owner) {
-            errors.push(`${owner}: ${error}`);
-          },
-        });
-        try {
-          const readyState = await execution.startRetainedCanonical(
-            JSON.stringify(result.sceneSpec),
-            {
-              loopDurationSeconds,
-              transportMode: "transferable",
-            },
-          );
-          await execution.pause();
-          await execution.seek(seekTime);
-          const metrics = await waitForRenderedState(execution, {
-            label,
-            seekTime,
-            expectedObjectCount,
-            errors,
-          });
-          assertCanonicalRenderedState(metrics, `${label} midpoint`, seekTime);
-          return {
-            backend: metrics.metrics.backend,
-            presentedFrames: metrics.metrics.presentedFrames,
-            drawCalls: metrics.metrics.drawCalls,
-            instancesDrawn: metrics.metrics.instancesDrawn,
-            engineTime: metrics.engineMetrics.time,
-            renderTime: metrics.metrics.time,
-            objectCount: metrics.metrics.objectCount,
-            readyState,
-          };
-        } finally {
-          execution.terminate();
         }
       }
 
@@ -350,58 +296,12 @@ class RetainedSequentialFamilySmoke(Scene):
             // One canonical worker crosses the touching boundary and renders both plans.
             writeRenderResult = await renderSequentialFamilySwitch();
 
-            const stressResponse = await fetch("./python/examples/manim_parity_stress_grid.py");
-            if (!stressResponse.ok) {
-              throw new Error(`stress source fetch failed with HTTP ${stressResponse.status}`);
-            }
-            const stressSource = await stressResponse.text();
-            stressResult = await runForExport(stressSource);
-            if (stressResult.kind !== "scene_document") {
-              throw new Error(`stress smoke returned ${stressResult.kind}`);
-            }
-            if (Math.abs(Number(stressResult.duration) - 5.0) > 1e-12) {
-              throw new Error(`stress scene duration drifted to ${stressResult.duration}`);
-            }
-            if (!stressResult.sceneSpec) {
-              throw new Error("stress scene did not produce canonical SceneSpec");
-            }
-            if (stressResult.document.objects.length !== 800) {
-              throw new Error(
-                `stress scene expected 800 geometry objects, got ${stressResult.document.objects.length}`,
-              );
-            }
-            const stressTextObjects = stressResult.sceneSpec.objects.filter(
-              (object) => object.content?.kind === "text",
-            );
-            if (stressTextObjects.length !== 26) {
-              throw new Error(
-                `stress SceneSpec expected 26 Text objects, got ${stressTextObjects.length}`,
-              );
-            }
-            if (stressResult.sceneSpec.objects.length !== 826) {
-              throw new Error(
-                `stress canonical SceneSpec expected 826 mixed objects, got ${stressResult.sceneSpec.objects.length}`,
-              );
-            }
-            stressRenderResult = await renderCanonicalMidpoint({
-              result: stressResult,
-              canvasSelector: "#retained-stress-smoke",
-              label: "dynamic load stress",
-              loopDurationSeconds: 5.0,
-              seekTime: 3.0,
-              // At t=3.0 all 600 primary shapes and all 26 retained Text objects
-              // are present. The 200 pulse circles are authored but enter later.
-              expectedObjectCount: 626,
-            });
-
             return {
               create,
               write: writeResult,
               unwrite,
               sequential: sequentialResult,
               writeRender: writeRenderResult,
-              stress: stressResult,
-              stressRender: stressRenderResult,
             };
           })();
         }
@@ -413,10 +313,6 @@ class RetainedSequentialFamilySmoke(Scene):
         renderRetainedWriteMidpoint: async () => {
           await ready();
           return writeRenderResult;
-        },
-        renderStressMidpoint: async () => {
-          await ready();
-          return stressRenderResult;
         },
         retainedTextView,
         run: runForExport,

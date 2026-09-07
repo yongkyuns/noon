@@ -780,9 +780,8 @@ fn lower_property(
         SemanticObjectProperty::Scale => Ok(Property::Scale),
         SemanticObjectProperty::RotationZ => Ok(Property::Rotation),
         SemanticObjectProperty::ObjectOpacity => Ok(Property::Opacity),
-        SemanticObjectProperty::FillOpacity
-        | SemanticObjectProperty::StrokeOpacity
-        | SemanticObjectProperty::StrokeWidth => {
+        SemanticObjectProperty::StrokeWidth => Ok(Property::StrokeWidth),
+        SemanticObjectProperty::FillOpacity | SemanticObjectProperty::StrokeOpacity => {
             Err(SemanticReactiveLoweringError::UnsupportedProperty { target, property })
         }
     }
@@ -870,6 +869,29 @@ mod tests {
                         Box::new(ReactiveExpr::Constant(ReactiveValue::Scalar(3.0))),
                     ))
         }));
+    }
+
+    #[test]
+    fn stroke_width_binding_lowers_to_the_distinct_scalar_execution_channel() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(2.5_f64).unwrap();
+        let object = visible_circle(&mut store);
+        store
+            .bind_semantic_signal(signal, object, SemanticObjectProperty::StrokeWidth)
+            .unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let execution = projection(&store, &mut index);
+        let reactive = lower_semantic_reactive_projection(&store, &execution).unwrap();
+
+        assert_eq!(
+            reactive.graph().bindings(),
+            &[ReactiveBinding {
+                signal: reactive.execution_signal_id(signal).unwrap(),
+                object: index.execution_object_id(object).unwrap(),
+                property: Property::StrokeWidth,
+            }]
+        );
     }
 
     #[test]

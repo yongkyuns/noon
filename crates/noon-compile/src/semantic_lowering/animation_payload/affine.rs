@@ -530,6 +530,7 @@ where
             } => (target_state, interpolation),
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
+            | SemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
             | SemanticScheduledAnimationPayload::Add
@@ -606,6 +607,21 @@ fn validate_leaf_matches_declaration(
                     scale_factor: *scale_factor,
                     color: *color,
                     scale_center: *scale_center,
+                } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::DrawBorderThenFill {
+            target,
+            stroke_width,
+            stroke_color,
+            phase_rate_function,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::DrawBorderThenFill {
+                    stroke_width: *stroke_width,
+                    stroke_color: *stroke_color,
+                    phase_rate_function: *phase_rate_function,
                 } =>
         {
             Ok(())
@@ -1177,6 +1193,89 @@ pub(super) fn lower_fade_channels(
     Ok(channels)
 }
 
+pub(super) fn lower_draw_border_then_fill_channels(
+    source: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+    stroke_width: f64,
+    stroke_color: Option<noon_core::Color>,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if !matches!(&source.content, SemanticObjectContent::Geometry(_)) {
+        return Err(AffinePayloadIssue::UnsupportedContentChange);
+    }
+    if !style_is_finite(from.style) {
+        return Err(AffinePayloadIssue::InvalidEffectiveStyle);
+    }
+    debug_assert!(stroke_width.is_finite() && stroke_width >= 0.0);
+    let outline_fill = from.style.fill.map(|color| noon_core::Color {
+        alpha: 0.0,
+        ..color
+    });
+    let outline_stroke = if let Some(color) = stroke_color {
+        Some(noon_core::Color {
+            alpha: from.style.stroke.map_or(1.0, |stroke| stroke.alpha),
+            ..color
+        })
+    } else if from.style.stroke.is_some() && from.style.stroke_width > 0.0 {
+        from.style.stroke
+    } else {
+        from.style.fill.map(|color| noon_core::Color {
+            alpha: 1.0,
+            ..color
+        })
+    };
+    if outline_stroke.is_none() {
+        return Err(AffinePayloadIssue::UnsupportedStyleChange);
+    }
+
+    let mut channels = Vec::with_capacity(4);
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::Presence,
+        Property::Reveal,
+        TrackValues::Scalar { from: 0.0, to: 1.0 },
+        SemanticAnimationCompletion::Release,
+        true,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::FillOpacity,
+        Property::Fill,
+        TrackValues::Color {
+            from: outline_fill,
+            to: from.style.fill,
+        },
+        SemanticAnimationCompletion::Release,
+        true,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::StrokeOpacity,
+        Property::Stroke,
+        TrackValues::Color {
+            from: outline_stroke,
+            to: from.style.stroke,
+        },
+        SemanticAnimationCompletion::Release,
+        true,
+        &mut channels,
+    )?;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::StrokeWidth,
+        Property::StrokeWidth,
+        TrackValues::Scalar {
+            from: stroke_width as f32,
+            to: from.style.stroke_width,
+        },
+        SemanticAnimationCompletion::Release,
+        true,
+        &mut channels,
+    )?;
+    Ok(channels)
+}
+
 pub(super) fn lower_indicate_channels(
     source: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
@@ -1619,12 +1718,13 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Scale => 2,
         Property::Fill => 3,
         Property::Stroke => 4,
-        Property::Opacity => 5,
-        Property::Appearance => 6,
-        Property::Reveal => 7,
-        Property::Transform => 8,
-        Property::Morph => 9,
-        Property::Presence => 10,
+        Property::StrokeWidth => 5,
+        Property::Opacity => 6,
+        Property::Appearance => 7,
+        Property::Reveal => 8,
+        Property::Transform => 9,
+        Property::Morph => 10,
+        Property::Presence => 11,
     };
     (object.get(), slot)
 }
@@ -1668,6 +1768,16 @@ mod tests {
             style: Style::default(),
             appearance: 1.0,
         }
+    }
+
+    #[test]
+    fn stroke_width_has_a_distinct_composition_driver_key() {
+        let object = ObjectId::new(7);
+        let width = driver_key(object, Property::StrokeWidth);
+
+        assert_ne!(width, driver_key(object, Property::Stroke));
+        assert_ne!(width, driver_key(object, Property::Opacity));
+        assert_ne!(width, driver_key(ObjectId::new(8), Property::StrokeWidth));
     }
 
     fn visible_object(store: &mut SemanticStore) -> SemanticNodeId {

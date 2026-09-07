@@ -736,6 +736,31 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage one activation-relative two-phase vector outline/fill declaration.
+    pub fn create_draw_border_then_fill_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        stroke_width: f64,
+        stroke_color: Option<crate::Color>,
+        phase_rate_function: crate::RateFunction,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::DrawBorderThenFill {
+                    target: target.into(),
+                    stroke_width,
+                    stroke_color,
+                    phase_rate_function,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a single-leaf fade declaration and return its transaction-local token.
     pub fn create_fade_animation(
         &mut self,
@@ -2027,6 +2052,9 @@ pub enum SemanticMutationTransactionError {
     InvalidIndicateEndpoint {
         index: usize,
     },
+    InvalidDrawBorderThenFillOutline {
+        index: usize,
+    },
     InvalidFadeEndpoint {
         index: usize,
     },
@@ -2403,6 +2431,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidIndicateEndpoint { index } => write!(
                 formatter,
                 "semantic mutation {index} has invalid Indicate scale, color, or center"
+            ),
+            Self::InvalidDrawBorderThenFillOutline { index } => write!(
+                formatter,
+                "semantic mutation {index} has an invalid DrawBorderThenFill outline"
             ),
             Self::InvalidFadeEndpoint { index } => write!(
                 formatter,

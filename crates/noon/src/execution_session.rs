@@ -17,7 +17,7 @@ use crate::execution_segment::{
     PendingSegmentCompletion, PendingSegmentCompletionKind, ScalarSegmentCompletionEntry,
     SegmentCompletionEntry,
 };
-use crate::live_session::IndicateOptions;
+use crate::live_session::{DrawBorderThenFillOptions, IndicateOptions};
 use noon_compile::{
     derive_prepared_scalar_animation_tracks,
     lower_prepared_scalar_signal_timeline_entries_with_resolver,
@@ -103,6 +103,16 @@ pub(crate) enum SemanticCompositionRequest {
         target: SemanticNodeId,
         indication: IndicateOptions,
         scale_center: noon_core::SemanticVec3,
+        options: AnimationOptions,
+    },
+    DrawBorderThenFill {
+        target: SemanticNodeId,
+        outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    },
+    FamilyDrawBorderThenFill {
+        target: SemanticNodeId,
+        outline: DrawBorderThenFillOptions,
         options: AnimationOptions,
     },
     Rotate {
@@ -1689,6 +1699,69 @@ impl ExecutionSession {
                     composition_options,
                 ))
             }
+            SemanticCompositionRequest::DrawBorderThenFill {
+                target,
+                outline,
+                options,
+            } => {
+                let introducer = options.introducer.unwrap_or(true);
+                if introducer {
+                    admit(*target, declaration, admitted)?;
+                } else {
+                    self.require_present_draw_border_target(store, root, *target)?;
+                }
+                let mut leaf_options = *options;
+                leaf_options.rate_func = Some(RateFunction::Linear);
+                Ok(declaration.create_draw_border_then_fill_animation(
+                    *target,
+                    outline.stroke_width,
+                    outline.stroke_color,
+                    outline.phase_rate_function,
+                    leaf_options,
+                ))
+            }
+            SemanticCompositionRequest::FamilyDrawBorderThenFill {
+                target,
+                outline,
+                options,
+            } => {
+                let leaves = store
+                    .ordered_family_leaf_pairs(*target, *target)
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?
+                    .into_iter()
+                    .map(|(leaf, _)| leaf)
+                    .collect::<Vec<_>>();
+                let introducer = options.introducer.unwrap_or(true);
+                let children = leaves
+                    .into_iter()
+                    .map(|leaf| {
+                        self.stage_composition_request(
+                            store,
+                            root,
+                            &SemanticCompositionRequest::DrawBorderThenFill {
+                                target: leaf,
+                                outline: *outline,
+                                options: AnimationOptions::new()
+                                    .rate_func(RateFunction::Linear)
+                                    .introducer(introducer),
+                            },
+                            declaration,
+                            admitted,
+                            removals,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut composition_options = *options;
+                composition_options.introducer = None;
+                composition_options.rate_func = Some(RateFunction::Linear);
+                Ok(declaration.create_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    children,
+                    composition_options,
+                ))
+            }
             SemanticCompositionRequest::Rotate {
                 target,
                 angle,
@@ -2141,6 +2214,30 @@ impl ExecutionSession {
                     });
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn require_present_draw_border_target(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        self.require_lifecycle_target_context(store, root, target)?;
+        let node = store
+            .node(target)
+            .expect("validated DrawBorderThenFill target has a live node");
+        let in_root = node.is_scene_owned()
+            || node
+                .parents()
+                .iter()
+                .any(|parent| *parent == root || self.reachability.is_reachable(*parent));
+        if !in_root || self.execution_index.execution_object_id(target).is_none() {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::TargetIsNotDirectRootMember,
+            });
         }
         Ok(())
     }

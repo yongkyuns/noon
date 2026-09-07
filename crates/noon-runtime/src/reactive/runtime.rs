@@ -220,7 +220,7 @@ impl ReactiveRuntime {
     }
 
     fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
-        const PROPERTIES: [Property; 11] = [
+        const PROPERTIES: [Property; 12] = [
             Property::Presence,
             Property::Transform,
             Property::Position,
@@ -228,6 +228,7 @@ impl ReactiveRuntime {
             Property::Scale,
             Property::Fill,
             Property::Stroke,
+            Property::StrokeWidth,
             Property::Opacity,
             Property::Appearance,
             Property::Reveal,
@@ -574,10 +575,11 @@ const fn property_slot(property: Property) -> u8 {
         Property::Scale => 4,
         Property::Fill => 5,
         Property::Stroke => 6,
-        Property::Opacity => 7,
-        Property::Appearance => 8,
-        Property::Reveal => 9,
-        Property::Morph => 10,
+        Property::StrokeWidth => 7,
+        Property::Opacity => 8,
+        Property::Appearance => 9,
+        Property::Reveal => 10,
+        Property::Morph => 11,
     }
 }
 
@@ -634,6 +636,11 @@ pub(crate) fn apply_reactive_value_to_row(
         (Property::Opacity, ReactiveValue::Scalar(value)) => {
             let changed = row.style.opacity != *value;
             row.style.opacity = *value;
+            changed
+        }
+        (Property::StrokeWidth, ReactiveValue::Scalar(value)) => {
+            let changed = row.style.stroke_width != *value;
+            row.style.stroke_width = *value;
             changed
         }
         (Property::Appearance, ReactiveValue::Scalar(value)) => {

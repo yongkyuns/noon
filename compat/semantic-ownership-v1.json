@@ -14,8 +14,6 @@
     {"path": "web/python/_manim_animate.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_compat.py", "token": "copy.deepcopy", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "copy.deepcopy", "maximum": 3, "migration_issue": "#61"},
-    {"path": "web/python/_manim_draw_border_then_fill.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
-    {"path": "web/python/_manim_draw_border_then_fill.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_lifecycle.py", "token": "copy.deepcopy", "maximum": 4, "migration_issue": "#61"},
     {"path": "web/python/_manim_lifecycle.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_rotate.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
@@ -227,6 +225,14 @@
       "reason": "Python coerces the Manim call into scale plus a shift or point value. Rust resolves effective endpoint layout, authors the affine and appearance tracks, owns lifecycle membership, and schedules composition timing."
     },
     {
+      "id": "animation.draw-border-then-fill",
+      "surface": "Typed leaf DrawBorderThenFill and forward ordinary-vector Write families",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_draw_border_then_fill/declare_and_activate_family_draw_border_then_fill"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_draw_border_then_fill_animation"}],
+      "reason": "Python coerces Manim outline options and wrapper identity. Rust derives the activation-effective outline and final style, owns both phases and family lag scheduling, and publishes detached families atomically."
+    },
+    {
       "id": "animation.lifecycle",
       "surface": "Unconverted retained/group Create/Uncreate/FadeIn/FadeOut",
       "classification": "python-semantic-duplicate",
@@ -242,7 +248,7 @@
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_composition.py", "symbol": "_schedule_composition"},
       "shared_owner": {"language": "rust", "path": "crates/noon-core/src/reactive/composition.rs", "symbol": "CompositionSchedule/resolve_composition_schedule"},
-      "reason": "Ordinary nested Transform/Rotate, Add/Wait, Create/Fade and affine lifecycle requests now lower as one shared Rust composition tree. Indication, border/fill, and unsupported lifecycle/family consumers still use Python recursive flattening and time-map construction.",
+      "reason": "Ordinary nested Transform/Rotate, Add/Wait, Create/Fade, affine lifecycle, Indicate, and DrawBorderThenFill requests now lower as one shared Rust composition tree. Unsupported retained lifecycle/family consumers still use Python recursive flattening and time-map construction.",
       "replacement": "Move remaining effects and family consumers onto the existing shared recursive composition operation, then delete the Python scheduler and time-map construction; retain only syntax adaptation.",
       "migration_issue": "#61"
     },

@@ -43,6 +43,18 @@ enum OrdinaryCompositionChild {
         indication: noon::IndicateOptions,
         options: noon_core::AnimationOptions,
     },
+    DrawBorderThenFill {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        outline: noon::DrawBorderThenFillOptions,
+        options: noon_core::AnimationOptions,
+    },
+    FamilyDrawBorderThenFill {
+        target: noon::MobjectFamily,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        outline: noon::DrawBorderThenFillOptions,
+        options: noon_core::AnimationOptions,
+    },
     Rotate {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1398,6 +1410,26 @@ impl CanonicalAuthoringScene {
                     indication: *indication,
                     options: *options,
                 },
+                OrdinaryCompositionChild::DrawBorderThenFill {
+                    target,
+                    outline,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::DrawBorderThenFill {
+                    target,
+                    outline: *outline,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::FamilyDrawBorderThenFill {
+                    target,
+                    outline,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::FamilyDrawBorderThenFill {
+                    target,
+                    outline: *outline,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
@@ -1530,6 +1562,18 @@ impl CanonicalAuthoringScene {
                         output.push((*id, target));
                     }
                 }
+                OrdinaryCompositionChild::DrawBorderThenFill {
+                    entering_id,
+                    target,
+                    ..
+                } => {
+                    if let Some(id) = entering_id {
+                        output.push((*id, target));
+                    }
+                }
+                OrdinaryCompositionChild::FamilyDrawBorderThenFill { entering, .. } => {
+                    output.extend(entering.iter().map(|(id, target)| (*id, target)));
+                }
                 OrdinaryCompositionChild::Add {
                     entering_id,
                     target,
@@ -1649,6 +1693,56 @@ impl CanonicalAuthoringScene {
                     .map_err(|error| error.to_string())?;
                     continue;
                 }
+                OrdinaryCompositionChild::FamilyDrawBorderThenFill {
+                    target,
+                    entering,
+                    options,
+                    ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                        return Err(
+                            "ordinary family DrawBorderThenFill belongs to another authoring store"
+                                .into(),
+                        );
+                    }
+                    target.validate()?;
+                    let family_leaves = crate::authoring_mobject::semantic_family_leaf_ids(
+                        &self.scene.store().borrow(),
+                        target.node_id(),
+                    )?;
+                    let expected_entering = family_leaves
+                        .iter()
+                        .copied()
+                        .filter(|id| !self.identities.contains_key(id))
+                        .collect::<BTreeSet<_>>();
+                    let supplied_entering = entering
+                        .iter()
+                        .map(|(_, member)| member.node_id())
+                        .collect::<BTreeSet<_>>();
+                    if supplied_entering != expected_entering {
+                        return Err("ordinary family DrawBorderThenFill wrapper identities do not match detached family leaves".into());
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    for (id, member) in entering {
+                        if !std::rc::Rc::ptr_eq(self.scene.store(), member.store()) {
+                            return Err("ordinary family DrawBorderThenFill member belongs to another authoring store".into());
+                        }
+                        member.validate()?;
+                        if self.bindings.contains_key(id)
+                            || self.identities.contains_key(&member.node_id())
+                            || !ids.insert(*id)
+                            || !entering_nodes.insert(member.node_id())
+                        {
+                            return Err("ordinary family DrawBorderThenFill entering identity is already bound".into());
+                        }
+                    }
+                    continue;
+                }
                 OrdinaryCompositionChild::FamilyTransformTo {
                     source,
                     target_state,
@@ -1723,6 +1817,12 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::Indicate {
                     target, options, ..
                 } => (None, target, *options),
+                OrdinaryCompositionChild::DrawBorderThenFill {
+                    entering_id,
+                    target,
+                    options,
+                    ..
+                } => (*entering_id, target, *options),
                 OrdinaryCompositionChild::Rotate {
                     entering_id,
                     target,
@@ -1823,7 +1923,7 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_manim_primitive(
         &mut self,
         options: noon::ManimPrimitiveOptions,
@@ -3193,6 +3293,108 @@ mod wasm {
                     indication: noon::IndicateOptions::new(scale_factor, color),
                     options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
                 });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendDrawBorderThenFillMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_draw_border_then_fill_mobject(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            stroke_width: f64,
+            red: Option<f64>,
+            green: Option<f64>,
+            blue: Option<f64>,
+            alpha: Option<f64>,
+            phase_rate_function: &str,
+            introducer: bool,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let color = callback_color("outline color", red, green, blue, alpha)?;
+            let phase = noon_core::RateFunction::from_semantic_id(phase_rate_function).ok_or_else(
+                || {
+                    js_error(format!(
+                        "unsupported outline phase rate function {phase_rate_function:?}"
+                    ))
+                },
+            )?;
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("DrawBorderThenFill object ID", object_id)?)
+            };
+            self.children
+                .push(OrdinaryCompositionChild::DrawBorderThenFill {
+                    entering_id,
+                    target: target.semantic_mobject().clone(),
+                    outline: noon::DrawBorderThenFillOptions::new(stroke_width, color)
+                        .with_phase_rate_function(phase),
+                    options: Self::options(child_run_time, rate_function)?.introducer(introducer),
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendDrawBorderThenFillFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_draw_border_then_fill_family(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            stroke_width: f64,
+            red: Option<f64>,
+            green: Option<f64>,
+            blue: Option<f64>,
+            alpha: Option<f64>,
+            phase_rate_function: &str,
+            introducer: bool,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = callback_color("outline color", red, green, blue, alpha)?;
+            let phase = noon_core::RateFunction::from_semantic_id(phase_rate_function).ok_or_else(
+                || {
+                    js_error(format!(
+                        "unsupported outline phase rate function {phase_rate_function:?}"
+                    ))
+                },
+            )?;
+            self.children
+                .push(OrdinaryCompositionChild::FamilyDrawBorderThenFill {
+                    target: target.semantic_family()?,
+                    entering: Vec::new(),
+                    outline: noon::DrawBorderThenFillOptions::new(stroke_width, color)
+                        .with_phase_rate_function(phase),
+                    options: Self::family_options(child_run_time, rate_function, lag_ratio)?
+                        .introducer(introducer),
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendDrawBorderThenFillFamilyEntering)]
+        pub fn append_draw_border_then_fill_family_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyDrawBorderThenFill {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error(
+                    "family entering member must follow FamilyDrawBorderThenFill",
+                ));
+            };
+            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+                return Err(js_error(
+                    "family entering member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("DrawBorderThenFill family object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
             Ok(())
         }
 
@@ -5944,6 +6146,85 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_draw_border_then_fill_leaf_and_family_publish_atomically() {
+        let mut context = CanonicalAuthoringScene::default();
+        let leaf = context.scene.circle(0.3).unwrap();
+        let left = context.scene.square(0.5).unwrap();
+        let right = context.scene.circle(0.25).unwrap();
+        let family = context.scene.family(&[&left, &right]).unwrap();
+        let outline = noon::DrawBorderThenFillOptions::new(0.04, Some(noon_core::YELLOW))
+            .with_phase_rate_function(RateFunction::Linear);
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear)
+            .introducer(true);
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        // Missing one detached family identity is rejected before a player,
+        // semantic admission, or facade binding can be published.
+        let invalid = [OrdinaryCompositionChild::FamilyDrawBorderThenFill {
+            target: family.clone(),
+            entering: vec![(ObjectId::new(1), left.clone())],
+            outline,
+            options,
+        }];
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &invalid,
+                composition,
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert!(context.bindings.is_empty());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let valid = [
+            OrdinaryCompositionChild::DrawBorderThenFill {
+                entering_id: Some(ObjectId::new(0)),
+                target: leaf.clone(),
+                outline,
+                options,
+            },
+            OrdinaryCompositionChild::FamilyDrawBorderThenFill {
+                target: family,
+                entering: vec![
+                    (ObjectId::new(1), left.clone()),
+                    (ObjectId::new(2), right.clone()),
+                ],
+                outline,
+                options: options.lag_ratio(0.5),
+            },
+        ];
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &valid,
+                    composition,
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            2.0
+        );
+        for target in [&leaf, &left, &right] {
+            assert!(context.live_contains_mobject(target).unwrap());
+        }
+        assert_eq!(context.bindings.len(), 3);
+        let publication: crate::RetainedExecutionDeltaEnvelope = serde_json::from_str(
+            &context
+                .active_live_player()
+                .unwrap()
+                .initial_delta_json()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(publication.objects.len(), 3);
+    }
+
+    #[test]
     fn ordinary_composition_converts_nested_typed_children_before_atomic_admission() {
         let mut context = CanonicalAuthoringScene::default();
         let bound = context.scene.circle(0.4).unwrap();
@@ -6487,6 +6768,94 @@ mod tests {
         let session = player.session_mut_for_test();
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
+    }
+
+    #[test]
+    fn returned_live_primitive_stays_detached_through_an_intervening_removal() {
+        let mut context = CanonicalAuthoringScene::default();
+        let leaving = context.scene.square(0.5).unwrap();
+        let label = context.scene.circle(0.2).unwrap();
+        context.bind_mobject(ObjectId::new(0), &leaving).unwrap();
+        context.bind_mobject(ObjectId::new(1), &label).unwrap();
+
+        // Python constructs these pulses after a completed continuation barrier.
+        // Exercise that returned-player mutation path rather than creating the
+        // FadeIn target before execution bootstrap.
+        context.live_player(1.0).unwrap();
+        let returned = context.take_execution_player(1.0, 73).unwrap();
+        context.return_execution_player(returned).unwrap();
+        let pulse = context
+            .live_create_manim_primitive(noon::ManimPrimitiveOptions::circle(0.05).unwrap())
+            .unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_move_to_point(&pulse, 2.0, -1.0)
+            .unwrap();
+        {
+            let store = context.scene.store().borrow();
+            let node = store.node(pulse.node_id()).unwrap();
+            assert_eq!(node.residency(), noon_core::SemanticNodeResidency::Detached);
+            assert!(node.parents().is_empty());
+        }
+
+        let options = AnimationOptions::new()
+            .run_time(0.1)
+            .rate_func(RateFunction::Linear);
+        let removal = [OrdinaryCompositionChild::Fade {
+            entering_id: None,
+            target: label,
+            direction: SemanticFadeDirection::Out,
+            endpoint: noon::FadeEndpoint::default(),
+            options,
+        }];
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &removal,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let mut player = context.resume_execution_player().unwrap();
+        player.live_advance_segment_to(end).unwrap();
+        player.live_complete_segment().unwrap();
+        context.return_execution_player(player).unwrap();
+
+        {
+            let store = context.scene.store().borrow();
+            let node = store.node(pulse.node_id()).unwrap();
+            assert_eq!(node.residency(), noon_core::SemanticNodeResidency::Detached);
+            assert!(node.parents().is_empty());
+        }
+        let mixed = [
+            OrdinaryCompositionChild::Fade {
+                entering_id: None,
+                target: leaving,
+                direction: SemanticFadeDirection::Out,
+                endpoint: noon::FadeEndpoint::default(),
+                options,
+            },
+            OrdinaryCompositionChild::Fade {
+                entering_id: Some(ObjectId::new(2)),
+                target: pulse.clone(),
+                direction: SemanticFadeDirection::In,
+                endpoint: noon::FadeEndpoint::new(
+                    0.15,
+                    noon::FadeTranslation::Shift(SemanticVec3::ZERO),
+                ),
+                options,
+            },
+        ];
+        context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &mixed,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert!(context.live_contains_mobject(&pulse).unwrap());
     }
 
     #[test]

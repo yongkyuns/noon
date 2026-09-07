@@ -66,6 +66,38 @@ pub enum AffineLifecycleEndpoint {
 
 pub type AffineLifecycleDirection = SemanticAffineLifecycleDirection;
 
+/// Outline style and local phase easing for shared DrawBorderThenFill semantics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawBorderThenFillOptions {
+    pub stroke_width: f64,
+    pub stroke_color: Option<Color>,
+    pub phase_rate_function: noon_core::RateFunction,
+}
+
+impl DrawBorderThenFillOptions {
+    pub const fn new(stroke_width: f64, stroke_color: Option<Color>) -> Self {
+        Self {
+            stroke_width,
+            stroke_color,
+            phase_rate_function: noon_core::RateFunction::Smooth,
+        }
+    }
+
+    pub const fn with_phase_rate_function(
+        mut self,
+        phase_rate_function: noon_core::RateFunction,
+    ) -> Self {
+        self.phase_rate_function = phase_rate_function;
+        self
+    }
+}
+
+impl Default for DrawBorderThenFillOptions {
+    fn default() -> Self {
+        Self::new(0.02, None)
+    }
+}
+
 /// Placement of the faded affine endpoint relative to activation-effective layout.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FadeTranslation {
@@ -189,6 +221,16 @@ pub enum AnimationCompositionRequest<'a> {
     FamilyIndicate {
         target: &'a MobjectFamily,
         indication: IndicateOptions,
+        options: AnimationOptions,
+    },
+    DrawBorderThenFill {
+        target: &'a Mobject,
+        outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    },
+    FamilyDrawBorderThenFill {
+        target: &'a MobjectFamily,
+        outline: DrawBorderThenFillOptions,
         options: AnimationOptions,
     },
     Rotate {
@@ -728,6 +770,36 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
+    /// Reveal one vector outline and restore its activation-effective final style.
+    pub fn declare_and_activate_draw_border_then_fill(
+        &mut self,
+        target: &Mobject,
+        outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::DrawBorderThenFill {
+            target,
+            outline,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Draw an ordered vector family through one atomic lagged composition.
+    pub fn declare_and_activate_family_draw_border_then_fill(
+        &mut self,
+        target: &MobjectFamily,
+        outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::FamilyDrawBorderThenFill {
+            target,
+            outline,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
     /// Atomically append and activate one scalar tracker interval at the current
     /// session time. The returned segment uses the same completion barrier as
     /// object-property animation tracks.
@@ -1022,6 +1094,30 @@ impl<'a> LiveSession<'a> {
                     target: target.node_id(),
                     indication: *indication,
                     scale_center: self.family_effective_center(target)?,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::DrawBorderThenFill {
+                target,
+                outline,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::DrawBorderThenFill {
+                    target: target.node_id(),
+                    outline: *outline,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilyDrawBorderThenFill {
+                target,
+                outline,
+                options,
+            } => {
+                self.require_family(target)?;
+                Request::FamilyDrawBorderThenFill {
+                    target: target.node_id(),
+                    outline: *outline,
                     options: *options,
                 }
             }
@@ -3169,6 +3265,68 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn composed_fade_out_completion_detaches_and_reenters_the_same_handle() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let fading = scene.circle(1.0).unwrap();
+        scene.add(&anchor).unwrap();
+        scene.add(&fading).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let options = linear(0.2);
+
+        let fade_out = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children: vec![
+                AnimationCompositionRequest::Fade {
+                    target: &fading,
+                    direction: SemanticFadeDirection::Out,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+                AnimationCompositionRequest::Wait { duration: 0.1 },
+            ],
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+        };
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_composition(&fade_out, AnimationOptions::new())
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+
+        assert!(!live.contains(&fading).unwrap());
+        assert!(fading
+            .store()
+            .borrow()
+            .node(fading.node_id())
+            .unwrap()
+            .parents()
+            .is_empty());
+        assert!(live.session.execution_object_id(fading.node_id()).is_none());
+
+        let fade_in = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children: vec![AnimationCompositionRequest::Fade {
+                target: &fading,
+                direction: SemanticFadeDirection::In,
+                endpoint: FadeEndpoint::default(),
+                options,
+            }],
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+        };
+        let reentry = live
+            .declare_and_activate_composition(&fade_in, AnimationOptions::new())
+            .unwrap();
+        assert!(live.contains(&fading).unwrap());
+        assert!(live.session.execution_object_id(fading.node_id()).is_some());
+        live.advance_segment_to(reentry, reentry.end_time())
+            .unwrap();
+        live.complete_segment(reentry).unwrap();
+    }
+
+    #[test]
     fn mixed_scalar_object_composition_publishes_and_completes_once() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
@@ -3623,5 +3781,65 @@ mod recursive_composition_tests {
         live.complete_segment(segment).unwrap();
         assert_eq!(live.effective(&left).unwrap().transform.translation.x, -2.0);
         assert_eq!(live.effective(&right).unwrap().transform.translation.x, 2.0);
+    }
+
+    #[test]
+    fn draw_border_then_fill_holds_the_explicit_outline_through_the_reveal_phase() {
+        let scene = Scene::new();
+        let mut square = scene.square(1.0).unwrap();
+        square
+            .set_fill(
+                f64::from(Color::ORANGE.red),
+                f64::from(Color::ORANGE.green),
+                f64::from(Color::ORANGE.blue),
+                1.0,
+            )
+            .unwrap();
+        square
+            .set_stroke_color(
+                f64::from(Color::BLUE.red),
+                f64::from(Color::BLUE.green),
+                f64::from(Color::BLUE.blue),
+                1.0,
+            )
+            .unwrap();
+        square.set_stroke_width(0.06).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_draw_border_then_fill(
+                &square,
+                DrawBorderThenFillOptions::new(0.04, Some(Color::YELLOW)),
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear)
+                    .introducer(true),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 0.5)
+            .unwrap();
+        let outline = live.effective(&square).unwrap().style;
+        assert_eq!(outline.fill.map(|fill| fill.alpha), Some(0.0));
+        assert_eq!(outline.stroke, Some(Color::YELLOW));
+        assert_eq!(outline.stroke_width, 0.04);
+
+        live.advance_segment_to(segment, segment.start_time() + 1.5)
+            .unwrap();
+        let filling = live.effective(&square).unwrap().style;
+        assert_eq!(filling.fill.map(|fill| fill.alpha), Some(0.5));
+        let stroke = filling.stroke.expect("fill phase retains a stroke");
+        assert!((stroke.red - (Color::YELLOW.red + Color::BLUE.red) * 0.5).abs() < 1e-6);
+        assert!((stroke.green - (Color::YELLOW.green + Color::BLUE.green) * 0.5).abs() < 1e-6);
+        assert!((stroke.blue - (Color::YELLOW.blue + Color::BLUE.blue) * 0.5).abs() < 1e-6);
+        assert!((filling.stroke_width - 0.05).abs() < 1e-6);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        let restored = live.effective(&square).unwrap().style;
+        assert_eq!(restored.fill, Some(Color::ORANGE));
+        assert_eq!(restored.stroke, Some(Color::BLUE));
+        assert_eq!(restored.stroke_width, 0.06);
     }
 }
