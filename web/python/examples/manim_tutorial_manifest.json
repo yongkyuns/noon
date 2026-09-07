@@ -1,1 +1,35 @@
-PLACEHOLDER
+{
+  "reference": {
+    "project": "Manim Community",
+    "version": "0.21.0",
+    "license": "MIT",
+    "tutorial_root": "https://docs.manim.community/en/stable/tutorials/index.html"
+  },
+  "policy": "Every `ready` user-facing example matches a checked-in ManimCE v0.21.0 upstream source fixture byte-for-byte after replacing exactly `from manim import *` with `from noon import *`. Exact-source examples may be `candidate` before a dedicated raster/timeline fixture exists; `parity-qualified` additionally requires the canonical exact-output gates. Noon-specific parity probes remain in the parity corpus and are never substituted for upstream public examples.",
+  "parity_policy": {
+    "candidate": "The literal upstream ManimCE v0.21.0 source executes in Noon, with only the import changed. Dedicated exact-output qualification may still be open.",
+    "parity-qualified": "The literal upstream source (import-only change) also passes the canonical semantic, pixel, timing, lifecycle, intermediate-frame, seek/playback, and supported-backend gates defined by #185/#176."
+  },
+  "entries": [
+    {
+      "id": "parity-create-circle",
+      "title": "CreateCircle",
+      "summary": "ManimCE v0.21 Quickstart CreateCircle, byte-for-byte except for the import module.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_create_circle.py",
+      "category": "quickstart",
+      "features": ["Scene", "Circle", "Create", "style", "pixel-parity", "time-parity"],
+      "upstream": "tutorials/quickstart.html",
+      "upstream_source": "parity/manim-v0.21/upstream-examples/create_circle.py",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "create-circle",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 1,
+      "thumbnail": "thumbnails/manim/create-circle.webp",
+      "thumbnail_alt": "Pink filled circle on the Manim scene background",
+      "thumbnail_time": 1,
+      "order": 10
+    }
+  ]
+}
