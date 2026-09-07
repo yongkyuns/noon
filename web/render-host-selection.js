@@ -68,11 +68,14 @@ async function probeWorkerGpuSurface() {
     self.onmessage = (event) => {
       try {
         const canvas = event.data.canvas;
-        let ok = false;
-        try { ok = canvas.getContext("webgpu") !== null; } catch {}
-        if (!ok) {
-          try { ok = canvas.getContext("webgl2") !== null; } catch {}
+        let context = null;
+        try { context = canvas.getContext("webgpu"); } catch {}
+        if (context === null) {
+          try { context = canvas.getContext("webgl2"); } catch {}
         }
+        const ok = context !== null;
+        context?.unconfigure?.();
+        context?.getExtension?.("WEBGL_lose_context")?.loseContext();
         self.postMessage({ ok, error: "" });
       } catch (error) {
         self.postMessage({ ok: false, error: String(error) });
@@ -84,7 +87,7 @@ async function probeWorkerGpuSurface() {
   let timeout = null;
   try {
     workerUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    worker = new Worker(workerUrl);
+    worker = new Worker(`${workerUrl}#noon-render-capability-probe`);
     const htmlCanvas = document.createElement("canvas");
     htmlCanvas.width = 2;
     htmlCanvas.height = 2;

@@ -125,7 +125,8 @@ function deferredRenderHostProbe(t) {
 
     constructor(url, options = {}) {
       super(url, options);
-      this.#probe = String(url) === "blob:noon-render-host-probe";
+      this.#probe =
+        String(url) === "blob:noon-render-host-probe#noon-render-capability-probe";
     }
 
     postMessage(message, transfer = []) {

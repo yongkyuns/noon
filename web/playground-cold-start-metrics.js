@@ -103,6 +103,7 @@ export function summarizeAuthoringStartup(metrics) {
 
 export function classifyWorkerUrl(url) {
   const value = String(url ?? "");
+  if (value.endsWith("#noon-render-capability-probe")) return "probe";
   if (/python-worker(?:\.|-)/.test(value)) return "authoring";
   if (/retained-execution-engine-worker|execution-engine-worker/.test(value)) return "engine";
   if (/retained-execution-render-worker|execution-render-worker|authoring-render-worker/.test(value)) {
@@ -115,7 +116,7 @@ export function summarizeWorkers(events) {
   if (!Array.isArray(events)) {
     throw new TypeError("worker events must be an array");
   }
-  const byRole = { authoring: 0, engine: 0, render: 0, other: 0 };
+  const byRole = { authoring: 0, engine: 0, render: 0, probe: 0, other: 0 };
   const workers = events.map((event) => {
     if (!event || typeof event.url !== "string" || !Number.isFinite(event.atMs) || event.atMs < 0) {
       throw new TypeError("worker event must contain a URL and finite non-negative timestamp");

@@ -89,7 +89,7 @@ renderer backend: WebGPU | WebGL2
 
 The cross-browser matrix keeps presentation coverage on Chromium, Firefox, and mobile WebKit. It calls the production host selector from the served page before starting execution, so runtime support and actual startup use the same secure browser realm and capability decision. Runtime execution is required whenever either supported host exposes a usable GPU surface. An environment with neither host remains an explicit unsupported-runtime result rather than a false product failure; the capability result is saved with the job diagnostics.
 
-This distinction matters for the current headless Firefox runner, which exposes the surrounding canvas/Worker APIs but no usable WebGL2 surface in either supported host. Mobile WebKit, by contrast, exposes the main-thread surface and therefore must execute rather than skip.
+Browser API presence alone does not establish runtime support. If the production selector finds a surface, the matrix requires the real renderer to initialize and present; a later renderer failure is a test failure, not an unsupported-runtime skip.
 
 The normal runtime smoke verifies deferred startup, scene execution, example selection, edit/rerun, resize, and absence of page/console errors on every environment with a usable host.
 
