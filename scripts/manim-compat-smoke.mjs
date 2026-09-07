@@ -84,7 +84,7 @@ class Demo(Scene):
 const phaseBSource = `
 from noon import *
 
-class GroupMembershipExport(Scene):
+class GroupMembershipLive(Scene):
     def construct(self):
         left = Circle(radius=0.35, color=BLUE)
         right = Square(side_length=0.7, color=PINK)
@@ -434,22 +434,12 @@ try {
   assert.ok(uncreate.metrics.presentedFrames > 0, "shared Uncreate options must present");
 
   const phaseB = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     phaseBSource,
   );
-  assert.equal(phaseB.kind, "scene_document");
-  assert.equal(phaseB.document.objects.length, 5, "groups should lower to flat runtime member objects");
-  const phaseBProperties = phaseB.document.tracks.map((track) => track.property);
-  assert.equal(
-    phaseBProperties.filter((property) => property === "transform").length,
-    1,
-    "the remaining exported scalar transform should lower once",
-  );
-  assert.equal(
-    phaseBProperties.filter((property) => property === "presence").length,
-    12,
-    "scene membership and grouped fades should lower to deterministic presence events",
-  );
+  assert.equal(phaseB.duration, 1.5, "membership edits preserve continuation timing");
+  assert.equal(phaseB.metrics.objectCount, 0, "group fade-out removes the final roots");
+  assert.ok(phaseB.metrics.presentedFrames > 0, "shared group membership must render");
 
   const defaultVmobjectStyle = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),
