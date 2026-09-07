@@ -398,8 +398,8 @@ impl CanonicalAuthoringScene {
             player.set_loop_duration(duration)?;
         } else {
             self.live_player = Some(self.build_live_player(duration, 0)?);
+            self.live_player_returned = false;
         }
-        self.live_player_returned = false;
         Ok(self.live_player.as_mut().expect("live player initialized"))
     }
 
@@ -6049,6 +6049,10 @@ mod tests {
         context
             .ordinary_play_transform_to(&anchor, &second_target, options)
             .unwrap();
+        let handoff = context.live_handoff_duration().unwrap();
+        let returned = context.take_execution_player(handoff, 17).unwrap();
+        context.return_execution_player(returned).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
 
         let left = context
             .live_create_manim_primitive(noon::ManimPrimitiveOptions::circle(0.15).unwrap())
@@ -6056,8 +6060,13 @@ mod tests {
         let right = context
             .live_create_manim_primitive(noon::ManimPrimitiveOptions::square(0.3).unwrap())
             .unwrap();
+        // Repeated explicit `Scene.live_execution()` helpers may adjust the loop
+        // duration, but must preserve the returned continuation lease.
+        context.live_player(handoff).unwrap();
         context.live_add_mobject(ObjectId::new(1), &left).unwrap();
+        context.live_player(handoff).unwrap();
         context.live_add_mobject(ObjectId::new(2), &right).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
         let pair = context
             .live_family(&[
                 noon::MobjectFamilyMember::Mobject(&left),
@@ -6100,34 +6109,31 @@ mod tests {
                 .rate_func(RateFunction::Smooth)
                 .lag_ratio(0.5),
         }];
-        context
-            .ordinary_play_mixed_composition(
+        let end = context
+            .begin_ordinary_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
                 &family_play,
                 AnimationOptions::new().rate_func(RateFunction::Linear),
                 AnimationOptions::new(),
             )
             .unwrap();
+        let mut resumed = context.resume_execution_player().unwrap();
+        resumed.live_advance_segment_to(end).unwrap();
+        resumed.live_complete_segment().unwrap();
         assert_eq!(
-            context
-                .active_live_player()
-                .unwrap()
-                .live_effective(&left)
-                .unwrap()
-                .transform
-                .translation,
+            resumed.live_effective(&left).unwrap().transform.translation,
             Vec2::new(0.0, 1.0)
         );
         assert_eq!(
-            context
-                .active_live_player()
-                .unwrap()
+            resumed
                 .live_effective(&right)
                 .unwrap()
                 .transform
                 .translation,
             Vec2::new(0.0, 1.0)
         );
+        context.return_execution_player(resumed).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
     }
 
     #[test]
