@@ -634,8 +634,14 @@ impl<'a> LiveSession<'a> {
         }
         let mut transaction = SemanticMutationTransaction::new();
         let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
+        // Families have ordered, unique direct membership. Validate every operand
+        // above, then stage each identity once in first-occurrence order; repeated
+        // edges in one transaction are correctly rejected by the transaction layer.
+        let mut seen = std::collections::BTreeSet::new();
         for member in members {
-            transaction.add_member(family, member.node_id());
+            if seen.insert(member.node_id()) {
+                transaction.add_member(family, member.node_id());
+            }
         }
         let result = self.apply(transaction)?;
         let node = result
