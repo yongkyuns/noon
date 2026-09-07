@@ -17,7 +17,7 @@ use crate::{
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
     FamilyArrangePlan, FamilyTranslation, Mobject, MobjectFamily, MobjectFamilyMember,
-    ValueTracker,
+    SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -432,7 +432,7 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Apply one supported semantic transaction and publish it into the same
-    /// runtime. Unsupported content, ordering, and structural work fails before
+    /// runtime. Unsupported content and structural work fails before
     /// either layer commits.
     pub fn apply(
         &mut self,
@@ -440,7 +440,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         let mut store = self.store.borrow_mut();
         self.session
-            .apply_semantic_transaction(&mut store, transaction)
+            .apply_semantic_transaction_at_root(&mut store, self.root, transaction)
             .map_err(Into::into)
     }
 
@@ -449,10 +449,9 @@ impl<'a> LiveSession<'a> {
         &mut self,
         mobject: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_member(self.root, mobject.node_id());
-        self.apply(transaction)
+        self.edit_membership(SceneMembershipRequest::Add(&[
+            MobjectFamilyMember::Mobject(mobject),
+        ]))
     }
 
     /// Remove an existing object from this live scene root without deleting identity.
@@ -460,10 +459,45 @@ impl<'a> LiveSession<'a> {
         &mut self,
         mobject: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.remove_member(self.root, mobject.node_id());
+        self.edit_membership(SceneMembershipRequest::Remove(&[
+            MobjectFamilyMember::Mobject(mobject),
+        ]))
+    }
+
+    pub fn edit_membership(
+        &mut self,
+        request: SceneMembershipRequest<'_>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let transaction =
+            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)
+                .map_err(LiveSessionError::Mobject)?;
         self.apply(transaction)
+    }
+
+    pub fn add_many(
+        &mut self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::Add(members))
+    }
+
+    pub fn remove_many(
+        &mut self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::Remove(members))
+    }
+
+    pub fn clear(&mut self) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::Clear)
+    }
+
+    pub fn replace(
+        &mut self,
+        old: MobjectFamilyMember<'_>,
+        new: MobjectFamilyMember<'_>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
 
     /// Check whether a handle is currently a direct member of this live scene root.
@@ -2601,7 +2635,7 @@ mod tests {
 
     #[test]
     fn affine_removal_rejects_another_live_reachable_parent() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let live_family = {
             let mut store = scene.store().borrow_mut();
@@ -2609,8 +2643,12 @@ mod tests {
             store.add_member(family, square.node_id()).unwrap();
             family
         };
-        scene.add_node(live_family).unwrap();
-        scene.add(&square).unwrap();
+        // Build an intentionally aliased root to exercise removal preflight;
+        // standard membership authoring dissolves this redundant projection.
+        let mut membership = SemanticMutationTransaction::new();
+        membership.add_member(scene.root(), live_family);
+        membership.add_member(scene.root(), square.node_id());
+        membership.apply(&mut scene.store().borrow_mut()).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
@@ -2715,36 +2753,63 @@ mod tests {
     }
 
     #[test]
-    fn uncreate_rejects_asymmetric_rate_before_admission() {
+    fn uncreate_honors_asymmetric_reversal_without_removing_kept_target() {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
-        let before_nodes = square.store().borrow().len();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
-        let before = session.publication_context();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_uncreate(
+                &square,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::RushInto)
+                    .remover(false),
+            )
+            .unwrap();
 
-        let result = scene.live(&mut session).declare_and_activate_uncreate(
-            &square,
-            AnimationOptions::new()
-                .run_time(1.0)
-                .rate_func(RateFunction::RushInto),
+        live.advance_segment_to(segment, segment.start_time() + 0.25)
+            .unwrap();
+        assert!(
+            (live.session.frame().reveal(0) - RateFunction::RushInto.evaluate(0.75)).abs() < 1e-6
         );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        assert_eq!(live.session.frame().reveal(0), 0.0);
+        live.complete_segment(segment).unwrap();
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(live.session.frame().reveal(0), 0.0);
+    }
 
-        assert!(matches!(
-            result,
-            Err(LiveSessionError::Activation(
-                ExecutionSessionAnimationError::CreateTarget {
-                    error: ExecutionSessionCreateError::UnsupportedUncreateRateFunction(
-                        RateFunction::RushInto
-                    ),
-                    ..
-                }
-            ))
-        ));
-        assert_eq!(session.publication_context(), before);
-        assert_eq!(square.store().borrow().len(), before_nodes);
-        assert!(session.frame().objects.is_empty());
-        assert!(session.take_frame_changes().is_empty());
+    #[test]
+    fn uncreate_honors_explicit_forward_rate_and_keeps_membership() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_uncreate(
+                &square,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::RushInto)
+                    .reverse_rate_function(false)
+                    .remover(false),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 0.25)
+            .unwrap();
+        assert!(
+            (live.session.frame().reveal(0) - RateFunction::RushInto.evaluate(0.25)).abs() < 1e-6
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(live.session.frame().reveal(0), 1.0);
     }
 
     #[test]

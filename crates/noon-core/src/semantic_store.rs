@@ -384,8 +384,35 @@ impl SemanticNode {
         self.members.iter().collect()
     }
 
+    pub fn members_iter(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.members.iter()
+    }
+
     pub fn member_count(&self) -> usize {
         self.members.len()
+    }
+
+    /// First direct family member in authoritative order.
+    pub fn first_member(&self) -> Option<SemanticNodeId> {
+        self.members.head
+    }
+
+    /// Direct successor of `member`, resolved without scanning siblings.
+    pub fn next_member(&self, member: SemanticNodeId) -> Option<SemanticNodeId> {
+        self.members.links.get(&member).and_then(|link| link.next)
+    }
+
+    /// Direct predecessor of `member`, resolved without scanning siblings.
+    pub fn previous_member(&self, member: SemanticNodeId) -> Option<SemanticNodeId> {
+        self.members
+            .links
+            .get(&member)
+            .and_then(|link| link.previous)
+    }
+
+    /// Whether `member` is a direct member of this family.
+    pub fn contains_member(&self, member: SemanticNodeId) -> bool {
+        self.members.contains(member)
     }
 
     pub fn host_updaters(&self) -> &[SemanticUpdaterRegistration] {

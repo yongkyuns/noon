@@ -102,7 +102,9 @@ fn materialize_semantic_projection(
     store: Option<&SemanticStore>,
 ) -> Result<CompiledScene, SemanticCompiledSceneError> {
     let mut ordered = projection.objects().iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|object| object.presentation.order_key());
+    // Root/family traversal already carries the authoritative same-z painter order.
+    // Stable sorting applies z layers without restoring global creation order.
+    ordered.sort_by_key(|object| object.presentation.z_index);
 
     let count = ordered.len();
     if u32::try_from(count).is_err() {
@@ -137,8 +139,11 @@ fn materialize_semantic_projection(
         object_indices.insert(object.execution_id, object_index);
     }
 
+    let painter_order = (0..objects.len() as u32).collect::<Vec<_>>();
     Ok(CompiledScene {
         live_object_count: objects.len(),
+        painter_ranks: painter_order.iter().copied().map(Some).collect(),
+        painter_order,
         objects,
         tracks: BTreeMap::new(),
         track_count: 0,
@@ -317,13 +322,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 index.execution_object_id(second).unwrap(),
-                index.execution_object_id(first).unwrap(),
                 index.execution_object_id(third).unwrap(),
+                index.execution_object_id(first).unwrap(),
             ]
         );
-        assert_eq!(compiled.objects()[1].base_transform.translation.x, 2.0);
-        assert_eq!(compiled.objects()[1].base_transform.translation.y, 3.0);
-        assert_eq!(compiled.objects()[1].base_style.fill.unwrap().alpha, 0.5);
+        assert_eq!(compiled.objects()[2].base_transform.translation.x, 2.0);
+        assert_eq!(compiled.objects()[2].base_transform.translation.y, 3.0);
+        assert_eq!(compiled.objects()[2].base_style.fill.unwrap().alpha, 0.5);
         assert!(compiled.tracks().is_empty());
     }
 

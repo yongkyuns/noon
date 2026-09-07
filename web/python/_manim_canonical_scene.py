@@ -36,7 +36,6 @@ try:
 except ImportError:  # pragma: no cover - native import smoke only
     _create_context = None
 
-
 _INSTALLED = False
 _CHECKPOINT_TAG = object()
 _ORIGINAL_APPEND_SNAPSHOT = _ir.Scene._append_snapshot
@@ -179,6 +178,214 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     else:
         context.bindMobject(str(reservation.object.id), handle)
     return _commit_typed_binding(self, scene, reservation, handle)
+
+
+def _semantic_wrapper_key(value: object) -> str:
+    if not isinstance(value, (_base.Mobject, _compat.Group)):
+        raise TypeError("Scene membership accepts Mobjects and Groups")
+    handle = getattr(value, "_semantic_family_handle", None)
+    if handle is None:
+        handle = getattr(value, "_semantic_handle", None)
+    if handle is None:
+        raise NotImplementedError(
+            "standard Scene membership requires an ordinary typed Mobject or Group"
+        )
+    return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+
+
+def _membership_registry(scene: _base.Scene) -> dict[str, object]:
+    registry = getattr(scene, "_canonical_membership_wrappers", None)
+    if registry is None:
+        registry = scene._canonical_membership_wrappers = {}
+    return registry
+
+
+def _register_membership_wrappers(scene: _base.Scene, value: object) -> None:
+    registry = _membership_registry(scene)
+    registry[_semantic_wrapper_key(value)] = value
+    if isinstance(value, _compat.Group):
+        for member in value.submobjects:
+            _register_membership_wrappers(scene, member)
+
+
+def _membership_wrapper_leaves(candidate: object):
+    """Visit affected Python identities; Rust alone decides scene membership."""
+    if isinstance(candidate, _compat.Group):
+        for child in candidate.submobjects:
+            yield from _membership_wrapper_leaves(child)
+    elif isinstance(candidate, _base.Mobject):
+        yield candidate
+
+
+def _membership_leaf_bindings(
+    scene: _base.Scene,
+    batch: object,
+    value: object,
+    *,
+    next_object_id: int,
+    key: str | None,
+    binding_keys: set[str],
+) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
+    # This walk reserves Python wrapper IDs only. The family handle below remains
+    # the sole membership/order input; Rust resolves authoritative family leaves.
+    leaves = list(_membership_wrapper_leaves(value))
+    if not leaves:
+        raise ValueError("Scene membership target must contain at least one Mobject")
+    reservations = []
+    for index, member in enumerate(leaves):
+        handle = getattr(member, "_semantic_handle", None)
+        if handle is None:
+            raise NotImplementedError(
+                "standard Scene membership does not support retained-only Mobjects"
+            )
+        semantic_key = _semantic_wrapper_key(member)
+        if semantic_key in binding_keys:
+            continue
+        binding_keys.add(semantic_key)
+        if member._scene is not None and member._scene is not scene:
+            raise ValueError("Mobject already belongs to another Scene")
+        if member._scene is scene:
+            reservation = _TypedBindingReservation(
+                member._object,
+                scene._object_keys[member._object.id],
+                None,
+                reuse_existing_identity=True,
+            )
+        else:
+            reservation = _reserve_typed_binding(
+                member,
+                scene,
+                handle,
+                key if index == 0 else None,
+                object_id=next_object_id,
+            )
+            if not reservation.reuse_existing_identity:
+                next_object_id += 1
+                reservations.append((member, reservation, handle))
+            else:
+                reservations.append((member, reservation, handle))
+        batch.reserveMobjectBinding(str(reservation.object.id), handle)
+    return next_object_id, reservations
+
+
+def _append_membership_value(
+    scene: _base.Scene,
+    batch: object,
+    value: object,
+    *,
+    next_object_id: int,
+    binding_keys: set[str],
+    reserve_bindings: bool,
+    key: str | None = None,
+) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
+    reservations = []
+    if reserve_bindings:
+        next_object_id, reservations = _membership_leaf_bindings(
+            scene,
+            batch,
+            value,
+            next_object_id=next_object_id,
+            key=key,
+            binding_keys=binding_keys,
+        )
+    if isinstance(value, _compat.Group):
+        family = getattr(value, "_semantic_family_handle", None)
+        if family is None:
+            raise NotImplementedError("standard Scene membership requires a typed Group")
+        batch.appendFamily(family)
+    elif isinstance(value, _base.Mobject):
+        handle = getattr(value, "_semantic_handle", None)
+        if handle is None:
+            raise NotImplementedError(
+                "standard Scene membership does not support retained-only Mobjects"
+            )
+        object_id = ""
+        if reserve_bindings:
+            assert value._object is not None or reservations
+            object_id = str(
+                value._object.id
+                if value._object is not None
+                else reservations[0][1].object.id
+            )
+        batch.appendMobject(object_id, handle)
+    else:
+        raise TypeError("Scene membership accepts Mobjects and Groups")
+    return next_object_id, reservations
+
+
+def _sync_membership_wrapper_attachments(
+    scene: _base.Scene, kind: str, values: tuple[object, ...]
+) -> None:
+    if kind == "add":
+        return
+    context = _context(scene)
+    # Clear affects every root; other operations only reconsider their old targets.
+    candidates = (
+        _membership_registry(scene).values()
+        if kind == "clear"
+        else (
+            leaf
+            for value in (values[:1] if kind == "replace" else values)
+            for leaf in _membership_wrapper_leaves(value)
+        )
+    )
+    seen = set()
+    for wrapper in candidates:
+        if isinstance(wrapper, _compat.Group) or wrapper._scene is not scene:
+            continue
+        semantic_key = _semantic_wrapper_key(wrapper)
+        if semantic_key in seen:
+            continue
+        seen.add(semantic_key)
+        if kind == "clear" or not bool(context.containsMobject(wrapper._semantic_handle)):
+            wrapper._scene = None
+
+
+def _canonical_scene_mobjects(scene: _base.Scene) -> list[object]:
+    registry = _membership_registry(scene)
+    return [
+        registry[str(key)]
+        for key in _context(scene).rootMembershipKeys()
+        if str(key) in registry
+    ]
+
+
+def _canonical_edit_membership(
+    scene: _base.Scene,
+    kind: str,
+    values: tuple[object, ...] = (),
+    *,
+    key: str | None = None,
+) -> None:
+    if key is not None and (kind != "add" or len(values) != 1 or isinstance(values[0], _compat.Group)):
+        raise ValueError("an explicit key requires one ordinary Mobject add")
+    context = _context(scene)
+    batch = context.beginMembershipBatch(kind)
+    next_object_id = scene._next_object_id
+    reservations = []
+    binding_keys = set()
+    request_keys = set()
+    for index, value in enumerate(values):
+        request_key = _semantic_wrapper_key(value)
+        if request_key in request_keys:
+            raise ValueError("membership request contains a duplicate Mobject or Group")
+        request_keys.add(request_key)
+        next_object_id, appended = _append_membership_value(
+            scene,
+            batch,
+            value,
+            next_object_id=next_object_id,
+            binding_keys=binding_keys,
+            reserve_bindings=kind in {"add", "replace"},
+            key=key if index == 0 else None,
+        )
+        reservations.extend(appended)
+    context.editMembership(batch)
+    for member, reservation, handle in reservations:
+        _commit_typed_binding(member, scene, reservation, handle)
+    for value in values:
+        _register_membership_wrappers(scene, value)
+    _sync_membership_wrapper_attachments(scene, kind, values)
 
 
 def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object:
@@ -1027,14 +1234,7 @@ def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> o
 
 
 def _canonical_uncreate_options(animation: object, kwargs: dict[str, object]) -> object | None:
-    if getattr(animation, "reverse_rate_function", None) is not True:
-        return None
-    if getattr(animation, "remover", None) is not True:
-        return None
-    resolved = _canonical_affine_options(animation, kwargs)
-    if resolved is None or resolved.rate_func not in {"linear", "smooth"}:
-        return None
-    return resolved
+    return _canonical_affine_options(animation, kwargs)
 
 
 def _play_canonical_create(
@@ -1097,12 +1297,20 @@ def _play_canonical_create(
             if _semantic_continuation_active(self)
             else (context.ordinaryPlayUncreate if remove else context.ordinaryPlayCreate)
         )
-        method(
+        arguments = [
             object_id,
             handle,
             float(resolved.run_time),
             str(resolved.rate_func),
-        )
+        ]
+        if remove:
+            arguments.extend(
+                [
+                    bool(getattr(animation, "remover", True)),
+                    bool(getattr(animation, "reverse_rate_function", True)),
+                ]
+            )
+        method(*arguments)
     except Exception as error:
         raise ValueError(str(error)) from None
     if reservation is not None:
@@ -1112,7 +1320,7 @@ def _play_canonical_create(
             register(target)
 
     def completed() -> None:
-        if remove:
+        if remove and bool(getattr(animation, "remover", True)):
             _reconcile_fade_membership(self, target, "out")
 
     if _async_continuation_active(self):
@@ -1180,9 +1388,6 @@ def _reconcile_fade_membership(
     # Preserve ObjectId/key/opaque handle for a same-handle `Scene.add` re-entry.
     # The context's membership query is authoritative; this is only wrapper state.
     target._scene = None
-    top_level = getattr(scene, "_compat_top_level", None)
-    if top_level is not None:
-        scene._compat_top_level = [value for value in top_level if value is not target]
 
 
 def _play_canonical_fade(
@@ -2821,6 +3026,9 @@ def install() -> None:
     if _INSTALLED:
         return
     _INSTALLED = True
+    _compat._STANDARD_MEMBERSHIP_EDIT = _canonical_edit_membership
+    _compat._STANDARD_MEMBERSHIP_VIEW = _canonical_scene_mobjects
+    _compat._STANDARD_MEMBERSHIP_REGISTER = _register_membership_wrappers
 
     _ir.Scene._append_snapshot = _append_snapshot
     _ir.Scene._authoring_checkpoint = _authoring_checkpoint

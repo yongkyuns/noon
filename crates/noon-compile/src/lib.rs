@@ -411,6 +411,9 @@ pub struct CompiledScene {
     track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
     retired_object_indices: BTreeMap<ObjectId, u32>,
+    /// Live stable row indices in authoritative semantic painter order.
+    painter_order: Vec<u32>,
+    painter_ranks: Vec<Option<u32>>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
     family_animation_plans: Vec<RetainedFamilyAnimationPlan>,
     family_animations: Vec<CompiledFamilyAnimationChannel>,
@@ -798,6 +801,8 @@ impl CompiledScene {
 
         let live_object_count = objects.len();
         Ok(Self {
+            painter_order: (0..objects.len() as u32).collect(),
+            painter_ranks: (0..objects.len() as u32).map(Some).collect(),
             objects,
             live_object_count,
             tracks: tracks_by_channel,
@@ -818,6 +823,39 @@ impl CompiledScene {
 
     pub const fn live_object_count(&self) -> usize {
         self.live_object_count
+    }
+
+    pub fn painter_order(&self) -> &[u32] {
+        &self.painter_order
+    }
+
+    pub fn painter_position(&self, object: ObjectId) -> Option<usize> {
+        let index = self.object_index(object)?;
+        self.painter_rank(index).map(|rank| rank as usize)
+    }
+
+    pub fn painter_rank(&self, object_index: u32) -> Option<u32> {
+        self.painter_ranks
+            .get(object_index as usize)
+            .copied()
+            .flatten()
+    }
+
+    fn painter_reorder_changes(&self, object: ObjectId, before: Option<ObjectId>) -> bool {
+        let Some(current) = self.painter_position(object) else {
+            return true;
+        };
+        let destination = match before {
+            Some(anchor) if anchor == object => return false,
+            Some(anchor) => {
+                let Some(anchor) = self.painter_position(anchor) else {
+                    return true;
+                };
+                anchor.saturating_sub(usize::from(current < anchor))
+            }
+            None => self.painter_order.len().saturating_sub(1),
+        };
+        current != destination
     }
 
     pub const fn resources(&self) -> &CompiledResources {
@@ -1016,6 +1054,9 @@ impl CompiledScene {
             ExecutionPatch::ReconcileTrack { track, .. } => self
                 .track(*track)
                 .is_none_or(|existing| !existing.reconciled),
+            ExecutionPatch::ReorderObject { object, before } => {
+                self.painter_reorder_changes(*object, *before)
+            }
             ExecutionPatch::CreateObject(_)
             | ExecutionPatch::RemoveObject(_)
             | ExecutionPatch::AddTrack(_)
@@ -1058,6 +1099,8 @@ impl CompiledScene {
                     self.object_indices
                         .insert(self.objects[index as usize].id, index);
                     self.live_object_count += 1;
+                    self.painter_order.push(index);
+                    self.painter_ranks[index as usize] = Some(self.painter_order.len() as u32 - 1);
                     stats.object_slots_reactivated = 1;
                     return Ok(stats);
                 }
@@ -1066,6 +1109,9 @@ impl CompiledScene {
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
                 self.live_object_count += 1;
+                self.painter_order.push(index);
+                self.painter_ranks
+                    .push(Some(self.painter_order.len() as u32 - 1));
                 stats.object_slots_appended = 1;
             }
             ExecutionPatch::RemoveObject(id) => {
@@ -1090,11 +1136,52 @@ impl CompiledScene {
                 self.object_indices.remove(id);
                 self.retired_object_indices.insert(*id, index);
                 self.live_object_count -= 1;
+                let painter_position = self.painter_ranks[index as usize]
+                    .take()
+                    .expect("live object has one painter rank")
+                    as usize;
+                self.painter_order.remove(painter_position);
+                for rank in painter_position..self.painter_order.len() {
+                    self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
+                }
                 stats.object_slots_retired = 1;
                 // No unrelated object or track payload changes storage location.
                 stats.object_indices_rewritten = 0;
                 stats.track_object_indices_rewritten = 0;
                 stats.unrelated_track_slots_shifted = 0;
+            }
+            ExecutionPatch::ReorderObject { object, before } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let before_index = before
+                    .map(|before| {
+                        self.object_index(before)
+                            .ok_or(CompilePatchError::UnknownObject(before))
+                    })
+                    .transpose()?;
+                if before_index == Some(index) {
+                    return Ok(stats);
+                }
+                let position = self
+                    .painter_order
+                    .iter()
+                    .position(|candidate| *candidate == index)
+                    .expect("live object has one painter-order entry");
+                self.painter_order.remove(position);
+                let destination = before_index
+                    .and_then(|anchor| {
+                        self.painter_order
+                            .iter()
+                            .position(|candidate| *candidate == anchor)
+                    })
+                    .unwrap_or(self.painter_order.len());
+                self.painter_order.insert(destination, index);
+                let first = position.min(destination);
+                let last = position.max(destination).min(self.painter_order.len() - 1);
+                for rank in first..=last {
+                    self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
+                }
             }
             ExecutionPatch::SetContent {
                 object,
@@ -2573,5 +2660,16 @@ mod tests {
         assert_eq!(compiled.live_object_count(), 2);
         assert_eq!(stats.object_slots_reactivated, 1);
         assert_eq!(stats.object_slots_appended, 0);
+        assert_eq!(compiled.painter_order(), &[1, 0]);
+
+        compiled
+            .apply_execution_patch(&ExecutionPatch::ReorderObject {
+                object: returning,
+                before: Some(later),
+            })
+            .unwrap();
+        assert_eq!(compiled.painter_order(), &[0, 1]);
+        assert_eq!(compiled.object_index(returning), Some(0));
+        assert_eq!(compiled.object_index(later), Some(1));
     }
 }

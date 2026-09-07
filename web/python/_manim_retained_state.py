@@ -21,8 +21,6 @@ import _manim_typst as _typst
 
 
 _INSTALLED = False
-_ORIGINAL_SCENE_ADD = _compat.Scene.add
-_ORIGINAL_SCENE_REMOVE = _compat.Scene.remove
 _ORIGINAL_SCENE_PLAY = _compat.Scene.play
 _ORIGINAL_SCENE_WAIT = _compat.Scene.wait
 _ORIGINAL_RETAINED_DOCUMENT = _compat.Scene.retained_document
@@ -332,18 +330,6 @@ def _commit_play_operations(animations: tuple[object, ...]) -> None:
         _observe_source(source)
 
 
-def _scene_add(self: _compat.Scene, *mobjects: object, **kwargs: Any):
-    _sync_all(self)
-    result = _ORIGINAL_SCENE_ADD(self, *mobjects, **kwargs)
-    _freeze_bound_sources(self)
-    return result
-
-
-def _scene_remove(self: _compat.Scene, *mobjects: object):
-    _sync_all(self)
-    return _ORIGINAL_SCENE_REMOVE(self, *mobjects)
-
-
 def _scene_play(self: _compat.Scene, *animations: Any, **kwargs: Any):
     _sync_all(self)
     result = _ORIGINAL_SCENE_PLAY(self, *animations, **kwargs)
@@ -377,8 +363,6 @@ def install() -> None:
         return
     _INSTALLED = True
 
-    _compat.Scene.add = _scene_add
-    _compat.Scene.remove = _scene_remove
     _compat.Scene.play = _scene_play
     _compat.Scene.wait = _scene_wait
     _compat.Scene.retained_document = _retained_document

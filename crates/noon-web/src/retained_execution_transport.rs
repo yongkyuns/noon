@@ -80,6 +80,18 @@ pub struct RetainedTransportObjectState {
     pub render_geometry_resource: Option<u32>,
 }
 
+/// One final-order splice over stable retained transport slots.
+///
+/// `slots` is the authoritative final segment beginning at `start`. Rows keep
+/// their dense mirror indices; only the renderer's derived painter permutation
+/// changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetainedPainterOrderDelta {
+    pub start: u32,
+    pub end: u32,
+    pub slots: Vec<TransportSlotId>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedExecutionDeltaEnvelope {
     pub channel: String,
@@ -91,6 +103,10 @@ pub struct RetainedExecutionDeltaEnvelope {
     #[serde(default)]
     pub camera: Camera2DState,
     pub objects: Vec<RetainedTransportObjectState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_slots: Vec<TransportSlotId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub painter_order: Option<RetainedPainterOrderDelta>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -345,6 +361,8 @@ impl RetainedExecutionDeltaEncoder {
             time: frame.time,
             camera,
             objects,
+            removed_slots: Vec::new(),
+            painter_order: None,
         })
     }
 
@@ -354,12 +372,35 @@ impl RetainedExecutionDeltaEncoder {
         changes: &FrameChanges,
         camera: Camera2DState,
     ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
+        self.encode_incremental_inner(frame, changes, camera, None)
+    }
+
+    /// Encode a sparse structural/order publication over stable worker rows.
+    /// Only dirty/new object rows, removed slot identities, and the affected
+    /// final painter segment cross the genuine worker boundary.
+    pub fn encode_incremental_with_painter_order(
+        &mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        camera: Camera2DState,
+        painter_order: &[u32],
+    ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
+        self.encode_incremental_inner(frame, changes, camera, Some(painter_order))
+    }
+
+    fn encode_incremental_inner(
+        &mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        camera: Camera2DState,
+        painter_order: Option<&[u32]>,
+    ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
         validate_frame_shape(frame)?;
         validate_time(frame.time)?;
         if !self.initialized {
             return Err(RetainedExecutionTransportError::IncrementalBeforeSnapshot);
         }
-        if changes.is_structural() {
+        if changes.is_structural() && painter_order.is_none() {
             return Err(RetainedExecutionTransportError::StructuralChangeRequiresSnapshot);
         }
         if changes.is_all() {
@@ -376,22 +417,112 @@ impl RetainedExecutionDeltaEncoder {
         if changes.is_empty() {
             return Ok(None);
         }
+        let removed_rows = changes
+            .removed_indices()
+            .iter()
+            .copied()
+            .map(|index| {
+                self.transport_object(frame, index)
+                    .map(|object| (index, object.slot))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let excluded_indices = removed_rows
+            .iter()
+            .map(|(index, _)| *index)
+            .collect::<HashSet<_>>();
+        // Several semantic publications may accumulate before the next worker
+        // delta. An object can therefore be re-added and removed again while its
+        // worker row remains absent throughout. Publish only removals that were
+        // live in the encoder's last worker state; still exclude every final
+        // removal from the changed-row payload below.
+        let removed_rows = removed_rows
+            .into_iter()
+            .filter(|(index, _)| {
+                self.snapshot_orders
+                    .get(*index)
+                    .copied()
+                    .flatten()
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        let removed_slots = removed_rows
+            .iter()
+            .map(|(_, slot)| *slot)
+            .collect::<Vec<_>>();
+        let (order_updates, painter_order) = if let Some(order) = painter_order {
+            let delta = changes
+                .painter_order_range()
+                .map(|range| {
+                    let end = range.end.min(order.len());
+                    let mut seen = HashSet::with_capacity(end.saturating_sub(range.start));
+                    let mut updates = Vec::with_capacity(end.saturating_sub(range.start));
+                    let slots = order[range.start.min(end)..end]
+                        .iter()
+                        .enumerate()
+                        .map(|(offset, &index)| {
+                            let index = index as usize;
+                            if !seen.insert(index) {
+                                return Err(RetainedExecutionTransportError::InvalidObjectIndex(
+                                    index,
+                                ));
+                            }
+                            let rank = u32::try_from(range.start + offset).map_err(|_| {
+                                RetainedExecutionTransportError::InvalidObjectIndex(index)
+                            })?;
+                            updates.push((index, rank));
+                            self.transport_object(frame, index)
+                                .map(|object| object.slot)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok::<_, RetainedExecutionTransportError>((
+                        updates,
+                        RetainedPainterOrderDelta {
+                            start: u32::try_from(range.start).map_err(|_| {
+                                RetainedExecutionTransportError::InvalidObjectIndex(range.start)
+                            })?,
+                            end: u32::try_from(range.end).map_err(|_| {
+                                RetainedExecutionTransportError::InvalidObjectIndex(range.end)
+                            })?,
+                            slots,
+                        },
+                    ))
+                })
+                .transpose()?;
+            match delta {
+                Some((updates, delta)) => (updates, Some(delta)),
+                None => (Vec::new(), None),
+            }
+        } else {
+            (Vec::new(), None)
+        };
+        let order_update_map = order_updates.iter().copied().collect::<HashMap<_, _>>();
         let objects = changes
             .object_indices()
             .iter()
             .copied()
+            .filter(|index| !excluded_indices.contains(index))
             .map(|index| {
                 let mut object = self.transport_object(frame, index)?;
-                object.order = self
-                    .snapshot_orders
-                    .get(index)
+                object.order = order_update_map
+                    .get(&index)
                     .copied()
-                    .flatten()
+                    .or_else(|| self.snapshot_orders.get(index).copied().flatten())
                     .ok_or(RetainedExecutionTransportError::UnknownSlot(object.slot))?;
                 Ok(object)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
+        for (index, _) in &removed_rows {
+            if let Some(order) = self.snapshot_orders.get_mut(*index) {
+                *order = None;
+            }
+        }
+        if self.snapshot_orders.len() < frame.objects.len() {
+            self.snapshot_orders.resize(frame.objects.len(), None);
+        }
+        for (index, rank) in order_updates {
+            self.snapshot_orders[index] = Some(rank);
+        }
         Ok(Some(RetainedExecutionDeltaEnvelope {
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
@@ -401,6 +532,8 @@ impl RetainedExecutionDeltaEncoder {
             time: frame.time,
             camera,
             objects,
+            removed_slots,
+            painter_order,
         }))
     }
 
@@ -420,11 +553,20 @@ pub struct RetainedExecutionFrameMirror {
     next_sequence: u64,
     slots: Vec<TransportSlotId>,
     slot_indices: HashMap<TransportSlotId, usize>,
+    object_indices: HashMap<ObjectId, usize>,
     render_geometries: Arc<[Arc<GeometryRef>]>,
     resource_session: Option<u32>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     camera: Camera2DState,
     frame: Option<FrameState>,
+    painter_order: Vec<u32>,
+    painter_ranks: Vec<Option<u32>>,
+}
+
+struct PreparedPainterOrder {
+    range: std::ops::Range<usize>,
+    old_end: usize,
+    segment: Vec<u32>,
 }
 
 impl RetainedExecutionFrameMirror {
@@ -450,6 +592,15 @@ impl RetainedExecutionFrameMirror {
                 .iter()
                 .map(|(&transport, &local)| (transport, local)),
         );
+    }
+
+    pub(crate) fn remove_installed_text_handles<'a>(
+        &mut self,
+        handles: impl IntoIterator<Item = &'a TransportTextResourceHandle>,
+    ) {
+        for handle in handles {
+            self.text_handles.remove(handle);
+        }
     }
 
     fn resolve_content(
@@ -505,8 +656,28 @@ impl RetainedExecutionFrameMirror {
         self.slot_indices.get(&slot).copied()
     }
 
+    /// Resolve one semantic execution identity without searching the dense frame.
+    pub(crate) fn frame_index_for_object(&self, object: ObjectId) -> Option<usize> {
+        self.object_indices.get(&object).copied()
+    }
+
+    /// Resolve the authored fields of one sparse transport row without mutating the mirror.
+    pub(crate) fn resolve_transport_object_state(
+        &self,
+        object: &RetainedTransportObjectState,
+    ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
+        validate_object_state(object)?;
+        let content = self.resolve_content(&object.content)?;
+        Ok(frame_object(object, content))
+    }
+
     pub const fn camera(&self) -> Camera2DState {
         self.camera
+    }
+
+    /// Dense mirror-row indices in authoritative engine painter order.
+    pub fn painter_order(&self) -> &[u32] {
+        &self.painter_order
     }
 
     pub fn apply(
@@ -610,8 +781,16 @@ impl RetainedExecutionFrameMirror {
             .enumerate()
             .map(|(index, slot)| (slot, index))
             .collect();
+        let object_indices = objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| (object.object, index))
+            .collect();
         self.slots = slots;
         self.slot_indices = slot_indices;
+        self.object_indices = object_indices;
+        self.painter_order = (0..objects.len() as u32).collect();
+        self.painter_ranks = (0..objects.len() as u32).map(Some).collect();
         self.frame = Some(FrameState {
             family_animations: vec![None; objects.len()],
             family_animation_plan_indices: vec![None; objects.len()],
@@ -639,49 +818,216 @@ impl RetainedExecutionFrameMirror {
             .ok_or(RetainedExecutionTransportError::IncrementalBeforeSnapshot)?;
         let mut updates = Vec::with_capacity(delta.objects.len());
         let mut seen_slots = HashSet::with_capacity(delta.objects.len());
+        let mut added_slot_indices = HashMap::new();
+        let mut added_objects = HashSet::new();
+        let mut next_slot_count = self.slots.len();
         for object in &delta.objects {
             if !seen_slots.insert(object.slot) {
                 return Err(RetainedExecutionTransportError::DuplicateSlot(object.slot));
             }
             validate_object_state(object)?;
-            let index = self
-                .slot_indices
-                .get(&object.slot)
-                .copied()
-                .ok_or(RetainedExecutionTransportError::UnknownSlot(object.slot))?;
-            let expected_order = u32::try_from(index)
-                .map_err(|_| RetainedExecutionTransportError::InvalidOrder(object.order))?;
-            if object.order != expected_order {
-                return Err(RetainedExecutionTransportError::InvalidOrder(object.order));
-            }
-            let current = &frame.objects[index];
-            if current.id != object.object {
-                return Err(RetainedExecutionTransportError::SlotIdentityChanged(
-                    object.slot,
-                ));
-            }
             let content = self.resolve_content(&object.content)?;
-            if !incremental_content_identity_matches(&current.content, &content) {
-                return Err(RetainedExecutionTransportError::ContentIdentityChanged(
-                    object.slot,
-                ));
-            }
             let geometry = self.resolve_render_geometry(object, delta.session)?;
-            updates.push((index, object, geometry, content));
+            let (index, added) = if let Some(&index) = self.slot_indices.get(&object.slot) {
+                let current = &frame.objects[index];
+                if current.id != object.object {
+                    return Err(RetainedExecutionTransportError::SlotIdentityChanged(
+                        object.slot,
+                    ));
+                }
+                if !incremental_content_identity_matches(&current.content, &content) {
+                    return Err(RetainedExecutionTransportError::ContentIdentityChanged(
+                        object.slot,
+                    ));
+                }
+                (index, false)
+            } else {
+                if self.object_indices.contains_key(&object.object)
+                    || !added_objects.insert(object.object)
+                {
+                    return Err(RetainedExecutionTransportError::DuplicateObject(
+                        object.object,
+                    ));
+                }
+                let index = next_slot_count;
+                next_slot_count += 1;
+                added_slot_indices.insert(object.slot, index);
+                (index, true)
+            };
+            updates.push((index, added, object, geometry, content));
         }
+        let mut seen_removed = HashSet::with_capacity(delta.removed_slots.len());
+        let _validated_removed_indices = delta
+            .removed_slots
+            .iter()
+            .map(|slot| {
+                if !seen_removed.insert(*slot) || seen_slots.contains(slot) {
+                    return Err(RetainedExecutionTransportError::DuplicateSlot(*slot));
+                }
+                self.slot_indices
+                    .get(slot)
+                    .copied()
+                    .ok_or(RetainedExecutionTransportError::UnknownSlot(*slot))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let painter_update = self.validate_painter_order_delta(
+            delta.painter_order.as_ref(),
+            &added_slot_indices,
+            &seen_removed,
+            &seen_slots,
+        )?;
+        // `order` establishes the dense painter order of a snapshot. Incremental
+        // publications retain stable sparse rows, so their authoritative order is
+        // the painter-order splice validated above. In particular, a row may keep
+        // stable slot 2 while becoming the sole live row at painter rank 0.
+        let added_indices = updates
+            .iter()
+            .filter_map(|(index, added, _, _, _)| {
+                (*added || self.painter_ranks.get(*index).copied().flatten().is_none())
+                    .then_some(*index)
+            })
+            .collect::<Vec<_>>();
+        let removed_indices = _validated_removed_indices;
         // Validate all rows and resource references before mutating the live mirror.
         let frame = self.frame.as_mut().expect("validated retained frame");
         let mut changed = Vec::with_capacity(updates.len());
-        for (index, object, geometry, content) in updates {
-            frame.objects[index] = frame_object(object, content);
-            frame.presences[index] = object.presence;
-            frame.reveals[index] = object.reveal;
-            frame.morphs[index] = object.morph;
-            frame.render_geometries[index] = geometry;
-            frame.render_transforms[index] = object.render_transform;
+        for (index, is_added, object, geometry, content) in updates {
+            if is_added {
+                debug_assert_eq!(index, frame.objects.len());
+                self.slots.push(object.slot);
+                self.slot_indices.insert(object.slot, index);
+                self.object_indices.insert(object.object, index);
+                frame.objects.push(frame_object(object, content));
+                frame.presences.push(object.presence);
+                frame.reveals.push(object.reveal);
+                frame.morphs.push(object.morph);
+                frame.render_geometries.push(geometry);
+                frame.render_transforms.push(object.render_transform);
+            } else {
+                frame.objects[index] = frame_object(object, content);
+                frame.presences[index] = object.presence;
+                frame.reveals[index] = object.reveal;
+                frame.morphs[index] = object.morph;
+                frame.render_geometries[index] = geometry;
+                frame.render_transforms[index] = object.render_transform;
+            }
             changed.push(index);
         }
-        Ok(FrameChanges::objects(changed))
+        // Removed rows remain allocated so their stable transport slots can be
+        // reused safely, but they must stop contributing retained render state.
+        // Removed objects are intentionally omitted from an incremental row
+        // payload, so apply the authoritative absence here and discard any
+        // transient render override left by the preceding frame.
+        for &index in &removed_indices {
+            frame.presences[index] = false;
+            frame.render_geometries[index] = None;
+            frame.render_transforms[index] = None;
+        }
+        let painter_range = painter_update.map(
+            |PreparedPainterOrder {
+                 range,
+                 old_end,
+                 segment,
+             }| {
+                for &index in &self.painter_order[range.start..old_end] {
+                    self.painter_ranks[index as usize] = None;
+                }
+                if self.painter_ranks.len() < frame.objects.len() {
+                    self.painter_ranks.resize(frame.objects.len(), None);
+                }
+                let next_end = range.start + segment.len();
+                self.painter_order.splice(range.start..old_end, segment);
+                for (rank, &index) in self.painter_order[range.start..next_end].iter().enumerate() {
+                    self.painter_ranks[index as usize] = Some((range.start + rank) as u32);
+                }
+                range
+            },
+        );
+        let mut changes = FrameChanges::with_structure(changed, added_indices, removed_indices);
+        if let Some(range) = painter_range {
+            changes = changes.with_painter_order(range);
+        }
+        Ok(changes)
+    }
+
+    fn validate_painter_order_delta(
+        &self,
+        delta: Option<&RetainedPainterOrderDelta>,
+        added_slot_indices: &HashMap<TransportSlotId, usize>,
+        removed: &HashSet<TransportSlotId>,
+        updated: &HashSet<TransportSlotId>,
+    ) -> Result<Option<PreparedPainterOrder>, RetainedExecutionTransportError> {
+        if delta.is_none() {
+            if !removed.is_empty() || !added_slot_indices.is_empty() {
+                return Err(RetainedExecutionTransportError::StructuralChangeRequiresSnapshot);
+            }
+            return Ok(None);
+        }
+        let delta = delta.expect("checked painter delta");
+        let start = delta.start as usize;
+        let end = delta.end as usize;
+        if end < start {
+            return Err(RetainedExecutionTransportError::InvalidOrder(delta.end));
+        }
+        let old_end = end.min(self.painter_order.len());
+        if start > old_end {
+            return Err(RetainedExecutionTransportError::InvalidOrder(delta.start));
+        }
+        let old_segment = self.painter_order[start..old_end]
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let mut segment = Vec::with_capacity(delta.slots.len());
+        let mut seen = HashSet::with_capacity(delta.slots.len());
+        for slot in &delta.slots {
+            if removed.contains(slot) || !seen.insert(*slot) {
+                return Err(RetainedExecutionTransportError::DuplicateSlot(*slot));
+            }
+            let index = self
+                .slot_indices
+                .get(slot)
+                .or_else(|| added_slot_indices.get(slot))
+                .copied()
+                .ok_or(RetainedExecutionTransportError::UnknownSlot(*slot))?;
+            segment.push(index as u32);
+        }
+        let segment_set = segment.iter().copied().collect::<HashSet<_>>();
+        if removed.iter().any(|slot| {
+            self.slot_indices
+                .get(slot)
+                .is_none_or(|index| !old_segment.contains(&(*index as u32)))
+        }) {
+            return Err(RetainedExecutionTransportError::InvalidOrder(delta.end));
+        }
+        if old_segment.iter().any(|index| {
+            !segment_set.contains(index) && !removed.contains(&self.slots[*index as usize])
+        }) {
+            return Err(RetainedExecutionTransportError::InvalidOrder(delta.end));
+        }
+        let mut added = added_slot_indices
+            .values()
+            .map(|&index| index as u32)
+            .collect::<HashSet<_>>();
+        for slot in updated {
+            if let Some(&index) = self.slot_indices.get(slot) {
+                if self.painter_ranks.get(index).copied().flatten().is_none() {
+                    added.insert(index as u32);
+                }
+            }
+        }
+        if segment
+            .iter()
+            .any(|index| !old_segment.contains(index) && !added.contains(index))
+            || added.iter().any(|index| !segment_set.contains(index))
+        {
+            return Err(RetainedExecutionTransportError::InvalidOrder(delta.end));
+        }
+        Ok(Some(PreparedPainterOrder {
+            range: start..end,
+            old_end,
+            segment,
+        }))
     }
 }
 
@@ -997,6 +1343,179 @@ mod tests {
         let (_, changes) = mirror.apply(delta).unwrap();
         assert_eq!(changes.object_indices(), &[1]);
         assert_eq!(mirror.frame().unwrap(), &updated);
+    }
+
+    #[test]
+    fn compact_painter_splice_reorders_and_replaces_without_resending_live_rows() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(19);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+
+        let reorder = encoder
+            .encode_incremental_with_painter_order(
+                &frame,
+                &FrameChanges::painter_order(0..2),
+                Camera2DState::default(),
+                &[1, 0],
+            )
+            .unwrap()
+            .unwrap();
+        assert!(reorder.objects.is_empty());
+        assert!(reorder.removed_slots.is_empty());
+        assert_eq!(reorder.painter_order.as_ref().unwrap().slots.len(), 2);
+        let (_, changes) = mirror.apply(reorder).unwrap();
+        assert_eq!(changes.painter_order_range(), Some(0..2));
+        assert_eq!(mirror.painter_order(), &[1, 0]);
+
+        let mut replaced = frame.clone();
+        replaced.objects.push(FrameObjectState {
+            id: ObjectId::new(13),
+            content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        });
+        replaced.presences.push(true);
+        replaced.reveals.push(1.0);
+        replaced.morphs.push(0.0);
+        replaced.render_geometries.push(None);
+        replaced.render_transforms.push(None);
+        let structural =
+            FrameChanges::with_structure(vec![0, 2], vec![2], vec![0]).with_painter_order(0..2);
+        let replace = encoder
+            .encode_incremental_with_painter_order(
+                &replaced,
+                &structural,
+                Camera2DState::default(),
+                &[2, 1],
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(replace.objects.len(), 1);
+        assert_eq!(replace.removed_slots.len(), 1);
+        let mut malformed = replace.clone();
+        malformed.painter_order.as_mut().unwrap().slots[1] =
+            malformed.painter_order.as_ref().unwrap().slots[0];
+        let before_frame = mirror.frame().unwrap().clone();
+        let before_order = mirror.painter_order().to_vec();
+        assert!(matches!(
+            mirror.apply(malformed),
+            Err(RetainedExecutionTransportError::DuplicateSlot(_))
+        ));
+        assert_eq!(mirror.frame().unwrap(), &before_frame);
+        assert_eq!(mirror.painter_order(), before_order);
+
+        let (_, changes) = mirror.apply(replace).unwrap();
+        assert_eq!(changes.added_indices(), &[2]);
+        assert_eq!(changes.removed_indices(), &[0]);
+        assert_eq!(changes.painter_order_range(), Some(0..2));
+        assert_eq!(mirror.painter_order(), &[2, 1]);
+        assert_eq!(mirror.frame().unwrap().objects[2].id, ObjectId::new(13));
+    }
+
+    #[test]
+    fn removed_text_slot_is_absent_after_sparse_painter_update() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(29);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+
+        let mut removed = frame.clone();
+        removed.time = 1.0;
+        removed.presences[1] = false;
+        let changes =
+            FrameChanges::with_structure(vec![1], Vec::new(), vec![1]).with_painter_order(1..2);
+        let delta = encoder
+            .encode_incremental_with_painter_order(
+                &removed,
+                &changes,
+                Camera2DState::default(),
+                &[0],
+            )
+            .unwrap()
+            .unwrap();
+
+        assert!(delta.objects.is_empty());
+        let (_, applied) = mirror.apply(delta).unwrap();
+        assert_eq!(applied.removed_indices(), &[1]);
+        assert_eq!(mirror.painter_order(), &[0]);
+        let installed = mirror.frame().unwrap();
+        assert!(!installed.presences[1]);
+        assert!(installed.render_geometries[1].is_none());
+        assert!(installed.render_transforms[1].is_none());
+    }
+
+    #[test]
+    fn coalesced_readd_replace_publishes_only_net_membership() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(23);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+
+        let removed = FrameChanges::with_structure(vec![0, 1], Vec::new(), vec![0, 1])
+            .with_painter_order(0..2);
+        let empty = encoder
+            .encode_incremental_with_painter_order(&frame, &removed, Camera2DState::default(), &[])
+            .unwrap()
+            .unwrap();
+        mirror.apply(empty).unwrap();
+        assert!(mirror.painter_order().is_empty());
+
+        let mut replaced = frame.clone();
+        replaced.objects.push(FrameObjectState {
+            id: ObjectId::new(13),
+            content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        });
+        replaced.presences.push(true);
+        replaced.reveals.push(1.0);
+        replaced.morphs.push(0.0);
+        replaced.render_geometries.push(None);
+        replaced.render_transforms.push(None);
+        // Re-add the old pair and replace it before publishing another frame.
+        // The accumulated changes retain 0/1 in both added and removed sets,
+        // although those rows stayed absent at the worker boundary.
+        let structural = FrameChanges::with_structure(vec![0, 1, 2], vec![0, 1, 2], vec![0, 1])
+            .with_painter_order(0..2);
+        let replacement = encoder
+            .encode_incremental_with_painter_order(
+                &replaced,
+                &structural,
+                Camera2DState::default(),
+                &[2],
+            )
+            .unwrap()
+            .unwrap();
+        assert!(replacement.removed_slots.is_empty());
+        mirror.apply(replacement).unwrap();
+        assert_eq!(mirror.painter_order(), &[2]);
+
+        replaced.objects[2].appearance = 0.5;
+        let later = encoder
+            .encode_incremental(
+                &replaced,
+                &FrameChanges::objects(vec![2]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        mirror.apply(later).unwrap();
+        assert_eq!(mirror.painter_order(), &[2]);
+        assert_eq!(mirror.frame().unwrap().objects[2].appearance, 0.5);
     }
 
     #[test]

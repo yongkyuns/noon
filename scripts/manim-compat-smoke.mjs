@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +9,10 @@ import playwright from "playwright";
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
+const uncreateSource = await readFile(
+  path.join(repoRoot, "web/python/examples/ordinary_uncreate_options.py"),
+  "utf8",
+);
 const port = 4175;
 const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -73,13 +78,23 @@ class Demo(Scene):
             run_time=0.75,
             rate_func=linear,
         )
+        # Masked target edits remain explicit export coverage during #959 migration.
+        self.play(circle.animate.set_y(1.5), run_time=0.4, rate_func=linear)
         self.play(FadeIn(Circle(radius=0.2, color=GREEN)), run_time=0.25)
+
+        # Group fades remain explicit export coverage until shared lifecycle migration (#959).
+        intro = VGroup(
+            Circle(radius=0.18, color=BLUE),
+            Square(side_length=0.36, color=PINK),
+        ).arrange(RIGHT, buff=0.2)
+        self.play(FadeIn(intro), run_time=0.25)
+        self.play(FadeOut(intro), run_time=0.25)
 `;
 
 const phaseBSource = `
 from noon import *
 
-class GroupMembershipExport(Scene):
+class GroupMembershipLive(Scene):
     def construct(self):
         left = Circle(radius=0.35, color=BLUE)
         right = Square(side_length=0.7, color=PINK)
@@ -115,19 +130,10 @@ class GroupMembershipExport(Scene):
         self.replace(pair, replacement)
         assert len(self.mobjects) == 1 and self.mobjects[0] is replacement
 
-        # set_y is intentionally not one of Noon's old fixed animation-builder methods.
-        self.play(replacement.animate.set_y(1.5), run_time=0.4, rate_func=linear)
+        self.wait(0.4)
         self.clear()
         assert self.mobjects == []
 
-        intro = VGroup(
-            Circle(radius=0.18, color=BLUE),
-            Square(side_length=0.36, color=PINK),
-        ).arrange(RIGHT, buff=0.2)
-        self.play(FadeIn(intro), run_time=0.25)
-        assert len(self.mobjects) == 1 and self.mobjects[0] is intro
-        self.play(FadeOut(intro), run_time=0.25)
-        assert self.mobjects == []
 `;
 
 const defaultVmobjectStyleSource = `
@@ -242,25 +248,6 @@ class SharedQueryTransforms(Scene):
         assert abs(orbit.get_x() + 0.5) < 1e-9
         assert abs(orbit.get_y() - 1.5) < 1e-9
         self.add(box, target, orbit)
-`;
-
-const uncreateSource = `
-from noon import *
-
-class UncreateLifecycle(Scene):
-    def construct(self):
-        first = Square(side_length=0.6, color=BLUE)
-        kept = Circle(radius=0.25, color=PINK)
-        forward = Square(side_length=0.4, color=GREEN)
-        self.add(first, kept, forward)
-        self.play(Uncreate(first), run_time=2.0, rate_func=rush_into)
-        assert first not in self.mobjects
-
-        self.play(Uncreate(kept, remover=False), run_time=1.0)
-        assert kept in self.mobjects
-
-        self.play(Uncreate(forward, reverse_rate_function=False), run_time=1.0)
-        assert forward not in self.mobjects
 `;
 
 const rateFunctionSource = `
@@ -424,10 +411,10 @@ try {
     foundationSource,
   );
   assert.equal(foundation.kind, "scene_document");
-  assert.equal(foundation.document.objects.length, 3, "introducer animations should auto-bind objects");
+  assert.equal(foundation.document.objects.length, 5, "introducer animations should auto-bind objects");
 
   const foundationProperties = foundation.document.tracks.map((track) => track.property);
-  assert.equal(foundationProperties.filter((property) => property === "presence").length, 3);
+  assert.equal(foundationProperties.filter((property) => property === "presence").length, 7);
   assert.equal(foundationProperties.filter((property) => property === "reveal").length, 2);
   assert.ok(foundationProperties.includes("transform"), "animate.shift should lower to transform");
 
@@ -440,41 +427,20 @@ try {
   assert.equal(transform.timing.easing, "linear");
 
   const uncreate = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     uncreateSource,
   );
-  assert.equal(uncreate.kind, "scene_document");
-  const uncreateReveals = uncreate.document.tracks.filter((track) => track.property === "reveal");
-  assert.equal(uncreateReveals.length, 3);
-  assert.deepEqual(uncreateReveals[0].values.scalar, { from: 1, to: 0 });
-  assert.equal(uncreateReveals[0].timing.easing, "rush_from");
-  assert.deepEqual(uncreateReveals[1].values.scalar, { from: 1, to: 0 });
-  assert.equal(uncreateReveals[1].timing.easing, "smooth");
-  assert.deepEqual(uncreateReveals[2].values.scalar, { from: 0, to: 1 });
-  const uncreateRemovals = uncreate.document.tracks.filter(
-    (track) => track.property === "presence" && track.values.bool?.from === true && track.values.bool?.to === false,
-  );
-  assert.equal(uncreateRemovals.length, 2, "remover=False must preserve scene membership");
-  assert.equal(uncreateRemovals[0].timing.start_time, 2.0);
-  assert.equal(uncreateRemovals[1].timing.start_time, 4.0);
+  assert.equal(uncreate.duration, 4, "Uncreate options must preserve sequential authored timing");
+  assert.equal(uncreate.metrics.objectCount, 1, "only remover=False target should remain live");
+  assert.ok(uncreate.metrics.presentedFrames > 0, "shared Uncreate options must present");
 
   const phaseB = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     phaseBSource,
   );
-  assert.equal(phaseB.kind, "scene_document");
-  assert.equal(phaseB.document.objects.length, 5, "groups should lower to flat runtime member objects");
-  const phaseBProperties = phaseB.document.tracks.map((track) => track.property);
-  assert.equal(
-    phaseBProperties.filter((property) => property === "transform").length,
-    1,
-    "the remaining exported scalar transform should lower once",
-  );
-  assert.equal(
-    phaseBProperties.filter((property) => property === "presence").length,
-    12,
-    "scene membership and grouped fades should lower to deterministic presence events",
-  );
+  assert.equal(phaseB.duration, 1, "membership edits preserve continuation timing");
+  assert.equal(phaseB.metrics.objectCount, 0, "clear removes the final root");
+  assert.ok(phaseB.metrics.presentedFrames > 0, "shared group membership must render");
 
   const defaultVmobjectStyle = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),

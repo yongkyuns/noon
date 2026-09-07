@@ -205,8 +205,10 @@ impl PreparedRetainedGpuFrame<'_> {
     ///
     /// Mixed frames use `render_items` because geometry and glyphs interleave.
     /// This exposes only renderer-derived batch order, never private scratch IDs.
-    pub fn geometry_render_batches(&self) -> &[OrderedRenderBatch] {
-        self.geometry.render_batches
+    pub fn geometry_render_chunks(
+        &self,
+    ) -> impl Iterator<Item = crate::PreparedRenderChunkRef<'_>> {
+        self.geometry.ordered_render_chunks()
     }
 
     /// Observe one retained prepared object without scanning unrelated draw items.
@@ -342,10 +344,12 @@ fn geometry_path_mapping_is_compacted(
     geometry: &crate::PreparedGeometryObjectObservation,
 ) -> bool {
     matches!(geometry.primitive, RenderPrimitive::Path { .. })
-        && frame
-            .render_batches
-            .iter()
-            .any(|batch| matches!(batch.primitive, RenderPrimitive::MegaPath { .. }))
+        && frame.ordered_render_chunks().any(|chunk| {
+            chunk
+                .render_batches
+                .iter()
+                .any(|batch| matches!(batch.primitive, RenderPrimitive::MegaPath { .. }))
+        })
 }
 
 fn observed_glyph_ranges(
@@ -828,6 +832,7 @@ pub struct RetainedFramePreparer {
     incremental_stats: RetainedFrameIncrementalStats,
     sources: Vec<SourceItem>,
     render_items: Vec<RetainedRenderItem>,
+    painter_order_indices: Vec<u32>,
     render_item_ranges: HashMap<ObjectId, std::ops::Range<usize>>,
     visible_render_items: Vec<RetainedRenderItem>,
     visible_projection_ready: bool,
@@ -878,6 +883,7 @@ impl Default for RetainedFramePreparer {
             incremental_stats: RetainedFrameIncrementalStats::default(),
             sources: Vec::new(),
             render_items: Vec::new(),
+            painter_order_indices: Vec::new(),
             render_item_ranges: HashMap::new(),
             visible_render_items: Vec::new(),
             visible_projection_ready: false,
@@ -904,6 +910,24 @@ impl Default for RetainedFramePreparer {
 }
 
 impl RetainedFramePreparer {
+    /// Install a transport-decoded painter permutation for a genuine worker
+    /// boundary. Direct runtime publications use [`RendererPublication`] instead.
+    pub fn set_painter_order(&mut self, order: &[u32]) {
+        self.painter_order_indices.clear();
+        self.painter_order_indices.extend_from_slice(order);
+    }
+
+    /// Apply one compact transport-decoded painter-order replacement range.
+    pub fn set_painter_order_range(&mut self, order: &[u32], range: std::ops::Range<usize>) {
+        let old_end = range.end.min(self.painter_order_indices.len());
+        let new_end = range.end.min(order.len());
+        self.painter_order_indices.splice(
+            range.start.min(old_end)..old_end,
+            order[range.start..new_end].iter().copied(),
+        );
+        debug_assert_eq!(self.painter_order_indices.len(), order.len());
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1011,6 +1035,11 @@ impl RetainedFramePreparer {
             }
         }
 
+        if previous.is_none() || publication.changes().is_all() {
+            self.set_painter_order(publication.painter_order());
+        } else if let Some(range) = publication.changes().painter_order_range() {
+            self.set_painter_order_range(publication.painter_order(), range);
+        }
         let prepared = self.prepare_with_changes(
             device,
             queue,
@@ -1044,6 +1073,11 @@ impl RetainedFramePreparer {
             }
         }
         validate_visible_object_indices(publication.frame(), visible_object_indices)?;
+        if self.last_applied_publication.is_none() || publication.changes().is_all() {
+            self.set_painter_order(publication.painter_order());
+        } else if let Some(range) = publication.changes().painter_order_range() {
+            self.set_painter_order_range(publication.painter_order(), range);
+        }
 
         let prepared = self.prepare_with_changes_inner(
             device,
@@ -1256,6 +1290,11 @@ impl RetainedFramePreparer {
             &self.snapshot_text_items,
             &geometry,
         );
+        reorder_mixed_items(
+            &mut self.render_items,
+            frame,
+            &self.painter_order_indices,
+        );
         rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         if let Some(indices) = visible_object_indices {
             if let Some(projected) = project_mixed_visibility_cached(
@@ -1415,6 +1454,13 @@ impl RetainedFramePreparer {
         visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepared_generation_ready = false;
+        if changes.is_all() {
+            self.geometry
+                .set_painter_order(frame, &self.painter_order_indices);
+        } else if let Some(range) = changes.painter_order_range() {
+            self.geometry
+                .set_painter_order_range(frame, &self.painter_order_indices, range);
+        }
         if let Some(indices) = visible_object_indices {
             self.record_visibility_projection(indices.len(), indices.len());
         }
@@ -1592,7 +1638,24 @@ impl RetainedFramePreparer {
                 &self.snapshot_text_items,
                 &geometry,
             );
+            reorder_mixed_items(
+                &mut self.render_items,
+                frame,
+                &self.painter_order_indices,
+            );
             rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
+            self.incremental_stats.mixed_order_rebuilds = self
+                .incremental_stats
+                .mixed_order_rebuilds
+                .saturating_add(1);
+        } else if let Some(range) = changes.painter_order_range() {
+            reorder_mixed_items_range(
+                &mut self.render_items,
+                &mut self.render_item_ranges,
+                frame,
+                &self.painter_order_indices,
+                range,
+            );
             self.incremental_stats.mixed_order_rebuilds = self
                 .incremental_stats
                 .mixed_order_rebuilds
@@ -1678,6 +1741,70 @@ fn rebuild_render_item_ranges(
     ranges.clear();
     for (index, item) in render_items.iter().enumerate() {
         ranges
+            .entry(item.object_id())
+            .and_modify(|range| range.end = index + 1)
+            .or_insert(index..index + 1);
+    }
+}
+
+fn reorder_mixed_items(
+    items: &mut [RetainedRenderItem],
+    frame: &FrameState,
+    painter_order: &[u32],
+) {
+    if painter_order.is_empty() {
+        return;
+    }
+    let ranks = painter_order
+        .iter()
+        .enumerate()
+        .filter_map(|(rank, &index)| {
+            frame
+                .objects
+                .get(index as usize)
+                .map(|object| (object.id, rank))
+        })
+        .collect::<HashMap<_, _>>();
+    items.sort_by_key(|item| ranks.get(&item.object_id()).copied().unwrap_or(usize::MAX));
+}
+
+fn reorder_mixed_items_range(
+    items: &mut [RetainedRenderItem],
+    item_ranges: &mut HashMap<ObjectId, std::ops::Range<usize>>,
+    frame: &FrameState,
+    painter_order: &[u32],
+    range: std::ops::Range<usize>,
+) {
+    let ranks = painter_order[range]
+        .iter()
+        .enumerate()
+        .filter_map(|(rank, &index)| {
+            frame
+                .objects
+                .get(index as usize)
+                .map(|object| (object.id, rank))
+        })
+        .collect::<HashMap<_, _>>();
+    let affected_ranges = ranks
+        .keys()
+        .filter_map(|id| item_ranges.get(id).cloned())
+        .collect::<Vec<_>>();
+    let Some(item_start) = affected_ranges.iter().map(|range| range.start).min() else {
+        return;
+    };
+    let item_end = affected_ranges
+        .iter()
+        .map(|range| range.end)
+        .max()
+        .unwrap_or(item_start);
+    for id in ranks.keys() {
+        item_ranges.remove(id);
+    }
+    items[item_start..item_end]
+        .sort_by_key(|item| ranks.get(&item.object_id()).copied().unwrap_or(usize::MAX));
+    for (offset, item) in items[item_start..item_end].iter().enumerate() {
+        let index = item_start + offset;
+        item_ranges
             .entry(item.object_id())
             .and_modify(|range| range.end = index + 1)
             .or_insert(index..index + 1);
@@ -3127,7 +3254,9 @@ mod tests {
                 .prepare_publication_visible(&device, &queue, &publication, &[], metrics)
                 .unwrap();
             assert_eq!(prepared.geometry.circles.len(), 1);
-            assert!(prepared.geometry_render_batches().is_empty());
+            assert!(prepared
+                .geometry_render_chunks()
+                .all(|chunk| chunk.render_batches.is_empty()));
         }
         assert_eq!(preparer.last_applied_publication(), Some(context));
         assert_eq!(

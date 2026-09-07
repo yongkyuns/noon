@@ -1,5 +1,8 @@
 //! Direct authoring scope over one family in the shared semantic store.
-use crate::{ExecutionSession, LiveSession, Mobject, MobjectFamily};
+use crate::{
+    ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectFamilyMember,
+    SceneMembershipRequest,
+};
 use noon_core::{
     AnimationOptions, GeometryRef, RateFunction, SemanticMutationImpact,
     SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticStore,
@@ -74,8 +77,45 @@ impl Scene {
         Mobject::from_geometry(Rc::clone(&self.store), GeometryRef::path(path), style)
     }
     pub fn add(&mut self, object: &Mobject) -> Result<(), String> {
-        self.require_object(object)?;
-        self.add_node(object.node_id())
+        self.edit_membership(SceneMembershipRequest::Add(&[
+            MobjectFamilyMember::Mobject(object),
+        ]))
+        .map(|_| ())
+    }
+
+    pub fn edit_membership(
+        &mut self,
+        request: SceneMembershipRequest<'_>,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+        let transaction =
+            crate::scene_membership::prepare_scene_membership(&self.store, self.root, request)?;
+        crate::scene_membership::apply_scene_membership(&self.store, transaction)
+    }
+
+    pub fn add_many(
+        &mut self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+        self.edit_membership(SceneMembershipRequest::Add(members))
+    }
+
+    pub fn remove_many(
+        &mut self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+        self.edit_membership(SceneMembershipRequest::Remove(members))
+    }
+
+    pub fn clear(&mut self) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+        self.edit_membership(SceneMembershipRequest::Clear)
+    }
+
+    pub fn replace(
+        &mut self,
+        old: MobjectFamilyMember<'_>,
+        new: MobjectFamilyMember<'_>,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+        self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
 
     /// Create one detached semantic family with authoritative ordered members.
@@ -100,23 +140,10 @@ impl Scene {
         MobjectFamily::from_node(Rc::clone(&self.store), node)
     }
     pub fn remove(&mut self, object: &Mobject) -> Result<(), String> {
-        self.require_object(object)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.remove_member(self.root, object.node_id());
-        transaction
-            .apply(&mut self.store.borrow_mut())
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    }
-    /// Integration entry point for retained feature nodes in the same store.
-    /// Callers must first establish that `node` originated in `store()`.
-    pub(crate) fn add_node(&mut self, node: SemanticNodeId) -> Result<(), String> {
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_member(self.root, node);
-        transaction
-            .apply(&mut self.store.borrow_mut())
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        self.edit_membership(SceneMembershipRequest::Remove(&[
+            MobjectFamilyMember::Mobject(object),
+        ]))
+        .map(|_| ())
     }
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), String> {
         if !Rc::ptr_eq(&self.store, object.store()) {

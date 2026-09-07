@@ -21,11 +21,13 @@ Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `r
 | Parallel Create | `noon::example_scenes::ordinary_square_and_circle_create_continuation_program()` | None; matches Python `manim_parity_square_and_circle.py` with one atomic admission and reveal segment |
 | MovingCameraCenter | `noon::example_scenes::ordinary_moving_camera_center_program()` | None; shared camera transforms and live admission after a wait match the literal Python scene |
 | Ordinary Uncreate | `noon::example_scenes::ordinary_uncreate_continuation_program()` | None; detached admission, reverse reveal, and endpoint removal share the same runtime |
+| Uncreate options | `noon::example_scenes::ordinary_uncreate_options::program()` / `python/examples/ordinary_uncreate_options.py` | None; shared Rust resolves easing, reveal direction and optional endpoint removal |
 | Static Typst / MathTypst | `noon::example_scenes::typst_text_reference()` / `math_typst_text_reference()` | None; shared semantic text resources supply glyphs and vector geometry |
 | Ordinary Create | `noon::example_scenes::ordinary_create_continuation_program()` | None; the typed Rust program owns introduction, reveal, endpoint reconciliation, and continuation admission |
 | Create → SquareToCircle → FadeOut | `noon::example_scenes::ordinary_create_then_content_morph_program()` | None; native and direct-WASM hosts run the same typed content and lifecycle continuation |
 | Ordinary style play | `noon::example_scenes::ordinary_style_play()` | None; the typed Rust session owns fill/object-opacity interpolation, completion, and the following authored style edit |
 | Ordinary paint play | `noon::example_scenes::ordinary_paint_play()` | None; the typed Rust session owns fill/stroke color and paint-opacity interpolation, completion, and the following authored paint edit |
+| Scene membership | `noon::example_scenes::ordinary_membership::program()` | None; shared Rust owns batch validation, ordered roots, family promotion, replacement and clear |
 | Ordered subset display | `noon::example_scenes::ordinary_subset_display::program()` | None; shared Rust owns family preparation, detached admission, exact increasing/one-by-one thresholds, and paint endpoints |
 | Mixed Text Write | `noon::example_scenes::text_write::program()` | None; shared Rust composes typed Text movement with ordered glyph Write and atomic admission |
 | Native signals | `noon::example_scenes::live_native_signals()` | Typed pointer, Space-key, opacity-control, and ordered pointer-down occurrences; no scene JSON or semantic IDs |

@@ -1,12 +1,14 @@
+use std::collections::HashMap;
+
 use noon_core::{Camera2DState, ObjectContentRef, RetainedFamilyAnimationPlan};
 use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
 use crate::{
     InstalledRetainedFamilyExecutionState, InstalledRetainedResources,
-    RetainedExecutionDeltaEnvelope, RetainedExecutionFrameMirror, RetainedExecutionTransportError,
-    RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,
-    RetainedResourceBundle, RetainedResourceTransportError, RetainedTransportApplyOutcome,
-    TransportObjectContent,
+    PreparedInstalledFamilyUpdate, RetainedExecutionDeltaEnvelope, RetainedExecutionFrameMirror,
+    RetainedExecutionTransportError, RetainedFamilyExecutionDeltaEnvelope,
+    RetainedFamilyExecutionTransportError, RetainedResourceBundle, RetainedResourceTransportError,
+    RetainedTransportApplyOutcome, TransportObjectContent,
 };
 
 /// Render-side retained execution mirror with renderer-local resource handles.
@@ -51,6 +53,10 @@ impl InstalledRetainedExecutionMirror {
 
     pub fn frame(&self) -> Option<&FrameState> {
         self.resolved.as_ref()
+    }
+
+    pub fn painter_order(&self) -> &[u32] {
+        self.wire.painter_order()
     }
 
     pub fn family_frame(&self) -> Result<Option<RetainedFamilyFrame<'_>>, InstalledExecutionError> {
@@ -114,8 +120,16 @@ impl InstalledRetainedExecutionMirror {
         &mut self,
         delta: RetainedExecutionDeltaEnvelope,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        self.apply_retained(delta, true)
+    }
+
+    fn apply_retained(
+        &mut self,
+        delta: RetainedExecutionDeltaEnvelope,
+        validate_snapshot_resources: bool,
+    ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
         let snapshot = delta.snapshot;
-        if snapshot {
+        if snapshot && validate_snapshot_resources {
             self.validate_snapshot_resources(&delta)?;
         }
 
@@ -157,28 +171,13 @@ impl InstalledRetainedExecutionMirror {
         if delta.retained.snapshot {
             self.validate_snapshot_resources(&delta.retained)?;
         }
-
-        // Family validation happens against the frame shape that will exist after the
-        // retained delta, but live family state is not changed until the base mirror
-        // accepts the sequence. Incrementals cannot change retained identity/content,
-        // so the current resolved frame is sufficient for their sidecar validation.
-        let mut next_family = self.family.clone();
-        if delta.retained.snapshot {
-            let preview = self.preview_resolved_snapshot(&delta.retained)?;
-            next_family.apply(&delta, &preview, self.resources.texts())?;
-        } else {
-            let current = self
-                .resolved
-                .as_ref()
-                .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
-            next_family.apply(&delta, current, self.resources.texts())?;
-        }
+        let prepared_family = self.prepare_family_update(&delta, self.resources.texts())?;
 
         let (outcome, changes) = self.apply(delta.retained)?;
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             return Ok((outcome, changes));
         }
-        self.family = next_family;
+        self.family.commit_prepared(prepared_family);
         Ok((outcome, changes))
     }
 
@@ -188,25 +187,107 @@ impl InstalledRetainedExecutionMirror {
         bundle: RetainedResourceBundle,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
         let additions = self.resources.prepare_additions(bundle)?;
-        let mut next_wire = self.wire.clone();
-        next_wire.extend_installed_text_handles(&additions.text_handle_remap());
-        let (outcome, changes) = next_wire.apply(delta.retained.clone())?;
+        let text_handles = additions.text_handle_remap();
+        self.wire.extend_installed_text_handles(&text_handles);
+        let text_lookup = additions.text_lookup(&self.resources);
+        let prepared_family = match self.prepare_family_update(&delta, &text_lookup) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.wire.remove_installed_text_handles(text_handles.keys());
+                return Err(error);
+            }
+        };
+        let applied = self.apply_retained(delta.retained, false);
+        let (outcome, changes) = match applied {
+            Ok(applied) => applied,
+            Err(error) => {
+                self.wire.remove_installed_text_handles(text_handles.keys());
+                return Err(error);
+            }
+        };
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            self.wire.remove_installed_text_handles(text_handles.keys());
             return Ok((outcome, changes));
         }
-        let next_resolved = next_wire
-            .frame()
-            .cloned()
-            .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        let mut next_family = self.family.clone();
-        let text_lookup = additions.text_lookup(&self.resources);
-        next_family.apply(&delta, &next_resolved, &text_lookup)?;
 
         self.resources.commit_additions(additions);
-        self.wire = next_wire;
-        self.resolved = Some(next_resolved);
-        self.family = next_family;
+        self.family.commit_prepared(prepared_family);
         Ok((outcome, changes))
+    }
+
+    fn prepare_family_update(
+        &self,
+        delta: &RetainedFamilyExecutionDeltaEnvelope,
+        texts: &(impl noon_core::TextResourceLookup + ?Sized),
+    ) -> Result<PreparedInstalledFamilyUpdate, InstalledExecutionError> {
+        // Resolve only sparse changed rows. Family validation borrows unchanged rows
+        // through the mirror's ObjectId index and overlays rows that the retained
+        // delta will update or append. Neither resident family state nor the full
+        // retained frame is cloned before commit.
+        let current = self.resolved.as_ref();
+        let mut changed_objects = HashMap::with_capacity(delta.retained.objects.len());
+        let mut next_indices = HashMap::with_capacity(delta.retained.objects.len());
+        let added_plan_objects = delta
+            .family_plans
+            .iter()
+            .flat_map(|plan| plan.objects.iter().copied())
+            .collect::<std::collections::HashSet<_>>();
+        let mut next_row = if delta.retained.snapshot {
+            0
+        } else {
+            current
+                .ok_or(InstalledExecutionError::MissingResolvedFrame)?
+                .objects
+                .len()
+        };
+        for object in &delta.retained.objects {
+            let index = if delta.retained.snapshot {
+                let index = object.order as usize;
+                next_row = next_row.max(index + 1);
+                index
+            } else if let Some(index) = self.wire.frame_index_for_slot(object.slot) {
+                index
+            } else {
+                let index = next_row;
+                next_row += 1;
+                index
+            };
+            next_indices.insert(object.object, index);
+            if added_plan_objects.contains(&object.object) {
+                changed_objects.insert(
+                    object.object,
+                    self.wire.resolve_transport_object_state(object)?,
+                );
+            }
+        }
+        let frame_len = if delta.retained.snapshot {
+            delta.retained.objects.len()
+        } else {
+            next_row
+        };
+        let snapshot = delta.retained.snapshot;
+        Ok(self.family.prepare_with_lookup(
+            delta,
+            frame_len,
+            texts,
+            |object| {
+                next_indices.get(&object).copied().or_else(|| {
+                    (!snapshot)
+                        .then(|| self.wire.frame_index_for_object(object))
+                        .flatten()
+                })
+            },
+            |object| {
+                changed_objects.get(&object).or_else(|| {
+                    (!snapshot)
+                        .then(|| {
+                            let index = self.wire.frame_index_for_object(object)?;
+                            current?.objects.get(index)
+                        })
+                        .flatten()
+                })
+            },
+        )?)
     }
 
     fn validate_snapshot_resources(
@@ -224,19 +305,6 @@ impl InstalledRetainedExecutionMirror {
             }
         }
         Ok(())
-    }
-
-    fn preview_resolved_snapshot(
-        &self,
-        delta: &RetainedExecutionDeltaEnvelope,
-    ) -> Result<FrameState, InstalledExecutionError> {
-        let mut wire = self.wire.clone();
-        let (outcome, _) = wire.apply(delta.clone())?;
-        debug_assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
-        let frame = wire
-            .frame()
-            .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        Ok(self.resolve_wire_frame(frame))
     }
 
     fn rebuild_resolved_snapshot(&mut self) -> Result<(), InstalledExecutionError> {
@@ -267,7 +335,7 @@ impl InstalledRetainedExecutionMirror {
             .resolved
             .as_mut()
             .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
-        if resolved.objects.len() != wire.objects.len() {
+        if resolved.objects.len() > wire.objects.len() {
             return Err(InstalledExecutionError::FrameShapeMismatch);
         }
 
@@ -277,6 +345,19 @@ impl InstalledRetainedExecutionMirror {
                 .objects
                 .get(index)
                 .ok_or(InstalledExecutionError::InvalidObjectIndex(index))?;
+            if index == resolved.objects.len() {
+                resolved.objects.push(source.clone());
+                resolved.presences.push(wire.presences[index]);
+                resolved.reveals.push(wire.reveals[index]);
+                resolved.morphs.push(wire.morphs[index]);
+                resolved
+                    .render_geometries
+                    .push(wire.render_geometries[index].clone());
+                resolved
+                    .render_transforms
+                    .push(wire.render_transforms[index]);
+                continue;
+            }
             let target = resolved
                 .objects
                 .get_mut(index)
@@ -591,6 +672,54 @@ mod tests {
     }
 
     #[test]
+    fn invalid_base_incremental_does_not_commit_prepared_family_state() {
+        let mut engine = engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let initial: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
+        mirror
+            .apply_family(family_snapshot(initial.clone()))
+            .unwrap();
+
+        let changed = initial.objects[0].clone();
+        let invalid = RetainedFamilyExecutionDeltaEnvelope {
+            retained: RetainedExecutionDeltaEnvelope {
+                channel: initial.channel,
+                protocol_version: initial.protocol_version,
+                session: initial.session,
+                sequence: 1,
+                snapshot: false,
+                time: 2.0,
+                camera: initial.camera,
+                objects: vec![changed.clone(), changed],
+                removed_slots: Vec::new(),
+                painter_order: None,
+            },
+            family_states: vec![RetainedFamilyExecutionObjectState::planned(
+                ObjectId::new(8),
+                Some(family_state(0.25)),
+                Some(0),
+            )
+            .unwrap()],
+            family_plans: Vec::new(),
+            resource_additions: None,
+        };
+
+        assert!(mirror.apply_family(invalid).is_err());
+        assert_ne!(mirror.frame().unwrap().time, 2.0);
+        assert_eq!(
+            mirror
+                .planned_family_frame()
+                .unwrap()
+                .unwrap()
+                .family_animation(0),
+            Some(family_state(0.5))
+        );
+    }
+
+    #[test]
     fn incremental_transform_updates_only_state_and_preserves_local_content_handle() {
         let mut engine = engine();
         let mut mirror =
@@ -612,6 +741,8 @@ mod tests {
             time: 0.5,
             camera: initial.camera,
             objects: vec![changed],
+            removed_slots: Vec::new(),
+            painter_order: None,
         };
         let (_, changes) = mirror.apply(delta).unwrap();
         assert_eq!(changes.object_indices(), &[0]);

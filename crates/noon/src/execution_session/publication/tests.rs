@@ -422,7 +422,7 @@ fn removing_reachable_family_cascades_only_its_execution_leaves() {
 }
 
 #[test]
-fn painter_interleaving_fails_before_semantic_or_runtime_publication() {
+fn precreated_detached_object_appends_through_root_order_publication() {
     let mut store = SemanticStore::new();
     let earlier = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
@@ -435,21 +435,104 @@ fn painter_interleaving_fails_before_semantic_or_runtime_publication() {
     store.attach_to_scene(root).unwrap();
     let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
     session.take_frame_changes();
-    let context = session.publication_context();
-    let frame = session.frame().clone();
-
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_member(root, earlier);
+    session
+        .apply_semantic_transaction_at_root(&mut store, root, transaction)
+        .unwrap();
+
+    assert_eq!(store.node(root).unwrap().members(), &[later, earlier]);
+    let ordered = session
+        .painter_order()
+        .iter()
+        .map(|&index| session.frame().objects[index as usize].id)
+        .collect::<Vec<_>>();
+    assert_eq!(ordered.len(), 2);
+    assert_eq!(ordered[1], semantic_execution_object_id(earlier));
+    assert!(session.take_frame_changes().is_structural());
+}
+
+#[test]
+fn root_reorder_publishes_painter_order_without_moving_frame_rows() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let nodes = (0..3)
+        .map(|radius| {
+            let node =
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: radius as f32 + 1.0,
+                }));
+            store.add_member(root, node).unwrap();
+            node
+        })
+        .collect::<Vec<_>>();
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    session.take_frame_changes();
+    let dense_ids = session
+        .frame()
+        .objects
+        .iter()
+        .map(|object| object.id)
+        .collect::<Vec<_>>();
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.reorder_member(root, nodes[2], Some(nodes[0]));
+    session
+        .apply_semantic_transaction_at_root(&mut store, root, transaction)
+        .unwrap();
+
+    assert_eq!(
+        store.node(root).unwrap().members(),
+        &[nodes[2], nodes[0], nodes[1]]
+    );
+    assert_eq!(
+        session
+            .painter_order()
+            .iter()
+            .map(|&index| session.frame().objects[index as usize].id)
+            .collect::<Vec<_>>(),
+        vec![dense_ids[2], dense_ids[0], dense_ids[1]]
+    );
+    assert_eq!(
+        session
+            .frame()
+            .objects
+            .iter()
+            .map(|object| object.id)
+            .collect::<Vec<_>>(),
+        dense_ids
+    );
+    let changes = session.take_frame_changes();
+    assert_eq!(changes.painter_order_range(), Some(0..3));
+    assert!(changes.object_indices().is_empty());
+}
+
+#[test]
+fn unrooted_reorder_fails_before_semantic_or_runtime_publication() {
+    let mut store = SemanticStore::new();
+    let family = store.insert_family();
+    let first = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    let second = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 2.0,
+    }));
+    store.add_member(family, first).unwrap();
+    store.add_member(family, second).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+    let context = session.publication_context();
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.reorder_member(family, second, Some(first));
     assert!(matches!(
         session.apply_semantic_transaction(&mut store, transaction),
         Err(ExecutionSessionPublicationError::Lowering(
-            SemanticPublicationLoweringError::PainterOrderInterleaving { .. }
-        ))
+            SemanticPublicationLoweringError::PainterOrderRootRequired { family: rejected }
+        )) if rejected.existing() == Some(family)
     ));
-    assert_eq!(store.scene_revision(), context.scene_revision());
+    assert_eq!(store.node(family).unwrap().members(), &[first, second]);
     assert_eq!(session.publication_context(), context);
-    assert_eq!(session.frame(), &frame);
-    assert_eq!(store.node(root).unwrap().members(), &[later]);
     assert!(session.take_frame_changes().is_empty());
 }
 

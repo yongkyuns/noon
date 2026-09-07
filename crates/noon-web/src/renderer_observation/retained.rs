@@ -552,6 +552,8 @@ mod tests {
                 render_transform: None,
                 render_geometry_resource: None,
             }],
+            removed_slots: Vec::new(),
+            painter_order: None,
         };
         assert_eq!(
             mirror.apply(delta).unwrap().0,

@@ -96,3 +96,45 @@ fn membership_preserves_identity_isolates_roots_and_rejects_foreign_stores() {
         .objects
         .is_empty());
 }
+
+#[test]
+fn batch_membership_uses_authoritative_root_order_and_one_revision() {
+    let mut scene = Scene::new();
+    let first = scene.circle(1.0).unwrap();
+    let second = scene.square(1.0).unwrap();
+    let replacement = scene.rectangle(2.0, 1.0).unwrap();
+    let before = scene.store().borrow().scene_revision();
+    scene
+        .add_many(&[
+            MobjectFamilyMember::Mobject(&first),
+            MobjectFamilyMember::Mobject(&second),
+        ])
+        .unwrap();
+    assert_eq!(
+        scene.store().borrow().scene_revision().get(),
+        before.get() + 1
+    );
+    assert_eq!(
+        scene.store().borrow().node(scene.root()).unwrap().members(),
+        &[first.node_id(), second.node_id()]
+    );
+
+    scene
+        .replace(
+            MobjectFamilyMember::Mobject(&first),
+            MobjectFamilyMember::Mobject(&replacement),
+        )
+        .unwrap();
+    assert_eq!(
+        scene.store().borrow().node(scene.root()).unwrap().members(),
+        &[replacement.node_id(), second.node_id()]
+    );
+    scene.clear().unwrap();
+    assert!(scene
+        .store()
+        .borrow()
+        .node(scene.root())
+        .unwrap()
+        .members()
+        .is_empty());
+}

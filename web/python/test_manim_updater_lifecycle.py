@@ -26,6 +26,8 @@ class ManimUpdaterLifecycleTests(unittest.TestCase):
 
             import _manim_compat
             _manim_compat.install()
+            from _test_manim_membership import install_test_membership
+            install_test_membership(_manim_compat)
             import _manim_phase_b  # noqa: F401
             import _manim_updaters as updaters
             updaters.install()

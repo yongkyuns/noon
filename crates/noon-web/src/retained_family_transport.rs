@@ -100,6 +100,20 @@ impl RetainedFamilyPlanTransport {
         frame: &FrameState,
         texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<RetainedFamilyAnimationPlan, RetainedFamilyTransportError> {
+        self.install_with_object_lookup(texts, |object_id| {
+            frame.objects.iter().find(|object| object.id == object_id)
+        })
+    }
+
+    /// Rebuild a plan using an indexed retained-object lookup supplied by the caller.
+    ///
+    /// Incremental receivers use this form so installing a sparse plan visits only
+    /// that plan's leaves instead of searching every resident frame row per leaf.
+    pub(crate) fn install_with_object_lookup<'a>(
+        &self,
+        texts: &(impl TextResourceLookup + ?Sized),
+        mut object_for_id: impl FnMut(ObjectId) -> Option<&'a noon_runtime::FrameObjectState>,
+    ) -> Result<RetainedFamilyAnimationPlan, RetainedFamilyTransportError> {
         self.validate()?;
 
         let mut semantics = SemanticStore::new();
@@ -123,10 +137,7 @@ impl RetainedFamilyPlanTransport {
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, target)
             .map_err(RetainedFamilyTransportError::Plan)?;
         for (&leaf, &object_id) in leaves.iter().zip(&self.objects) {
-            let object = frame
-                .objects
-                .iter()
-                .find(|object| object.id == object_id)
+            let object = object_for_id(object_id)
                 .ok_or(RetainedFamilyTransportError::MissingObject(object_id))?;
             let definition = RetainedObjectDefinition {
                 id: object.id,

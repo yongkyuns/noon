@@ -1,12 +1,13 @@
 use noon_compile::{
     prepare_semantic_publication, prepare_semantic_publication_with_scalar_timeline,
-    validate_semantic_publication, ExecutionMutationTransaction, ExecutionPatch,
-    SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
+    semantic_execution_object_id, validate_semantic_publication, ExecutionMutationTransaction,
+    ExecutionPatch, SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
 };
 use noon_core::{
-    PreparedSemanticMutationTransaction, PublicationContext, SceneRevision,
+    PreparedSemanticMutationTransaction, PublicationContext, SceneRevision, SemanticMutation,
     SemanticMutationTransaction, SemanticMutationTransactionError,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticNodeKind, SemanticStore,
+    SemanticTransactionNodeRef,
 };
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
@@ -20,6 +21,84 @@ use super::ExecutionSession;
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
     SegmentCompletion,
+}
+
+fn lower_root_order_patches(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    root: SemanticNodeId,
+) -> Result<Vec<ExecutionPatch>, SemanticPublicationLoweringError> {
+    fn leaves(
+        store: &SemanticStore,
+        node: SemanticNodeId,
+        output: &mut Vec<SemanticNodeId>,
+    ) -> Result<(), SemanticPublicationLoweringError> {
+        let node_state = store.node(node).ok_or_else(|| {
+            SemanticPublicationLoweringError::from(noon_compile::SemanticLoweringError::Store(
+                noon_core::SemanticStoreError::UnknownNode(node),
+            ))
+        })?;
+        match node_state.kind() {
+            SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => output.push(node),
+            SemanticNodeKind::Family => {
+                for member in node_state.members() {
+                    leaves(store, member, output)?;
+                }
+            }
+            SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}
+        }
+        Ok(())
+    }
+
+    let mut patches = Vec::new();
+    for mutation in prepared.candidate_mutations() {
+        match mutation {
+            SemanticMutation::AddMember { family, member } if family.existing() == Some(root) => {
+                let Some(member) = member.existing() else {
+                    continue;
+                };
+                let mut member_leaves = Vec::new();
+                leaves(prepared.store(), member, &mut member_leaves)?;
+                for leaf in member_leaves {
+                    patches.push(ExecutionPatch::ReorderObject {
+                        object: semantic_execution_object_id(leaf),
+                        before: None,
+                    });
+                }
+            }
+            SemanticMutation::ReorderMember {
+                family,
+                member,
+                before,
+            } if family.existing() == Some(root) => {
+                let Some(member) = member.existing() else {
+                    continue;
+                };
+                let mut member_leaves = Vec::new();
+                leaves(prepared.store(), member, &mut member_leaves)?;
+                let mut anchor =
+                    if let Some(before) = before.and_then(SemanticTransactionNodeRef::existing) {
+                        let mut anchor_leaves = Vec::new();
+                        leaves(prepared.store(), before, &mut anchor_leaves)?;
+                        anchor_leaves
+                            .first()
+                            .copied()
+                            .map(semantic_execution_object_id)
+                    } else {
+                        None
+                    };
+                for leaf in member_leaves.into_iter().rev() {
+                    let object = semantic_execution_object_id(leaf);
+                    patches.push(ExecutionPatch::ReorderObject {
+                        object,
+                        before: anchor,
+                    });
+                    anchor = Some(object);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(patches)
 }
 
 pub(crate) struct PreparedReactiveEnrollmentBatch {
@@ -133,11 +212,12 @@ impl ExecutionSession {
     /// exclusively; all semantic/compiler/runtime failures precede publication.
     /// The final semantic commit is infallible and synchronous with runtime commit.
     ///
-    /// Structural publication admits append-compatible geometry entries, local
+    /// Structural publication admits geometry entries, local
     /// family exits, and content already owned by this store before session bootstrap.
-    /// Aliases are reduced to exact net membership after semantic commit. Resource
-    /// allocation, reactive membership, and painter-order interleaving remain explicit
-    /// unsupported cases.
+    /// Aliases are reduced to exact net membership after semantic commit. Root-relative
+    /// painter reordering is published through [`LiveSession`](crate::LiveSession), which
+    /// supplies the authoritative execution root. Resource allocation and reactive
+    /// membership remain explicit unsupported cases.
     pub fn apply_semantic_transaction(
         &mut self,
         store: &mut SemanticStore,
@@ -149,6 +229,28 @@ impl ExecutionSession {
             Vec::new(),
             None,
             SemanticPublicationPurpose::AuthoredMutation,
+        )
+    }
+
+    pub(crate) fn apply_semantic_transaction_at_root(
+        &mut self,
+        store: &mut SemanticStore,
+        root: SemanticNodeId,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        validate_semantic_publication(&transaction)
+            .map_err(ExecutionSessionPublicationError::Lowering)?;
+        let prepared = transaction
+            .prepare(store)
+            .map_err(ExecutionSessionPublicationError::Semantic)?;
+        self.apply_prepared_semantic_transaction_with_execution_contract(
+            prepared,
+            Vec::new(),
+            None,
+            SemanticPublicationPurpose::AuthoredMutation,
+            None,
+            Some(root),
         )
     }
 
@@ -200,6 +302,7 @@ impl ExecutionSession {
             effective,
             purpose,
             None,
+            None,
         )
     }
 
@@ -221,6 +324,7 @@ impl ExecutionSession {
                 handled_signals: handled_scalar_signals,
                 reactive_enrollment,
             }),
+            None,
         )
     }
 
@@ -241,6 +345,7 @@ impl ExecutionSession {
                 handled_signals: handled_scalar_signals,
                 reactive_enrollment: None,
             }),
+            None,
         )
     }
 
@@ -251,6 +356,7 @@ impl ExecutionSession {
         effective: Option<PreparedEffectivePropertyBatch>,
         purpose: SemanticPublicationPurpose,
         scalar: Option<PreparedScalarPublicationContract>,
+        order_root: Option<SemanticNodeId>,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
@@ -261,23 +367,33 @@ impl ExecutionSession {
             return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
         }
         self.require_published_store(prepared.store())?;
+        if order_root.is_none() {
+            if let Some(SemanticMutation::ReorderMember { family, .. }) = prepared
+                .candidate_mutations()
+                .find(|mutation| matches!(mutation, SemanticMutation::ReorderMember { .. }))
+            {
+                return Err(ExecutionSessionPublicationError::Lowering(
+                    SemanticPublicationLoweringError::PainterOrderRootRequired { family: *family },
+                ));
+            }
+        }
         let publication = match scalar.as_ref() {
             Some(scalar) => prepare_semantic_publication_with_scalar_timeline(
                 &prepared,
                 &self.execution_index,
                 &self.reachability,
-                self.painter_order.tail(),
                 &scalar.handled_signals,
             ),
-            None => prepare_semantic_publication(
-                &prepared,
-                &self.execution_index,
-                &self.reachability,
-                self.painter_order.tail(),
-            ),
+            None => {
+                prepare_semantic_publication(&prepared, &self.execution_index, &self.reachability)
+            }
         }
         .map_err(ExecutionSessionPublicationError::Lowering)?;
         let preparation_stats = publication.stats();
+        let order_patches = order_root
+            .map(|root| lower_root_order_patches(&prepared, root))
+            .transpose()
+            .map_err(ExecutionSessionPublicationError::Lowering)?;
         let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) =
             execution_prefix.into_iter().partition(|patch| {
                 matches!(
@@ -285,6 +401,18 @@ impl ExecutionSession {
                     ExecutionPatch::AddTrack(_) | ExecutionPatch::AddFamilyAnimation(_)
                 )
             });
+        // Root-order targets and anchors remain visible in the proposed projection.
+        // Removing every possible old family exit would incorrectly retire a
+        // promoted survivor before validating its order patch.
+        let ordered_survivors: std::collections::HashSet<_> = order_patches
+            .iter()
+            .flatten()
+            .flat_map(|patch| match patch {
+                ExecutionPatch::ReorderObject { object, before } => [Some(*object), *before],
+                _ => [None, None],
+            })
+            .flatten()
+            .collect();
         let mut conservative_patches = execution_prefix.clone();
         conservative_patches.extend_from_slice(publication.value_transaction().mutations());
         conservative_patches.extend(
@@ -292,11 +420,17 @@ impl ExecutionSession {
                 .possible_exits()
                 .iter()
                 .copied()
+                .filter(|object| !ordered_survivors.contains(object))
                 .map(ExecutionPatch::RemoveObject),
         );
-        if !execution_suffix.is_empty() {
+        if !execution_suffix.is_empty()
+            || order_patches
+                .as_ref()
+                .is_some_and(|items| !items.is_empty())
+        {
             conservative_patches.extend(publication.conservative_existing_entry_patches());
         }
+        conservative_patches.extend(order_patches.iter().flatten().cloned());
         conservative_patches.extend(execution_suffix.iter().cloned());
         let conservative = ExecutionMutationTransaction::from_mutations(conservative_patches);
         let structural_change_possible =
@@ -336,6 +470,7 @@ impl ExecutionSession {
             execution_prefix
                 .into_iter()
                 .chain(execution.mutations().iter().cloned())
+                .chain(order_patches.into_iter().flatten())
                 .chain(execution_suffix),
         );
         if let Some(reactive_enrollment) = scalar.and_then(|scalar| scalar.reactive_enrollment) {
@@ -363,16 +498,6 @@ impl ExecutionSession {
         self.execution_index
             .apply_transaction_result(store, &result);
         self.execution_index.apply_reachability_update(&membership);
-        for node in membership.exited_objects() {
-            self.painter_order.remove(*node);
-        }
-        for node in membership.entered_objects() {
-            let state = store
-                .semantic_object_state_checked(*node)
-                .expect("entered semantic object remains live after commit");
-            self.painter_order
-                .insert(*node, state.presentation().order_key());
-        }
         self.last_structural_publication = StructuralPublicationStats {
             preparation: preparation_stats,
             entered_objects: entered.len(),

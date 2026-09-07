@@ -18,6 +18,8 @@ class ManimMoveToTargetTests(unittest.TestCase):
             f"""
             import runpy
             import _manim_compat; _manim_compat.install()
+            from _test_manim_membership import install_test_membership
+            install_test_membership(_manim_compat)
             import _manim_rate_functions; _manim_rate_functions.install()
             from noon import Circle, MoveToTarget, RIGHT, Scene, Transform, UP, VGroup
 

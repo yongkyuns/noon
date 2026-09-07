@@ -457,6 +457,7 @@ pub struct FrameChanges {
     object_indices: Vec<usize>,
     added_indices: Vec<usize>,
     removed_indices: Vec<usize>,
+    painter_order_range: Option<std::ops::Range<usize>>,
 }
 
 impl FrameChanges {
@@ -466,6 +467,7 @@ impl FrameChanges {
             object_indices: Vec::new(),
             added_indices: Vec::new(),
             removed_indices: Vec::new(),
+            painter_order_range: None,
         }
     }
 
@@ -476,6 +478,7 @@ impl FrameChanges {
             object_indices,
             added_indices: Vec::new(),
             removed_indices: Vec::new(),
+            painter_order_range: None,
         }
     }
 
@@ -490,7 +493,21 @@ impl FrameChanges {
             object_indices,
             added_indices,
             removed_indices,
+            painter_order_range: None,
         }
+    }
+
+    pub fn painter_order(range: std::ops::Range<usize>) -> Self {
+        let mut changes = Self::default();
+        changes.insert_painter_order_range(range);
+        changes
+    }
+
+    /// Attach a locally bounded painter-order update to an existing object or
+    /// structural change set.
+    pub fn with_painter_order(mut self, range: std::ops::Range<usize>) -> Self {
+        self.insert_painter_order_range(range);
+        self
     }
 
     pub fn with_structure(
@@ -508,6 +525,7 @@ impl FrameChanges {
             object_indices,
             added_indices,
             removed_indices,
+            painter_order_range: None,
         }
     }
 
@@ -547,8 +565,16 @@ impl FrameChanges {
         !self.added_indices.is_empty() || !self.removed_indices.is_empty()
     }
 
+    pub const fn has_painter_order_change(&self) -> bool {
+        self.painter_order_range.is_some()
+    }
+
     pub const fn is_empty(&self) -> bool {
-        !self.all && self.object_indices.is_empty()
+        !self.all && self.object_indices.is_empty() && self.painter_order_range.is_none()
+    }
+
+    pub fn painter_order_range(&self) -> Option<std::ops::Range<usize>> {
+        self.painter_order_range.clone()
     }
 
     fn invalidate_all(&mut self) {
@@ -556,6 +582,7 @@ impl FrameChanges {
         self.object_indices.clear();
         self.added_indices.clear();
         self.removed_indices.clear();
+        self.painter_order_range = None;
     }
 
     fn insert(&mut self, object_index: usize) {
@@ -576,6 +603,16 @@ impl FrameChanges {
         }
         insert_sorted_unique(&mut self.object_indices, object_index);
         insert_sorted_unique(&mut self.removed_indices, object_index);
+    }
+
+    fn insert_painter_order_range(&mut self, range: std::ops::Range<usize>) {
+        if self.all || range.is_empty() {
+            return;
+        }
+        self.painter_order_range = Some(match self.painter_order_range.take() {
+            Some(existing) => existing.start.min(range.start)..existing.end.max(range.end),
+            None => range,
+        });
     }
 }
 
@@ -694,6 +731,7 @@ pub struct SceneInstance {
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
     active_family_animation_indices: BTreeSet<usize>,
+    pending_family_endpoint_expirations: BTreeMap<usize, usize>,
 }
 
 impl Clone for SceneInstance {
@@ -713,6 +751,7 @@ impl Clone for SceneInstance {
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
             active_family_animation_indices: self.active_family_animation_indices.clone(),
+            pending_family_endpoint_expirations: self.pending_family_endpoint_expirations.clone(),
         }
     }
 }
@@ -744,6 +783,7 @@ impl SceneInstance {
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
             active_family_animation_indices: BTreeSet::new(),
+            pending_family_endpoint_expirations: BTreeMap::new(),
         };
         instance.seek_unchecked(0.0);
         instance
@@ -815,6 +855,7 @@ impl SceneInstance {
             self.compiled.geometry_resources(),
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
+            self.compiled.painter_order(),
         )
     }
 
@@ -838,6 +879,11 @@ impl SceneInstance {
         self.spatial_changes.insert_removed(object_index);
     }
 
+    pub(crate) fn mark_painter_order_changed(&mut self, range: std::ops::Range<usize>) {
+        self.changes.insert_painter_order_range(range.clone());
+        self.spatial_changes.insert_painter_order_range(range);
+    }
+
     pub(crate) fn mark_all_changed(&mut self) {
         self.changes.invalidate_all();
         self.spatial_changes.invalidate_all();
@@ -849,6 +895,14 @@ impl SceneInstance {
 
     pub fn frame_index_for_object(&self, id: ObjectId) -> Option<usize> {
         self.compiled.object_index(id).map(|index| index as usize)
+    }
+
+    pub fn painter_order(&self) -> &[u32] {
+        self.compiled.painter_order()
+    }
+
+    pub fn painter_rank(&self, object_index: usize) -> Option<u32> {
+        self.compiled.painter_rank(object_index as u32)
     }
 
     pub fn object_has_effective_driver(&self, id: ObjectId) -> bool {
@@ -962,7 +1016,9 @@ impl SceneInstance {
 
         if matches!(
             patch,
-            ExecutionPatch::CreateObject(_) | ExecutionPatch::RemoveObject(_)
+            ExecutionPatch::CreateObject(_)
+                | ExecutionPatch::RemoveObject(_)
+                | ExecutionPatch::ReorderObject { .. }
         ) {
             self.apply_structural_patch(patch)?;
             return Ok(&self.frame);
@@ -972,6 +1028,14 @@ impl SceneInstance {
     }
 
     fn apply_structural_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
+        let previous_order_len = self.compiled.painter_order().len();
+        let previous_order_position = match patch {
+            ExecutionPatch::RemoveObject(object) | ExecutionPatch::ReorderObject { object, .. } => {
+                self.compiled.painter_position(*object)
+            }
+            ExecutionPatch::CreateObject(_) => None,
+            _ => unreachable!("structural patch helper accepts only create/remove/reorder"),
+        };
         let removed = match patch {
             ExecutionPatch::RemoveObject(object) => {
                 let object_index = self
@@ -981,6 +1045,7 @@ impl SceneInstance {
                 Some((object_index, self.compiled.object_channels(*object)))
             }
             ExecutionPatch::CreateObject(_) => None,
+            ExecutionPatch::ReorderObject { .. } => None,
             _ => unreachable!("structural patch helper accepts only create/remove"),
         };
 
@@ -1003,9 +1068,7 @@ impl SceneInstance {
                 if compiled_stats.object_slots_reactivated == 1 {
                     let time = self.frame.time;
                     reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
-                    self.frame.family_animations[object_index] = None;
-                    self.frame.family_animation_plan_indices[object_index] = None;
-                    self.active_family_animation_indices.remove(&object_index);
+                    self.clear_family_animation_runtime_state(object_index);
                     self.mark_added(object_index);
                 } else {
                     debug_assert_eq!(object_index, self.frame.objects.len());
@@ -1028,12 +1091,37 @@ impl SceneInstance {
                 self.frame.presences[object_index] = false;
                 self.frame.render_geometries[object_index] = None;
                 self.frame.render_transforms[object_index] = None;
-                self.frame.family_animations[object_index] = None;
-                self.frame.family_animation_plan_indices[object_index] = None;
-                self.active_family_animation_indices.remove(&object_index);
+                self.clear_family_animation_runtime_state(object_index);
                 self.mark_removed(object_index);
             }
+            ExecutionPatch::ReorderObject { .. } => {}
             _ => unreachable!("structural patch helper accepts only create/remove"),
+        }
+
+        let next_position = match patch {
+            ExecutionPatch::CreateObject(object) => self.compiled.painter_position(object.id),
+            ExecutionPatch::ReorderObject { object, .. } => self.compiled.painter_position(*object),
+            ExecutionPatch::RemoveObject(_) => None,
+            _ => unreachable!("structural patch helper accepts only create/remove/reorder"),
+        };
+        if previous_order_position != next_position
+            || previous_order_len != self.compiled.painter_order().len()
+        {
+            let first = previous_order_position
+                .into_iter()
+                .chain(next_position)
+                .min()
+                .unwrap_or(previous_order_len.min(self.compiled.painter_order().len()));
+            let end = if previous_order_len == self.compiled.painter_order().len() {
+                previous_order_position
+                    .into_iter()
+                    .chain(next_position)
+                    .max()
+                    .map_or(first, |position| position + 1)
+            } else {
+                previous_order_len.max(self.compiled.painter_order().len())
+            };
+            self.mark_painter_order_changed(first..end);
         }
 
         self.last_stats = EvaluationStats::default();
@@ -1265,6 +1353,7 @@ impl SceneInstance {
         self.frame = base_frame(&self.compiled, time);
         self.effective_driver_rows.clear();
         self.active_family_animation_indices.clear();
+        self.pending_family_endpoint_expirations.clear();
         self.mark_all_changed();
         let mut stats = EvaluationStats::default();
 
@@ -1285,11 +1374,7 @@ impl SceneInstance {
         }
         self.timeline_scheduler.seek(time);
         for animation_index in 0..self.compiled.family_animations().len() {
-            if let Some(state) =
-                family_state_at(&self.compiled.family_animations()[animation_index], time)
-            {
-                self.set_family_animation(animation_index, state);
-            }
+            self.update_family_animation(animation_index, time);
         }
 
         self.reapply_reactive();
@@ -1347,10 +1432,18 @@ impl SceneInstance {
     }
 
     fn update_requested_family_animations(&mut self, time: f64) -> bool {
-        let requested = self
-            .timeline_scheduler
-            .requested_family_animations()
-            .to_vec();
+        // End events leave one exact endpoint publication active for lifecycle
+        // reconciliation. Revisit only those crossed endpoint channels on the next
+        // tick so they expire without scanning historical family animations.
+        let mut requested = std::mem::take(&mut self.pending_family_endpoint_expirations)
+            .into_values()
+            .collect::<BTreeSet<_>>();
+        requested.extend(
+            self.timeline_scheduler
+                .requested_family_animations()
+                .iter()
+                .copied(),
+        );
         let mut changed = false;
         for animation_index in requested {
             changed = self.update_family_animation(animation_index, time) || changed;
@@ -1358,11 +1451,31 @@ impl SceneInstance {
         changed
     }
 
+    fn clear_family_animation_runtime_state(&mut self, object_index: usize) {
+        self.frame.family_animations[object_index] = None;
+        self.frame.family_animation_plan_indices[object_index] = None;
+        self.active_family_animation_indices.remove(&object_index);
+        self.pending_family_endpoint_expirations
+            .remove(&object_index);
+    }
+
     fn update_family_animation(&mut self, animation_index: usize, time: f64) -> bool {
         let animation = self.compiled.family_animations()[animation_index].clone();
         let object_index = animation.object_index as usize;
         if let Some(state) = family_state_at(&animation, time) {
+            let (_, end_time) = family_animation_interval(&animation);
+            if time == end_time {
+                self.pending_family_endpoint_expirations
+                    .insert(object_index, animation_index);
+            } else {
+                self.pending_family_endpoint_expirations
+                    .remove(&object_index);
+            }
             return self.set_family_animation(animation_index, state);
+        }
+        if self.pending_family_endpoint_expirations.get(&object_index) == Some(&animation_index) {
+            self.pending_family_endpoint_expirations
+                .remove(&object_index);
         }
         if self.frame.family_animation_plan_indices[object_index] != Some(animation.plan_index) {
             return false;
@@ -1412,7 +1525,11 @@ fn family_state_at(
     time: f64,
 ) -> Option<FamilyAnimationState> {
     let (start_time, end_time) = family_animation_interval(animation);
-    if time < start_time || time >= end_time {
+    // Keep the exact endpoint available for one coherent publication. Completion
+    // reconciliation applies lifecycle removals after that publication; expiring
+    // here would briefly expose the object's canonical state between an Unwrite
+    // endpoint and its atomic removal.
+    if time < start_time || time > end_time {
         return None;
     }
     let progress = mapped_continuous_progress(
@@ -2516,6 +2633,42 @@ mod tests {
         instance.advance_to(3.0).unwrap();
         assert_eq!(instance.frame().family_animation_plan_indices[0], Some(1));
         instance.advance_to(5.0).unwrap();
+        let endpoint = instance.frame().family_animations[0]
+            .expect("reverse family channel retains its exact endpoint");
+        assert_eq!(endpoint.overall_progress, 1.0);
+        assert!(endpoint.reverse_member_order);
+        assert_eq!(instance.frame().family_animation_plan_indices[0], Some(1));
+        assert_eq!(instance.pending_family_endpoint_expirations.len(), 1);
+        instance.advance_to(5.0 + 1e-9).unwrap();
+        assert!(instance.active_family_animation_indices().is_empty());
+        assert!(instance.frame().family_animations[0].is_none());
+        assert!(instance.pending_family_endpoint_expirations.is_empty());
+        assert!(instance
+            .timeline_scheduler
+            .requested_family_animations()
+            .is_empty());
+
+        let forward = &instance.compiled.family_animations()[0];
+        let (_, forward_end) = family_animation_interval(forward);
+        assert_eq!(
+            family_state_at(forward, forward_end)
+                .expect("forward family channel retains its exact endpoint")
+                .overall_progress,
+            1.0
+        );
+        assert!(family_state_at(forward, forward_end + 1e-9).is_none());
+
+        instance.take_frame_changes();
+        instance.seek(5.0).unwrap();
+        instance.take_frame_changes();
+        assert_eq!(instance.pending_family_endpoint_expirations.len(), 1);
+        instance
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(object.id))
+            .unwrap();
+        assert!(instance.pending_family_endpoint_expirations.is_empty());
+        assert_eq!(instance.take_frame_changes().removed_indices(), &[0]);
+        instance.advance_to(5.0 + 1e-9).unwrap();
+        assert!(instance.take_frame_changes().is_empty());
         assert!(instance.active_family_animation_indices().is_empty());
         assert!(instance.frame().family_animations[0].is_none());
     }
@@ -3346,5 +3499,40 @@ mod tests {
         instance.advance_to(0.75).expect("valid time");
         assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
         assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn painter_reorder_keeps_dense_rows_and_publishes_only_shifted_order() {
+        let [first, second, third] = [1, 2, 3].map(ObjectId::new);
+        let objects = [first, second, third]
+            .into_iter()
+            .map(|id| {
+                CompiledObject::new(
+                    id,
+                    ObjectContentRef::Geometry(GeometryRef::circle(id.get() as f32)),
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                )
+            })
+            .collect();
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
+        instance.take_frame_changes();
+
+        instance
+            .apply_execution_patch(&ExecutionPatch::ReorderObject {
+                object: third,
+                before: Some(first),
+            })
+            .expect("live objects can reorder");
+
+        assert_eq!(instance.painter_order(), &[2, 0, 1]);
+        assert_eq!(instance.frame().objects[0].id, first);
+        assert_eq!(instance.frame().objects[1].id, second);
+        assert_eq!(instance.frame().objects[2].id, third);
+        let changes = instance.take_frame_changes();
+        assert_eq!(changes.painter_order_range(), Some(0..3));
+        assert!(changes.object_indices().is_empty());
+        assert!(!changes.is_structural());
     }
 }

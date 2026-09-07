@@ -1778,6 +1778,14 @@ where
             )
             .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
             options.reverse_rate_function = reverse;
+            if reverse {
+                options.rate_func = reversed_create_rate(options.rate_func).ok_or(
+                    AnimationSchedulePlanError::Options {
+                        animation,
+                        error: AnimationOptionsError::UnsupportedReverseRateFunction,
+                    },
+                )?;
+            }
             if !options.introducer {
                 return Err(
                     AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
@@ -1956,6 +1964,18 @@ where
                 },
             })
         }
+    }
+}
+
+/// Rate used with swapped Create endpoints so `1 - mapped(t)` equals `original(1 - t)`.
+fn reversed_create_rate(rate: RateFunction) -> Option<RateFunction> {
+    match rate {
+        RateFunction::Linear | RateFunction::Smooth | RateFunction::EaseInOutCubic => Some(rate),
+        RateFunction::RushInto => Some(RateFunction::RushFrom),
+        RateFunction::RushFrom => Some(RateFunction::RushInto),
+        RateFunction::StepStart => Some(RateFunction::StepEnd),
+        RateFunction::StepEnd => Some(RateFunction::StepStart),
+        RateFunction::ThereAndBack => None,
     }
 }
 
@@ -2483,6 +2503,86 @@ mod tests {
             Err(SemanticAnimationScheduleError::Options {
                 animation,
                 error: AnimationOptionsError::UnsupportedPathArc(0.5),
+            })
+        );
+    }
+
+    #[test]
+    fn reversed_create_maps_asymmetric_rate_and_preserves_explicit_forward_rate() {
+        let mut store = SemanticStore::new();
+        let target = visible_target(&mut store, 1.0);
+        let reversed = store
+            .insert_semantic_create_animation(
+                target,
+                AnimationOptions::new()
+                    .rate_func(RateFunction::RushInto)
+                    .reverse_rate_function(true),
+            )
+            .unwrap();
+        let forward = store
+            .insert_semantic_create_animation(
+                target,
+                AnimationOptions::new()
+                    .rate_func(RateFunction::RushInto)
+                    .reverse_rate_function(false),
+            )
+            .unwrap();
+        let index = prepare_index(&store);
+
+        let reversed_schedule = lower_semantic_animation_schedule(
+            &store,
+            &index,
+            reversed,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            reversed_schedule.leaves()[0].timing.easing,
+            RateFunction::RushFrom
+        );
+        assert!(reversed_schedule.leaves()[0].options.reverse_rate_function);
+
+        let forward_schedule = lower_semantic_animation_schedule(
+            &store,
+            &index,
+            forward,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            forward_schedule.leaves()[0].timing.easing,
+            RateFunction::RushInto
+        );
+        assert!(!forward_schedule.leaves()[0].options.reverse_rate_function);
+    }
+
+    #[test]
+    fn reversed_create_rejects_unmappable_rate_before_lowering() {
+        let mut store = SemanticStore::new();
+        let target = visible_target(&mut store, 1.0);
+        let animation = store
+            .insert_semantic_create_animation(
+                target,
+                AnimationOptions::new()
+                    .rate_func(RateFunction::ThereAndBack)
+                    .reverse_rate_function(true),
+            )
+            .unwrap();
+        let index = prepare_index(&store);
+
+        assert_eq!(
+            lower_semantic_animation_schedule(
+                &store,
+                &index,
+                animation,
+                0.0,
+                AnimationOptions::new(),
+            ),
+            Err(SemanticAnimationScheduleError::Options {
+                animation,
+                error: AnimationOptionsError::UnsupportedReverseRateFunction,
             })
         );
     }

@@ -287,6 +287,12 @@ mod wasm {
             .map_err(js_error)?;
             let plans = self.mirror.family_plans();
             let family_frame = self.mirror.planned_family_frame().map_err(js_error)?;
+            if self.pending_changes.is_all() {
+                self.preparer.set_painter_order(self.mirror.painter_order());
+            } else if let Some(range) = self.pending_changes.painter_order_range() {
+                self.preparer
+                    .set_painter_order_range(self.mirror.painter_order(), range);
+            }
             let family_active = !self.mirror.active_family_animation_indices().is_empty();
             let prepared = if !family_active {
                 self.preparer.release_planned_family_realization();
@@ -452,9 +458,21 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = objectCount)]
+        /// Live painter-order objects whose runtime presence is enabled.
+        /// Retired stable transport rows are intentionally excluded.
         pub fn object_count(&self) -> usize {
             self.mirror.frame().map_or(0, |frame| {
-                frame.presences.iter().filter(|&&present| present).count()
+                self.mirror
+                    .painter_order()
+                    .iter()
+                    .filter(|&&index| {
+                        frame
+                            .presences
+                            .get(index as usize)
+                            .copied()
+                            .unwrap_or(false)
+                    })
+                    .count()
             })
         }
 

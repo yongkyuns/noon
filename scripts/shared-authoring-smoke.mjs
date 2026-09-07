@@ -67,8 +67,10 @@ class SharedAuthoringSmoke(Scene):
         circle.set_fill(BLUE, opacity=0.4)
         live = self.live_execution()
 
-        # Real Rust rejection must not consume an export identity or force a
-        # whole-Python-scene checkpoint. Successful append uses the same path.
+        # A detached handle created before the initially attached objects keeps
+        # its semantic identity when live membership assigns a stable execution
+        # slot. Neither admission nor removal may scan or checkpoint the whole
+        # Python scene.
         class LocalKeys(dict):
             def values(self):
                 raise AssertionError("typed binding scanned every object key")
@@ -77,16 +79,12 @@ class SharedAuthoringSmoke(Scene):
         self._object_keys = LocalKeys(self._object_keys)
         self._authoring_checkpoint = reject_checkpoint
         next_id = self._next_object_id
-        try:
-            live.add(earlier)
-        except Exception:
-            pass
-        else:
-            raise AssertionError("interleaved live membership unexpectedly succeeded")
-        assert self._next_object_id == next_id
-        assert earlier._scene is None
+        live.add(earlier)
+        assert earlier.id == next_id
+        assert earlier._scene is self
+        live.remove(earlier)
         live.add(appended)
-        assert appended.id == next_id
+        assert appended.id == next_id + 1
         live.remove(appended)
 
         live.set_translation(circle, 2.0, -1.0)
@@ -794,7 +792,11 @@ try {
             ) return latest;
             await new Promise((resolve) => setTimeout(resolve, 20));
           }
-          throw new Error(`live example did not render: ${JSON.stringify(latest)}`);
+          const diagnostic = JSON.stringify(
+            latest,
+            (_key, value) => typeof value === "bigint" ? value.toString() : value,
+          );
+          throw new Error(`live example did not render: ${diagnostic}`);
         }
 
         const initial = await waitForFrame();
@@ -1407,6 +1409,38 @@ try {
     });
     assert.equal(result.duration, 3.25);
     assert.equal(result.metrics.objectCount, 1);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const membershipSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_membership.py"), "utf8",
+  );
+  await startSampledSource(page, membershipSource, "scene-shared-membership");
+  try {
+    const canvas = page.locator("#scene-shared-membership");
+    for (const [stage, count] of [2, 2, 1, 3, 2, 2, 0].entries()) {
+      const time = stage * 0.5 + 0.25;
+      const metrics = await page.evaluate(async (time) => {
+        const execution = window.sharedAuthoringSmoke.sampledProof.execution;
+        await execution.sampleToAuthoredTime(time);
+        return (await execution.metrics()).metrics;
+      }, time);
+      assert.equal(metrics.objectCount, count, `shared membership stage ${stage}`);
+      const color = renderedWorldPixel(await canvas.screenshot(), 0, 0);
+      const channel = stage === 2 || stage === 5 ? "green" : "blue";
+      if (count > 0) {
+        assert.ok(color[channel] > 100 && color[channel] > color.red + 40,
+          `shared membership painter order at stage ${stage}: ${JSON.stringify(color)}`);
+      }
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.5), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3.5);
+    assert.equal(result.metrics.objectCount, 0);
   } finally {
     await stopSampledSource(page);
   }

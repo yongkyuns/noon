@@ -784,6 +784,29 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    /// Publish one already validated scene-membership batch through the active
+    /// semantic session. The player retains no membership or painter-order mirror.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_edit_membership(
+        &mut self,
+        request: noon::SceneMembershipRequest<'_>,
+    ) -> Result<(), String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .edit_membership(request)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn require_completed_live_segment(&self) -> Result<(), String> {
         self.require_callback_progression_available()?;
@@ -1553,13 +1576,12 @@ impl SemanticExecutionPlayer {
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
-        if snapshot || changes.is_all() || changes.is_structural() || !self.snapshot_sent {
-            let indices = (0..self.session.frame().objects.len())
-                .filter(|index| {
-                    self.session
-                        .execution_slot_for_frame_index(*index)
-                        .is_some()
-                })
+        if snapshot || changes.is_all() || !self.snapshot_sent {
+            let indices = self
+                .session
+                .painter_order()
+                .iter()
+                .map(|&index| index as usize)
                 .collect::<Vec<_>>();
             let text_handles = indices
                 .iter()
@@ -1576,6 +1598,27 @@ impl SemanticExecutionPlayer {
                 .map_err(|e| e.to_string())?;
             self.attach_resource_additions(&mut delta, text_handles)?;
             self.snapshot_sent = true;
+            Ok(Some(delta))
+        } else if changes.is_structural() || changes.has_painter_order_change() {
+            let text_handles = changes
+                .object_indices()
+                .iter()
+                .filter_map(|&index| self.session.frame().objects.get(index)?.text())
+                .collect::<Vec<_>>();
+            let Some(mut delta) = self
+                .encoder
+                .encode_planned_incremental_with_painter_order(
+                    &self.session.planned_family_frame(),
+                    self.session.family_animation_plans(),
+                    &changes,
+                    camera,
+                    self.session.painter_order(),
+                )
+                .map_err(|e| e.to_string())?
+            else {
+                return Ok(None);
+            };
+            self.attach_resource_additions(&mut delta, text_handles)?;
             Ok(Some(delta))
         } else {
             let text_handles = changes
@@ -2313,7 +2356,7 @@ mod tests {
     }
 
     #[test]
-    fn membership_snapshot_omits_retired_rows_and_preserves_incremental_order() {
+    fn membership_deltas_omit_unchanged_rows_and_preserve_incremental_order() {
         let mut scene = noon::Scene::new();
         let anchor = scene.circle(0.5).unwrap();
         let toggled = scene.circle(1.0).unwrap();
@@ -2334,17 +2377,16 @@ mod tests {
         mirror.apply(initial.retained).unwrap();
         player.live_remove(&toggled).unwrap();
         let retired = player.delta(false).unwrap().unwrap();
-        assert!(retired.retained.snapshot);
-        assert_eq!(retired.retained.objects.len(), 1);
+        assert!(!retired.retained.snapshot);
+        assert!(retired.retained.objects.is_empty());
+        assert_eq!(retired.retained.removed_slots.len(), 1);
         mirror.apply(retired.retained).unwrap();
         player.live_add(&toggled).unwrap();
         assert!(player.session.execution_slot_for_frame_index(1).is_some());
         let snapshot = player.delta(false).unwrap().unwrap();
-        assert!(snapshot.retained.snapshot);
-        assert_eq!(snapshot.retained.objects.len(), 2);
-        assert_eq!(snapshot.retained.objects[1].slot.slot, 1);
-        assert_eq!(snapshot.retained.objects[1].slot.generation, 0);
-        assert_eq!(snapshot.retained.objects[1].order, 1);
+        assert!(!snapshot.retained.snapshot);
+        assert_eq!(snapshot.retained.objects.len(), 1);
+        assert_eq!(snapshot.retained.objects[0].order, 1);
         mirror.apply(snapshot.retained).unwrap();
         player.live_set_translation(&toggled, 2.0, -1.0).unwrap();
         let delta = player.delta(false).unwrap().unwrap();

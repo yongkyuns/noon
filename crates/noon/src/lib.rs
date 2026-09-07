@@ -56,7 +56,9 @@ pub use retained_family_authoring_lowering::*;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use semantic_mobject::{ManimPrimitiveOptions, Mobject};
 mod scene;
+mod scene_membership;
 pub use scene::Scene;
+pub use scene_membership::SceneMembershipRequest;
 pub use text_authoring::*;
 
 /// Common imports for direct typed semantic authoring.
