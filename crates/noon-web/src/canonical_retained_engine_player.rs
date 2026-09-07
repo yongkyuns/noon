@@ -14,8 +14,8 @@ use crate::{
 /// expose the same clocked delta/resource API.
 #[derive(Debug)]
 enum CanonicalRetainedExecutionPlayer {
-    Ordinary(RetainedAuthoringPlayer),
-    Family(RetainedFamilyExecutionPlayer),
+    Ordinary(Box<RetainedAuthoringPlayer>),
+    Family(Box<RetainedFamilyExecutionPlayer>),
 }
 
 impl CanonicalRetainedExecutionPlayer {
@@ -77,9 +77,9 @@ impl CanonicalRetainedEnginePlayer {
         let scene_spec_json = scene_spec.to_json()?;
         let player = if !has_family_animations {
             let mixed = MixedRetainedAuthoringScene::from_scene_spec(scene_spec)?;
-            CanonicalRetainedExecutionPlayer::Ordinary(RetainedAuthoringPlayer::new(
+            CanonicalRetainedExecutionPlayer::Ordinary(Box::new(RetainedAuthoringPlayer::new(
                 mixed, session,
-            )?)
+            )?))
         } else {
             let lowered = CanonicalRetainedFamilyAnimationScene::from_scene_spec(scene_spec)?;
             let (scene, tracks, camera_object, animations) = lowered.into_parts();
@@ -87,7 +87,7 @@ impl CanonicalRetainedEnginePlayer {
                 .into_iter()
                 .map(|animation| animation.into_parts())
                 .collect();
-            CanonicalRetainedExecutionPlayer::Family(
+            CanonicalRetainedExecutionPlayer::Family(Box::new(
                 RetainedFamilyExecutionPlayer::new_many_with_tracks(
                     scene,
                     &tracks,
@@ -95,7 +95,7 @@ impl CanonicalRetainedEnginePlayer {
                     camera_object,
                     session,
                 )?,
-            )
+            ))
         };
 
         Ok(Self {
