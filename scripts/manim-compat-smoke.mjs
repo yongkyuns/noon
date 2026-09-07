@@ -284,6 +284,20 @@ class ConcurrentRetainedFamilies(Scene):
         short = Text("AB")
         long = Text("ABCDEFGHIJKLMNOPQRST")
         self.play(Write(short), Write(long), rate_func=linear)
+        assert short in self.mobjects
+        assert long in self.mobjects
+`;
+
+const plainTextLifecycleSource = `
+from noon import *
+
+class PlainTextLifecycle(Scene):
+    def construct(self):
+        text = Text("AB")
+        self.play(Write(text), run_time=1.0, rate_func=linear)
+        assert text in self.mobjects
+        self.play(Unwrite(text), run_time=1.0, rate_func=linear)
+        assert text not in self.mobjects
 `;
 
 const overlappingFamilySource = `
@@ -303,6 +317,8 @@ class MixedFamilyOrdinary(Scene):
         circle = Circle(radius=0.28, color=BLUE).shift(LEFT)
         text = Text("AB")
         self.play(circle.animate.shift(RIGHT), Write(text), rate_func=linear)
+        assert circle in self.mobjects
+        assert text in self.mobjects
 `;
 
 const mixedFamilyOrdinaryEditedSource = `
@@ -320,6 +336,9 @@ class MixedFamilyOrdinaryEdited(Scene):
             run_time=1.5,
             rate_func=linear,
         )
+        assert text in self.mobjects
+        assert square in self.mobjects
+        assert circle in self.mobjects
 `;
 
 let browser = null;
@@ -496,225 +515,10 @@ try {
     "known Python callables should lower directly to shared Rust semantic IDs",
   );
 
-  const concurrent = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
-    concurrentFamilySource,
-  );
-  assert.equal(concurrent.kind, "scene_document");
-  assert.equal(concurrent.retainedDocument, undefined);
-  assert.equal(
-    concurrent.sceneSpec.objects.filter((object) => object.content?.kind === "text").length,
-    2,
-  );
-  assert.equal(concurrent.sceneSpec.family_animations.length, 2);
-  assert.equal(concurrent.duration, 2, "Scene.play duration must be the maximum child duration");
-  const concurrentRequests = concurrent.sceneSpec.family_animations;
-  assert.deepEqual(
-    concurrentRequests.map((request) => request.spec.start_time),
-    [0, 0],
-    "concurrent family requests must share the play start time",
-  );
-  assert.deepEqual(
-    concurrentRequests.map((request) => request.spec.duration),
-    [1, 2],
-    "each Write must retain its independently Rust-derived default duration",
-  );
-  assert.ok(
-    concurrentRequests.every((request) => request.spec.mode === "draw_border_then_fill"),
-  );
-  const concurrentSerialized = JSON.stringify(concurrentRequests);
-  for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
-    assert.equal(concurrentSerialized.includes(forbidden), false, `concurrent requests leaked ${forbidden}`);
-  }
-  const concurrentRender = await page.evaluate(async (sceneSpec) => {
-    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 360;
-    document.body.appendChild(canvas);
-    const errors = [];
-    const execution = new ExecutionWorkerClient(canvas, {
-      onError(error, owner) {
-        errors.push(`${owner}: ${error}`);
-      },
-    });
-    async function renderedAt(time) {
-      await execution.seek(time);
-      let latest = null;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        latest = await execution.metrics();
-        if (errors.length !== 0) throw new Error(errors.join("; "));
-        if (
-          Math.abs(Number(latest.metrics.time) - time) <= 1e-6 &&
-          latest.metrics.objectCount === 2 &&
-          latest.metrics.presentedFrames >= 1
-        ) {
-          return latest;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      throw new Error(`concurrent family render did not converge at t=${time}: ${JSON.stringify(latest)}`);
-    }
-    try {
-      await execution.startRetainedCanonical(JSON.stringify(sceneSpec), {
-        loopDurationSeconds: 2,
-        transportMode: "transferable",
-      });
-      await execution.pause();
-      const first = await renderedAt(0.5);
-      const presented = first.metrics.presentedFrames;
-      const second = await renderedAt(1.5);
-      if (!first.engineMetrics.canonical || !second.engineMetrics.canonical) {
-        throw new Error("concurrent family render bypassed canonical retained execution");
-      }
-      if (second.metrics.presentedFrames <= presented) {
-        throw new Error("second concurrent-family seek did not present a new frame");
-      }
-      return {
-        firstTime: first.metrics.time,
-        secondTime: second.metrics.time,
-        objectCount: second.metrics.objectCount,
-        presentedFrames: second.metrics.presentedFrames,
-      };
-    } finally {
-      execution.terminate();
-      canvas.remove();
-    }
-  }, concurrent.sceneSpec);
-  assert.equal(concurrentRender.firstTime, 0.5);
-  assert.equal(concurrentRender.secondTime, 1.5);
-  assert.equal(concurrentRender.objectCount, 2);
-
-  const mixedFirst = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
-    mixedFamilyOrdinarySource,
-  );
-  assert.equal(mixedFirst.kind, "scene_document");
-  assert.equal(mixedFirst.document.objects.length, 1);
-  assert.equal(mixedFirst.retainedDocument, undefined);
-  assert.equal(
-    mixedFirst.sceneSpec.objects.filter((object) => object.content?.kind === "text").length,
-    1,
-  );
-  assert.equal(mixedFirst.sceneSpec.objects.length, 2);
-  assert.equal(mixedFirst.sceneSpec.family_animations.length, 1);
-  assert.equal(
-    mixedFirst.document.tracks.filter((track) => track.property === "transform").length,
-    1,
-  );
-  assert.equal(mixedFirst.duration, 1);
-  assert.equal(mixedFirst.sceneSpec.family_animations[0].spec.start_time, 0);
-  assert.equal(mixedFirst.sceneSpec.family_animations[0].spec.duration, 1);
-
-  // Reuse the same Pyodide authoring worker for a source edit. The second Scene must
-  // own a fresh Rust canonical authoring context rather than accumulating the first.
-  const mixedEdited = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
-    mixedFamilyOrdinaryEditedSource,
-  );
-  assert.equal(mixedEdited.kind, "scene_document");
-  assert.equal(mixedEdited.document.objects.length, 2);
-  assert.equal(mixedEdited.retainedDocument, undefined);
-  assert.equal(
-    mixedEdited.sceneSpec.objects.filter((object) => object.content?.kind === "text").length,
-    1,
-  );
-  assert.equal(mixedEdited.sceneSpec.objects.length, 3);
-  assert.equal(mixedEdited.sceneSpec.family_animations.length, 1, "edited rerun must replace family requests");
-  assert.equal(
-    mixedEdited.document.tracks.filter((track) => track.property === "transform").length,
-    2,
-  );
-  assert.equal(mixedEdited.duration, 1.5);
-  assert.equal(mixedEdited.sceneSpec.family_animations[0].spec.start_time, 0);
-  assert.equal(mixedEdited.sceneSpec.family_animations[0].spec.duration, 1.5);
-
-  const mixedRerunRender = await page.evaluate(async ({ first, edited }) => {
-    const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 360;
-    document.body.appendChild(canvas);
-    const errors = [];
-    const execution = new AuthoringExecutionClient(canvas, {
-      onError(error, owner) {
-        errors.push(`${owner}: ${error}`);
-      },
-    });
-
-    async function renderedAt(time, expectedObjectCount) {
-      await execution.seek(time);
-      let latest = null;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        latest = await execution.metrics();
-        if (errors.length !== 0) throw new Error(errors.join("; "));
-        if (
-          Math.abs(Number(latest.metrics.time) - time) <= 1e-6 &&
-          latest.metrics.objectCount === expectedObjectCount &&
-          latest.metrics.presentedFrames >= 1
-        ) {
-          return latest;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      throw new Error(
-        `mixed edit/rerun render did not converge at t=${time}: ${JSON.stringify(latest)}`,
-      );
-    }
-
-    try {
-      await execution.startRetainedCanonical(JSON.stringify(first.sceneSpec), {
-        loopDurationSeconds: first.duration,
-        transportMode: "transferable",
-      });
-      await execution.pause();
-      const firstReport = await renderedAt(0.5, 2);
-      if (!firstReport.engineMetrics.canonical) {
-        throw new Error("first mixed scene bypassed canonical retained execution");
-      }
-
-      const reconcile = await execution.reconcileScene(JSON.stringify(edited.document), {
-        sceneSpecJson: JSON.stringify(edited.sceneSpec),
-        loopDurationSeconds: edited.duration,
-      });
-      if (!reconcile.rebuilt || reconcile.mode !== "retained") {
-        throw new Error(`edited mixed scene did not rebuild retained execution: ${JSON.stringify(reconcile)}`);
-      }
-      if (execution.canvas !== canvas) {
-        throw new Error("retained edit/rerun replaced the persistent authoring canvas");
-      }
-
-      await execution.pause();
-      const editedReport = await renderedAt(0.75, 3);
-      if (!editedReport.engineMetrics.canonical) {
-        throw new Error("edited mixed scene bypassed canonical retained execution");
-      }
-      return {
-        firstObjectCount: firstReport.metrics.objectCount,
-        editedObjectCount: editedReport.metrics.objectCount,
-        firstTime: firstReport.metrics.time,
-        editedTime: editedReport.metrics.time,
-        rebuilt: reconcile.rebuilt,
-        mode: reconcile.mode,
-      };
-    } finally {
-      execution.terminate();
-      canvas.remove();
-    }
-  }, { first: mixedFirst, edited: mixedEdited });
-  assert.deepEqual(mixedRerunRender, {
-    firstObjectCount: 2,
-    editedObjectCount: 3,
-    firstTime: 0.5,
-    editedTime: 0.75,
-    rebuilt: true,
-    mode: "retained",
-  });
-
   let overlapError = null;
   try {
     await page.evaluate(
-      (pythonSource) => window.noonManimCompat.run(pythonSource),
+      (pythonSource) => window.noonManimCompat.runLive(pythonSource),
       overlappingFamilySource,
     );
   } catch (error) {
@@ -722,9 +526,36 @@ try {
   }
   assert.match(
     overlapError ?? "",
-    /disjoint family leaves/,
-    "same-leaf concurrent family ownership must fail before lifecycle mutation",
+    /ConflictingObjectDrivers/,
+    "same-Text concurrent Write/Unwrite must reject atomically before lifecycle mutation",
   );
+
+  // Plain Text Write/Unwrite and mixed ordinary compositions execute through the
+  // shared semantic session. Source assertions cover membership at completion;
+  // these public reports cover authored timing and stable live canvas ownership.
+  const sharedText = await page.evaluate(
+    (sources) => window.noonManimCompat.runLiveSources(sources),
+    [
+      concurrentFamilySource,
+      plainTextLifecycleSource,
+      mixedFamilyOrdinarySource,
+      mixedFamilyOrdinaryEditedSource,
+    ],
+  );
+  assert.equal(sharedText.sameCanvas, true, "plain Text reruns must retain the mounted canvas");
+  assert.deepEqual(
+    sharedText.results.map((result) => result.duration),
+    [2, 2, 1, 1.5],
+    "shared Text composition must preserve child-default and explicit play timing",
+  );
+  assert.deepEqual(
+    sharedText.results.map((result) => result.metrics.objectCount),
+    [2, 0, 2, 3],
+    "Write/Unwrite and mixed composition must publish final scene membership",
+  );
+  for (const result of sharedText.results) {
+    assert.ok(result.metrics.presentedFrames > 0, "shared Text composition must present");
+  }
 
   let zError = null;
   try {
@@ -739,7 +570,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent retained-family play, mixed family/ordinary play with retained edit-rerun rebuild, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, mixed Text/ordinary composition, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();
