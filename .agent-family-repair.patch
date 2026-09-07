@@ -1,0 +1,448 @@
+diff --git a/crates/noon-web/src/canonical_authoring_scene.rs b/crates/noon-web/src/canonical_authoring_scene.rs
+index 27d691b..59a30e1 100644
+--- a/crates/noon-web/src/canonical_authoring_scene.rs
++++ b/crates/noon-web/src/canonical_authoring_scene.rs
+@@ -2176,6 +2176,33 @@ impl CanonicalAuthoringScene {
+         }
+     }
+ 
++    /// Reuse the inert typed membership operands to publish a detached family.
++    /// Wrapper bindings and root-membership edits are not part of construction.
++    #[cfg(any(target_arch = "wasm32", test))]
++    fn create_live_family(
++        &mut self,
++        batch: SceneMembershipBatch,
++    ) -> Result<noon::MobjectFamily, String> {
++        if batch.kind != SceneMembershipBatchKind::Add || !batch.bindings.is_empty() {
++            return Err("live family construction requires unbound add operands".into());
++        }
++        let members = batch
++            .members
++            .iter()
++            .map(|member| match member {
++                OwnedSceneMembershipMember::Mobject {
++                    wrapper_id: None,
++                    handle,
++                } => Ok(noon::MobjectFamilyMember::Mobject(handle)),
++                OwnedSceneMembershipMember::Family(family) => {
++                    Ok(noon::MobjectFamilyMember::Family(family))
++                }
++                _ => Err("live family construction cannot reserve wrapper bindings".to_owned()),
++            })
++            .collect::<Result<Vec<_>, String>>()?;
++        self.live_family(&members)
++    }
++
+     #[cfg(any(target_arch = "wasm32", test))]
+     fn live_shift_family(
+         &mut self,
+@@ -5524,6 +5551,19 @@ mod wasm {
+                 .map_err(js_error)
+         }
+ 
++        /// Publish a complete Group/VGroup constructor through the live owner.
++        /// The batch is an operand list, not another semantic family authority.
++        #[wasm_bindgen(js_name = createLiveFamily)]
++        pub fn create_live_family(
++            &mut self,
++            batch: WasmSceneMembershipBatch,
++        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
++            self.inner
++                .create_live_family(batch.inner)
++                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
++                .map_err(js_error)
++        }
++
+         /// Begin an inert ordered family target. Member targets may be built
+         /// bottom-up before the family node and edges publish through this context.
+         #[wasm_bindgen(js_name = beginLiveFamilyTarget)]
+@@ -6859,6 +6899,73 @@ mod tests {
+         context.live_target_editor(&circle).unwrap();
+     }
+ 
++    #[test]
++    fn live_family_constructor_rejects_invalid_operands_without_poisoning_the_owner() {
++        let mut context = CanonicalAuthoringScene::default();
++        let circle = context.scene.circle(0.4).unwrap();
++        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
++        context.live_player(1.0).unwrap();
++        let foreign = noon::Scene::new().circle(0.2).unwrap();
++        let revision = context.scene.store().borrow().scene_revision();
++        for (kind, handle, wrapper_id) in [
++            (SceneMembershipBatchKind::Remove, circle.clone(), None),
++            (SceneMembershipBatchKind::Add, foreign, None),
++            (
++                SceneMembershipBatchKind::Add,
++                circle.clone(),
++                Some(ObjectId::new(2)),
++            ),
++        ] {
++            assert!(context
++                .create_live_family(SceneMembershipBatch {
++                    kind,
++                    members: vec![OwnedSceneMembershipMember::Mobject {
++                        wrapper_id,
++                        handle,
++                    }],
++                    bindings: Vec::new(),
++                })
++                .is_err());
++            assert_eq!(context.scene.store().borrow().scene_revision(), revision);
++        }
++        context.live_target_editor(&circle).unwrap();
++    }
++
++    #[test]
++    fn live_family_constructor_preserves_shared_order_and_duplicate_suppression() {
++        let mut context = CanonicalAuthoringScene::default();
++        let circle = context.scene.circle(0.4).unwrap();
++        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
++        context.live_player(1.0).unwrap();
++        let target = context.live_target_editor(&circle).unwrap();
++        let nested = context
++            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)])
++            .unwrap();
++        let revision = context.scene.store().borrow().scene_revision();
++        let family = context
++            .create_live_family(SceneMembershipBatch {
++                kind: SceneMembershipBatchKind::Add,
++                members: vec![
++                    OwnedSceneMembershipMember::Family(nested.clone()),
++                    OwnedSceneMembershipMember::Mobject {
++                        wrapper_id: None,
++                        handle: target.clone(),
++                    },
++                    OwnedSceneMembershipMember::Family(nested.clone()),
++                ],
++                bindings: Vec::new(),
++            })
++            .unwrap();
++        let store = context.scene.store().borrow();
++        assert_eq!(store.scene_revision().get(), revision.get() + 1);
++        assert_eq!(
++            store.semantic_family_members_checked(family.node_id()).unwrap(),
++            &[nested.node_id(), target.node_id()]
++        );
++        drop(store);
++        context.live_target_editor(&circle).unwrap();
++    }
++
+     #[test]
+     fn live_created_group_arrange_and_target_preserve_returned_player_after_prior_plays() {
+         let mut context = CanonicalAuthoringScene::default();
+@@ -6894,10 +7001,20 @@ mod tests {
+             .live_create_manim_geometry(noon::ManimGeometryOptions::square(0.3).unwrap())
+             .unwrap();
+         let pair = context
+-            .live_family(&[
+-                noon::MobjectFamilyMember::Mobject(&left),
+-                noon::MobjectFamilyMember::Mobject(&right),
+-            ])
++            .create_live_family(SceneMembershipBatch {
++                kind: SceneMembershipBatchKind::Add,
++                members: vec![
++                    OwnedSceneMembershipMember::Mobject {
++                        wrapper_id: None,
++                        handle: left.clone(),
++                    },
++                    OwnedSceneMembershipMember::Mobject {
++                        wrapper_id: None,
++                        handle: right.clone(),
++                    },
++                ],
++                bindings: Vec::new(),
++            })
+             .unwrap();
+         context
+             .live_arrange_family(&pair, 1.0, 0.0, 0.15, true)
+diff --git a/scripts/semantic-preview-smoke.mjs b/scripts/semantic-preview-smoke.mjs
+index ad238e5..f626ee4 100644
+--- a/scripts/semantic-preview-smoke.mjs
++++ b/scripts/semantic-preview-smoke.mjs
+@@ -82,6 +82,37 @@ async function captureSquareToCircle(label) {
+   }
+ }
+ 
++// This unmodified canonical fixture used to fail when a VGroup was created
++// after a completed segment. Select its class without rewriting construct().
++async function captureLateFamilyConstruction() {
++  const canonical = await readFile(path.join(root, "parity/manim-v0.21/quickstart.py"), "utf8");
++  const source = canonical.replace("from manim import *", "from noon import *") +
++    "\nfor _name, _cls in tuple(globals().items()):\n" +
++    "    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not AddWaitLaggedStartMap:\n" +
++    "        _cls.__module__ = 'preview_fixture_library'\ndel _cls\n";
++  const page = await pageReady();
++  try {
++    const loaded = await page.evaluate((code) => window.noonHostRaster.load(code, 5), source);
++    assert.equal(loaded.kind, "semantic_execution");
++    const frameTimes = Array.from({ length: 97 }, (_, frame) => frame / 30);
++    let final;
++    for (const frameIndex of [0, 30, 63, 96]) {
++      final = await page.evaluate(({ frameIndex, frameTimes }) =>
++        window.noonHostRaster.renderThrough(frameIndex, frameTimes), { frameIndex, frameTimes });
++      verifySample(final, frameIndex, activeBackend === "webgpu" ? "WebGPU" : "WebGL2");
++      const bytes = await page.locator("#scene").screenshot();
++      await writeFile(path.join(artifacts, `${activeBackend}-late-family-${frameIndex}.png`), bytes);
++      observations.push({ backend: activeBackend, fixture: "AddWaitLaggedStartMap", frameIndex,
++        sample: final, sourceSha256: hash(source), imageSha256: hash(bytes) });
++    }
++    assert.equal(final.objectCount, 4, "both original circles and late-created squares must remain");
++    assert.ok(Math.abs(final.authoredDuration - 3.2) < 1e-9, "source must finish the second composition");
++    await page.evaluate(() => window.noonHostRaster.close());
++  } finally {
++    await page.close();
++  }
++}
++
+ async function cancelRunningSource() {
+   const page = await pageReady();
+   try {
+@@ -139,6 +170,7 @@ try {
+       const after = await captureSquareToCircle("after-cancel");
+       // Equality is required only within one backend/environment, never across GPUs.
+       verifyFreshRun(before, after);
++      await captureLateFamilyConstruction();
+       console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation and identical fresh-run frames passed`);
+     } finally {
+       await browser.close();
+diff --git a/web/python/_manim_semantic_handles.py b/web/python/_manim_semantic_handles.py
+index 20e2bb0..bc035ea 100644
+--- a/web/python/_manim_semantic_handles.py
++++ b/web/python/_manim_semantic_handles.py
+@@ -1924,7 +1924,38 @@ def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...])
+             raise ValueError("Group cannot contain itself")
+ 
+ 
++def _publish_live_family(
++    self: _compat.Group, mobjects: tuple[object, ...], context: object
++) -> None:
++    """Publish through Rust, then mirror its authoritative direct-member order."""
++    _validate_group_members(self, mobjects)
++    batch = context.beginMembershipBatch("add")
++    wrappers = {}
++    for member in mobjects:
++        kind, handle = _family_member_handle(member)
++        if handle is None:
++            raise RuntimeError("family member has no shared semantic identity")
++        # This is an identity-to-wrapper lookup, not Python membership planning.
++        key = (int(handle.semanticSlot), int(handle.semanticGeneration))
++        wrappers.setdefault(key, member)
++        if kind == "family":
++            batch.appendFamily(handle)
++        else:
++            batch.appendMobject("", handle)
++    family = context.createLiveFamily(batch)
++    mirrored = [
++        wrappers[(int(family.memberSlot(index)), int(family.memberGeneration(index)))]
++        for index in range(int(family.memberCount))
++    ]
++    self._semantic_family_handle = family
++    self.submobjects = mirrored
++
++
+ def _group_init(self: _compat.Group, *mobjects: object) -> None:
++    context = _live_constructor_context("family")
++    if context is not None:
++        _publish_live_family(self, mobjects, context)
++        return
+     self._semantic_family_handle = _create_family_handle()
+     _ORIGINAL_GROUP_INIT(self, *mobjects)
+ 
+@@ -2053,9 +2084,13 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
+     # Constructor-based delegates may already have created a family handle. The
+     # browser geometry delegate uses object.__new__ and therefore needs one here.
+     if getattr(clone, "_semantic_family_handle", None) is None:
+-        clone._semantic_family_handle = _create_family_handle()
+-        for member in clone.submobjects:
+-            _family_add_handle(clone._semantic_family_handle, member)
++        context = _live_constructor_context("family")
++        if context is not None:
++            _publish_live_family(clone, tuple(clone.submobjects), context)
++        else:
++            clone._semantic_family_handle = _create_family_handle()
++            for member in clone.submobjects:
++                _family_add_handle(clone._semantic_family_handle, member)
+     return clone
+ 
+ 
+diff --git a/web/python/test_manim_live_family_construction.py b/web/python/test_manim_live_family_construction.py
+new file mode 100644
+index 0000000..e4e7957
+--- /dev/null
++++ b/web/python/test_manim_live_family_construction.py
+@@ -0,0 +1,175 @@
++"""Wrapper-only contracts; Rust and browser tests qualify actual publication."""
++import os
++from pathlib import Path
++import subprocess
++import sys
++import textwrap
++import unittest
++
++
++SETUP = r'''
++from types import SimpleNamespace
++from unittest.mock import patch
++import _manim_compat as compat
++compat.install()
++import _manim_phase_b
++import _manim_semantic_handles as handles
++
++class Handle:
++    def __init__(self, slot, generation=1):
++        self.semanticSlot = slot
++        self.semanticGeneration = generation
++
++class Family(Handle):
++    def __init__(self, keys):
++        super().__init__(90)
++        self.keys = keys
++        self.memberCount = len(keys)
++    def memberSlot(self, index):
++        return self.keys[index][0]
++    def memberGeneration(self, index):
++        return self.keys[index][1]
++
++class Batch:
++    def __init__(self):
++        self.operands = []
++    def appendMobject(self, wrapper_id, handle):
++        assert wrapper_id == ""
++        self.operands.append(("mobject", handle))
++    def appendFamily(self, handle):
++        self.operands.append(("family", handle))
++
++class Context:
++    def __init__(self):
++        self.batches = []
++        self.publications = 0
++        self.fail = False
++        self.reverse = False
++    def beginMembershipBatch(self, kind):
++        assert kind == "add"
++        batch = Batch()
++        self.batches.append(batch)
++        return batch
++    def createLiveFamily(self, batch):
++        if self.fail:
++            raise ValueError("publication rejected")
++        self.publications += 1
++        keys = list(dict.fromkeys((h.semanticSlot, h.semanticGeneration) for _, h in batch.operands))
++        return Family(list(reversed(keys)) if self.reverse else keys)
++
++context = Context()
++def leaf(slot, generation=1):
++    obj = object.__new__(compat.Circle)
++    obj._semantic_handle = Handle(slot, generation)
++    return obj
++
++def forbidden_raw():
++    raise AssertionError("live construction bypassed the canonical owner")
++handles._create_family_handle = forbidden_raw
++owner = object.__new__(compat.Group)
++first, second = leaf(1), leaf(2)
++'''
++
++
++class LiveFamilyConstructionTests(unittest.TestCase):
++    def run_case(self, body: str) -> None:
++        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parent))
++        result = subprocess.run(
++            [sys.executable, "-B", "-c", SETUP + "\n" + textwrap.dedent(body)],
++            env=env, capture_output=True, text=True, timeout=15,
++        )
++        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++
++    def test_live_constructor_uses_one_publication_and_shared_order(self):
++        self.run_case('''
++            with patch.object(handles, "_live_constructor_context", return_value=context):
++                handles._group_init(owner, first, second, first)
++            assert context.publications == 1
++            assert len(context.batches[0].operands) == 3
++            assert owner.submobjects == [first, second]
++            assert owner._semantic_family_handle.memberCount == 2
++        ''')
++
++    def test_nested_family_and_generational_identity_are_preserved(self):
++        self.run_case('''
++            nested = object.__new__(compat.Group)
++            nested._semantic_family_handle = Handle(1, 2)
++            with patch.object(handles, "_live_constructor_context", return_value=context):
++                handles._group_init(owner, nested, first)
++            assert [kind for kind, _ in context.batches[0].operands] == ["family", "mobject"]
++            assert owner.submobjects == [nested, first]
++        ''')
++
++    def test_wrapper_reads_result_order_instead_of_planning_membership(self):
++        self.run_case('''
++            context.reverse = True
++            with patch.object(handles, "_live_constructor_context", return_value=context):
++                handles._group_init(owner, first, second)
++            assert owner.submobjects == [second, first]
++        ''')
++
++    def test_invalid_member_and_missing_identity_do_not_publish(self):
++        self.run_case('''
++            for invalid in (object(), object.__new__(compat.Circle), owner):
++                with patch.object(handles, "_live_constructor_context", return_value=context):
++                    try:
++                        handles._group_init(owner, first, invalid)
++                    except (ValueError, TypeError, RuntimeError):
++                        pass
++                    else:
++                        raise AssertionError("invalid member accepted")
++                assert context.publications == 0
++                assert not hasattr(owner, "_semantic_family_handle")
++        ''')
++
++    def test_failed_publication_does_not_commit_wrapper_metadata(self):
++        self.run_case('''
++            context.fail = True
++            with patch.object(handles, "_live_constructor_context", return_value=context):
++                try:
++                    handles._group_init(owner, first, second)
++                except ValueError as error:
++                    assert "publication rejected" in str(error)
++                else:
++                    raise AssertionError("publication failure swallowed")
++            assert not hasattr(owner, "_semantic_family_handle")
++            assert not hasattr(owner, "submobjects")
++        ''')
++
++    def test_constructor_free_copy_publishes_without_mutating_original(self):
++        self.run_case('''
++            original = Family([(1, 1), (2, 1)])
++            owner._semantic_family_handle = original
++            owner.submobjects = [first, second]
++            def delegate(source):
++                assert not hasattr(source, "_semantic_family_handle")
++                clone = object.__new__(compat.Group)
++                clone.submobjects = list(source.submobjects)
++                return clone
++            with patch.object(handles, "_live_constructor_context", return_value=context), \\
++                 patch.object(handles, "_GROUP_COPY_DELEGATE", delegate):
++                clone = handles._group_copy(owner)
++            assert context.publications == 1
++            assert clone.submobjects == [first, second]
++            assert owner._semantic_family_handle is original
++            assert clone._semantic_family_handle is not original
++        ''')
++
++    def test_transferred_execution_rejects_before_raw_construction(self):
++        self.run_case('''
++            import sys
++            scope = SimpleNamespace(_current_authoring_scene=lambda: SimpleNamespace(
++                _canonical_authoring_context=SimpleNamespace(liveExecutionOwnership=lambda: "transferred")))
++            with patch.dict(sys.modules, {"_manim_reactive": scope}):
++                try:
++                    handles._group_init(owner, first)
++                except RuntimeError as error:
++                    assert "family" in str(error) and "transferred" in str(error)
++                else:
++                    raise AssertionError("transferred owner allowed construction")
++            assert not hasattr(owner, "_semantic_family_handle")
++        ''')
++
++
++if __name__ == "__main__":
++    unittest.main()
