@@ -17,7 +17,7 @@ use crate::{
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
     FamilyArrangePlan, FamilyTranslation, Mobject, MobjectFamily, MobjectFamilyMember,
-    ValueTracker,
+    SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -449,10 +449,9 @@ impl<'a> LiveSession<'a> {
         &mut self,
         mobject: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_member(self.root, mobject.node_id());
-        self.apply(transaction)
+        self.edit_membership(SceneMembershipRequest::Add(&[
+            MobjectFamilyMember::Mobject(mobject),
+        ]))
     }
 
     /// Remove an existing object from this live scene root without deleting identity.
@@ -460,10 +459,45 @@ impl<'a> LiveSession<'a> {
         &mut self,
         mobject: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.remove_member(self.root, mobject.node_id());
+        self.edit_membership(SceneMembershipRequest::Remove(&[
+            MobjectFamilyMember::Mobject(mobject),
+        ]))
+    }
+
+    pub fn edit_membership(
+        &mut self,
+        request: SceneMembershipRequest<'_>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let transaction =
+            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)
+                .map_err(LiveSessionError::Mobject)?;
         self.apply(transaction)
+    }
+
+    pub fn add_many(
+        &mut self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::Add(members))
+    }
+
+    pub fn remove_many(
+        &mut self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::Remove(members))
+    }
+
+    pub fn clear(&mut self) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::Clear)
+    }
+
+    pub fn replace(
+        &mut self,
+        old: MobjectFamilyMember<'_>,
+        new: MobjectFamilyMember<'_>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
 
     /// Check whether a handle is currently a direct member of this live scene root.

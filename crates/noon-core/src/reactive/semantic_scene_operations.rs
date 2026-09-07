@@ -14,6 +14,9 @@ pub enum SemanticSceneOperationError {
     NotSemanticObject(SemanticNodeId),
     NotSemanticFamily(SemanticNodeId),
     NotSemanticAuthoringNode(SemanticNodeId),
+    DuplicateMembershipTarget(SemanticNodeId),
+    MissingMembershipTarget(SemanticNodeId),
+    AmbiguousMembershipTarget(SemanticNodeId),
     /// One local scene restructure would promote the same aliased node from
     /// multiple attached roots. Until the scene store exposes a local root-order
     /// comparison primitive, fail before commit rather than scan unrelated roots.
@@ -45,6 +48,24 @@ impl std::fmt::Display for SemanticSceneOperationError {
             Self::NotSemanticAuthoringNode(id) => write!(
                 formatter,
                 "semantic node {}:{} is not a target semantic object or family",
+                id.slot(),
+                id.generation()
+            ),
+            Self::DuplicateMembershipTarget(id) => write!(
+                formatter,
+                "semantic membership request repeats node {}:{}",
+                id.slot(),
+                id.generation()
+            ),
+            Self::MissingMembershipTarget(id) => write!(
+                formatter,
+                "semantic membership target {}:{} is absent from the scene projection",
+                id.slot(),
+                id.generation()
+            ),
+            Self::AmbiguousMembershipTarget(id) => write!(
+                formatter,
+                "semantic membership target {}:{} occurs through multiple root branches",
                 id.slot(),
                 id.generation()
             ),
