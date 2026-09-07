@@ -1275,9 +1275,10 @@ async function directExactPropertyTracksProof(expectedBackend) {
   const samples = [];
   try {
     renderer.resize(canvas.width, canvas.height);
-    for (const time of [0, 1, 2, 0.5]) {
-      renderer.seek(time);
-      await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const time of [0, 1, 2]) {
+      renderer.advanceDirectRealtime(time * 1000);
+      await settleDirectPublication(renderer, time * 1000);
       const circle = await sampleRenderedColor(canvas, -2 + 2 * time, 1);
       const square = await sampleRenderedColor(canvas, 0, -1);
       if (circle.red <= circle.green + 30 || square.blue <= square.red + 100) {
@@ -1287,9 +1288,8 @@ async function directExactPropertyTracksProof(expectedBackend) {
     }
     if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 2
         || samples[0].circle.red <= samples[1].circle.red
-        || samples[1].circle.red <= samples[2].circle.red
-        || samples[3].circle.red <= samples[1].circle.red) {
-      throw new Error(`exact property track seek lost authored opacity: ${JSON.stringify(samples)}`);
+        || samples[1].circle.red <= samples[2].circle.red) {
+      throw new Error(`exact property track playback lost authored opacity: ${JSON.stringify(samples)}`);
     }
     return samples;
   } finally {
