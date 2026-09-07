@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { PNG } from "pngjs";
 import playwright from "playwright";
 
 const { chromium } = playwright;
@@ -41,15 +42,17 @@ from noon import *
 class MixedRetainedGroupFadeWriteFirst(Scene):
     def construct(self):
         writing = Text("WRITE")
+        writing.shift(UP)
         first = Text("A")
         second = Text("B")
-        labels = VGroup(first, second)
+        labels = VGroup(first, second).arrange(RIGHT).shift(DOWN)
         self.play(
             Write(writing),
             FadeIn(labels),
             run_time=1.0,
             rate_func=linear,
         )
+        assert self.mobjects == [writing, labels]
 `;
 
 const fadeFirstEditedSource = `
@@ -68,6 +71,7 @@ class MixedRetainedGroupFadeFirst(Scene):
             run_time=1.0,
             rate_func=linear,
         )
+        assert self.mobjects == [labels, writing]
 `;
 
 const sameLeafSource = `
@@ -87,12 +91,7 @@ class MixedRetainedGroupFadeSameLeaf(Scene):
             raise AssertionError("same-leaf family/group-fade ownership must fail")
         except ValueError as error:
             assert "disjoint scene leaves" in str(error)
-        assert shared._scene is None
-        assert shared._object is None
-        assert shared._retained_object_id is None
-        assert peer._scene is None
-        assert peer._object is None
-        assert peer._retained_object_id is None
+        assert self.mobjects == []
         self.play(FadeIn(labels), run_time=0.25, rate_func=linear)
         self.play(FadeOut(labels), run_time=0.25, rate_func=linear)
 `;
@@ -116,10 +115,8 @@ class MixedRetainedGroupFadeRollback(Scene):
             raise AssertionError("negative sibling run_time must fail")
         except ValueError:
             pass
-        for member in (first, second, writing, moving):
-            assert member._scene is None
-            assert member._object is None
-            assert member._retained_object_id is None
+        assert self.mobjects == []
+        assert abs(moving.get_center()[0]) < 1e-6
         self.play(
             Write(writing),
             FadeIn(labels),
@@ -129,89 +126,95 @@ class MixedRetainedGroupFadeRollback(Scene):
         )
 `;
 
-const lagFailureSource = `
+const laggedSource = `
 from noon import *
 
-class MixedRetainedGroupFadeLagFailure(Scene):
+class MixedRetainedGroupFadeLagged(Scene):
     def construct(self):
         labels = VGroup(Text("A"), Text("B"))
         writing = Text("WRITE")
-        try:
-            self.play(
-                Write(writing),
-                FadeIn(labels),
-                lag_ratio=0.25,
-            )
-            raise AssertionError("group fade play lag_ratio must fail")
-        except NotImplementedError as error:
-            assert "shared retained family scheduling" in str(error)
-        for member in (*labels.submobjects, writing):
-            assert member._scene is None
-            assert member._object is None
-            assert member._retained_object_id is None
+        self.play(
+            Write(writing),
+            FadeIn(labels, lag_ratio=0.25),
+            run_time=1.0,
+            rate_func=linear,
+        )
+        assert self.mobjects == [writing, labels]
 `;
 
-function canonicalTextSources(result) {
-  assert.equal(result.retainedDocument, undefined, "canonical export must not retain a sidecar");
-  return result.sceneSpec.objects
-    .filter((object) => object.content?.kind === "text")
-    .map((object) => object.content.value.source);
-}
-
-function tracksFor(result, property) {
-  return result.sceneSpec.tracks.filter((track) => track.property === property);
-}
-
-function assertFadeTracks(result, objectIndexes) {
-  const presence = tracksFor(result, "presence");
-  const appearance = tracksFor(result, "appearance");
-  for (const object of objectIndexes) {
-    assert.ok(
-      presence.some(
-        (track) =>
-          track.object === object &&
-          track.values.bool?.from === false &&
-          track.values.bool?.to === true,
-      ),
-      `missing FadeIn presence track for retained object ${object}`,
-    );
-    assert.ok(
-      appearance.some(
-        (track) =>
-          track.object === object &&
-          track.values.scalar?.from === 0 &&
-          track.values.scalar?.to === 1,
-      ),
-      `missing FadeIn appearance track for retained object ${object}`,
-    );
+function visibleTextRows(buffer) {
+  const png = PNG.sync.read(buffer);
+  const result = { total: 0, upper: 0, lower: 0, upperBrightness: 0, lowerBrightness: 0 };
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const red = png.data[offset];
+    const green = png.data[offset + 1];
+    const blue = png.data[offset + 2];
+    const brightness = Math.max(red, green, blue);
+    if (brightness < 24) continue;
+    result.total += 1;
+    const y = Math.floor(offset / 4 / png.width);
+    if (y < png.height / 2) {
+      result.upper += 1;
+      result.upperBrightness += brightness;
+    } else {
+      result.lower += 1;
+      result.lowerBrightness += brightness;
+    }
   }
+  return result;
 }
 
-function assertFadeOutTracks(result, objectIndexes) {
-  const presence = tracksFor(result, "presence");
-  const appearance = tracksFor(result, "appearance");
-  for (const object of objectIndexes) {
-    assert.ok(
-      presence.some(
-        (track) =>
-          track.object === object &&
-          track.values.bool?.from === true &&
-          track.values.bool?.to === false,
-      ),
-      `missing FadeOut presence track for retained object ${object}`,
-    );
-    assert.ok(
-      appearance.some(
-        (track) =>
-          track.object === object &&
-          track.values.scalar?.from === 1 &&
-          track.values.scalar?.to === 0,
-      ),
-      `missing FadeOut appearance track for retained object ${object}`,
-    );
-  }
+async function startSampledSource(page, source) {
+  await page.evaluate(async (pythonSource) => {
+    const { PythonAuthoringClient } = await import("./authoring-client.js");
+    const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+    const authoring = new PythonAuthoringClient();
+    await authoring.ready();
+    const canvas = document.createElement("canvas");
+    canvas.id = "mixed-family-fade-runtime";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let resolveAttached;
+    let rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
+    });
+    const runtimeErrors = [];
+    const execution = new AuthoringExecutionClient(canvas, {
+      onError(error, owner) {
+        const failure = new Error(`${owner}: ${error}`);
+        runtimeErrors.push(failure.message);
+        rejectAttached(failure);
+      },
+    });
+    const authored = authoring.run(pythonSource, {}, {
+      async onSemanticContinuation(registration) {
+        await execution.startSemanticExecution(registration.semanticExecution, {
+          authoringClient: authoring,
+          loopDurationSeconds: registration.duration,
+          transportMode: "transferable",
+          pacing: "external_samples",
+        });
+        resolveAttached();
+      },
+    });
+    authored.catch(rejectAttached);
+    await attached;
+    window.mixedFamilyFadeProof = { authoring, execution, authored, canvas, runtimeErrors };
+  }, source);
 }
 
+async function stopSampledSource(page) {
+  await page.evaluate(() => {
+    const proof = window.mixedFamilyFadeProof;
+    proof.execution.terminate();
+    proof.authoring.terminate();
+    proof.canvas.remove();
+    window.mixedFamilyFadeProof = null;
+  });
+}
 let browser = null;
 try {
   await waitForServer();
@@ -231,121 +234,65 @@ try {
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonManimCompat.ready());
 
-  const writeFirst = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    writeFirstSource,
+  // Reconcile every public source through one shared execution owner. This
+  // exercises both argument orders, atomic rejection, positive lag scheduling,
+  // and replacement of the previous source without replacing the canvas.
+  const observed = await page.evaluate(
+    (sources) => window.noonManimCompat.runLiveSources(sources),
+    [writeFirstSource, fadeFirstEditedSource, sameLeafSource, rollbackSource, laggedSource],
   );
-  assert.equal(writeFirst.kind, "scene_document");
-  assert.deepEqual(canonicalTextSources(writeFirst), ["WRITE", "A", "B"]);
-  assert.equal(writeFirst.sceneSpec.objects.length, 3);
-  assert.equal(writeFirst.sceneSpec.family_animations.length, 1);
-  assert.equal(writeFirst.duration, 1);
-  assertFadeTracks(writeFirst, [1, 2]);
+  assert.equal(observed.sameCanvas, true, "shared source reruns must preserve the canvas");
+  assert.deepEqual(observed.results.map((result) => result.duration), [1, 1, 0.5, 0.5, 1]);
+  assert.deepEqual(observed.results.map((result) => result.metrics.objectCount), [3, 4, 0, 4, 3]);
+  for (const result of observed.results) {
+    assert.ok(result.metrics.presentedFrames > 0, "shared Text family Fade must present");
+  }
 
-  const fadeFirst = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    fadeFirstEditedSource,
-  );
-  assert.equal(fadeFirst.kind, "scene_document");
-  assert.deepEqual(canonicalTextSources(fadeFirst), ["A2", "B2", "C2", "EDITED"]);
-  assert.equal(fadeFirst.sceneSpec.objects.length, 4);
-  assert.equal(fadeFirst.sceneSpec.family_animations.length, 1);
-  assertFadeTracks(fadeFirst, [0, 1, 2]);
-
-  const sameLeaf = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    sameLeafSource,
-  );
-  assert.deepEqual(canonicalTextSources(sameLeaf), ["SHARED", "PEER"]);
-  assert.equal((sameLeaf.sceneSpec.family_animations ?? []).length, 0);
-  assertFadeTracks(sameLeaf, [0, 1]);
-  assertFadeOutTracks(sameLeaf, [0, 1]);
-
-  const rollback = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    rollbackSource,
-  );
-  assert.deepEqual(canonicalTextSources(rollback), ["WRITE", "A", "B", "MOVE"]);
-  assert.equal(rollback.sceneSpec.family_animations.length, 1);
-  assert.equal(tracksFor(rollback, "position").length, 1);
-  assertFadeTracks(rollback, [1, 2]);
-
-  const lagFailure = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    lagFailureSource,
-  );
-  assert.equal(lagFailure.sceneSpec.objects.length, 0);
-  assert.equal((lagFailure.sceneSpec.family_animations ?? []).length, 0);
-
-  // Reconcile the two source versions through one persistent execution owner. The
-  // retained object set must replace 3 -> 4 rather than accumulate the first run.
-  const rebuild = await page.evaluate(async ({ first, second }) => {
-    const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 360;
-    document.body.appendChild(canvas);
-    const runtimeErrors = [];
-    const execution = new AuthoringExecutionClient(canvas, {
-      onError(error) {
-        runtimeErrors.push(String(error));
-      },
-    });
-
-    async function waitForObjectCount(expected) {
-      let latest = null;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        latest = await execution.metrics();
-        if (runtimeErrors.length !== 0) throw new Error(runtimeErrors.join("; "));
-        if (latest.metrics?.objectCount === expected) return latest;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      throw new Error(`retained object count did not converge to ${expected}: ${JSON.stringify(latest)}`);
-    }
-
-    try {
-      await execution.startRetainedCanonical(JSON.stringify(first.sceneSpec), {
-        loopDurationSeconds: first.duration,
-        transportMode: "transferable",
-      });
-      const persistentCanvas = execution.canvas;
-      const before = await waitForObjectCount(3);
-      const reconciled = await execution.reconcileScene(JSON.stringify(second.document), {
-        sceneSpecJson: JSON.stringify(second.sceneSpec),
-        loopDurationSeconds: second.duration,
-      });
-      const after = await waitForObjectCount(4);
+  // Sample the same shared semantic execution used by normal live authoring.
+  // Write occupies the upper half and the family FadeIn the lower half, so one
+  // midpoint proves both planned effects reach the renderer concurrently.
+  await startSampledSource(page, writeFirstSource);
+  try {
+    const canvas = page.locator("#mixed-family-fade-runtime");
+    await page.evaluate(() => window.mixedFamilyFadeProof.execution.sampleToAuthoredTime(0));
+    const initial = visibleTextRows(await canvas.screenshot());
+    await page.evaluate(() => window.mixedFamilyFadeProof.execution.sampleToAuthoredTime(0.5));
+    const midpoint = visibleTextRows(await canvas.screenshot());
+    const completed = await page.evaluate(async () => {
+      const proof = window.mixedFamilyFadeProof;
+      const [, authored] = await Promise.all([
+        proof.execution.sampleToAuthoredTime(1),
+        proof.authored,
+      ]);
       return {
-        beforeCount: before.metrics.objectCount,
-        afterCount: after.metrics.objectCount,
-        beforeCanonical: Boolean(before.engineMetrics?.canonical),
-        afterCanonical: Boolean(after.engineMetrics?.canonical),
-        rebuilt: reconciled.rebuilt,
-        mode: reconciled.mode,
-        sameCanvas: execution.canvas === persistentCanvas,
+        duration: authored.duration,
+        metrics: (await proof.execution.metrics()).metrics,
+        sameCanvas: proof.execution.canvas === proof.canvas,
+        errors: proof.runtimeErrors,
       };
-    } finally {
-      execution.terminate();
-      execution.canvas?.remove();
-    }
-  }, { first: writeFirst, second: fadeFirst });
-
-  assert.deepEqual(rebuild, {
-    beforeCount: 3,
-    afterCount: 4,
-    beforeCanonical: true,
-    afterCanonical: true,
-    rebuilt: true,
-    mode: "retained",
-    sameCanvas: true,
-  });
-
+    });
+    const endpoint = visibleTextRows(await canvas.screenshot());
+    assert.equal(initial.total, 0, `detached FadeIn/Write must start hidden: ${JSON.stringify(initial)}`);
+    assert.ok(midpoint.upper > 0, `Text Write did not draw at midpoint: ${JSON.stringify(midpoint)}`);
+    assert.ok(midpoint.lower > 0, `Text family FadeIn did not draw at midpoint: ${JSON.stringify(midpoint)}`);
+    assert.ok(endpoint.upper > 0 && endpoint.lower > 0,
+      `Text Write/FadeIn endpoints must remain visible: ${JSON.stringify(endpoint)}`);
+    assert.ok(midpoint.lowerBrightness < endpoint.lowerBrightness * 0.9,
+      `Text family FadeIn must remain visibly dimmer at midpoint: ${JSON.stringify({ midpoint, endpoint })}`);
+    assert.equal(completed.duration, 1);
+    assert.equal(completed.metrics.objectCount, 3);
+    assert.ok(completed.metrics.presentedFrames > 0);
+    assert.equal(completed.sameCanvas, true);
+    assert.deepEqual(completed.errors, []);
+  } finally {
+    await stopSampledSource(page);
+  }
   assert.deepEqual(
     errors,
     [],
-    `browser errors while testing retained family fade batches:\n${errors.join("\n")}`,
+    `browser errors while testing shared Text family fades:\n${errors.join("\n")}`,
   );
-  console.log("Mixed retained family Group/VGroup fade batch smoke passed, including standalone FadeOut and edit -> rerun rebuild.");
+  console.log("Shared Text family fade composition passed, including overlap rejection, rollback, lag, pixels, and source reuse.");
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
