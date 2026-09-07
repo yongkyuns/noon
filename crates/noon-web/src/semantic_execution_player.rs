@@ -16,13 +16,15 @@ use noon_core::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use crate::RetainedExecutionDeltaEnvelope;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::{
     BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan, BrowserHostWake,
 };
 use crate::{
-    PlaybackClock, RendererObservationRequest, RetainedExecutionDeltaEncoder,
-    RetainedExecutionDeltaEnvelope, RetainedResourceBundle,
+    PlaybackClock, RendererObservationRequest, RetainedFamilyExecutionDeltaEncoder,
+    RetainedFamilyExecutionDeltaEnvelope, RetainedResourceBundle,
 };
 
 /// A browser-host wake observation derived from one player-owned execution session.
@@ -102,7 +104,7 @@ impl WasmExecutionWake {
 pub struct SemanticExecutionPlayer {
     session: ExecutionSession,
     clock: PlaybackClock,
-    encoder: RetainedExecutionDeltaEncoder,
+    encoder: RetainedFamilyExecutionDeltaEncoder,
     /// Immutable text/font/vector dependencies transferred once at the genuine
     /// authoring-worker to render-worker boundary.
     resource_bundle: Vec<u8>,
@@ -234,7 +236,7 @@ impl SemanticExecutionPlayer {
         Ok(Self {
             session,
             clock,
-            encoder: RetainedExecutionDeltaEncoder::new(transport_session),
+            encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
             resource_bundle,
             snapshot_sent: false,
             pending_callback_phase: None,
@@ -264,7 +266,7 @@ impl SemanticExecutionPlayer {
         Ok(Self {
             session,
             clock,
-            encoder: RetainedExecutionDeltaEncoder::new(transport_session),
+            encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
             resource_bundle,
             snapshot_sent: false,
             pending_callback_phase: None,
@@ -301,7 +303,7 @@ impl SemanticExecutionPlayer {
         let resource_bundle = Self::resource_bundle_for(&self.session)?;
         self.clock = clock;
         self.resource_bundle = resource_bundle;
-        self.encoder = RetainedExecutionDeltaEncoder::new(transport_session);
+        self.encoder = RetainedFamilyExecutionDeltaEncoder::new(transport_session);
         self.snapshot_sent = false;
         // A transport recovery reuses this runtime but begins a new host lease.
         // Re-anchor the derived wall conversion at its next wake so elapsed wall
@@ -1525,14 +1527,18 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    fn delta(&mut self, snapshot: bool) -> Result<Option<RetainedExecutionDeltaEnvelope>, String> {
+    fn delta(
+        &mut self,
+        snapshot: bool,
+    ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
         if snapshot || changes.is_all() || changes.is_structural() || !self.snapshot_sent {
             let delta = self
                 .encoder
-                .encode_snapshot_indices(
-                    self.session.frame(),
+                .encode_planned_snapshot_indices(
+                    &self.session.planned_family_frame(),
+                    self.session.family_animation_plans(),
                     camera,
                     (0..self.session.frame().objects.len()).filter(|index| {
                         self.session
@@ -1545,7 +1551,12 @@ impl SemanticExecutionPlayer {
             Ok(Some(delta))
         } else {
             self.encoder
-                .encode_incremental(self.session.frame(), &changes, camera)
+                .encode_planned_incremental(
+                    &self.session.planned_family_frame(),
+                    self.session.family_animation_plans(),
+                    &changes,
+                    camera,
+                )
                 .map_err(|e| e.to_string())
         }
     }
@@ -1695,7 +1706,7 @@ struct CallbackTerminationWire {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct RendererObservationPublicationWire {
-    delta: RetainedExecutionDeltaEnvelope,
+    delta: RetainedFamilyExecutionDeltaEnvelope,
     observation: RendererObservationRequest,
 }
 
@@ -2141,8 +2152,8 @@ impl SemanticExecutionPlayer {
             .delta(false)?
             .ok_or("callback commit produced no retained renderer publication")?;
         let observation = RendererObservationRequest::from_callback_publication(
-            delta.session,
-            delta.sequence,
+            delta.retained.session,
+            delta.retained.sequence,
             committed,
         );
         serde_json::to_string(&RendererObservationPublicationWire { delta, observation })
@@ -2264,28 +2275,28 @@ mod tests {
         .unwrap();
         let mut mirror = RetainedExecutionFrameMirror::default();
         let initial = player.delta(true).unwrap().unwrap();
-        assert_eq!(initial.objects[1].slot.generation, 0);
-        mirror.apply(initial).unwrap();
+        assert_eq!(initial.retained.objects[1].slot.generation, 0);
+        mirror.apply(initial.retained).unwrap();
         player.live_remove(&toggled).unwrap();
         let retired = player.delta(false).unwrap().unwrap();
-        assert!(retired.snapshot);
-        assert_eq!(retired.objects.len(), 1);
-        mirror.apply(retired).unwrap();
+        assert!(retired.retained.snapshot);
+        assert_eq!(retired.retained.objects.len(), 1);
+        mirror.apply(retired.retained).unwrap();
         player.live_add(&toggled).unwrap();
         assert!(player.session.execution_slot_for_frame_index(1).is_some());
         let snapshot = player.delta(false).unwrap().unwrap();
-        assert!(snapshot.snapshot);
-        assert_eq!(snapshot.objects.len(), 2);
-        assert_eq!(snapshot.objects[1].slot.slot, 1);
-        assert_eq!(snapshot.objects[1].slot.generation, 0);
-        assert_eq!(snapshot.objects[1].order, 1);
-        mirror.apply(snapshot).unwrap();
+        assert!(snapshot.retained.snapshot);
+        assert_eq!(snapshot.retained.objects.len(), 2);
+        assert_eq!(snapshot.retained.objects[1].slot.slot, 1);
+        assert_eq!(snapshot.retained.objects[1].slot.generation, 0);
+        assert_eq!(snapshot.retained.objects[1].order, 1);
+        mirror.apply(snapshot.retained).unwrap();
         player.live_set_translation(&toggled, 2.0, -1.0).unwrap();
         let delta = player.delta(false).unwrap().unwrap();
-        assert!(!delta.snapshot);
-        assert_eq!(delta.objects.len(), 1);
-        assert_eq!(delta.objects[0].order, 1);
-        mirror.apply(delta).unwrap();
+        assert!(!delta.retained.snapshot);
+        assert_eq!(delta.retained.objects.len(), 1);
+        assert_eq!(delta.retained.objects[0].order, 1);
+        mirror.apply(delta.retained).unwrap();
         assert_eq!(
             mirror.frame().unwrap().objects[1].transform.translation,
             noon_core::Vec2::new(2.0, -1.0)
