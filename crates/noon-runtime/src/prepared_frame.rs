@@ -59,6 +59,7 @@ pub struct PreparedFrameEvaluation {
     base_time: f64,
     time: f64,
     requested_channels: Vec<CompiledChannelKey>,
+    requested_family_animations: Vec<usize>,
     cursor_updates: Vec<(CompiledChannelKey, usize)>,
     rows: Vec<PreparedFrameRow>,
     stats: EvaluationStats,
@@ -383,6 +384,7 @@ impl SceneInstance {
             base_time: self.frame.time,
             time,
             requested_channels: preview.requested().to_vec(),
+            requested_family_animations: preview.requested_family_animations().to_vec(),
             cursor_updates: cursor_updates.into_iter().collect(),
             rows: rows
                 .into_iter()
@@ -477,6 +479,7 @@ impl SceneInstance {
         }
         let may_publish = prepared.time != self.frame.time
             || !prepared.rows.is_empty()
+            || !prepared.requested_family_animations.is_empty()
             || prepared
                 .reactive
                 .as_ref()
@@ -498,6 +501,7 @@ impl SceneInstance {
         self.preflight_prepared_frame_commit(&prepared, &effective)?;
         let may_publish = prepared.time != self.frame.time
             || !prepared.rows.is_empty()
+            || !prepared.requested_family_animations.is_empty()
             || prepared
                 .reactive
                 .as_ref()
@@ -515,6 +519,10 @@ impl SceneInstance {
         debug_assert_eq!(
             self.timeline_scheduler.requested(),
             prepared.requested_channels
+        );
+        debug_assert_eq!(
+            self.timeline_scheduler.requested_family_animations(),
+            prepared.requested_family_animations
         );
         for (channel, cursor) in &prepared.cursor_updates {
             if let Some(group) = self.groups.get_mut(channel) {
@@ -548,7 +556,7 @@ impl SceneInstance {
 
         let time_changed = self.frame.time != prepared.time;
         self.frame.time = prepared.time;
-        let mut changed = false;
+        let mut changed = self.update_requested_family_animations(prepared.time);
         for (object_index, row) in final_rows {
             if row.differs_from_frame(&self.frame, object_index) {
                 row.write_to_frame(&mut self.frame, object_index);

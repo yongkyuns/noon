@@ -187,6 +187,8 @@ mod tests {
             morphs: vec![0.0, 0.0],
             render_geometries: vec![None, None],
             render_transforms: vec![None, None],
+            family_animations: vec![None, None],
+            family_animation_plan_indices: vec![None, None],
         };
         (plan, frame, vec![Some(state()), Some(state())])
     }

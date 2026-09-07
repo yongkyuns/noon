@@ -517,6 +517,8 @@ mod tests {
             morphs: vec![0.0],
             render_geometries: vec![None],
             render_transforms: vec![None],
+            family_animations: vec![None],
+            family_animation_plan_indices: vec![None],
         }
     }
 
@@ -546,6 +548,8 @@ mod tests {
             morphs: vec![0.0],
             render_geometries: vec![None],
             render_transforms: vec![None],
+            family_animations: vec![None],
+            family_animation_plan_indices: vec![None],
         };
 
         assert_eq!(
