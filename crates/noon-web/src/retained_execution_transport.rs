@@ -765,7 +765,8 @@ impl RetainedExecutionFrameMirror {
             .ok_or(RetainedExecutionTransportError::IncrementalBeforeSnapshot)?;
         let mut updates = Vec::with_capacity(delta.objects.len());
         let mut seen_slots = HashSet::with_capacity(delta.objects.len());
-        let mut next_slot_indices = self.slot_indices.clone();
+        let mut added_slot_indices = HashMap::new();
+        let mut added_objects = HashSet::new();
         let mut next_slot_count = self.slots.len();
         for object in &delta.objects {
             if !seen_slots.insert(object.slot) {
@@ -774,7 +775,7 @@ impl RetainedExecutionFrameMirror {
             validate_object_state(object)?;
             let content = self.resolve_content(&object.content)?;
             let geometry = self.resolve_render_geometry(object, delta.session)?;
-            let (index, added) = if let Some(&index) = next_slot_indices.get(&object.slot) {
+            let (index, added) = if let Some(&index) = self.slot_indices.get(&object.slot) {
                 let current = &frame.objects[index];
                 if current.id != object.object {
                     return Err(RetainedExecutionTransportError::SlotIdentityChanged(
@@ -788,14 +789,16 @@ impl RetainedExecutionFrameMirror {
                 }
                 (index, false)
             } else {
-                if self.object_indices.contains_key(&object.object) {
+                if self.object_indices.contains_key(&object.object)
+                    || !added_objects.insert(object.object)
+                {
                     return Err(RetainedExecutionTransportError::DuplicateObject(
                         object.object,
                     ));
                 }
                 let index = next_slot_count;
                 next_slot_count += 1;
-                next_slot_indices.insert(object.slot, index);
+                added_slot_indices.insert(object.slot, index);
                 (index, true)
             };
             updates.push((index, added, object, geometry, content));
@@ -817,7 +820,7 @@ impl RetainedExecutionFrameMirror {
 
         let painter_update = self.validate_painter_order_delta(
             delta.painter_order.as_ref(),
-            &next_slot_indices,
+            &added_slot_indices,
             &seen_removed,
             &seen_slots,
         )?;
@@ -831,14 +834,13 @@ impl RetainedExecutionFrameMirror {
                     .collect::<HashMap<_, _>>()
             })
             .unwrap_or_default();
-        for (_, _, object, _, _) in &updates {
-            let index = next_slot_indices[&object.slot];
+        for (index, _, object, _, _) in &updates {
             let rank = segment_ranks
-                .get(&(index as u32))
+                .get(&(*index as u32))
                 .copied()
                 .or_else(|| {
                     self.painter_ranks
-                        .get(index)
+                        .get(*index)
                         .copied()
                         .flatten()
                         .map(|rank| rank as usize)
@@ -848,16 +850,12 @@ impl RetainedExecutionFrameMirror {
                 return Err(RetainedExecutionTransportError::InvalidOrder(object.order));
             }
         }
-        let added_indices = segment_ranks
-            .keys()
-            .filter(|&&index| {
-                self.painter_ranks
-                    .get(index as usize)
-                    .copied()
-                    .flatten()
-                    .is_none()
+        let added_indices = updates
+            .iter()
+            .filter_map(|(index, added, _, _, _)| {
+                (*added || self.painter_ranks.get(*index).copied().flatten().is_none())
+                    .then_some(*index)
             })
-            .map(|&index| index as usize)
             .collect::<Vec<_>>();
         let removed_indices = _validated_removed_indices;
         // Validate all rows and resource references before mutating the live mirror.
@@ -915,12 +913,12 @@ impl RetainedExecutionFrameMirror {
     fn validate_painter_order_delta(
         &self,
         delta: Option<&RetainedPainterOrderDelta>,
-        slot_indices: &HashMap<TransportSlotId, usize>,
+        added_slot_indices: &HashMap<TransportSlotId, usize>,
         removed: &HashSet<TransportSlotId>,
         updated: &HashSet<TransportSlotId>,
     ) -> Result<Option<PreparedPainterOrder>, RetainedExecutionTransportError> {
         if delta.is_none() {
-            if !removed.is_empty() || slot_indices.len() != self.slot_indices.len() {
+            if !removed.is_empty() || !added_slot_indices.is_empty() {
                 return Err(RetainedExecutionTransportError::StructuralChangeRequiresSnapshot);
             }
             return Ok(None);
@@ -945,8 +943,10 @@ impl RetainedExecutionFrameMirror {
             if removed.contains(slot) || !seen.insert(*slot) {
                 return Err(RetainedExecutionTransportError::DuplicateSlot(*slot));
             }
-            let index = slot_indices
+            let index = self
+                .slot_indices
                 .get(slot)
+                .or_else(|| added_slot_indices.get(slot))
                 .copied()
                 .ok_or(RetainedExecutionTransportError::UnknownSlot(*slot))?;
             segment.push(index as u32);
@@ -964,15 +964,17 @@ impl RetainedExecutionFrameMirror {
         }) {
             return Err(RetainedExecutionTransportError::InvalidOrder(delta.end));
         }
-        let added = slot_indices
-            .iter()
-            .filter(|(slot, index)| {
-                **index >= self.slots.len()
-                    || (updated.contains(slot)
-                        && self.painter_ranks.get(**index).copied().flatten().is_none())
-            })
-            .map(|(_, &index)| index as u32)
+        let mut added = added_slot_indices
+            .values()
+            .map(|&index| index as u32)
             .collect::<HashSet<_>>();
+        for slot in updated {
+            if let Some(&index) = self.slot_indices.get(slot) {
+                if self.painter_ranks.get(index).copied().flatten().is_none() {
+                    added.insert(index as u32);
+                }
+            }
+        }
         if segment
             .iter()
             .any(|index| !old_segment.contains(index) && !added.contains(index))
