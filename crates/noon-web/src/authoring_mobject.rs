@@ -281,7 +281,7 @@ impl FrontendFamilyArrangePlan {
     }
 }
 
-fn semantic_family_leaf_ids(
+pub(crate) fn semantic_family_leaf_ids(
     store: &SemanticStore,
     family: SemanticNodeId,
 ) -> Result<Vec<SemanticNodeId>, String> {

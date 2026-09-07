@@ -21,6 +21,10 @@ import _manim_animation_options as _options
 import _manim_animate as _animate
 import _manim_compat as _compat
 import _manim_composition as _composition
+import _manim_draw_border_then_fill as _draw_border_then_fill
+import _manim_family_creation as _family_creation
+import _manim_phase_b as _phase_b
+import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 import _noon_ir as _ir
@@ -1280,6 +1284,8 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         import _manim_rotate as _rotate
 
         animation = args[0]
+        if _canonical_draw_border_then_fill_animation(scene, animation) is not None:
+            return "parallel", args, None
         if isinstance(animation, (_animate._AlignedGroupAnimationBuilder, _animate.Indicate)):
             return "parallel", args, None
         if type(animation) is _rotate.Rotate:
@@ -1392,6 +1398,41 @@ def _canonical_indicate_animation(
     return target, family
 
 
+def _canonical_draw_border_then_fill_animation(scene: _base.Scene, animation: object):
+    """Classify leaf DrawBorderThenFill and forward ordinary-vector Write."""
+    if isinstance(animation, _draw_border_then_fill.DrawBorderThenFill):
+        target = animation.target
+        leaves = [target]
+        family = None
+        phase_rate = "smooth"
+    elif type(animation) is _family_creation.Write:
+        if animation.reverse or animation.remover or animation.reverse_rate_function:
+            return None
+        target = animation.target
+        leaves = _compat._leaf_mobjects(target)
+        if not leaves or any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
+            return None
+        family = target if isinstance(target, _compat.Group) else getattr(
+            animation, "_ordinary_write_family", None
+        )
+        if family is None:
+            family = _compat.Group(target)
+            animation._ordinary_write_family = family
+        phase_rate = "linear"
+    else:
+        return None
+    if any(
+        not isinstance(member, _compat.VMobject)
+        or getattr(member, "_semantic_handle", None) is None
+        or (member._scene is not None and member._scene is not scene)
+        for member in leaves
+    ):
+        raise NotImplementedError(
+            "canonical DrawBorderThenFill requires ordinary typed vector leaves"
+        )
+    return target, family, leaves, phase_rate
+
+
 def _build_canonical_composition_candidate(
     self: _base.Scene,
     kind: str,
@@ -1461,6 +1502,44 @@ def _build_canonical_composition_candidate(
             if child_kwargs:
                 raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
             builder.appendWait(float(animation.run_time))
+            return
+        border_fill = _canonical_draw_border_then_fill_animation(self, animation)
+        if border_fill is not None:
+            target, family, leaves, phase_rate = border_fill
+            args = dict(getattr(animation, "anim_args", {}))
+            args["rate_func"] = _rate_functions.linear
+            child = _canonical_affine_options(
+                animation, child_kwargs, builder_args=args, allow_family_lag=family is not None
+            )
+            if child is None or child.rate_func != "linear":
+                raise NotImplementedError(
+                    "canonical DrawBorderThenFill requires linear outer timing"
+                )
+            color = getattr(animation, "stroke_color", None)
+            rgba = (None, None, None, None) if color is None else tuple(
+                float(getattr(color, name)) for name in ("red", "green", "blue", "alpha")
+            )
+            width = _phase_b._manim_stroke_width(animation.stroke_width)
+            introducer = bool(getattr(animation, "introducer", True))
+            detached = [member for member in leaves if member._scene is None]
+            if family is None:
+                member = leaves[0]
+                reservation = reserve(member) if detached else None
+                object_id = "" if reservation is None else str(reservation.object.id)
+                builder.appendDrawBorderThenFillMobject(
+                    object_id, member._semantic_handle, width, *rgba, phase_rate,
+                    introducer, float(child.run_time), "linear",
+                )
+            else:
+                builder.appendDrawBorderThenFillFamily(
+                    family._semantic_family_handle, width, *rgba, phase_rate,
+                    introducer, float(child.run_time), "linear", float(child.lag_ratio),
+                )
+                for member in detached:
+                    reservation = reserve(member)
+                    builder.appendDrawBorderThenFillFamilyEntering(
+                        str(reservation.object.id), member._semantic_handle
+                    )
             return
         indicate = _canonical_indicate_animation(self, animation)
         if indicate is not None:

@@ -1313,6 +1313,32 @@ try {
     await stopSampledSource(page);
   }
 
+  const drawBorderThenFillSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_draw_border_then_fill.py"), "utf8",
+  );
+  await startSampledSource(page, drawBorderThenFillSource, "scene-shared-draw-border-then-fill");
+  try {
+    const canvas = page.locator("#scene-shared-draw-border-then-fill");
+    for (const [time, x] of [[1.5, -1], [2, -1], [2.5, 1], [3, 1]]) {
+      await page.evaluate(
+        (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
+        time,
+      );
+      const color = renderedWorldPixel(await canvas.screenshot(), x, 0);
+      assert.ok(color.alpha > 40 && color.red > 90,
+        `shared DrawBorderThenFill at ${time}s missed filled member at ${x}`);
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.25), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3.25);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   // Scalar tracker continuation keeps both values and timing in the returned
   // Rust player. Python remains suspended through both tracks and the wait.
   const externalSamples = await page.evaluate(async (source) => {

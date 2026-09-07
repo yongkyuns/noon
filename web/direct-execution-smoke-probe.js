@@ -21,6 +21,7 @@ const {
   createDirectOrdinaryCompositionSmokeRenderer,
   createDirectMixedScalarCompositionSmokeRenderer,
   createDirectFamilyTransformIndicateSmokeRenderer,
+  createDirectDrawBorderThenFillSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -1085,6 +1086,39 @@ async function directFamilyTransformIndicateProof(expectedBackend) {
   }
 }
 
+async function directDrawBorderThenFillProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectDrawBorderThenFillSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const [time, x, channel] of [[1500, -1, "red"], [2000, -1, "red"], [2500, 1, "red"], [3000, 1, "red"]]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const color = await sampleRenderedColor(canvas, x, 0);
+      if (color.alpha < 40 || color[channel] < 90) {
+        throw new Error(`direct DrawBorderThenFill at ${time}ms missed filled member: ${JSON.stringify(color)}`);
+      }
+      samples.push({ time, x, color });
+    }
+    renderer.advanceDirectRealtime(3250);
+    await settleDirectPublication(renderer, 3250);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3250));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 3.25
+        || renderer.objectCount() !== 2 || wake.cadence !== "idle") {
+      throw new Error("direct DrawBorderThenFill did not complete its shared continuation");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directMovingCameraCenterProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectMovingCameraCenterSmokeRenderer(canvas);
@@ -1688,6 +1722,7 @@ async function start() {
   metrics.timedComposition = await directTimedCompositionProof(expectedBackend);
   metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);
   metrics.familyTransformIndicate = await directFamilyTransformIndicateProof(expectedBackend);
+  metrics.drawBorderThenFill = await directDrawBorderThenFillProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);
