@@ -103,3 +103,31 @@ pub fn program() -> Result<LiveProgram<UncreateOptions>, String> {
         })
         .map_err(|error| error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{LiveProgramStatus, RustHostCallbackTable};
+
+    #[test]
+    fn uncreate_options_complete_with_shared_membership() {
+        let mut program = program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        for endpoint in [2.0, 3.0, 4.0] {
+            assert!(matches!(
+                program.resume().unwrap(),
+                LiveProgramStatus::Awaiting(_)
+            ));
+            match program.drive_to(&mut callbacks, endpoint).unwrap() {
+                LiveProgramStatus::PublicationPending(expected) => {
+                    let context = program.take_renderer_publication().context();
+                    assert_eq!(context, expected);
+                    program.admit_publication(context).unwrap();
+                }
+                LiveProgramStatus::ReadyToResume => {}
+                status => panic!("Uncreate completion: {status:?}"),
+            }
+        }
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+}
