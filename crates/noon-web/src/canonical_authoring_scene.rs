@@ -1981,7 +1981,13 @@ impl CanonicalAuthoringScene {
                 noon_core::resolve_animation_options(
                     noon_core::AnimationDefaults::MANIM,
                     options,
-                    noon_core::AnimationOptions::new(),
+                    if matches!(child, OrdinaryCompositionChild::TextWrite { .. }) {
+                        // Glyph realization owns reversal; keep the original child
+                        // options for shared schedule lowering after shape validation.
+                        noon_core::AnimationOptions::new().reverse_rate_function(false)
+                    } else {
+                        noon_core::AnimationOptions::new()
+                    },
                 )
             };
             resolved.map_err(|error| error.to_string())?;
@@ -6716,6 +6722,32 @@ mod tests {
             context.bindings.get(&ObjectId::new(1)),
             Some(&writing.node_id())
         );
+
+        let unwrite = [OrdinaryCompositionChild::TextWrite {
+            entering_id: None,
+            target: writing.clone(),
+            reverse_member_order: true,
+            options: options
+                .introducer(false)
+                .remover(true)
+                .reverse_rate_function(true),
+        }];
+        context
+            .validate_ordinary_mixed_composition(
+                &unwrite,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &unwrite,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert!(!context.live_contains_mobject(&writing).unwrap());
 
         let mut rejected = CanonicalAuthoringScene::default();
         let shared = rejected.scene.text(noon::Text::new("ONE")).unwrap();

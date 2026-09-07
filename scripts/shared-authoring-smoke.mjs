@@ -332,7 +332,11 @@ async function startSampledSource(page, source, canvasId, width = 640, height = 
         resolveAttached();
       },
     });
-    authored.then(() => rejectAttached(new Error(`${canvasId} did not register a continuation`)), rejectAttached);
+    authored.then(() => rejectAttached(new Error(`${canvasId} did not register a continuation`)), (error) => {
+      console.error(`${canvasId} authoring: ${error}`);
+      rejectAttached(error);
+      execution.terminate();
+    });
     harness.sampledProof = { execution, authored };
     await attached;
   }, { source, canvasId, width, height });
@@ -1370,10 +1374,24 @@ try {
     const canvas = page.locator("#scene-shared-text-write");
     const samples = [];
     for (const time of [0, 0.5, 1, 2, 2.5, 3]) {
-      await page.evaluate(
-        (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
-        time,
-      );
+      // Attachment has already sampled zero; inspect that published frame directly.
+      if (time !== 0) {
+        console.log(`Sampling Text Write at ${time}s`);
+        await page.evaluate(async (sampleTime) => {
+          const { execution } = window.sharedAuthoringSmoke.sampledProof;
+          let timer;
+          try {
+            return await Promise.race([
+              execution.sampleToAuthoredTime(sampleTime),
+              new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`Text Write sample ${sampleTime}s timed out`)), 15000);
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
+        }, time);
+      }
       const stats = visiblePixelStats(await canvas.screenshot(),
         (red, green, blue, _x, y) => y < 270 && red > 100 && green > 100 && blue > 100);
       samples.push(stats.count);

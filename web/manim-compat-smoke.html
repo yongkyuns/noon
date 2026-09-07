@@ -176,8 +176,8 @@ class RetainedSequentialFamilySmoke(Scene):
       }
 
       function assertCanonicalRenderedState(metrics, label, seekTime) {
-        if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
-          throw new Error(`${label} did not run through canonical retained execution`);
+        if (!metrics.metrics.ready || !metrics.metrics.retained || metrics.executionMode !== "semantic") {
+          throw new Error(`${label} did not run through shared semantic retained execution`);
         }
         if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
           throw new Error(`${label} did not produce a presented retained render frame`);
