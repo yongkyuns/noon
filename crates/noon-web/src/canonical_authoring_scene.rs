@@ -4222,23 +4222,13 @@ mod wasm {
 
         /// Return the authoritative direct-root semantic identities in painter order.
         #[wasm_bindgen(js_name = rootMembershipKeys)]
-        pub fn root_membership_keys(&self) -> Result<js_sys::Array, JsValue> {
-            let keys = self.inner.root_membership_keys().map_err(js_error)?;
-            let result = js_sys::Array::new_with_length(keys.len() as u32);
-            for (index, key) in keys.into_iter().enumerate() {
-                result.set(index as u32, JsValue::from_str(&key));
-            }
-            Ok(result)
+        pub fn root_membership_keys(&self) -> Result<Vec<String>, JsValue> {
+            self.inner.root_membership_keys().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = rootMembershipLeafKeys)]
-        pub fn root_membership_leaf_keys(&self) -> Result<js_sys::Array, JsValue> {
-            let keys = self.inner.root_membership_leaf_keys().map_err(js_error)?;
-            let result = js_sys::Array::new_with_length(keys.len() as u32);
-            for (index, key) in keys.into_iter().enumerate() {
-                result.set(index as u32, JsValue::from_str(&key));
-            }
-            Ok(result)
+        pub fn root_membership_leaf_keys(&self) -> Result<Vec<String>, JsValue> {
+            self.inner.root_membership_leaf_keys().map_err(js_error)
         }
 
         /// Evaluate one callback-local rotation without mutating authored scene state.
