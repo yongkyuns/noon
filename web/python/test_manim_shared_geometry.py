@@ -30,14 +30,12 @@ class ManimSharedGeometryTests(unittest.TestCase):
                 def __init__(self, snapshot):
                     self.snapshot = snapshot
                 def snapshotJson(self): return json.dumps(self.snapshot)
-                def setStrokeWidth(self, value): self.snapshot["style"]["stroke_width"] = float(value)
-                def setFillOpacity(self, value): self.snapshot["style"]["fill"]["alpha"] = float(value)
+                def setStrokeWidth(self, value): raise AssertionError("post-publication style mutation")
+                def setFillOpacity(self, value): raise AssertionError("post-publication style mutation")
                 def setFillColor(self, r, g, b, a):
-                    alpha = self.snapshot["style"]["fill"]["alpha"]
-                    self.snapshot["style"]["fill"] = {"red": float(r), "green": float(g), "blue": float(b), "alpha": alpha}
+                    raise AssertionError("post-publication style mutation")
                 def setStrokeColor(self, r, g, b, a):
-                    alpha = self.snapshot["style"]["stroke"]["alpha"]
-                    self.snapshot["style"]["stroke"] = {"red": float(r), "green": float(g), "blue": float(b), "alpha": alpha}
+                    raise AssertionError("post-publication style mutation")
                 def manimMoveToPoint(self, x, y, edge_x, edge_y, mask_x, mask_y):
                     placement_calls.append((
                         float(x), float(y), float(edge_x), float(edge_y),
@@ -101,8 +99,8 @@ class ManimSharedGeometryTests(unittest.TestCase):
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, generic_snapshot)
-            fake_js.noonCreateAuthoringDotHandle = dot
-            fake_js.noonCreateAuthoringTriangleHandle = triangle
+            _geometry_test.install_option_factory(fake_js, "dot", dot)
+            _geometry_test.install_option_factory(fake_js, "triangle", triangle)
             sys.modules["js"] = fake_js
 
             import _manim_compat

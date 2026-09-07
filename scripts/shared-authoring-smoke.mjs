@@ -1208,10 +1208,18 @@ try {
       return { duration: result.duration, metrics: (await execution.metrics()).metrics };
     });
     assert.equal(final.duration, 2);
-    assert.equal(final.metrics.objectCount, 6);
+    assert.equal(final.metrics.objectCount, 9);
     const canvas = page.locator("#scene-shared-live-geometry");
     const blue = renderedWorldPixel(await canvas.screenshot(), -2, 0);
     const green = renderedWorldPixel(await canvas.screenshot(), 2, 1);
+    const dot = renderedWorldPixel(await canvas.screenshot(), -4, -1.5);
+    const annulus = renderedWorldPixel(await canvas.screenshot(), 4.375, -1.5);
+    const underline = renderedWorldPixel(await canvas.screenshot(), 2, 0.45);
+    assert.ok(dot.red > dot.green + 30, "late Dot lost its constructor color");
+    assert.ok(annulus.red > annulus.blue + 30 && annulus.green > annulus.blue + 30,
+      "late Annulus lost its constructor color");
+    assert.ok(Math.min(underline.red, underline.green, underline.blue) > 150,
+      "late Underline did not use the animated target bounds");
     assert.ok(blue.blue > blue.red + 30, "typed Path lost its blue fill");
     assert.ok(green.green > green.red + 30, "late Rectangle did not animate through shared live publication");
   } finally {

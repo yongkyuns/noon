@@ -105,7 +105,7 @@ class ManimSharedElbowTests(unittest.TestCase):
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, generic_handle)
-            fake_js.noonCreateAuthoringElbowHandle = elbow
+            _geometry_test.install_option_factory(fake_js, "elbow", elbow)
             sys.modules["js"] = fake_js
 
             import _manim_compat

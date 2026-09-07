@@ -109,7 +109,7 @@ class ManimSharedRoundedRectangleTests(unittest.TestCase):
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, generic_handle)
-            fake_js.noonCreateAuthoringRoundedRectangleHandle = rounded_rectangle
+            _geometry_test.install_option_factory(fake_js, "roundedRectangle", rounded_rectangle)
             sys.modules["js"] = fake_js
 
             import _manim_compat
