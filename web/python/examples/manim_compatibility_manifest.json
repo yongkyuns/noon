@@ -56,7 +56,7 @@
       "title": "FamilyWrite",
       "summary": "Write a styled VGroup with lag_ratio so its members reveal in order.",
       "status": "ready",
-      "path": "python/examples/ordinary_draw_border_then_fill.py",
+      "path": "python/examples/manim_compatible_family_write.py",
       "category": "manim-compatible/creation",
       "features": ["Write", "VGroup", "lag_ratio", "style", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
