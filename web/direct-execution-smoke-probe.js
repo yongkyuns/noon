@@ -19,6 +19,7 @@ const {
   createDirectOrdinaryAffineLifecycleSmokeRenderer,
   createDirectOrdinaryCompositionSmokeRenderer,
   createDirectMixedScalarCompositionSmokeRenderer,
+  createDirectFamilyTransformIndicateSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -988,6 +989,66 @@ async function directMixedScalarCompositionProof(expectedBackend) {
   }
 }
 
+async function directFamilyTransformIndicateProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectFamilyTransformIndicateSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    for (const [time, leftX, rightX, highlighted] of [
+      [0, -2, 0, null],
+      [500, -1.625, 0, null],
+      [1000, -1.25, 0.25, null],
+      [2000, -1, 1, null],
+      [8000 / 3, -1.2, 1, "left"],
+      [10000 / 3, -1, 1.2, "right"],
+      [4000, -1, 1, null],
+      [4250, 0, 1, null],
+      [4500, 0, 1, null],
+    ]) {
+      renderer.advanceDirectRealtime(time);
+      const directive = await settleDirectPublication(renderer, time);
+      const left = await sampleRenderedColor(canvas, leftX, 0);
+      const right = await sampleRenderedColor(canvas, rightX, 0);
+      if (left.alpha < 128 || right.alpha < 128) {
+        throw new Error(
+          `direct family transform/Indicate at ${time}ms missed its expected members: ${JSON.stringify({ left, right })}`,
+        );
+      }
+      if (highlighted !== null) {
+        const color = highlighted === "left" ? left : right;
+        if (!(color.red > 180 && color.green > 150 && color.blue < color.green - 40)) {
+          throw new Error(
+            `direct family Indicate did not reach its shared outward state: ${JSON.stringify({ left, right })}`,
+          );
+        }
+      }
+      if (time === 4000 || time === 4500) {
+        const restored = left.red > left.green + 40 && left.blue > left.green + 40
+          && right.blue > right.red + 25;
+        if (!restored) {
+          throw new Error(
+            `direct family Indicate did not restore its captured transformed state: ${JSON.stringify({ left, right })}`,
+          );
+        }
+      }
+      samples.push({ time, leftX, rightX, highlighted, left, right, cadence: directive.cadence });
+    }
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(4500));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 4.5
+        || renderer.objectCount() !== 2 || wake.cadence !== "idle") {
+      throw new Error("direct family transform/Indicate did not complete its shared continuation");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directMovingCameraCenterProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectMovingCameraCenterSmokeRenderer(canvas);
@@ -1590,6 +1651,7 @@ async function start() {
   metrics.affineLifecycle = await directAffineLifecycleProof(expectedBackend);
   metrics.timedComposition = await directTimedCompositionProof(expectedBackend);
   metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);
+  metrics.familyTransformIndicate = await directFamilyTransformIndicateProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);

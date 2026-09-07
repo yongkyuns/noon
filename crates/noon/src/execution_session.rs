@@ -17,6 +17,7 @@ use crate::execution_segment::{
     PendingSegmentCompletion, PendingSegmentCompletionKind, ScalarSegmentCompletionEntry,
     SegmentCompletionEntry,
 };
+use crate::live_session::IndicateOptions;
 use noon_compile::{
     derive_prepared_scalar_animation_tracks,
     lower_prepared_scalar_signal_timeline_entries_with_resolver,
@@ -85,6 +86,23 @@ pub(crate) enum SemanticCompositionRequest {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
         interpolation: noon_core::SemanticTransformInterpolation,
+        options: AnimationOptions,
+    },
+    FamilyTransformTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    },
+    Indicate {
+        target: SemanticNodeId,
+        indication: IndicateOptions,
+        scale_center: noon_core::SemanticVec3,
+        options: AnimationOptions,
+    },
+    FamilyIndicate {
+        target: SemanticNodeId,
+        indication: IndicateOptions,
+        scale_center: noon_core::SemanticVec3,
         options: AnimationOptions,
     },
     Rotate {
@@ -1584,11 +1602,90 @@ impl ExecutionSession {
                 admit(*source, declaration, admitted)?;
                 let target_state =
                     self.stage_animation_target_state(store, declaration, *target_state)?;
-                Ok(declaration.create_transform_animation_with_interpolation(
+                let animation = declaration.create_transform_animation_with_interpolation(
                     *source,
                     target_state,
                     *interpolation,
                     *options,
+                );
+                Ok(animation)
+            }
+            SemanticCompositionRequest::FamilyTransformTo {
+                source,
+                target_state,
+                options,
+            } => {
+                let pairs = store
+                    .ordered_family_leaf_pairs(*source, *target_state)
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?;
+                let expanded = SemanticCompositionRequest::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    children: pairs
+                        .into_iter()
+                        .map(
+                            |(source, target_state)| SemanticCompositionRequest::TransformTo {
+                                source,
+                                target_state,
+                                interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                                // The family composition applies authored easing once.
+                                options: AnimationOptions::new().rate_func(RateFunction::Linear),
+                            },
+                        )
+                        .collect(),
+                    options: *options,
+                };
+                self.stage_composition_request(
+                    store,
+                    root,
+                    &expanded,
+                    declaration,
+                    admitted,
+                    removals,
+                )
+            }
+            SemanticCompositionRequest::Indicate {
+                target,
+                indication,
+                scale_center,
+                options,
+            } => {
+                self.stage_indicate_leaf(*target, *indication, *scale_center, *options, declaration)
+            }
+            SemanticCompositionRequest::FamilyIndicate {
+                target,
+                indication,
+                scale_center,
+                options,
+            } => {
+                let leaves = store
+                    .ordered_family_leaf_pairs(*target, *target)
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?
+                    .into_iter()
+                    .map(|(leaf, _)| leaf)
+                    .collect::<Vec<_>>();
+                self.validate_indicate_options(*indication, *options)?;
+                let children = leaves
+                    .into_iter()
+                    .map(|leaf| {
+                        self.stage_indicate_leaf(
+                            leaf,
+                            *indication,
+                            *scale_center,
+                            AnimationOptions::new().rate_func(RateFunction::ThereAndBack),
+                            declaration,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut composition_options = *options;
+                composition_options.rate_func = Some(RateFunction::Linear);
+                Ok(declaration.create_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    children,
+                    composition_options,
                 ))
             }
             SemanticCompositionRequest::Rotate {
@@ -2133,6 +2230,63 @@ impl ExecutionSession {
             .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?
             .clone();
         Ok(declaration.create_node(SemanticNodeCreation::object(state)))
+    }
+
+    fn validate_indicate_options(
+        &self,
+        indication: IndicateOptions,
+        options: AnimationOptions,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        let color = indication.color;
+        if !indication.scale_factor.is_finite()
+            || indication.scale_factor < 0.0
+            || indication.scale_factor > f32::MAX as f64
+            || !color.red.is_finite()
+            || !color.green.is_finite()
+            || !color.blue.is_finite()
+            || !color.alpha.is_finite()
+        {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "Indicate scale and color must be finite and representable".into(),
+            ));
+        }
+        if !matches!(options.rate_func, None | Some(RateFunction::ThereAndBack))
+            || options.path_arc.is_some()
+            || options.reverse_rate_function == Some(true)
+            || options.remover == Some(true)
+            || options.introducer == Some(true)
+        {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "restoring Indicate supports there-and-back timing without path or lifecycle overrides"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn stage_indicate_leaf(
+        &self,
+        target: SemanticNodeId,
+        indication: IndicateOptions,
+        scale_center: noon_core::SemanticVec3,
+        options: AnimationOptions,
+        declaration: &mut SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        self.validate_indicate_options(indication, options)?;
+        if self.execution_index.execution_object_id(target).is_none() {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "Indicate requires an object already present in the execution domain".into(),
+            ));
+        }
+        let mut leaf_options = options;
+        leaf_options.rate_func = Some(RateFunction::ThereAndBack);
+        Ok(declaration.create_indicate_animation(
+            target,
+            indication.scale_factor,
+            indication.color,
+            scale_center,
+            leaf_options,
+        ))
     }
 
     fn declare_and_activate_prepared_animation(

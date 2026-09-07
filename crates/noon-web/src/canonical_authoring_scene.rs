@@ -28,6 +28,21 @@ enum OrdinaryCompositionChild {
         interpolation: noon_core::SemanticTransformInterpolation,
         options: noon_core::AnimationOptions,
     },
+    FamilyTransformTo {
+        source: noon::MobjectFamily,
+        target_state: noon::MobjectFamily,
+        options: noon_core::AnimationOptions,
+    },
+    Indicate {
+        target: noon::Mobject,
+        indication: noon::IndicateOptions,
+        options: noon_core::AnimationOptions,
+    },
+    FamilyIndicate {
+        target: noon::MobjectFamily,
+        indication: noon::IndicateOptions,
+        options: noon_core::AnimationOptions,
+    },
     Rotate {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1352,6 +1367,33 @@ impl CanonicalAuthoringScene {
                     };
                     noon::AnimationCompositionRequest::TransformTo(request)
                 }
+                OrdinaryCompositionChild::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => noon::AnimationCompositionRequest::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::Indicate {
+                    target,
+                    indication,
+                    options,
+                } => noon::AnimationCompositionRequest::Indicate {
+                    target,
+                    indication: *indication,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::FamilyIndicate {
+                    target,
+                    indication,
+                    options,
+                } => noon::AnimationCompositionRequest::FamilyIndicate {
+                    target,
+                    indication: *indication,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
@@ -1489,6 +1531,9 @@ impl CanonicalAuthoringScene {
                 } => output.push((*entering_id, target)),
                 OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
+                OrdinaryCompositionChild::FamilyTransformTo { .. }
+                | OrdinaryCompositionChild::Indicate { .. }
+                | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
                     for child in children {
                         bindings(child, output);
@@ -1598,6 +1643,45 @@ impl CanonicalAuthoringScene {
                     .map_err(|error| error.to_string())?;
                     continue;
                 }
+                OrdinaryCompositionChild::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
+                        || !std::rc::Rc::ptr_eq(self.scene.store(), target_state.store())
+                    {
+                        return Err(
+                            "ordinary family Transform belongs to another authoring store".into(),
+                        );
+                    }
+                    source.validate()?;
+                    target_state.validate()?;
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
+                OrdinaryCompositionChild::FamilyIndicate {
+                    target, options, ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                        return Err(
+                            "ordinary family Indicate belongs to another authoring store".into(),
+                        );
+                    }
+                    target.validate()?;
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
                 OrdinaryCompositionChild::Composition {
                     kind: _,
                     children,
@@ -1630,6 +1714,9 @@ impl CanonicalAuthoringScene {
                     }
                     (*entering_id, source, *options)
                 }
+                OrdinaryCompositionChild::Indicate {
+                    target, options, ..
+                } => (None, target, *options),
                 OrdinaryCompositionChild::Rotate {
                     entering_id,
                     target,
@@ -1712,6 +1799,19 @@ impl CanonicalAuthoringScene {
         match self.live_execution_ownership() {
             "none" => source.target_editor(),
             "active" | "returned" => self.active_live_player()?.live_target_editor(source),
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_family(
+        &mut self,
+        members: &[noon::MobjectFamilyMember<'_>],
+    ) -> Result<noon::MobjectFamily, String> {
+        match self.live_execution_ownership() {
+            "active" | "returned" => self.active_live_player()?.live_family(members),
+            "none" => Err("live family creation requires an active canonical session".into()),
             "transferred" => Err("live execution session is running in the semantic engine".into()),
             _ => unreachable!("canonical live ownership has one closed set of states"),
         }
@@ -2622,6 +2722,18 @@ mod wasm {
             Ok(options)
         }
 
+        fn family_options(
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<noon_core::AnimationOptions, JsValue> {
+            let mut options = Self::optional_options(child_run_time, rate_function)?;
+            if let Some(lag_ratio) = lag_ratio {
+                options = options.lag_ratio(lag_ratio);
+            }
+            Ok(options)
+        }
+
         fn push_target(
             &mut self,
             object_id: &str,
@@ -2977,6 +3089,85 @@ mod wasm {
                 target,
                 options: Self::optional_options(child_run_time, rate_function)?,
             });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyTransformTo)]
+        pub fn append_family_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            self.children
+                .push(OrdinaryCompositionChild::FamilyTransformTo {
+                    source: source.semantic_family()?,
+                    target_state: target_state.semantic_family()?,
+                    options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendIndicateMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_indicate_mobject(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            scale_factor: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = callback_color(
+                "indication color",
+                Some(red),
+                Some(green),
+                Some(blue),
+                Some(alpha),
+            )?
+            .expect("all indication color channels were supplied");
+            self.children.push(OrdinaryCompositionChild::Indicate {
+                target: target.semantic_mobject().clone(),
+                indication: noon::IndicateOptions::new(scale_factor, color),
+                options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendIndicateFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_indicate_family(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            scale_factor: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = callback_color(
+                "indication color",
+                Some(red),
+                Some(green),
+                Some(blue),
+                Some(alpha),
+            )?
+            .expect("all indication color channels were supplied");
+            self.children
+                .push(OrdinaryCompositionChild::FamilyIndicate {
+                    target: target.semantic_family()?,
+                    indication: noon::IndicateOptions::new(scale_factor, color),
+                    options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+                });
             Ok(())
         }
 
@@ -4388,6 +4579,93 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Begin an inert ordered family target. Member targets may be built
+        /// bottom-up before the family node and edges publish through this context.
+        #[wasm_bindgen(js_name = beginLiveFamilyTarget)]
+        pub fn begin_live_family_target(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<crate::WasmAuthoringFamilyTargetEditor, JsValue> {
+            let family = source.semantic_family()?;
+            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), family.store()) {
+                return Err(js_error(
+                    "family target and canonical context belong to different authoring stores",
+                ));
+            }
+            if self.inner.live_execution_ownership() == "transferred" {
+                return Err(js_error(
+                    "live execution session is running in the semantic engine",
+                ));
+            }
+            source.target_editor()
+        }
+
+        /// Atomically publish one completed family target through the current
+        /// live owner. Before bootstrap, the editor uses its ordinary one-transaction finish.
+        #[wasm_bindgen(js_name = finishLiveFamilyTarget)]
+        pub fn finish_live_family_target(
+            &mut self,
+            editor: &crate::WasmAuthoringFamilyTargetEditor,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), editor.store()) {
+                return Err(js_error(
+                    "family target and canonical context belong to different authoring stores",
+                ));
+            }
+            if self.inner.live_execution_ownership() == "none" {
+                return editor.finish();
+            }
+
+            enum OwnedMember {
+                Mobject(noon::Mobject),
+                Family(noon::MobjectFamily),
+            }
+
+            let store = std::rc::Rc::clone(self.inner.scene.store());
+            let mut owned = Vec::new();
+            for &id in editor.target_member_ids()? {
+                let is_family = {
+                    let store = store.borrow();
+                    match store.node(id).map(|node| node.kind()) {
+                        Some(noon_core::SemanticNodeKind::Object(_)) => false,
+                        Some(noon_core::SemanticNodeKind::Family) => true,
+                        Some(_) => {
+                            return Err(js_error(
+                                "live family targets require ordinary mobjects or nested families",
+                            ));
+                        }
+                        None => {
+                            return Err(js_error(format!(
+                                "unknown live family target member {id:?}"
+                            )));
+                        }
+                    }
+                };
+                owned.push(if is_family {
+                    OwnedMember::Family(
+                        noon::MobjectFamily::from_node(std::rc::Rc::clone(&store), id)
+                            .map_err(js_error)?,
+                    )
+                } else {
+                    OwnedMember::Mobject(
+                        noon::Mobject::from_node(std::rc::Rc::clone(&store), id)
+                            .map_err(js_error)?,
+                    )
+                });
+            }
+            let members = owned
+                .iter()
+                .map(|member| match member {
+                    OwnedMember::Mobject(mobject) => noon::MobjectFamilyMember::Mobject(mobject),
+                    OwnedMember::Family(family) => noon::MobjectFamilyMember::Family(family),
+                })
+                .collect::<Vec<_>>();
+            self.inner
+                .live_family(&members)
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(js_error)
+        }
+
         /// Start an inert Circle constructor request. It owns no semantic identity
         /// until `liveCreateManimPrimitive` consumes it through the retained session.
         #[wasm_bindgen(js_name = beginLiveManimCircle)]
@@ -5427,6 +5705,39 @@ mod tests {
     }
 
     #[test]
+    fn live_family_target_publication_keeps_the_execution_owner_coherent() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context.live_player(1.0).unwrap();
+        let target = context.live_target_editor(&circle).unwrap();
+        let family = context
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)])
+            .unwrap();
+        let nested = context
+            .live_family(&[noon::MobjectFamilyMember::Family(&family)])
+            .unwrap();
+        assert_eq!(
+            context
+                .scene
+                .store()
+                .borrow()
+                .semantic_family_members_checked(nested.node_id())
+                .unwrap(),
+            &[family.node_id()]
+        );
+        let foreign = noon::Scene::new().circle(0.2).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&foreign)])
+            .is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        // Another owner-mediated mutation remains valid after both publications
+        // and the rejected foreign member: no stale execution revision is hidden.
+        context.live_target_editor(&circle).unwrap();
+    }
+
+    #[test]
     fn target_editor_rejects_a_transferred_player_without_authored_fallback() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
@@ -5674,6 +5985,100 @@ mod tests {
             )
             .is_err());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+    }
+
+    #[test]
+    fn canonical_family_composition_rejects_crosswrites_and_captures_between_segments() {
+        let mut context = CanonicalAuthoringScene::default();
+        let left = context.scene.square(0.5).unwrap();
+        let right = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &left).unwrap();
+        context.bind_mobject(ObjectId::new(1), &right).unwrap();
+        let source = context.scene.family(&[&left, &right]).unwrap();
+        let mut left_target = left.target_editor().unwrap();
+        left_target.set_translation(-2.0, 1.0).unwrap();
+        let mut right_target = right.target_editor().unwrap();
+        right_target.set_translation(2.0, -1.0).unwrap();
+        let target = context
+            .scene
+            .family(&[&left_target, &right_target])
+            .unwrap();
+        let invalid_target = context.scene.family(&[&left_target]).unwrap();
+        let transform_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .lag_ratio(0.25);
+        let indicate_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::ThereAndBack);
+        let invalid = [OrdinaryCompositionChild::FamilyTransformTo {
+            source: source.clone(),
+            target_state: invalid_target,
+            options: transform_options,
+        }];
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &invalid,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let children = [
+            OrdinaryCompositionChild::FamilyTransformTo {
+                source: source.clone(),
+                target_state: target,
+                options: transform_options,
+            },
+            OrdinaryCompositionChild::Indicate {
+                target: left.clone(),
+                indication: noon::IndicateOptions::default(),
+                options: indicate_options,
+            },
+            OrdinaryCompositionChild::FamilyIndicate {
+                target: source,
+                indication: noon::IndicateOptions::default(),
+                options: indicate_options,
+            },
+        ];
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        // Completion barriers publish the preceding transform before Indicate
+        // captures its effective source and shared family center.
+        for (index, child) in children.iter().enumerate() {
+            assert_eq!(
+                context
+                    .ordinary_play_mixed_composition(
+                        noon_core::SemanticAnimationCompositionKind::Sequence,
+                        std::slice::from_ref(child),
+                        AnimationOptions::new(),
+                        AnimationOptions::new(),
+                    )
+                    .unwrap(),
+                (index + 1) as f64
+            );
+        }
+        let player = context.active_live_player().unwrap();
+        assert_eq!(
+            player.live_effective(&left).unwrap().transform.translation,
+            Vec2::new(-2.0, 1.0)
+        );
+        assert_eq!(
+            player.live_effective(&right).unwrap().transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@
   ],
   "duplicate_debt_budgets": [
     {"path": "web/python/_manim_animate.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
-    {"path": "web/python/_manim_animate.py", "token": "_snapshot_for_object_at", "maximum": 3, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "_snapshot_for_object_at", "maximum": 2, "migration_issue": "#61"},
     {"path": "web/python/_manim_animate.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_compat.py", "token": "copy.deepcopy", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "copy.deepcopy", "maximum": 3, "migration_issue": "#61"},
@@ -191,6 +191,22 @@
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::become_handle/replace_handle"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_become/_replace"}]
+    },
+    {
+      "id": "animation.canonical-family-transform",
+      "surface": "Canonical Group.animate/ApplyMethod/ScaleInPlace over ordinary semantic leaves",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/execution_session.rs", "symbol": "SemanticCompositionRequest::FamilyTransformTo"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_family_transform_animation"}],
+      "reason": "Rust validates authoritative family topology/order and lowers one shared composition. Live target families publish through the existing session; Python retains wrapper identity and call coercion."
+    },
+    {
+      "id": "animation.indicate",
+      "surface": "Canonical leaf/family Indicate with default restoring timing",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-compile/src/semantic_lowering/animation_payload/affine.rs", "symbol": "lower_indicate_channels"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_animate.py", "symbol": "Indicate"}],
+      "reason": "Python passes an inert handle/options request. Rust captures effective state, computes family-center scaling, lowers shared restoring time maps and rejects conflicting center dependencies atomically."
     },
     {
       "id": "animation.transform",

@@ -76,6 +76,14 @@ pub enum SemanticAnimationIntent {
         target_state: SemanticNodeId,
         interpolation: SemanticTransformInterpolation,
     },
+    /// Temporarily scale and recolor one object around a shared activation center.
+    /// The compiler captures the effective source and lowers a restoring track.
+    Indicate {
+        target: SemanticNodeId,
+        scale_factor: f64,
+        color: Color,
+        scale_center: SemanticVec3,
+    },
     /// Rotate one centered 2D object along an angular path. This remains distinct
     /// from TransformTo point correspondence even when both share affine endpoints.
     Rotate { target: SemanticNodeId, angle: f64 },
@@ -117,6 +125,7 @@ impl SemanticAnimationIntent {
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target, .. }
+            | Self::Indicate { target, .. }
             | Self::Rotate { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
@@ -131,6 +140,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::TransformTo { target_state, .. } => Some(*target_state),
             Self::Rotate { .. }
+            | Self::Indicate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
@@ -144,6 +154,7 @@ impl SemanticAnimationIntent {
     pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
         match self {
             Self::TransformTo { .. }
+            | Self::Indicate { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -158,6 +169,7 @@ impl SemanticAnimationIntent {
     pub fn children(&self) -> &[SemanticNodeId] {
         match self {
             Self::TransformTo { .. }
+            | Self::Indicate { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -204,6 +216,7 @@ pub enum SemanticAnimationError {
     Options(AnimationOptionsError),
     SameTargetAndTargetState(SemanticNodeId),
     InvalidRotationAngle(f64),
+    InvalidIndicateEndpoint,
     InvalidAffineLifecycleEndpoint,
     Signal(SemanticSignalError),
     NotScalarInputSignal(SemanticNodeId),
@@ -240,6 +253,9 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidRotationAngle(angle) => {
                 write!(formatter, "rotation angle must be finite, got {angle}")
             }
+            Self::InvalidIndicateEndpoint => formatter.write_str(
+                "Indicate scale, color, and shared scale center must be finite 2D values",
+            ),
             Self::InvalidAffineLifecycleEndpoint => formatter.write_str(
                 "affine lifecycle endpoint point and rotation offset must be finite 2D values",
             ),
@@ -316,6 +332,44 @@ fn validate_authored_animation_options(
 }
 
 impl SemanticStore {
+    /// Insert one activation-relative restoring Indicate declaration.
+    pub fn insert_semantic_indicate_animation(
+        &mut self,
+        target: SemanticNodeId,
+        scale_factor: f64,
+        color: Color,
+        scale_center: SemanticVec3,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        let color_is_finite = color.red.is_finite()
+            && color.green.is_finite()
+            && color.blue.is_finite()
+            && color.alpha.is_finite();
+        if !scale_factor.is_finite()
+            || scale_factor < 0.0
+            || scale_factor > f32::MAX as f64
+            || scale_center.lower_xy_f32().is_err()
+            || scale_center.z != 0.0
+            || !color_is_finite
+        {
+            return Err(SemanticAnimationError::InvalidIndicateEndpoint);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Indicate {
+                    target,
+                    scale_factor,
+                    color,
+                    scale_center,
+                },
+                options,
+            )),
+        )
+    }
+
     /// Insert one target-state transform declaration into the scene-global semantic
     /// identity arena.
     ///

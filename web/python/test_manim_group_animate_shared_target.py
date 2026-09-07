@@ -222,6 +222,42 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             assert target_second._current_raw().transform["translation"]["x"] == 1.0
             assert target_first._current_raw().style["fill"]["alpha"] == 0.5
             assert target_second._current_raw().style["fill"]["alpha"] == 0.5
+
+            class FakeCanonicalContext:
+                def __init__(self):
+                    self.calls = []
+
+                def liveExecutionOwnership(self):
+                    return "active"
+
+                def liveTargetEditor(self, handle):
+                    self.calls.append(("leaf", handle.identity()))
+                    return handle.targetEditor()
+
+                def beginLiveFamilyTarget(self, family):
+                    self.calls.append(("begin-family", family.identity()))
+                    return FakeFamilyTargetEditor(family)
+
+                def finishLiveFamilyTarget(self, editor):
+                    self.calls.append(("finish-family", editor.index))
+                    return editor.finish()
+
+            context = FakeCanonicalContext()
+            scene = types.SimpleNamespace(
+                _canonical_authoring_context=context,
+                _legacy_geometry_materialized=False,
+                _tracks=[],
+            )
+            first._scene = scene
+            first._object = types.SimpleNamespace(id=1)
+            second._scene = scene
+            second._object = types.SimpleNamespace(id=2)
+            live_target = group.animate.target
+            assert isinstance(live_target, VGroup)
+            assert [call[0] for call in context.calls] == [
+                "leaf", "leaf", "begin-family", "finish-family",
+                "begin-family", "finish-family",
+            ], context.calls
             """
         )
         completed = subprocess.run(

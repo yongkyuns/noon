@@ -1114,6 +1114,27 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    /// Create one detached family through the retained session so its node and
+    /// ordered edges share the current semantic/runtime publication.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_family(
+        &mut self,
+        members: &[noon::MobjectFamilyMember<'_>],
+    ) -> Result<noon::MobjectFamily, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .family(members)
+        .map_err(|error| error.to_string())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, String> {
         self.require_completed_live_segment()?;

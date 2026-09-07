@@ -119,12 +119,8 @@ def _scale_in_place_builder(
     Transform path represents the same endpoint/interpolation without a new playback path.
     """
 
-    if isinstance(mobject, _compat.Group):
-        raise NotImplementedError(
-            "ScaleInPlace Group/VGroup family scaling is not yet supported"
-        )
-    if not isinstance(mobject, _base.Mobject):
-        raise TypeError("ScaleInPlace target must be a Mobject")
+    if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+        raise TypeError("ScaleInPlace target must be a Mobject or Group")
 
     factor = float(scale_factor)
     if not math.isfinite(factor):
@@ -147,7 +143,13 @@ def _scale_in_place_builder(
     # materialization to the point where the scheduler asks for ``animation.target``.
     import _manim_animate as _animate
 
-    class _DeferredScaleBuilder(_animate._AlignedAnimationBuilder):
+    builder_base = (
+        _animate._AlignedGroupAnimationBuilder
+        if isinstance(mobject, _compat.Group)
+        else _animate._AlignedAnimationBuilder
+    )
+
+    class _DeferredScaleBuilder(builder_base):
         def __init__(self) -> None:
             # Do not call _AlignedAnimationBuilder.__init__: its normal .animate path
             # eagerly copies the source because chained methods are authored immediately.
@@ -160,8 +162,21 @@ def _scale_in_place_builder(
             self.is_chaining = False
 
         @property
-        def target(self) -> _base.Mobject:
+        def target(self) -> object:
             source = self.source
+            if isinstance(source, _compat.Group):
+                target = source._copy_for_animate_target()
+                target.scale(self.scale_factor)
+                return target
+            if (
+                getattr(source, "_semantic_handle", None) is not None
+                and getattr(source, "_semantic_handle_fresh", False)
+                and getattr(getattr(source, "_scene", None), "_canonical_authoring_context", None)
+                is not None
+            ):
+                target = source._copy_for_animate_target()
+                target.scale(self.scale_factor)
+                return target
             scene = source._scene
             obj = source._object
             if scene is not None and obj is not None:

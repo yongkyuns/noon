@@ -106,13 +106,7 @@ class Transform(_ORIGINAL_TRANSFORM):
 
 
 class Indicate:
-    """ManimCE ``Indicate`` lowered without a Python-owned frame callback.
-
-    The default ``there_and_back`` curve is represented by two deterministic smooth
-    Transform intervals. Besides matching the rendered path, this preserves Manim's
-    crucial post-animation semantic state: the indicated mobject returns to its source
-    appearance and scale, so a following animation starts from the original object.
-    """
+    """Inert ManimCE ``Indicate`` request for shared Rust semantic playback."""
 
     def __init__(
         self,
@@ -122,12 +116,8 @@ class Indicate:
         rate_func: object = _rate_functions.there_and_back,
         **kwargs: Any,
     ) -> None:
-        if isinstance(mobject, _compat.Group):
-            raise NotImplementedError(
-                "Indicate(Group/VGroup) requires retained family Transform semantics and is not yet supported"
-            )
-        if not isinstance(mobject, _base.Mobject):
-            raise TypeError("Indicate target must be a Mobject")
+        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+            raise TypeError("Indicate target must be a Mobject or Group")
         factor = float(scale_factor)
         if not math.isfinite(factor):
             raise ValueError("Indicate scale_factor must be finite")
@@ -474,13 +464,9 @@ def _expanded_schedule(
     easing: str,
     lag_ratio: float,
 ) -> list[tuple[object, float, float, str]]:
-    if isinstance(animation, Indicate):
-        return _indicate_schedule(
-            scene,
-            animation,
-            start_time=start_time,
-            run_time=run_time,
-            easing=easing,
+    if isinstance(animation, (_AlignedGroupAnimationBuilder, Indicate)):
+        raise NotImplementedError(
+            "family Transform and Indicate require shared semantic composition playback"
         )
     if isinstance(animation, _AlignedAnimationBuilder):
         expanded = [_base.Transform(animation.source, animation.target)]
@@ -489,10 +475,7 @@ def _expanded_schedule(
     if not expanded:
         return []
 
-    is_family_animation = isinstance(animation, _AlignedGroupAnimationBuilder) or (
-        isinstance(animation, (_base.Create, _base.FadeIn, _base.FadeOut))
-        and isinstance(animation.target, _compat.Group)
-    )
+    is_family_animation = isinstance(animation, (_base.Create, _base.FadeIn, _base.FadeOut)) and isinstance(animation.target, _compat.Group)
     if not is_family_animation or len(expanded) == 1:
         return [(item, start_time, run_time, easing) for item in expanded]
 
@@ -513,36 +496,6 @@ def _snapshot_mobject(snapshot: dict[str, Any]) -> _base.Mobject:
             style=copy.deepcopy(snapshot["style"]),
         )
     )
-
-
-def _indicate_schedule(
-    scene: _compat.Scene,
-    animation: Indicate,
-    *,
-    start_time: float,
-    run_time: float,
-    easing: str,
-) -> list[tuple[object, float, float, str]]:
-    """Compile Indicate while preserving both its path and post-animation state."""
-
-    mobject = animation.mobject
-    if mobject._scene is not scene or mobject._object is None:
-        raise ValueError("Indicate target must belong to this Scene")
-
-    snapshot = scene._snapshot_for_object_at(mobject._object, start_time)
-    source = _snapshot_mobject(snapshot)
-    target = _snapshot_mobject(snapshot)
-    target.scale(animation.scale_factor)
-    target.set_color(animation.color)
-
-    if easing == "there_and_back":
-        half = run_time / 2.0
-        return [
-            (_base.Transform(mobject, target), start_time, half, "smooth"),
-            (_base.Transform(mobject, source), start_time + half, half, "smooth"),
-        ]
-
-    return [(_base.Transform(mobject, target), start_time, run_time, easing)]
 
 
 def _fade_endpoint_snapshots(

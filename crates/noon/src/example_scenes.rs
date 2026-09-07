@@ -1,5 +1,6 @@
 //! Target-neutral scene builders shared by executable Rust examples.
 
+pub mod family_transform_indicate;
 pub mod mixed_scalar_composition;
 pub mod timed_composition;
 

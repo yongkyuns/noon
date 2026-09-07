@@ -177,6 +177,11 @@ def _ordinary_requires_retained_scheduler(animation: object) -> bool:
 def _retained_ordinary_plan(animation: object) -> list[dict[str, Any]] | None:
     """Classify one non-family animation without inventing a second retained scheduler."""
 
+    if isinstance(animation, (_animate._AlignedGroupAnimationBuilder, _animate.Indicate)):
+        raise NotImplementedError(
+            "family Transform and Indicate require shared canonical composition playback"
+        )
+
     plan = _retained._retained_animation_plan(animation)
     if plan is not None:
         return plan

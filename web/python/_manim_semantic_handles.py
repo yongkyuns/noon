@@ -1984,6 +1984,27 @@ def _family_target_accept(editor: object, source: object, target: object) -> Non
         raise RuntimeError("unsupported Group target member kind")
 
 
+def _group_target_context(value: object) -> object | None:
+    contexts: list[object] = []
+
+    def collect(member: object) -> None:
+        if isinstance(member, _compat.Group):
+            for child in member.submobjects:
+                collect(child)
+            return
+        context = getattr(member, "_canonical_live_target_context", None)
+        if context is not None:
+            contexts.append(context)
+
+    collect(value)
+    if not contexts:
+        return None
+    context = contexts[0]
+    if any(candidate is not context for candidate in contexts[1:]):
+        raise RuntimeError("Group target members belong to different canonical contexts")
+    return context
+
+
 def _group_target_copy(self: _compat.Group) -> _compat.Group:
     delegate = _GROUP_COPY_DELEGATE
     if delegate is None:
@@ -2007,12 +2028,21 @@ def _group_target_copy(self: _compat.Group) -> _compat.Group:
 
     if len(clone.submobjects) != len(self.submobjects):
         raise RuntimeError("Group target wrapper copy changed direct membership")
-    editor = source_family_handle.targetEditor()
+    context = _group_target_context(clone)
+    editor = (
+        context.beginLiveFamilyTarget(source_family_handle)
+        if context is not None
+        else source_family_handle.targetEditor()
+    )
     for source_member, target_member in zip(
         self.submobjects, clone.submobjects, strict=True
     ):
         _family_target_accept(editor, source_member, target_member)
-    clone._semantic_family_handle = editor.finish()
+    clone._semantic_family_handle = (
+        context.finishLiveFamilyTarget(editor)
+        if context is not None
+        else editor.finish()
+    )
     return clone
 
 

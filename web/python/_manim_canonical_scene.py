@@ -18,6 +18,7 @@ from typing import Any
 import _manim_retained_state as _retained_state
 import _manim_typst as _typst
 import _manim_animation_options as _options
+import _manim_animate as _animate
 import _manim_compat as _compat
 import _manim_composition as _composition
 import _manim_reactive as _reactive
@@ -692,6 +693,7 @@ def _canonical_affine_options(
     kwargs: dict[str, object],
     *,
     builder_args: dict[str, object] | None = None,
+    allow_family_lag: bool = False,
 ) -> object | None:
     """Resolve the existing Python play ergonomics before typed Rust preflight."""
     duration = kwargs.get("duration")
@@ -720,7 +722,11 @@ def _canonical_affine_options(
         )
     except NotImplementedError:
         return None
-    if resolved.lag_ratio != 0.0 or resolved.path_arc != 0.0 or resolved.reverse_rate_function:
+    if (
+        (resolved.lag_ratio != 0.0 and not allow_family_lag)
+        or resolved.path_arc != 0.0
+        or resolved.reverse_rate_function
+    ):
         return None
     return resolved
 
@@ -1258,6 +1264,8 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         import _manim_rotate as _rotate
 
         animation = args[0]
+        if isinstance(animation, (_animate._AlignedGroupAnimationBuilder, _animate.Indicate)):
+            return "parallel", args, None
         if type(animation) is _rotate.Rotate:
             return "parallel", args, None
         affine = _canonical_affine_animation(scene, animation)
@@ -1320,6 +1328,52 @@ def _canonical_composition_child_options(animation: object, kwargs: dict[str, ob
             "canonical ordinary composition currently requires linear or smooth affine leaves"
         )
     return resolved
+
+
+def _canonical_family_transform_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_compat.Group, _compat.Group, object] | None:
+    if isinstance(animation, _animate._AlignedGroupAnimationBuilder):
+        source, target = animation.source, animation.target
+    elif type(animation) is _base.Transform and isinstance(animation.source, _compat.Group):
+        source, target = animation.source, animation.target
+    else:
+        return None
+    if not isinstance(source, _compat.Group):
+        return None
+    source_leaves = _compat._leaf_mobjects(source)
+    if not source_leaves or any(member._scene is not scene for member in source_leaves):
+        return None
+    if not isinstance(target, _compat.Group) or any(
+        member._scene is not None for member in _compat._leaf_mobjects(target)
+    ):
+        raise NotImplementedError("canonical family Transform target must be detached")
+    if getattr(source, "_semantic_family_handle", None) is None or getattr(
+        target, "_semantic_family_handle", None
+    ) is None:
+        raise NotImplementedError("canonical family Transform requires shared family handles")
+    return source, target, animation
+
+
+def _canonical_indicate_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[object, bool] | None:
+    if not isinstance(animation, _animate.Indicate):
+        return None
+    target = animation.mobject
+    family = isinstance(target, _compat.Group)
+    handle_name = "_semantic_family_handle" if family else "_semantic_handle"
+    bound = (
+        bool(_compat._leaf_mobjects(target))
+        and all(member._scene is scene for member in _compat._leaf_mobjects(target))
+        if family
+        else getattr(target, "_scene", None) is scene
+    )
+    if not isinstance(target, (_base.Mobject, _compat.Group)) or not bound:
+        raise ValueError("Indicate target must belong to this Scene")
+    if getattr(target, handle_name, None) is None:
+        raise NotImplementedError("canonical Indicate requires a shared semantic handle")
+    return target, family
 
 
 def _build_canonical_composition_candidate(
@@ -1391,6 +1445,60 @@ def _build_canonical_composition_candidate(
             if child_kwargs:
                 raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
             builder.appendWait(float(animation.run_time))
+            return
+        indicate = _canonical_indicate_animation(self, animation)
+        if indicate is not None:
+            target, family = indicate
+            resolved = _options.resolve(
+                builder_args=_options.builder_args(animation),
+                default_lag_ratio=0.0,
+                play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
+                play_easing=child_kwargs.get("easing"),
+                play_rate_func=child_kwargs.get("rate_func"),
+                play_lag_ratio=child_kwargs.get("lag_ratio"),
+            )
+            if resolved.path_arc != 0.0 or resolved.reverse_rate_function:
+                raise NotImplementedError("canonical Indicate does not support path options")
+            if resolved.rate_func != "there_and_back":
+                raise NotImplementedError(
+                    "canonical restoring Indicate requires there_and_back easing"
+                )
+            color = animation.color
+            rgba = tuple(
+                float(getattr(color, name))
+                for name in ("red", "green", "blue", "alpha")
+            )
+            method = builder.appendIndicateFamily if family else builder.appendIndicateMobject
+            handle = getattr(
+                target,
+                "_semantic_family_handle" if family else "_semantic_handle",
+            )
+            method(
+                handle,
+                float(animation.scale_factor),
+                *rgba,
+                float(resolved.run_time),
+                str(resolved.rate_func),
+                float(resolved.lag_ratio),
+            )
+            return
+        family_transform = _canonical_family_transform_animation(self, animation)
+        if family_transform is not None:
+            source, target, leaf = family_transform
+            child = _canonical_affine_options(leaf, child_kwargs, allow_family_lag=True)
+            if child is None or child.path_arc != 0.0 or child.reverse_rate_function:
+                raise NotImplementedError("unsupported canonical family Transform options")
+            if child.rate_func not in ("linear", "smooth"):
+                raise NotImplementedError(
+                    "canonical family Transform requires linear or smooth easing"
+                )
+            builder.appendFamilyTransformTo(
+                source._semantic_family_handle,
+                target._semantic_family_handle,
+                float(child.run_time),
+                str(child.rate_func),
+                float(child.lag_ratio),
+            )
             return
         if isinstance(animation, _composition.Add):
             if child_kwargs:

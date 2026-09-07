@@ -711,6 +711,31 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage one activation-relative restoring Indicate declaration.
+    pub fn create_indicate_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        scale_factor: f64,
+        color: crate::Color,
+        scale_center: crate::SemanticVec3,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Indicate {
+                    target: target.into(),
+                    scale_factor,
+                    color,
+                    scale_center,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a single-leaf fade declaration and return its transaction-local token.
     pub fn create_fade_animation(
         &mut self,
@@ -1982,6 +2007,9 @@ pub enum SemanticMutationTransactionError {
     InvalidAnimationAngle {
         index: usize,
     },
+    InvalidIndicateEndpoint {
+        index: usize,
+    },
     InvalidAffineLifecycleEndpoint {
         index: usize,
     },
@@ -2351,6 +2379,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidAnimationAngle { index } => write!(
                 formatter,
                 "semantic mutation {index} has a non-finite rotation angle"
+            ),
+            Self::InvalidIndicateEndpoint { index } => write!(
+                formatter,
+                "semantic mutation {index} has invalid Indicate scale, color, or center"
             ),
             Self::InvalidAffineLifecycleEndpoint { index } => write!(
                 formatter,

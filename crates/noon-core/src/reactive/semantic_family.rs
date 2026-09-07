@@ -1,8 +1,170 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticStoreError};
 
+/// Failure while matching two semantic families for an ordered transform.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SemanticFamilyPairingError {
+    UnknownNode(SemanticNodeId),
+    RootIsNotFamily(SemanticNodeId),
+    TopologyMismatch {
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    },
+    UnsupportedLeaf(SemanticNodeId),
+    AliasMismatch {
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    },
+    Empty,
+}
+
+impl std::fmt::Display for SemanticFamilyPairingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownNode(node) => write!(formatter, "unknown semantic node {node:?}"),
+            Self::RootIsNotFamily(node) => {
+                write!(formatter, "semantic node {node:?} is not a family")
+            }
+            Self::TopologyMismatch { source, target } => write!(
+                formatter,
+                "semantic family topology differs at source {source:?} and target {target:?}"
+            ),
+            Self::UnsupportedLeaf(node) => write!(
+                formatter,
+                "semantic family leaf {node:?} is not an ordinary semantic object"
+            ),
+            Self::AliasMismatch { source, target } => write!(
+                formatter,
+                "semantic family alias structure differs at source {source:?} and target {target:?}"
+            ),
+            Self::Empty => formatter.write_str("family animation requires at least one leaf"),
+        }
+    }
+}
+
+impl std::error::Error for SemanticFamilyPairingError {}
+
 impl SemanticStore {
+    /// Pair ordinary leaves from two structurally equivalent semantic families.
+    ///
+    /// Families are traversed together in authoritative member order. Aliases
+    /// must occur in the same positions on both sides and produce one pair at
+    /// their first occurrence. The complete topology is validated before the
+    /// returned pairs can be staged into an animation transaction.
+    pub fn ordered_family_leaf_pairs(
+        &self,
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    ) -> Result<Vec<(SemanticNodeId, SemanticNodeId)>, SemanticFamilyPairingError> {
+        let require_family = |node_id| {
+            let node = self
+                .node(node_id)
+                .ok_or(SemanticFamilyPairingError::UnknownNode(node_id))?;
+            if !matches!(node.kind(), SemanticNodeKind::Family) {
+                return Err(SemanticFamilyPairingError::RootIsNotFamily(node_id));
+            }
+            Ok(())
+        };
+        require_family(source)?;
+        require_family(target)?;
+
+        fn pair(
+            store: &SemanticStore,
+            source: SemanticNodeId,
+            target: SemanticNodeId,
+            source_aliases: &mut HashMap<SemanticNodeId, SemanticNodeId>,
+            target_aliases: &mut HashMap<SemanticNodeId, SemanticNodeId>,
+            leaves: &mut Vec<(SemanticNodeId, SemanticNodeId)>,
+        ) -> Result<(), SemanticFamilyPairingError> {
+            let source_node = store
+                .node(source)
+                .ok_or(SemanticFamilyPairingError::UnknownNode(source))?;
+            let target_node = store
+                .node(target)
+                .ok_or(SemanticFamilyPairingError::UnknownNode(target))?;
+            match (source_node.kind(), target_node.kind()) {
+                (SemanticNodeKind::Family, SemanticNodeKind::Family) => {
+                    if source_node.members().len() != target_node.members().len() {
+                        return Err(SemanticFamilyPairingError::TopologyMismatch {
+                            source,
+                            target,
+                        });
+                    }
+                    for (&source_member, target_member) in
+                        source_node.members().iter().zip(target_node.members())
+                    {
+                        pair(
+                            store,
+                            source_member,
+                            target_member,
+                            source_aliases,
+                            target_aliases,
+                            leaves,
+                        )?;
+                    }
+                    Ok(())
+                }
+                (SemanticNodeKind::AuthoringObject, SemanticNodeKind::AuthoringObject) => {
+                    if source_node.semantic_object_state().is_none() {
+                        return Err(SemanticFamilyPairingError::UnsupportedLeaf(source));
+                    }
+                    if target_node.semantic_object_state().is_none() {
+                        return Err(SemanticFamilyPairingError::UnsupportedLeaf(target));
+                    }
+                    match (source_aliases.get(&source), target_aliases.get(&target)) {
+                        (None, None) => {
+                            source_aliases.insert(source, target);
+                            target_aliases.insert(target, source);
+                            leaves.push((source, target));
+                            Ok(())
+                        }
+                        (Some(expected_target), Some(expected_source))
+                            if *expected_target == target && *expected_source == source =>
+                        {
+                            Ok(())
+                        }
+                        _ => Err(SemanticFamilyPairingError::AliasMismatch { source, target }),
+                    }
+                }
+                (SemanticNodeKind::Family, _)
+                | (SemanticNodeKind::AuthoringObject, SemanticNodeKind::Family) => {
+                    Err(SemanticFamilyPairingError::TopologyMismatch { source, target })
+                }
+                (SemanticNodeKind::Object(_), _)
+                | (SemanticNodeKind::Signal(_), _)
+                | (SemanticNodeKind::Animation(_), _)
+                | (_, SemanticNodeKind::Object(_))
+                | (_, SemanticNodeKind::Signal(_))
+                | (_, SemanticNodeKind::Animation(_)) => {
+                    let unsupported = if !matches!(
+                        source_node.kind(),
+                        SemanticNodeKind::Family | SemanticNodeKind::AuthoringObject
+                    ) {
+                        source
+                    } else {
+                        target
+                    };
+                    Err(SemanticFamilyPairingError::UnsupportedLeaf(unsupported))
+                }
+            }
+        }
+
+        let mut leaves = Vec::new();
+        pair(
+            self,
+            source,
+            target,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+            &mut leaves,
+        )?;
+        if leaves.is_empty() {
+            return Err(SemanticFamilyPairingError::Empty);
+        }
+        Ok(leaves)
+    }
+
     /// Return render/animation leaves below `root` in authoritative semantic order.
     ///
     /// A non-family object is its own leaf. Families are flattened depth-first in
@@ -119,9 +281,85 @@ mod tests {
     }
 
     #[test]
+    fn family_pairing_preserves_order_and_matching_aliases() {
+        let mut store = SemanticStore::new();
+        let source_first = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let source_second = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_first = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_second = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let source_nested = store.insert_family();
+        let target_nested = store.insert_family();
+        let source = store.insert_family();
+        let target = store.insert_family();
+        store.add_member(source_nested, source_second).unwrap();
+        store.add_member(source_nested, source_first).unwrap();
+        store.add_member(target_nested, target_second).unwrap();
+        store.add_member(target_nested, target_first).unwrap();
+        store.add_member(source, source_first).unwrap();
+        store.add_member(source, source_nested).unwrap();
+        store.add_member(target, target_first).unwrap();
+        store.add_member(target, target_nested).unwrap();
+
+        assert_eq!(
+            store.ordered_family_leaf_pairs(source, target).unwrap(),
+            vec![(source_first, target_first), (source_second, target_second)]
+        );
+    }
+
+    #[test]
+    fn family_pairing_rejects_structural_or_alias_mismatch() {
+        let mut store = SemanticStore::new();
+        let source_leaf = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_first = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let target_second = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
+        let source_nested = store.insert_family();
+        let target_nested = store.insert_family();
+        let source = store.insert_family();
+        let target = store.insert_family();
+        store.add_member(source, source_leaf).unwrap();
+        store.add_member(source_nested, source_leaf).unwrap();
+        store.add_member(source, source_nested).unwrap();
+        store.add_member(target, target_first).unwrap();
+        store.add_member(target_nested, target_second).unwrap();
+        store.add_member(target, target_nested).unwrap();
+
+        assert!(matches!(
+            store.ordered_family_leaf_pairs(source, target),
+            Err(SemanticFamilyPairingError::AliasMismatch { .. })
+        ));
+
+        let nested = store.insert_family();
+        store.add_member(nested, source_leaf).unwrap();
+        let source_outer = store.insert_family();
+        let target_outer = store.insert_family();
+        store.add_member(source_outer, nested).unwrap();
+        store.add_member(target_outer, target_first).unwrap();
+        assert!(matches!(
+            store.ordered_family_leaf_pairs(source_outer, target_outer),
+            Err(SemanticFamilyPairingError::TopologyMismatch { .. })
+        ));
+    }
+
+    #[test]
     fn stale_or_unknown_root_fails_closed() {
         let mut store = SemanticStore::new();
-        let stale = store.insert_authoring_object();
+        let stale = store.insert_semantic_object(crate::SemanticObjectState::new(
+            crate::StoredGeometry::Circle { radius: 1.0 },
+        ));
         store.remove_node(stale).unwrap();
 
         assert_eq!(
