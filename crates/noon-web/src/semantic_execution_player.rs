@@ -358,7 +358,7 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_move_to_point(
         &mut self,
         mobject: &noon::Mobject,
@@ -380,7 +380,7 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_manim_primitive(
         &mut self,
         options: noon::ManimPrimitiveOptions,

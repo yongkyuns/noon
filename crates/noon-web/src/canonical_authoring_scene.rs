@@ -1923,7 +1923,7 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_manim_primitive(
         &mut self,
         options: noon::ManimPrimitiveOptions,
@@ -6768,6 +6768,94 @@ mod tests {
         let session = player.session_mut_for_test();
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
+    }
+
+    #[test]
+    fn returned_live_primitive_stays_detached_through_an_intervening_removal() {
+        let mut context = CanonicalAuthoringScene::default();
+        let leaving = context.scene.square(0.5).unwrap();
+        let label = context.scene.circle(0.2).unwrap();
+        context.bind_mobject(ObjectId::new(0), &leaving).unwrap();
+        context.bind_mobject(ObjectId::new(1), &label).unwrap();
+
+        // Python constructs these pulses after a completed continuation barrier.
+        // Exercise that returned-player mutation path rather than creating the
+        // FadeIn target before execution bootstrap.
+        context.live_player(1.0).unwrap();
+        let returned = context.take_execution_player(1.0, 73).unwrap();
+        context.return_execution_player(returned).unwrap();
+        let pulse = context
+            .live_create_manim_primitive(noon::ManimPrimitiveOptions::circle(0.05).unwrap())
+            .unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_move_to_point(&pulse, 2.0, -1.0)
+            .unwrap();
+        {
+            let store = context.scene.store().borrow();
+            let node = store.node(pulse.node_id()).unwrap();
+            assert_eq!(node.residency(), noon_core::SemanticNodeResidency::Detached);
+            assert!(node.parents().is_empty());
+        }
+
+        let options = AnimationOptions::new()
+            .run_time(0.1)
+            .rate_func(RateFunction::Linear);
+        let removal = [OrdinaryCompositionChild::Fade {
+            entering_id: None,
+            target: label,
+            direction: SemanticFadeDirection::Out,
+            endpoint: noon::FadeEndpoint::default(),
+            options,
+        }];
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &removal,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        let mut player = context.resume_execution_player().unwrap();
+        player.live_advance_segment_to(end).unwrap();
+        player.live_complete_segment().unwrap();
+        context.return_execution_player(player).unwrap();
+
+        {
+            let store = context.scene.store().borrow();
+            let node = store.node(pulse.node_id()).unwrap();
+            assert_eq!(node.residency(), noon_core::SemanticNodeResidency::Detached);
+            assert!(node.parents().is_empty());
+        }
+        let mixed = [
+            OrdinaryCompositionChild::Fade {
+                entering_id: None,
+                target: leaving,
+                direction: SemanticFadeDirection::Out,
+                endpoint: noon::FadeEndpoint::default(),
+                options,
+            },
+            OrdinaryCompositionChild::Fade {
+                entering_id: Some(ObjectId::new(2)),
+                target: pulse.clone(),
+                direction: SemanticFadeDirection::In,
+                endpoint: noon::FadeEndpoint::new(
+                    0.15,
+                    noon::FadeTranslation::Shift(SemanticVec3::ZERO),
+                ),
+                options,
+            },
+        ];
+        context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &mixed,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert!(context.live_contains_mobject(&pulse).unwrap());
     }
 
     #[test]

@@ -38,8 +38,8 @@ impl SemanticExecutionIndex {
     }
 
     /// Return the existing execution compatibility key for one indexed semantic
-    /// object. Detached or never-lowered nodes are absent until an AddNode impact or
-    /// scene lowering observes them.
+    /// object. Detached or never-lowered nodes are absent until reachability or scene
+    /// lowering observes them.
     pub fn execution_object_id(&self, semantic_id: SemanticNodeId) -> Option<ObjectId> {
         self.object_ids.get(&semantic_id).copied()
     }
@@ -57,10 +57,11 @@ impl SemanticExecutionIndex {
     /// Apply committed A1.5 mutation impacts to the identity index without scanning
     /// unrelated semantic nodes.
     ///
-    /// Object creation installs only that newly allocated target object identity.
-    /// Structural removal deletes exactly the identities reported by the semantic
-    /// transaction's reverse-reference cleanup. Property/content/subscription and
-    /// family-order impacts do not change identity and therefore require no index
+    /// Detached object creation does not install an execution identity. A transaction
+    /// that also admits the object installs it through [`Self::apply_reachability_update`]
+    /// after commit. Structural removal deletes exactly the identities reported by the
+    /// semantic transaction's reverse-reference cleanup. Property/content/subscription
+    /// and family-order impacts do not change identity and therefore require no index
     /// mutation.
     pub fn apply_transaction_result(
         &mut self,
@@ -70,18 +71,10 @@ impl SemanticExecutionIndex {
         self.apply_impacts(store, result.impacts());
     }
 
-    pub fn apply_impacts(&mut self, store: &SemanticStore, impacts: &[SemanticMutationImpact]) {
+    pub fn apply_impacts(&mut self, _store: &SemanticStore, impacts: &[SemanticMutationImpact]) {
         for impact in impacts {
             match *impact {
-                SemanticMutationImpact::NodeAdded { node } => {
-                    if store
-                        .node(node)
-                        .and_then(|node| node.semantic_object_state())
-                        .is_some()
-                    {
-                        self.ensure_object(node);
-                    }
-                }
+                SemanticMutationImpact::NodeAdded { .. } => {}
                 SemanticMutationImpact::NodeRemoved { node } => {
                     self.object_ids.remove(&node);
                 }
@@ -766,7 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn node_added_and_removed_impacts_update_only_that_identity() {
+    fn detached_node_addition_does_not_allocate_an_execution_identity() {
         let mut store = SemanticStore::new();
         let mut index = SemanticExecutionIndex::new();
 
@@ -777,8 +770,8 @@ mod tests {
             panic!("expected one node-added impact");
         };
         index.apply_transaction_result(&store, &result);
-        let old_id = index.execution_object_id(*node).unwrap();
-        assert_eq!(index.len(), 1);
+        assert_eq!(index.execution_object_id(*node), None);
+        assert!(index.is_empty());
 
         let old_node = *node;
         let mut remove = SemanticMutationTransaction::new();
@@ -793,7 +786,7 @@ mod tests {
         assert_ne!(replacement.generation(), old_node.generation());
         store.attach_to_scene(replacement).unwrap();
         let new_id = index.lower_scene(&store).unwrap().objects()[0].execution_id;
-        assert_ne!(new_id, old_id);
+        assert_eq!(index.execution_object_id(replacement), Some(new_id));
     }
 
     #[test]
