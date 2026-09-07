@@ -102,7 +102,7 @@ impl std::fmt::Display for VisibleRenderError {
 impl std::error::Error for VisibleRenderError {}
 
 impl FramePreparer {
-    const RENDER_ORDER_CHUNK_SIZE: usize = 64;
+    pub(crate) const RENDER_ORDER_CHUNK_SIZE: usize = 64;
 
     /// Install the runtime-derived painter permutation without relocating or
     /// re-realizing stable object slots. Callers need invoke this only for the
@@ -345,6 +345,9 @@ impl FramePreparer {
             self.render_order_batch_count = 0;
             self.render_order_mega_batch_count = 0;
             self.render_order_mega_path_count = 0;
+            self.render_chunk_boundary_merges.clear();
+            self.render_order_boundary_merge_count = 0;
+            self.render_order_mega_boundary_merge_count = 0;
             return;
         }
         let position_count = if self.painter_order_indices.is_empty() {
@@ -364,15 +367,25 @@ impl FramePreparer {
                     .map(|batch| batch.path_count)
                     .sum::<usize>();
             }
+            for &(ordinary, mega) in
+                &self.render_chunk_boundary_merges[chunk_count.saturating_sub(1)..]
+            {
+                self.render_order_boundary_merge_count -= usize::from(ordinary);
+                self.render_order_mega_boundary_merge_count -= usize::from(mega);
+            }
         }
         self.render_chunks
             .resize_with(chunk_count, PreparedRenderChunk::default);
         self.render_chunks.truncate(chunk_count);
+        self.render_chunk_boundary_merges
+            .resize(chunk_count.saturating_sub(1), (false, false));
         if position_count == 0 {
             self.render_chunks_active = range.is_some();
             self.render_order_batch_count = 0;
             self.render_order_mega_batch_count = 0;
             self.render_order_mega_path_count = 0;
+            self.render_order_boundary_merge_count = 0;
+            self.render_order_mega_boundary_merge_count = 0;
             return;
         }
 
@@ -385,6 +398,8 @@ impl FramePreparer {
             self.render_order_batch_count = 0;
             self.render_order_mega_batch_count = 0;
             self.render_order_mega_path_count = 0;
+            self.render_order_boundary_merge_count = 0;
+            self.render_order_mega_boundary_merge_count = 0;
         }
         for chunk_index in first_chunk..=last_chunk {
             let start = chunk_index * Self::RENDER_ORDER_CHUNK_SIZE;
@@ -425,8 +440,55 @@ impl FramePreparer {
             self.render_order_positions_visited += end - start;
             self.render_order_chunks_rebuilt += 1;
         }
+        let first_boundary = first_chunk.saturating_sub(1);
+        let last_boundary = last_chunk.min(chunk_count.saturating_sub(2));
+        let has_boundary = chunk_count >= 2 && first_boundary <= last_boundary;
+        if !rebuild_all && has_boundary {
+            for boundary in first_boundary..=last_boundary {
+                let (ordinary, mega) = self.render_chunk_boundary_merges[boundary];
+                self.render_order_boundary_merge_count -= usize::from(ordinary);
+                self.render_order_mega_boundary_merge_count -= usize::from(mega);
+            }
+        }
+        if has_boundary {
+            for boundary in first_boundary..=last_boundary {
+                let merge = render_chunk_boundary_merge(
+                    &self.render_chunks[boundary],
+                    &self.render_chunks[boundary + 1],
+                );
+                self.render_chunk_boundary_merges[boundary] = merge;
+                self.render_order_boundary_merge_count += usize::from(merge.0);
+                self.render_order_mega_boundary_merge_count += usize::from(merge.1);
+            }
+        }
         if activate_chunks {
             self.render_chunks_active = true;
+        }
+    }
+}
+
+fn render_chunk_boundary_merge(
+    left: &PreparedRenderChunk,
+    right: &PreparedRenderChunk,
+) -> (bool, bool) {
+    let (Some(left_batch), Some(right_batch)) =
+        (left.render_batches.last(), right.render_batches.first())
+    else {
+        return (false, false);
+    };
+    match (&left_batch.primitive, &right_batch.primitive) {
+        (
+            RenderPrimitive::MegaPath { batch: left_index },
+            RenderPrimitive::MegaPath { batch: right_index },
+        ) => {
+            let merge = left.mega_path_batches[*left_index].index_range.end
+                == right.mega_path_batches[*right_index].index_range.start;
+            (merge, merge)
+        }
+        _ => {
+            let merge = left_batch.primitive == right_batch.primitive
+                && left_batch.instance_range.end == right_batch.instance_range.start;
+            (merge, false)
         }
     }
 }
