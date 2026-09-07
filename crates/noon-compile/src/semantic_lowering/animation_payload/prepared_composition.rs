@@ -62,6 +62,7 @@ pub struct PreparedSemanticAnimationActivation {
     start_time: f64,
     run_time: f64,
     tracks: Vec<PreparedSemanticAnimationTrack>,
+    family_animations: Vec<super::CompiledFamilyAnimation>,
 }
 
 impl PreparedSemanticAnimationActivation {
@@ -81,18 +82,23 @@ impl PreparedSemanticAnimationActivation {
         &self.tracks
     }
 
+    pub fn family_animations(&self) -> &[super::CompiledFamilyAnimation] {
+        &self.family_animations
+    }
+
     pub fn len(&self) -> usize {
-        self.tracks.len()
+        self.tracks.len() + self.family_animations.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tracks.is_empty()
+        self.tracks.is_empty() && self.family_animations.is_empty()
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationLoweringError {
     Schedule(PreparedSemanticAnimationScheduleError),
+    TextWrite(super::TextWriteLoweringError),
     Target {
         animation: SemanticTransactionNodeRef,
         node: SemanticTransactionNodeRef,
@@ -225,6 +231,9 @@ where
     let schedule =
         lower_prepared_semantic_animation_schedule(prepared, index, root, start_time, play_options)
             .map_err(PreparedSemanticAnimationLoweringError::Schedule)?;
+    let family_animations =
+        super::lower_prepared_text_write_animations(prepared.store(), &schedule)
+            .map_err(PreparedSemanticAnimationLoweringError::TextWrite)?;
     let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
@@ -237,6 +246,12 @@ where
         .collect::<HashSet<_>>();
 
     for leaf in schedule.leaves() {
+        if matches!(
+            leaf.payload,
+            PreparedSemanticScheduledAnimationPayload::TextWrite { .. }
+        ) {
+            continue;
+        }
         let source = prepared.object_state(leaf.target).map_err(|error| {
             PreparedSemanticAnimationLoweringError::Target {
                 animation: leaf.animation,
@@ -621,6 +636,9 @@ where
                     },
                 }
             }
+            PreparedSemanticScheduledAnimationPayload::TextWrite { .. } => {
+                unreachable!("TextWrite payload was lowered into the shared family channel")
+            }
             PreparedSemanticScheduledAnimationPayload::Add => {
                 if leaf.options.lag_ratio != 0.0
                     || leaf.options.path_arc != 0.0
@@ -663,6 +681,7 @@ where
         start_time: schedule.start_time(),
         run_time: schedule.run_time(),
         tracks,
+        family_animations,
     })
 }
 

@@ -81,6 +81,10 @@ impl InstalledRetainedExecutionMirror {
         self.family.plans()
     }
 
+    pub fn active_family_animation_indices(&self) -> &std::collections::BTreeSet<usize> {
+        self.family.active_indices()
+    }
+
     pub fn family_plan(
         &self,
     ) -> Result<Option<&RetainedFamilyAnimationPlan>, InstalledExecutionError> {
@@ -134,9 +138,22 @@ impl InstalledRetainedExecutionMirror {
     /// Transactionally apply retained execution plus generic family sidecar state.
     pub fn apply_family(
         &mut self,
-        delta: RetainedFamilyExecutionDeltaEnvelope,
+        mut delta: RetainedFamilyExecutionDeltaEnvelope,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        if self.wire.session() == Some(delta.retained.session)
+            && self
+                .wire
+                .applied_sequence()
+                .is_some_and(|sequence| delta.retained.sequence <= sequence)
+        {
+            // Preserve the base transport's header checks and stale-drop contract
+            // before revalidating already-installed resources or family plans.
+            return Ok(self.wire.apply(delta.retained)?);
+        }
         delta.validate()?;
+        if let Some(bundle) = delta.resource_additions.take() {
+            return self.apply_family_with_resource_additions(delta, bundle);
+        }
         if delta.retained.snapshot {
             self.validate_snapshot_resources(&delta.retained)?;
         }
@@ -161,6 +178,33 @@ impl InstalledRetainedExecutionMirror {
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             return Ok((outcome, changes));
         }
+        self.family = next_family;
+        Ok((outcome, changes))
+    }
+
+    fn apply_family_with_resource_additions(
+        &mut self,
+        delta: RetainedFamilyExecutionDeltaEnvelope,
+        bundle: RetainedResourceBundle,
+    ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        let additions = self.resources.prepare_additions(bundle)?;
+        let mut next_wire = self.wire.clone();
+        next_wire.extend_installed_text_handles(&additions.text_handle_remap());
+        let (outcome, changes) = next_wire.apply(delta.retained.clone())?;
+        if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            return Ok((outcome, changes));
+        }
+        let next_resolved = next_wire
+            .frame()
+            .cloned()
+            .ok_or(InstalledExecutionError::MissingWireFrame)?;
+        let mut next_family = self.family.clone();
+        let text_lookup = additions.text_lookup(&self.resources);
+        next_family.apply(&delta, &next_resolved, &text_lookup)?;
+
+        self.resources.commit_additions(additions);
+        self.wire = next_wire;
+        self.resolved = Some(next_resolved);
         self.family = next_family;
         Ok((outcome, changes))
     }
@@ -392,6 +436,7 @@ mod tests {
             )
             .unwrap()],
             family_plans: vec![RetainedFamilyPlanTransport::new(vec![ObjectId::new(8)]).unwrap()],
+            resource_additions: None,
         }
     }
 
@@ -422,6 +467,26 @@ mod tests {
         );
         assert!(mirror.resources().texts().get(local).is_some());
         assert!(mirror.family_frame().unwrap().is_none());
+    }
+
+    #[test]
+    fn stale_resource_additions_are_dropped_before_duplicate_resource_validation() {
+        let mut engine = engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let initial = engine.initial_delta_json().unwrap();
+        mirror.apply_json(&initial).unwrap();
+        let before = mirror.frame().unwrap().clone();
+        let mut replay: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&initial).unwrap();
+        replay.resource_additions =
+            Some(RetainedResourceBundle::decode_binary(engine.resource_bundle_bytes()).unwrap());
+        let (outcome, changes) = mirror.apply_family(replay).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::DroppedStale);
+        assert!(!changes.is_all());
+        assert!(changes.object_indices().is_empty());
+        assert_eq!(mirror.frame().unwrap(), &before);
     }
 
     #[test]
@@ -519,6 +584,7 @@ mod tests {
             family_plans: vec![
                 RetainedFamilyPlanTransport::new(vec![ObjectId::new(u64::MAX)]).unwrap(),
             ],
+            resource_additions: None,
         };
         assert!(mirror.apply_family(invalid).is_err());
         assert_ne!(mirror.frame().unwrap().time, 2.0);

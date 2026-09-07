@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
+
 use noon_core::{
-    FontResourceLookup, GeometryResourceLookup, PublicationContext, TextResourceLookup,
+    FontResourceLookup, GeometryResourceLookup, PublicationContext, RetainedFamilyAnimationPlan,
+    TextResourceLookup,
 };
 
-use crate::{FrameChanges, FrameState};
+use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 
 /// One coherent borrowed runtime publication for renderer preparation.
 ///
@@ -16,6 +19,8 @@ pub struct RendererPublication<'a> {
     text_resources: &'a dyn TextResourceLookup,
     font_resources: &'a dyn FontResourceLookup,
     geometry_resources: &'a dyn GeometryResourceLookup,
+    family_animation_plans: &'a [RetainedFamilyAnimationPlan],
+    active_family_animation_indices: &'a BTreeSet<usize>,
 }
 
 impl RendererPublication<'_> {
@@ -43,6 +48,22 @@ impl RendererPublication<'_> {
         self.geometry_resources
     }
 
+    pub fn planned_family_frame(&self) -> RetainedPlannedFamilyFrame<'_> {
+        RetainedPlannedFamilyFrame {
+            retained: self.frame,
+            family_animations: &self.frame.family_animations,
+            family_plan_indices: &self.frame.family_animation_plan_indices,
+        }
+    }
+
+    pub fn family_animation_plans(&self) -> &[RetainedFamilyAnimationPlan] {
+        self.family_animation_plans
+    }
+
+    pub fn active_family_animation_indices(&self) -> &BTreeSet<usize> {
+        self.active_family_animation_indices
+    }
+
     /// Escalate an acquired redraw to a full renderer invalidation while retaining
     /// this publication's exact frame, resources, and revision context.
     pub fn invalidate_all(&mut self) {
@@ -51,6 +72,7 @@ impl RendererPublication<'_> {
 }
 
 impl<'a> RendererPublication<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         context: PublicationContext,
         frame: &'a FrameState,
@@ -58,6 +80,8 @@ impl<'a> RendererPublication<'a> {
         text_resources: &'a dyn TextResourceLookup,
         font_resources: &'a dyn FontResourceLookup,
         geometry_resources: &'a dyn GeometryResourceLookup,
+        family_animation_plans: &'a [RetainedFamilyAnimationPlan],
+        active_family_animation_indices: &'a BTreeSet<usize>,
     ) -> Self {
         Self {
             context,
@@ -66,6 +90,8 @@ impl<'a> RendererPublication<'a> {
             text_resources,
             font_resources,
             geometry_resources,
+            family_animation_plans,
+            active_family_animation_indices,
         }
     }
 }

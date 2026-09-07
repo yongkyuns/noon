@@ -154,6 +154,11 @@ pub enum SemanticAnimationIntent {
         count: usize,
         mode: SemanticSubsetDisplayMode,
     },
+    /// Draw one plain Text object's derived glyph members in retained painter order.
+    TextWrite {
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+    },
     /// Rotate one centered 2D object along an angular path. This remains distinct
     /// from TransformTo point correspondence even when both share affine endpoints.
     Rotate { target: SemanticNodeId, angle: f64 },
@@ -199,6 +204,7 @@ impl SemanticAnimationIntent {
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::SubsetDisplayMember { target, .. }
+            | Self::TextWrite { target, .. }
             | Self::Rotate { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
@@ -216,6 +222,7 @@ impl SemanticAnimationIntent {
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
+            | Self::TextWrite { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
@@ -232,6 +239,7 @@ impl SemanticAnimationIntent {
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
+            | Self::TextWrite { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -249,6 +257,7 @@ impl SemanticAnimationIntent {
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
+            | Self::TextWrite { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -298,6 +307,7 @@ pub enum SemanticAnimationError {
     InvalidIndicateEndpoint,
     InvalidDrawBorderThenFillOutline,
     InvalidSubsetDisplayMember,
+    InvalidTextWriteTarget,
     InvalidFadeEndpoint,
     InvalidAffineLifecycleEndpoint,
     Signal(SemanticSignalError),
@@ -343,6 +353,9 @@ impl std::fmt::Display for SemanticAnimationError {
             }
             Self::InvalidSubsetDisplayMember => formatter
                 .write_str("subset display member requires a nonempty count and an in-range index"),
+            Self::InvalidTextWriteTarget => {
+                formatter.write_str("TextWrite requires one plain Text semantic object")
+            }
             Self::InvalidFadeEndpoint => formatter
                 .write_str("Fade scale, translation, and scale center must be finite 2D values"),
             Self::InvalidAffineLifecycleEndpoint => formatter.write_str(
@@ -567,6 +580,37 @@ impl SemanticStore {
                     index,
                     count,
                     mode,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one forward plain-Text Write declaration.
+    pub fn insert_semantic_text_write_animation(
+        &mut self,
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        let state = self.semantic_object_state_checked(target)?;
+        let crate::SemanticObjectContent::Text(handle) = &state.content else {
+            return Err(SemanticAnimationError::InvalidTextWriteTarget);
+        };
+        let resource = self
+            .text_resources()
+            .get(*handle)
+            .ok_or(SemanticAnimationError::InvalidTextWriteTarget)?;
+        if resource.kind != crate::TextSourceKind::Plain {
+            return Err(SemanticAnimationError::InvalidTextWriteTarget);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::TextWrite {
+                    target,
+                    reverse_member_order,
                 },
                 options,
             )),

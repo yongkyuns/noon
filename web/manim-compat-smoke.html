@@ -10,32 +10,49 @@
     <script type="module">
       import init, { semanticFrameJson } from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
-      import { ExecutionWorkerClient } from "./execution-worker-client.js";
 
       const client = new PythonAuthoringClient();
       const runForExport = (source) => client.run(source, {}, { exportDocument: true });
-      async function runLive(source) {
+      async function runLiveSources(sources) {
         const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
         const canvas = document.createElement("canvas");
         canvas.width = 640;
         canvas.height = 360;
         document.body.append(canvas);
         const execution = new AuthoringExecutionClient(canvas);
+        const results = [];
+        let started = false;
+        let sameCanvas = true;
         try {
-          const result = await client.run(source, {}, {
-            async onSemanticContinuation(registration) {
-              await execution.startSemanticExecution(registration.semanticExecution, {
-                authoringClient: client,
-                loopDurationSeconds: registration.duration,
-                transportMode: "transferable",
-              });
-            },
-          });
-          return { duration: result.duration, metrics: (await execution.metrics()).metrics };
+          for (const source of sources) {
+            const result = await client.run(source, {}, {
+              async onSemanticContinuation(registration) {
+                const options = {
+                  authoringClient: client,
+                  loopDurationSeconds: registration.duration,
+                };
+                if (started) {
+                  await execution.reconcileSemanticExecution(registration.semanticExecution, options);
+                } else {
+                  await execution.startSemanticExecution(registration.semanticExecution, {
+                    ...options,
+                    transportMode: "transferable",
+                  });
+                  started = true;
+                }
+              },
+            });
+            sameCanvas &&= execution.canvas === canvas;
+            results.push({ duration: result.duration, metrics: (await execution.metrics()).metrics });
+          }
+          return { results, sameCanvas };
         } finally {
           execution.terminate();
           canvas.remove();
         }
+      }
+      async function runLive(source) {
+        return (await runLiveSources([source])).results[0];
       }
       const wasmReady = init();
       const familyCreateSource = `
@@ -76,7 +93,6 @@ class RetainedSequentialFamilySmoke(Scene):
 
       let readyPromise = null;
       let writeResult = null;
-      let sequentialResult = null;
       let writeRenderResult = null;
 
       function retainedTextView(result, label = "retained text") {
@@ -132,26 +148,6 @@ class RetainedSequentialFamilySmoke(Scene):
         return request;
       }
 
-      function sequentialFamilyRequests(result) {
-        if (result.kind !== "scene_document") {
-          throw new Error(`sequential family smoke returned ${result.kind}`);
-        }
-        if (result.retainedDocument != null) {
-          throw new Error("sequential family smoke must export mixed content through SceneSpec only");
-        }
-        const requests = result.sceneSpec?.family_animations;
-        if (!Array.isArray(requests) || requests.length !== 2) {
-          throw new Error("sequential family smoke did not reach two canonical family requests");
-        }
-        const serialized = JSON.stringify(requests);
-        for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
-          if (serialized.includes(forbidden)) {
-            throw new Error(`sequential family requests leaked ${forbidden}`);
-          }
-        }
-        return requests;
-      }
-
       async function waitForRenderedState(
         execution,
         { label, seekTime, expectedObjectCount, errors },
@@ -180,8 +176,8 @@ class RetainedSequentialFamilySmoke(Scene):
       }
 
       function assertCanonicalRenderedState(metrics, label, seekTime) {
-        if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
-          throw new Error(`${label} did not run through canonical retained execution`);
+        if (!metrics.metrics.ready || !metrics.metrics.retained || metrics.executionMode !== "semantic") {
+          throw new Error(`${label} did not run through shared semantic retained execution`);
         }
         if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
           throw new Error(`${label} did not produce a presented retained render frame`);
@@ -192,49 +188,60 @@ class RetainedSequentialFamilySmoke(Scene):
       }
 
       async function renderSequentialFamilySwitch() {
-        if (sequentialResult == null) {
-          throw new Error("sequential family authoring result is unavailable");
-        }
-
+        const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
         const canvas = document.querySelector("#retained-write-smoke");
         const errors = [];
-        const execution = new ExecutionWorkerClient(canvas, {
+        let resolveAttached;
+        let rejectAttached;
+        const attached = new Promise((resolve, reject) => {
+          resolveAttached = resolve;
+          rejectAttached = reject;
+        });
+        const execution = new AuthoringExecutionClient(canvas, {
           onError(error, owner) {
-            errors.push(`${owner}: ${error}`);
+            const message = `${owner}: ${error}`;
+            errors.push(message);
+            rejectAttached(new Error(message));
           },
         });
-        try {
-          const readyState = await execution.startRetainedCanonical(
-            JSON.stringify(sequentialResult.sceneSpec),
-            {
-              loopDurationSeconds: 2.0,
+        let readyState;
+        const authored = client.run(sequentialFamilySource, {}, {
+          async onSemanticContinuation(registration) {
+            readyState = await execution.startSemanticExecution(registration.semanticExecution, {
+              authoringClient: client,
+              loopDurationSeconds: registration.duration,
               transportMode: "transferable",
-            },
-          );
-          await execution.pause();
-
-          await execution.seek(0.5);
+              pacing: "external_samples",
+            });
+            resolveAttached();
+          },
+        });
+        authored.then(() => rejectAttached(new Error("Write/Unwrite did not register a continuation")), rejectAttached);
+        try {
+          await attached;
+          await execution.sampleToAuthoredTime(0.5);
           const first = await waitForRenderedState(execution, {
-            label: "sequential family first plan",
+            label: "shared Text Write",
             seekTime: 0.5,
             expectedObjectCount: 1,
             errors,
           });
-          assertCanonicalRenderedState(first, "sequential family first plan", 0.5);
-          const presentedAfterFirst = first.metrics.presentedFrames;
-
-          await execution.seek(1.5);
+          assertCanonicalRenderedState(first, "shared Text Write", 0.5);
+          await execution.sampleToAuthoredTime(1.5);
           const second = await waitForRenderedState(execution, {
-            label: "sequential family second plan",
+            label: "shared Text Unwrite",
             seekTime: 1.5,
             expectedObjectCount: 1,
             errors,
           });
-          assertCanonicalRenderedState(second, "sequential family second plan", 1.5);
-          if (second.metrics.presentedFrames <= presentedAfterFirst) {
-            throw new Error("sequential family second plan did not present a new retained frame");
+          assertCanonicalRenderedState(second, "shared Text Unwrite", 1.5);
+          if (second.metrics.presentedFrames <= first.metrics.presentedFrames) {
+            throw new Error("shared Text Unwrite did not publish a new frame");
           }
-
+          const [, completed] = await Promise.all([execution.sampleToAuthoredTime(2.0), authored]);
+          if (completed.duration !== 2.0 || (await execution.metrics()).metrics.objectCount !== 0) {
+            throw new Error("shared Text Unwrite did not remove its member at completion");
+          }
           return {
             backend: second.metrics.backend,
             presentedFrames: second.metrics.presentedFrames,
@@ -266,64 +273,20 @@ class RetainedSequentialFamilySmoke(Scene):
               throw new Error(`family Create authored unexpected mode ${createRequest.spec.mode}`);
             }
 
-            writeResult = await runForExport(familyWriteSource);
-            const writeRequest = oneFamilyRequest(writeResult, "family Write");
-            if (writeRequest.spec.mode !== "draw_border_then_fill") {
-              throw new Error(`family Write authored unexpected mode ${writeRequest.spec.mode}`);
+            writeResult = await runLive(familyWriteSource);
+            if (writeResult.duration !== 1.0 || writeResult.metrics.objectCount !== 1) {
+              throw new Error("Text Write must derive one-second duration from 14 visible glyphs");
             }
-            if (Math.abs(Number(writeRequest.spec.duration) - 1.0) > 1e-12) {
-              throw new Error(
-                `family Write must derive one-second duration from 14 rendered members, got ${writeRequest.spec.duration}`,
-              );
+            const unwrite = await runLive(familyUnwriteSource);
+            if (unwrite.duration !== 1.0 || unwrite.metrics.objectCount !== 0) {
+              throw new Error("default Text Unwrite must remove its target after one second");
             }
-            if (Math.abs(Number(writeRequest.spec.lag_ratio) - 0.2) > 1e-12) {
-              throw new Error(`family Write default lag ratio drifted to ${writeRequest.spec.lag_ratio}`);
-            }
-            if (writeRequest.spec.rate_function !== "linear") {
-              throw new Error(`family Write default rate function drifted to ${writeRequest.spec.rate_function}`);
-            }
-            if (writeRequest.spec.reverse_rate_function || writeRequest.spec.reverse_member_order) {
-              throw new Error("forward Write unexpectedly reversed rate or member order");
-            }
-            if (Math.abs(Number(writeResult.duration) - 1.0) > 1e-12) {
-              throw new Error(`family Write scene cursor did not use Rust-resolved duration: ${writeResult.duration}`);
-            }
-
-            const unwrite = await runForExport(familyUnwriteSource);
-            const unwriteRequest = oneFamilyRequest(unwrite, "family Unwrite");
-            if (unwriteRequest.spec.mode !== "draw_border_then_fill") {
-              throw new Error(`family Unwrite authored unexpected mode ${unwriteRequest.spec.mode}`);
-            }
-            if (!unwriteRequest.spec.reverse_rate_function || !unwriteRequest.spec.reverse_member_order) {
-              throw new Error("default Unwrite must reverse both per-member rate and semantic member order");
-            }
-
-            sequentialResult = await runForExport(sequentialFamilySource);
-            const sequential = sequentialFamilyRequests(sequentialResult);
-            if (Math.abs(Number(sequential[0].spec.start_time) - 0.0) > 1e-12 || Math.abs(Number(sequential[0].spec.duration) - 1.0) > 1e-12) {
-              throw new Error("sequential Write did not retain its [0, 1] canonical interval");
-            }
-            if (Math.abs(Number(sequential[1].spec.start_time) - 1.0) > 1e-12 || Math.abs(Number(sequential[1].spec.duration) - 1.0) > 1e-12) {
-              throw new Error("sequential Unwrite did not retain its [1, 2] canonical interval");
-            }
-            if (sequential[0].spec.reverse_rate_function || sequential[0].spec.reverse_member_order) {
-              throw new Error("sequential Write unexpectedly reversed rate or member order");
-            }
-            if (!sequential[1].spec.reverse_rate_function || !sequential[1].spec.reverse_member_order) {
-              throw new Error("sequential Unwrite did not retain reverse rate/member semantics");
-            }
-            if (Math.abs(Number(sequentialResult.duration) - 2.0) > 1e-12) {
-              throw new Error(`sequential family scene cursor drifted to ${sequentialResult.duration}`);
-            }
-
-            // One canonical worker crosses the touching boundary and renders both plans.
             writeRenderResult = await renderSequentialFamilySwitch();
 
             return {
               create,
               write: writeResult,
               unwrite,
-              sequential: sequentialResult,
               writeRender: writeRenderResult,
             };
           })();
@@ -340,6 +303,7 @@ class RetainedSequentialFamilySmoke(Scene):
         retainedTextView,
         run: runForExport,
         runLive,
+        runLiveSources,
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };
     </script>

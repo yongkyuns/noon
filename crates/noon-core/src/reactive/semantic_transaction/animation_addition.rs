@@ -43,6 +43,10 @@ pub enum SemanticTransactionAnimationIntent {
         count: usize,
         mode: crate::SemanticSubsetDisplayMode,
     },
+    TextWrite {
+        target: SemanticTransactionNodeRef,
+        reverse_member_order: bool,
+    },
     Rotate {
         target: SemanticTransactionNodeRef,
         angle: f64,
@@ -86,6 +90,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::SubsetDisplayMember { target, .. }
+            | Self::TextWrite { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
@@ -99,6 +104,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
+            | Self::TextWrite { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -187,6 +193,13 @@ impl SemanticTransactionAnimation {
                 index: *index,
                 count: *count,
                 mode: *mode,
+            },
+            SemanticAnimationIntent::TextWrite {
+                target,
+                reverse_member_order,
+            } => SemanticTransactionAnimationIntent::TextWrite {
+                target: (*target).into(),
+                reverse_member_order: *reverse_member_order,
             },
             SemanticAnimationIntent::Fade {
                 target,
@@ -283,6 +296,13 @@ impl SemanticTransactionAnimation {
                 index: *index,
                 count: *count,
                 mode: *mode,
+            },
+            SemanticTransactionAnimationIntent::TextWrite {
+                target,
+                reverse_member_order,
+            } => SemanticAnimationIntent::TextWrite {
+                target: resolve_node_ref(*target, committed),
+                reverse_member_order: *reverse_member_order,
             },
             SemanticTransactionAnimationIntent::Fade {
                 target,
@@ -455,6 +475,12 @@ pub(super) fn preflight_transaction_animation(
                 return Err(SemanticMutationTransactionError::InvalidSubsetDisplayMember { index });
             }
         }
+        SemanticTransactionAnimationIntent::TextWrite { target, .. } => {
+            catalog.ensure_animation_target(*target, index)?;
+            let state =
+                catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            catalog.ensure_plain_text_write_target(state, index)?;
+        }
         SemanticTransactionAnimationIntent::Fade {
             target, endpoint, ..
         } => {
@@ -612,6 +638,12 @@ pub(super) fn commit_add_animation(
         } => store
             .insert_semantic_subset_display_member_animation(*target, *index, *count, *mode, options)
             .expect("preflighted subset display insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::TextWrite {
+            target,
+            reverse_member_order,
+        } => store
+            .insert_semantic_text_write_animation(*target, *reverse_member_order, options)
+            .expect("preflighted TextWrite insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Fade {
             target,
             direction,

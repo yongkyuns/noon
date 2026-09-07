@@ -6,6 +6,8 @@ use noon_runtime::{FrameObjectState, FrameState};
 
 fn line_frame(cap: StrokeCap, width_mode: StrokeWidthMode) -> FrameState {
     FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
             id: ObjectId::new(0),

@@ -1299,7 +1299,7 @@ mod wasm {
                 publication_context = publication.context();
                 let prepared = self
                     .direct_preparer
-                    .prepare_publication_visible(
+                    .prepare_planned_publication_visible(
                         &self.device,
                         &self.queue,
                         &publication,

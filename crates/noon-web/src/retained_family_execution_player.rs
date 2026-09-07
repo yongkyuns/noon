@@ -310,7 +310,7 @@ mod tests {
         let initial = player.evaluate_delta(0.0).unwrap().unwrap();
         assert!(initial.retained.snapshot);
         assert_eq!(initial.retained.sequence, 0);
-        assert_eq!(initial.family_plans.len(), 1);
+        assert!(initial.family_plans.is_empty());
         let initial_json = serde_json::to_string(&initial).unwrap();
         assert!(!initial_json.contains("glyph"));
         let (outcome, changes) = mirror.apply_json(&initial_json).unwrap();
@@ -320,7 +320,7 @@ mod tests {
         let midpoint = player.evaluate_delta(2.0).unwrap().unwrap();
         assert!(!midpoint.retained.snapshot);
         assert_eq!(midpoint.retained.sequence, 1);
-        assert!(midpoint.family_plans.is_empty());
+        assert_eq!(midpoint.family_plans.len(), 1);
         assert_eq!(midpoint.family_states.len(), 2);
         assert!(midpoint
             .family_states

@@ -867,6 +867,8 @@ mod tests {
         transform: Transform2D,
     ) -> FrameState {
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
                 id: ObjectId::new(1),
@@ -887,6 +889,8 @@ mod tests {
     fn two_text_frame(text: TextResourceHandle) -> FrameState {
         let transform = scene_transform();
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![
                 FrameObjectState {

@@ -1,9 +1,12 @@
+#[cfg(test)]
+use crate::TextResourceArena;
+
 use crate::{
     FamilyAnimationLeafProgress, FamilyAnimationLeafSpan, FamilyAnimationMemberEvaluationError,
     FamilyAnimationMemberPlan, FamilyAnimationMemberPlanBuilder, FamilyAnimationRequest,
     FamilyAnimationRequestError, FamilyAnimationState, ObjectId, RetainedAnimationMember,
     RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError, RetainedObjectDefinition,
-    SemanticNodeId, SemanticStore, TextResourceArena,
+    SemanticNodeId, SemanticStore, TextResourceLookup,
 };
 
 /// Prepared retained-content binding for one semantic family leaf.
@@ -39,6 +42,23 @@ pub struct RetainedFamilyAnimationPlan {
 }
 
 impl RetainedFamilyAnimationPlan {
+    /// Build a retained plan for one semantic object whose content-local members were derived
+    /// directly from its immutable execution resource.
+    pub fn single_leaf(
+        target: SemanticNodeId,
+        object: ObjectId,
+        members: RetainedAnimationMembers,
+    ) -> Result<Self, RetainedFamilyAnimationMemberPlanError> {
+        let mut inner = FamilyAnimationMemberPlanBuilder::begin_ordered(target, vec![target])?;
+        inner.accept_leaf(target, object, members.member_count())?;
+        let member_plan = inner.finish()?;
+        let span = member_plan.leaves()[0];
+        Ok(Self {
+            member_plan,
+            leaves: vec![RetainedFamilyAnimationLeafPlan { span, members }],
+        })
+    }
+
     pub fn member_plan(&self) -> &FamilyAnimationMemberPlan {
         &self.member_plan
     }
@@ -68,7 +88,7 @@ impl RetainedFamilyAnimationPlan {
     pub fn from_request(
         request: &FamilyAnimationRequest,
         objects: &[RetainedObjectDefinition],
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<Self, RetainedFamilyAnimationRequestPlanError> {
         request.validate()?;
         let expected_leaves = request
@@ -171,7 +191,7 @@ impl RetainedFamilyAnimationPlanBuilder {
         &mut self,
         semantic_leaf: SemanticNodeId,
         object: &RetainedObjectDefinition,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyAnimationMemberPlanError> {
         let members = self
             .inner

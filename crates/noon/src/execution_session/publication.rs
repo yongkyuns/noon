@@ -278,9 +278,13 @@ impl ExecutionSession {
         }
         .map_err(ExecutionSessionPublicationError::Lowering)?;
         let preparation_stats = publication.stats();
-        let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) = execution_prefix
-            .into_iter()
-            .partition(|patch| matches!(patch, ExecutionPatch::AddTrack(_)));
+        let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) =
+            execution_prefix.into_iter().partition(|patch| {
+                matches!(
+                    patch,
+                    ExecutionPatch::AddTrack(_) | ExecutionPatch::AddFamilyAnimation(_)
+                )
+            });
         let mut conservative_patches = execution_prefix.clone();
         conservative_patches.extend_from_slice(publication.value_transaction().mutations());
         conservative_patches.extend(

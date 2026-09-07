@@ -23,6 +23,7 @@ const {
   createDirectFamilyTransformIndicateSmokeRenderer,
   createDirectDrawBorderThenFillSmokeRenderer,
   createDirectOrdinarySubsetDisplaySmokeRenderer,
+  createDirectOrdinaryTextWriteSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -1128,6 +1129,50 @@ async function directDrawBorderThenFillProof(expectedBackend) {
   }
 }
 
+async function directOrdinaryTextWriteProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryTextWriteSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const time of [0, 500, 1000, 2000, 2500, 3000]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
+      const reader = new OffscreenCanvas(canvas.width, canvas.height);
+      const context = reader.getContext("2d", { willReadFrequently: true });
+      context.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height / 2).data;
+      let ink = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] > 100 && pixels[i + 1] > 100 && pixels[i + 2] > 100) ink += 1;
+      }
+      samples.push({ time, ink });
+    }
+    if (samples[0].ink !== 0 || samples[1].ink <= 0 || samples[2].ink <= samples[1].ink
+        || samples[3].ink <= samples[1].ink || samples[4].ink <= 0
+        || samples[4].ink >= samples[3].ink || samples[5].ink !== 0) {
+      throw new Error(`direct Text Write did not reveal ordered glyph phases: ${JSON.stringify(samples)}`);
+    }
+    renderer.advanceDirectRealtime(3250);
+    await settleDirectPublication(renderer, 3250);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3250));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 1
+        || renderer.time() !== 3.25 || wake.cadence !== "idle") {
+      throw new Error("direct Text Write did not complete its shared mixed composition");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directOrdinarySubsetDisplayProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinarySubsetDisplaySmokeRenderer(canvas);
@@ -1781,6 +1826,7 @@ async function start() {
   metrics.familyTransformIndicate = await directFamilyTransformIndicateProof(expectedBackend);
   metrics.drawBorderThenFill = await directDrawBorderThenFillProof(expectedBackend);
   metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);
+  metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);

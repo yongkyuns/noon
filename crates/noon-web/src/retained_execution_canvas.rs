@@ -89,7 +89,7 @@ mod wasm {
                     .render_geometries()
                     .len()
                     .max(mirror.resources().render_geometry_preparation_count()),
-                mirror.resources().geometries().len(),
+                mirror.resources().geometry_count(),
             );
 
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -286,7 +286,10 @@ mod wasm {
             ))
             .map_err(js_error)?;
             let plans = self.mirror.family_plans();
-            let prepared = if plans.is_empty() {
+            let family_frame = self.mirror.planned_family_frame().map_err(js_error)?;
+            let family_active = !self.mirror.active_family_animation_indices().is_empty();
+            let prepared = if !family_active {
+                self.preparer.release_planned_family_realization();
                 let frame = self.mirror.frame().ok_or_else(|| {
                     js_message("retained execution renderer has no frame snapshot")
                 })?;
@@ -303,21 +306,18 @@ mod wasm {
                     )
                     .map_err(js_error)?
             } else {
-                let family_frame = self
-                    .mirror
-                    .planned_family_frame()
-                    .map_err(js_error)?
-                    .ok_or_else(|| {
-                        js_message(
-                            "retained family execution has plans without an evaluated family frame",
-                        )
-                    })?;
+                let family_frame = family_frame.ok_or_else(|| {
+                    js_message(
+                        "retained family execution has plans without an evaluated family frame",
+                    )
+                })?;
                 self.preparer
-                    .prepare_family_plan_set_with_changes(
+                    .prepare_active_family_plan_set_with_changes(
                         &self.device,
                         &self.queue,
                         &family_frame,
                         plans,
+                        self.mirror.active_family_animation_indices(),
                         &self.pending_changes,
                         resources.texts(),
                         resources.fonts(),

@@ -120,6 +120,11 @@ pub(crate) enum SemanticCompositionRequest {
         mode: SubsetDisplayMode,
         options: AnimationOptions,
     },
+    TextWrite {
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    },
     Rotate {
         target: SemanticNodeId,
         angle: f64,
@@ -405,6 +410,7 @@ pub enum ExecutionSessionAnimationError {
     Schedule(SemanticAnimationScheduleError),
     Segment(ExecutionSegmentError),
     Payload(SemanticAffineAnimationTrackError),
+    TextWrite(noon_compile::TextWriteLoweringError),
     PreparedAnimation(PreparedSemanticAnimationLoweringError),
     PreparedSchedule(PreparedSemanticAnimationScheduleError),
     PreparedScalarAnimation(PreparedScalarAnimationTrackError),
@@ -511,6 +517,7 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
                 target.generation()
             ),
             Self::InvalidComposition(error) => formatter.write_str(error),
+            Self::TextWrite(error) => error.fmt(formatter),
             Self::PreparedTrack(error) => {
                 write!(formatter, "prepared animation track failed: {error}")
             }
@@ -812,6 +819,21 @@ impl ExecutionSession {
         self.runtime.frame()
     }
 
+    /// Current renderer-facing frame with derived Text/family animation state.
+    pub fn planned_family_frame(&self) -> noon_runtime::RetainedPlannedFamilyFrame<'_> {
+        self.runtime.planned_family_frame()
+    }
+
+    /// Immutable derived member plans installed in this execution revision.
+    pub fn family_animation_plans(&self) -> &[noon_core::RetainedFamilyAnimationPlan] {
+        self.runtime.family_animation_plans()
+    }
+
+    /// Sparse runtime-owned set of object rows with active glyph animation state.
+    pub fn active_family_animation_indices(&self) -> &std::collections::BTreeSet<usize> {
+        self.runtime.active_family_animation_indices()
+    }
+
     /// Work performed by the most recent incremental execution-plan patch.
     pub const fn last_patch_stats(&self) -> noon_runtime::RuntimePatchStats {
         self.runtime.last_patch_stats()
@@ -1083,7 +1105,10 @@ impl ExecutionSession {
                 appearance: row.appearance,
             })
         })?;
-        if tracks.is_empty() {
+        let family_animations =
+            noon_compile::lower_semantic_text_write_animations(store, &schedule)
+                .map_err(ExecutionSessionAnimationError::TextWrite)?;
+        if tracks.is_empty() && family_animations.is_empty() {
             return Ok(segment);
         }
 
@@ -1116,7 +1141,11 @@ impl ExecutionSession {
             .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
         let next_segment_sequence = raw_sequence.checked_add(1);
         let transaction = ExecutionMutationTransaction::from_mutations(
-            definitions.into_iter().map(ExecutionPatch::AddTrack),
+            definitions.into_iter().map(ExecutionPatch::AddTrack).chain(
+                family_animations
+                    .into_iter()
+                    .map(ExecutionPatch::AddFamilyAnimation),
+            ),
         );
         self.runtime.apply_execution_transaction(&transaction)?;
         let token = ExecutionSegmentToken::new(
@@ -1833,6 +1862,27 @@ impl ExecutionSession {
                     SemanticAnimationCompositionKind::Parallel,
                     children,
                     composition_options,
+                ))
+            }
+            SemanticCompositionRequest::TextWrite {
+                target,
+                reverse_member_order,
+                options,
+            } => {
+                let introducer = options.introducer.unwrap_or(!reverse_member_order);
+                let remover = options.remover.unwrap_or(*reverse_member_order);
+                if introducer {
+                    admit(*target, declaration, admitted)?;
+                } else {
+                    self.require_present_draw_border_target(store, root, *target)?;
+                }
+                if remover {
+                    removals.push((root, *target));
+                }
+                Ok(declaration.create_text_write_animation(
+                    *target,
+                    *reverse_member_order,
+                    *options,
                 ))
             }
             SemanticCompositionRequest::Rotate {
@@ -2666,23 +2716,32 @@ impl ExecutionSession {
                 .map_err(ExecutionSessionAnimationError::Publication)?;
         }
 
-        let (token, next_segment_sequence) =
-            if definitions.is_empty() && scalar_completions.is_empty() {
-                (None, self.next_segment_sequence)
-            } else {
-                let raw_sequence = self
-                    .next_segment_sequence
-                    .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
-                let token = ExecutionSegmentToken::new(
-                    self.runtime.runtime_identity(),
-                    ExecutionSegmentSequence::new(raw_sequence),
-                );
-                (Some(token), raw_sequence.checked_add(1))
-            };
+        let (token, next_segment_sequence) = if definitions.is_empty()
+            && projection.family_animations().is_empty()
+            && scalar_completions.is_empty()
+        {
+            (None, self.next_segment_sequence)
+        } else {
+            let raw_sequence = self
+                .next_segment_sequence
+                .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
+            let token = ExecutionSegmentToken::new(
+                self.runtime.runtime_identity(),
+                ExecutionSegmentSequence::new(raw_sequence),
+            );
+            (Some(token), raw_sequence.checked_add(1))
+        };
 
         let execution_prefix = definitions
             .into_iter()
             .map(ExecutionPatch::AddTrack)
+            .chain(
+                projection
+                    .family_animations()
+                    .iter()
+                    .cloned()
+                    .map(ExecutionPatch::AddFamilyAnimation),
+            )
             .collect();
         let reactive_enrollment = if projection_enrollments.is_empty() {
             None

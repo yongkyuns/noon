@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt,
     sync::Arc,
 };
@@ -196,14 +196,83 @@ pub struct RetainedResourceBundle {
     render_geometry_resources: Option<TransportRenderGeometryResources>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RetainedResourceInventory {
+    texts: HashSet<TransportTextResourceHandle>,
+    geometries: BTreeSet<TransportGeometryResourceHandle>,
+    fonts: BTreeSet<(String, u32)>,
+}
+
+impl RetainedResourceInventory {
+    pub(crate) fn contains_text(&self, handle: TransportTextResourceHandle) -> bool {
+        self.texts.contains(&handle)
+    }
+}
+
 impl RetainedResourceBundle {
+    pub(crate) fn inventory(&self) -> RetainedResourceInventory {
+        RetainedResourceInventory {
+            texts: self.texts.iter().map(|entry| entry.handle).collect(),
+            geometries: self.geometries.iter().map(|entry| entry.handle).collect(),
+            fonts: self
+                .fonts
+                .iter()
+                .map(|entry| (entry.face_key.clone(), entry.face_index))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn retain_additions(&mut self, installed: &mut RetainedResourceInventory) {
+        self.texts
+            .retain(|entry| installed.texts.insert(entry.handle));
+        self.geometries
+            .retain(|entry| installed.geometries.insert(entry.handle));
+        self.fonts.retain(|entry| {
+            installed
+                .fonts
+                .insert((entry.face_key.clone(), entry.face_index))
+        });
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.texts.is_empty() && self.geometries.is_empty() && self.fonts.is_empty()
+    }
+
+    pub(crate) fn capture_additions(
+        text_handles: impl IntoIterator<Item = TextResourceHandle>,
+        texts: &impl TextResourceLookup,
+        geometries: &impl GeometryResourceLookup,
+        fonts: &impl FontResourceLookup,
+        installed: &RetainedResourceInventory,
+    ) -> Result<Self, RetainedResourceTransportError> {
+        Self::capture_filtered(text_handles, texts, geometries, fonts, Some(installed))
+    }
+
     pub fn capture(
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
         texts: &impl TextResourceLookup,
         geometries: &impl GeometryResourceLookup,
         fonts: &impl FontResourceLookup,
     ) -> Result<Self, RetainedResourceTransportError> {
-        let text_handles = text_handles.into_iter().collect::<BTreeSet<_>>();
+        Self::capture_filtered(text_handles, texts, geometries, fonts, None)
+    }
+
+    fn capture_filtered(
+        text_handles: impl IntoIterator<Item = TextResourceHandle>,
+        texts: &impl TextResourceLookup,
+        geometries: &impl GeometryResourceLookup,
+        fonts: &impl FontResourceLookup,
+        installed: Option<&RetainedResourceInventory>,
+    ) -> Result<Self, RetainedResourceTransportError> {
+        let text_handles = text_handles
+            .into_iter()
+            .filter(|handle| {
+                installed.is_none_or(|inventory| {
+                    !inventory
+                        .contains_text(TransportTextResourceHandle::from_source_handle(*handle))
+                })
+            })
+            .collect::<BTreeSet<_>>();
         let mut geometry_handles = BTreeSet::new();
         let mut font_entries = BTreeMap::<(String, u32), TransportFontEntry>::new();
         let mut text_entries = Vec::with_capacity(text_handles.len());
@@ -215,9 +284,16 @@ impl RetainedResourceBundle {
                 )
             })?;
             for vector in resource.vector_items.iter() {
-                geometry_handles.insert(vector.geometry);
+                let transport = TransportGeometryResourceHandle::from(vector.geometry);
+                if installed.is_none_or(|inventory| !inventory.geometries.contains(&transport)) {
+                    geometry_handles.insert(vector.geometry);
+                }
             }
             for run in resource.runs.iter() {
+                let font_key = (run.font.face_key.to_string(), run.font.face_index);
+                if installed.is_some_and(|inventory| inventory.fonts.contains(&font_key)) {
+                    continue;
+                }
                 let font = fonts.get_for_face(&run.font).ok_or_else(|| {
                     RetainedResourceTransportError::MissingFont {
                         face_key: run.font.face_key.to_string(),
@@ -377,11 +453,17 @@ impl RetainedResourceBundle {
             text_handles.insert(entry.handle, local);
         }
 
+        let inventory = RetainedResourceInventory {
+            texts: text_handles.keys().copied().collect(),
+            geometries: geometry_handles.keys().copied().collect(),
+            fonts: font_bytes.keys().cloned().collect(),
+        };
         Ok(InstalledRetainedResources {
             texts,
             geometries,
             fonts,
             text_handles,
+            geometry_handles,
             render_geometry_session: self
                 .render_geometry_resources
                 .as_ref()
@@ -402,6 +484,13 @@ impl RetainedResourceBundle {
                         .into()
                 })
                 .unwrap_or_default(),
+            additions: Vec::new(),
+            text_layers: HashMap::new(),
+            geometry_layers: HashMap::new(),
+            font_layers: HashMap::new(),
+            font_layers_by_face: HashMap::new(),
+            font_arenas: HashSet::new(),
+            inventory,
         })
     }
 
@@ -426,9 +515,17 @@ pub struct InstalledRetainedResources {
     geometries: GeometryResourceArena,
     fonts: FontResourceArena,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
+    geometry_handles: HashMap<TransportGeometryResourceHandle, GeometryResourceHandle>,
     render_geometry_session: Option<u32>,
     render_geometries: Arc<[Arc<GeometryRef>]>,
     render_geometry_preparations: Vec<RenderGeometryPreparation>,
+    additions: Vec<InstalledRetainedResources>,
+    text_layers: HashMap<u64, usize>,
+    geometry_layers: HashMap<u64, usize>,
+    font_layers: HashMap<u64, usize>,
+    font_layers_by_face: HashMap<(String, u32), usize>,
+    font_arenas: HashSet<u64>,
+    inventory: RetainedResourceInventory,
 }
 
 impl InstalledRetainedResources {
@@ -448,16 +545,25 @@ impl InstalledRetainedResources {
         self.render_geometry_preparations().len()
     }
 
-    pub fn texts(&self) -> &TextResourceArena {
-        &self.texts
+    pub fn texts(&self) -> &dyn TextResourceLookup {
+        self
     }
 
-    pub fn geometries(&self) -> &GeometryResourceArena {
-        &self.geometries
+    pub fn geometries(&self) -> &dyn GeometryResourceLookup {
+        self
     }
 
-    pub fn fonts(&self) -> &FontResourceArena {
-        &self.fonts
+    pub fn fonts(&self) -> &dyn FontResourceLookup {
+        self
+    }
+
+    pub fn geometry_count(&self) -> usize {
+        self.geometries.len()
+            + self
+                .additions
+                .iter()
+                .map(InstalledRetainedResources::geometry_count)
+                .sum::<usize>()
     }
 
     pub fn resolve_text_handle(
@@ -472,6 +578,252 @@ impl InstalledRetainedResources {
     ) -> HashMap<TransportTextResourceHandle, TextResourceHandle> {
         self.text_handles.clone()
     }
+
+    pub(crate) fn prepare_additions(
+        &self,
+        bundle: RetainedResourceBundle,
+    ) -> Result<PreparedRetainedResourceAdditions, RetainedResourceTransportError> {
+        if bundle.render_geometry_resources.is_some() {
+            return Err(RetainedResourceTransportError::IncrementalRenderGeometryResources);
+        }
+        let inventory = bundle.inventory();
+        if let Some(handle) = inventory.texts.intersection(&self.inventory.texts).next() {
+            return Err(RetainedResourceTransportError::DuplicateText(*handle));
+        }
+        if let Some(handle) = inventory
+            .geometries
+            .intersection(&self.inventory.geometries)
+            .next()
+        {
+            return Err(RetainedResourceTransportError::DuplicateGeometry(*handle));
+        }
+        if let Some((face_key, face_index)) =
+            inventory.fonts.intersection(&self.inventory.fonts).next()
+        {
+            return Err(RetainedResourceTransportError::DuplicateFont {
+                face_key: face_key.clone(),
+                face_index: *face_index,
+            });
+        }
+        bundle.validate_protocol()?;
+        let mut geometries = GeometryResourceArena::new();
+        let mut geometry_handles = HashMap::with_capacity(bundle.geometries.len());
+        for entry in bundle.geometries {
+            if geometry_handles.contains_key(&entry.handle) {
+                return Err(RetainedResourceTransportError::DuplicateGeometry(
+                    entry.handle,
+                ));
+            }
+            let local = geometries.insert_path(entry.path);
+            geometry_handles.insert(entry.handle, local);
+        }
+        for entry in &bundle.texts {
+            for vector in &entry.resource.vector_items {
+                if geometry_handles.contains_key(&vector.geometry) {
+                    continue;
+                }
+                let local = self.geometry_handles.get(&vector.geometry).copied().ok_or(
+                    RetainedResourceTransportError::MissingGeometry(vector.geometry),
+                )?;
+                geometry_handles.insert(vector.geometry, local);
+            }
+        }
+
+        let mut font_bytes = BTreeMap::new();
+        for entry in bundle.fonts {
+            let key = (entry.face_key, entry.face_index);
+            if font_bytes
+                .insert(key.clone(), Arc::<[u8]>::from(entry.data))
+                .is_some()
+            {
+                return Err(RetainedResourceTransportError::DuplicateFont {
+                    face_key: key.0,
+                    face_index: key.1,
+                });
+            }
+        }
+        let mut fonts = FontResourceArena::new();
+        let mut font_arenas = HashSet::new();
+        let mut texts = TextResourceArena::new();
+        let mut text_handles = HashMap::with_capacity(bundle.texts.len());
+        for entry in bundle.texts {
+            if text_handles.contains_key(&entry.handle) {
+                return Err(RetainedResourceTransportError::DuplicateText(entry.handle));
+            }
+            let resource = entry.resource.into_core(&geometry_handles)?;
+            for run in resource.runs.iter() {
+                let key = (run.font.face_key.to_string(), run.font.face_index);
+                if let Some(bytes) = font_bytes.get(&key) {
+                    let handle = fonts
+                        .intern_face(&run.font, bytes.clone())
+                        .map_err(|error| {
+                            RetainedResourceTransportError::InvalidFont(error.to_string())
+                        })?;
+                    font_arenas.insert(handle.arena);
+                } else if self.handle_for_face(&run.font).is_none() {
+                    return Err(RetainedResourceTransportError::MissingFont {
+                        face_key: key.0,
+                        face_index: key.1,
+                    });
+                }
+            }
+            let local = texts
+                .insert(resource)
+                .map_err(|error| RetainedResourceTransportError::InvalidText(error.to_string()))?;
+            text_handles.insert(entry.handle, local);
+        }
+        let installed = InstalledRetainedResources {
+            texts,
+            geometries,
+            fonts,
+            text_handles,
+            geometry_handles: geometry_handles
+                .into_iter()
+                .filter(|(transport, _)| inventory.geometries.contains(transport))
+                .collect(),
+            render_geometry_session: None,
+            render_geometries: Arc::from([]),
+            render_geometry_preparations: Vec::new(),
+            additions: Vec::new(),
+            text_layers: HashMap::new(),
+            geometry_layers: HashMap::new(),
+            font_layers: HashMap::new(),
+            font_layers_by_face: HashMap::new(),
+            font_arenas,
+            inventory,
+        };
+        Ok(PreparedRetainedResourceAdditions { installed })
+    }
+
+    pub(crate) fn commit_additions(&mut self, additions: PreparedRetainedResourceAdditions) {
+        let layer = self.additions.len();
+        for handle in additions.installed.text_handles.values() {
+            self.text_layers.insert(handle.arena, layer);
+        }
+        for handle in additions.installed.geometry_handles.values() {
+            self.geometry_layers.insert(handle.arena, layer);
+        }
+        for &arena in &additions.installed.font_arenas {
+            self.font_layers.insert(arena, layer);
+        }
+        for face in &additions.installed.inventory.fonts {
+            self.font_layers_by_face.insert(face.clone(), layer);
+        }
+        self.inventory
+            .texts
+            .extend(additions.installed.inventory.texts.iter().copied());
+        self.inventory
+            .geometries
+            .extend(additions.installed.inventory.geometries.iter().copied());
+        self.inventory
+            .fonts
+            .extend(additions.installed.inventory.fonts.iter().cloned());
+        self.text_handles.extend(
+            additions
+                .installed
+                .text_handles
+                .iter()
+                .map(|(&key, &value)| (key, value)),
+        );
+        self.geometry_handles.extend(
+            additions
+                .installed
+                .geometry_handles
+                .iter()
+                .map(|(&key, &value)| (key, value)),
+        );
+        self.additions.push(additions.installed);
+    }
+}
+
+pub(crate) struct PreparedRetainedResourceAdditions {
+    installed: InstalledRetainedResources,
+}
+
+impl PreparedRetainedResourceAdditions {
+    pub(crate) fn text_handle_remap(
+        &self,
+    ) -> HashMap<TransportTextResourceHandle, TextResourceHandle> {
+        self.installed.text_handle_remap()
+    }
+
+    pub(crate) fn text_lookup<'a>(
+        &'a self,
+        existing: &'a InstalledRetainedResources,
+    ) -> InstalledTextResourceOverlay<'a> {
+        InstalledTextResourceOverlay {
+            existing,
+            additions: &self.installed,
+        }
+    }
+}
+
+pub(crate) struct InstalledTextResourceOverlay<'a> {
+    existing: &'a InstalledRetainedResources,
+    additions: &'a InstalledRetainedResources,
+}
+
+impl TextResourceLookup for InstalledTextResourceOverlay<'_> {
+    fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
+        self.additions
+            .get_text(handle)
+            .or_else(|| self.existing.get_text(handle))
+    }
+}
+
+impl InstalledRetainedResources {
+    fn get_text(&self, handle: TextResourceHandle) -> Option<&TextResource> {
+        self.texts.get(handle).or_else(|| {
+            self.text_layers
+                .get(&handle.arena)
+                .and_then(|&layer| self.additions.get(layer))
+                .and_then(|resources| resources.texts.get(handle))
+        })
+    }
+}
+
+impl TextResourceLookup for InstalledRetainedResources {
+    fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
+        self.get_text(handle)
+    }
+}
+
+impl GeometryResourceLookup for InstalledRetainedResources {
+    fn current_handle(&self, id: noon_core::GeometryId) -> Option<GeometryResourceHandle> {
+        // A bare GeometryId has no arena scope and can alias the same slot in every
+        // additive layer. Incremental resources therefore resolve only by their
+        // qualified GeometryResourceHandle; this legacy helper remains base-only.
+        self.geometries.current_handle(id)
+    }
+
+    fn get(&self, handle: GeometryResourceHandle) -> Option<&GeometryResource> {
+        self.geometries.get(handle).or_else(|| {
+            self.geometry_layers
+                .get(&handle.arena)
+                .and_then(|&layer| self.additions.get(layer))
+                .and_then(|resources| resources.geometries.get(handle))
+        })
+    }
+}
+
+impl FontResourceLookup for InstalledRetainedResources {
+    fn handle_for_face(&self, face: &FontFaceIdentity) -> Option<noon_core::FontResourceHandle> {
+        self.fonts.handle_for_face(face).or_else(|| {
+            self.font_layers_by_face
+                .get(&(face.face_key.to_string(), face.face_index))
+                .and_then(|&layer| self.additions.get(layer))
+                .and_then(|resources| resources.fonts.handle_for_face(face))
+        })
+    }
+
+    fn get(&self, handle: noon_core::FontResourceHandle) -> Option<&noon_core::FontResource> {
+        self.fonts.get(handle).or_else(|| {
+            self.font_layers
+                .get(&handle.arena)
+                .and_then(|&layer| self.additions.get(layer))
+                .and_then(|resources| resources.fonts.get(handle))
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -482,12 +834,14 @@ pub enum RetainedResourceTransportError {
     UnknownGeometry(TransportGeometryResourceHandle),
     DuplicateText(TransportTextResourceHandle),
     DuplicateGeometry(TransportGeometryResourceHandle),
+    DuplicateFont { face_key: String, face_index: u32 },
     MissingGeometry(TransportGeometryResourceHandle),
     MissingFont { face_key: String, face_index: u32 },
     InvalidText(String),
     InvalidFont(String),
     InvalidRenderGeometry(usize),
     InvalidRenderPreparation(usize),
+    IncrementalRenderGeometryResources,
     Encode(String),
     Decode(String),
 }
@@ -528,6 +882,10 @@ impl fmt::Display for RetainedResourceTransportError {
                 "duplicate retained geometry resource {}@{}",
                 handle.id, handle.version
             ),
+            Self::DuplicateFont {
+                face_key,
+                face_index,
+            } => write!(formatter, "duplicate retained font {face_key}#{face_index}"),
             Self::MissingGeometry(handle) => write!(
                 formatter,
                 "missing retained geometry dependency {}@{}",
@@ -539,6 +897,9 @@ impl fmt::Display for RetainedResourceTransportError {
             } => write!(formatter, "missing retained font {face_key}#{face_index}"),
             Self::InvalidText(message) => write!(formatter, "invalid retained text: {message}"),
             Self::InvalidFont(message) => write!(formatter, "invalid retained font: {message}"),
+            Self::IncrementalRenderGeometryResources => formatter.write_str(
+                "incremental retained resources cannot replace compiled render geometry",
+            ),
             Self::Encode(message) => {
                 write!(formatter, "retained resource encode failed: {message}")
             }
@@ -1251,7 +1612,7 @@ mod tests {
         let handles = text_handles(&scene);
 
         let bundle = RetainedResourceBundle::capture(
-            handles,
+            handles.iter().copied(),
             scene.texts(),
             scene.geometries(),
             scene.fonts(),
@@ -1260,6 +1621,65 @@ mod tests {
 
         assert_eq!(bundle.text_count(), 2);
         assert_eq!(bundle.font_count(), 1);
+    }
+
+    #[test]
+    fn sparse_addition_reuses_installed_dependencies_and_preserves_handles() {
+        let mut scene = RetainedScene::new();
+        scene.add_typst(Typst::new("A")).unwrap();
+        scene.add_typst(Typst::new("B")).unwrap();
+        let handles = text_handles(&scene);
+        let base = RetainedResourceBundle::capture(
+            [handles[0]],
+            scene.texts(),
+            scene.geometries(),
+            scene.fonts(),
+        )
+        .unwrap();
+        let mut inventory = base.inventory();
+        let first_transport = TransportTextResourceHandle::from_source_handle(handles[0]);
+        let second_transport = TransportTextResourceHandle::from_source_handle(handles[1]);
+        let mut installed = base.install().unwrap();
+        let first_local = installed.resolve_text_handle(first_transport).unwrap();
+        let mut addition = RetainedResourceBundle::capture_additions(
+            handles.iter().copied(),
+            scene.texts(),
+            scene.geometries(),
+            scene.fonts(),
+            &inventory,
+        )
+        .unwrap();
+        assert_eq!(addition.text_count(), 1);
+        assert_eq!(addition.font_count(), 0);
+        addition.retain_additions(&mut inventory);
+
+        let prepared = installed.prepare_additions(addition).unwrap();
+        let second_local = prepared.text_handle_remap()[&second_transport];
+        installed.commit_additions(prepared);
+
+        assert_eq!(
+            installed.resolve_text_handle(first_transport),
+            Some(first_local)
+        );
+        assert_eq!(
+            installed.resolve_text_handle(second_transport),
+            Some(second_local)
+        );
+        assert!(TextResourceLookup::get(&installed, first_local).is_some());
+        assert!(TextResourceLookup::get(&installed, second_local).is_some());
+
+        let repeated = RetainedResourceBundle::capture_additions(
+            handles,
+            scene.texts(),
+            scene.geometries(),
+            scene.fonts(),
+            &inventory,
+        )
+        .unwrap();
+        assert!(
+            repeated.is_empty(),
+            "installed resources must not be resent"
+        );
     }
 
     #[test]

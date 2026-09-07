@@ -23,10 +23,13 @@ use std::{
 };
 
 use noon_compile::{
-    CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, ExecutionPatch,
-    TransformGeometryPlan,
+    CompilePatchError, CompiledChannelKey, CompiledFamilyAnimationChannel, CompiledScene,
+    CompiledTrack, ExecutionPatch, TransformGeometryPlan,
 };
-use noon_core::{mapped_continuous_progress, PublicationContext};
+use noon_core::{
+    continuous_time_map_interval, mapped_continuous_progress, FamilyAnimationState,
+    PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
+};
 use noon_core::{
     Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
     StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D, Vec2, VectorPath,
@@ -63,6 +66,8 @@ pub struct FrameState {
     pub render_geometries: Vec<Option<Arc<GeometryRef>>>,
     /// Derived geometry coordinate frame; absent means semantic object transform.
     pub render_transforms: Vec<Option<Transform2D>>,
+    pub family_animations: Vec<Option<FamilyAnimationState>>,
+    pub family_animation_plan_indices: Vec<Option<u32>>,
 }
 
 impl FrameState {
@@ -688,6 +693,7 @@ pub struct SceneInstance {
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
+    active_family_animation_indices: BTreeSet<usize>,
 }
 
 impl Clone for SceneInstance {
@@ -706,6 +712,7 @@ impl Clone for SceneInstance {
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
+            active_family_animation_indices: self.active_family_animation_indices.clone(),
         }
     }
 }
@@ -736,6 +743,7 @@ impl SceneInstance {
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
+            active_family_animation_indices: BTreeSet::new(),
         };
         instance.seek_unchecked(0.0);
         instance
@@ -747,6 +755,22 @@ impl SceneInstance {
 
     pub fn frame(&self) -> &FrameState {
         &self.frame
+    }
+
+    pub fn planned_family_frame(&self) -> RetainedPlannedFamilyFrame<'_> {
+        RetainedPlannedFamilyFrame {
+            retained: &self.frame,
+            family_animations: &self.frame.family_animations,
+            family_plan_indices: &self.frame.family_animation_plan_indices,
+        }
+    }
+
+    pub fn family_animation_plans(&self) -> &[RetainedFamilyAnimationPlan] {
+        self.compiled.family_animation_plans()
+    }
+
+    pub fn active_family_animation_indices(&self) -> &BTreeSet<usize> {
+        &self.active_family_animation_indices
     }
 
     pub fn effective_properties_at(
@@ -789,6 +813,8 @@ impl SceneInstance {
             self.compiled.text_resources(),
             self.compiled.font_resources(),
             self.compiled.geometry_resources(),
+            self.compiled.family_animation_plans(),
+            &self.active_family_animation_indices,
         )
     }
 
@@ -925,6 +951,7 @@ impl SceneInstance {
         if matches!(
             patch,
             ExecutionPatch::AddTrack(_)
+                | ExecutionPatch::AddFamilyAnimation(_)
                 | ExecutionPatch::ReplaceTrack(_)
                 | ExecutionPatch::RemoveTrack(_)
                 | ExecutionPatch::ReconcileTrack { .. }
@@ -976,6 +1003,9 @@ impl SceneInstance {
                 if compiled_stats.object_slots_reactivated == 1 {
                     let time = self.frame.time;
                     reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
+                    self.frame.family_animations[object_index] = None;
+                    self.frame.family_animation_plan_indices[object_index] = None;
+                    self.active_family_animation_indices.remove(&object_index);
                     self.mark_added(object_index);
                 } else {
                     debug_assert_eq!(object_index, self.frame.objects.len());
@@ -998,6 +1028,9 @@ impl SceneInstance {
                 self.frame.presences[object_index] = false;
                 self.frame.render_geometries[object_index] = None;
                 self.frame.render_transforms[object_index] = None;
+                self.frame.family_animations[object_index] = None;
+                self.frame.family_animation_plan_indices[object_index] = None;
+                self.active_family_animation_indices.remove(&object_index);
                 self.mark_removed(object_index);
             }
             _ => unreachable!("structural patch helper accepts only create/remove"),
@@ -1009,6 +1042,26 @@ impl SceneInstance {
     }
 
     fn apply_timeline_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
+        if matches!(patch, ExecutionPatch::AddFamilyAnimation(_)) {
+            let animation_index = self.compiled.family_animations().len();
+            self.compiled.apply_execution_patch(patch)?;
+            let animation = self.compiled.family_animations()[animation_index].clone();
+            let (start_time, end_time) = family_animation_interval(&animation);
+            let scheduler_stats = self.timeline_scheduler.append_family_animation(
+                animation_index,
+                start_time,
+                end_time,
+            );
+            self.update_family_animation(animation_index, self.frame.time);
+            self.last_stats = EvaluationStats::default();
+            self.last_patch_stats = RuntimePatchStats {
+                channels_relowered: scheduler_stats.groups_relowered,
+                scheduler_events_removed: scheduler_stats.events_removed,
+                scheduler_events_inserted: scheduler_stats.events_inserted,
+                ..RuntimePatchStats::default()
+            };
+            return Ok(());
+        }
         if let ExecutionPatch::ReconcileTrack { track, .. } = patch {
             let channel = self
                 .compiled
@@ -1035,6 +1088,7 @@ impl SceneInstance {
             ExecutionPatch::ReplaceTrack(track) => self.compiled.channel_for_track(track.id),
             ExecutionPatch::RemoveTrack(id) => self.compiled.channel_for_track(*id),
             ExecutionPatch::AddTrack(_) => None,
+            ExecutionPatch::AddFamilyAnimation(_) => unreachable!("handled above"),
             ExecutionPatch::ReconcileTrack { .. } => unreachable!("handled above"),
             _ => unreachable!("timeline patch helper accepts only track mutations"),
         };
@@ -1044,6 +1098,7 @@ impl SceneInstance {
                 self.compiled.channel_for_track(track.id)
             }
             ExecutionPatch::RemoveTrack(_) => None,
+            ExecutionPatch::AddFamilyAnimation(_) => unreachable!("handled above"),
             ExecutionPatch::ReconcileTrack { .. } => unreachable!("handled above"),
             _ => unreachable!("timeline patch helper accepts only track mutations"),
         };
@@ -1209,6 +1264,7 @@ impl SceneInstance {
     fn seek_unchecked(&mut self, time: f64) {
         self.frame = base_frame(&self.compiled, time);
         self.effective_driver_rows.clear();
+        self.active_family_animation_indices.clear();
         self.mark_all_changed();
         let mut stats = EvaluationStats::default();
 
@@ -1228,6 +1284,13 @@ impl SceneInstance {
             stats.groups_evaluated += 1;
         }
         self.timeline_scheduler.seek(time);
+        for animation_index in 0..self.compiled.family_animations().len() {
+            if let Some(state) =
+                family_state_at(&self.compiled.family_animations()[animation_index], time)
+            {
+                self.set_family_animation(animation_index, state);
+            }
+        }
 
         self.reapply_reactive();
         self.last_stats = stats;
@@ -1275,12 +1338,92 @@ impl SceneInstance {
             }
             stats.groups_evaluated += 1;
         }
+        self.update_requested_family_animations(time);
 
         self.last_stats = stats;
         if self.frame.time != previous_time {
             self.publish_effective_change();
         }
     }
+
+    fn update_requested_family_animations(&mut self, time: f64) -> bool {
+        let requested = self
+            .timeline_scheduler
+            .requested_family_animations()
+            .to_vec();
+        let mut changed = false;
+        for animation_index in requested {
+            changed = self.update_family_animation(animation_index, time) || changed;
+        }
+        changed
+    }
+
+    fn update_family_animation(&mut self, animation_index: usize, time: f64) -> bool {
+        let animation = self.compiled.family_animations()[animation_index].clone();
+        let object_index = animation.object_index as usize;
+        if let Some(state) = family_state_at(&animation, time) {
+            return self.set_family_animation(animation_index, state);
+        }
+        if self.frame.family_animation_plan_indices[object_index] != Some(animation.plan_index) {
+            return false;
+        }
+        self.frame.family_animations[object_index] = None;
+        self.frame.family_animation_plan_indices[object_index] = None;
+        self.active_family_animation_indices.remove(&object_index);
+        self.mark_changed(object_index);
+        true
+    }
+
+    fn set_family_animation(
+        &mut self,
+        animation_index: usize,
+        state: FamilyAnimationState,
+    ) -> bool {
+        let animation = &self.compiled.family_animations()[animation_index];
+        let object_index = animation.object_index as usize;
+        if self.frame.family_animations[object_index] == Some(state)
+            && self.frame.family_animation_plan_indices[object_index] == Some(animation.plan_index)
+        {
+            return false;
+        }
+        self.frame.family_animations[object_index] = Some(state);
+        self.frame.family_animation_plan_indices[object_index] = Some(animation.plan_index);
+        self.active_family_animation_indices.insert(object_index);
+        self.mark_changed(object_index);
+        true
+    }
+}
+
+fn family_animation_timing(animation: &CompiledFamilyAnimationChannel) -> TrackTiming {
+    TrackTiming::new(
+        animation.spec.start_time,
+        animation.spec.duration,
+        noon_core::RateFunction::Linear,
+    )
+}
+
+fn family_animation_interval(animation: &CompiledFamilyAnimationChannel) -> (f64, f64) {
+    continuous_time_map_interval(family_animation_timing(animation), &animation.time_map)
+        .expect("compiled family animation retains a validated continuous time map")
+}
+
+fn family_state_at(
+    animation: &CompiledFamilyAnimationChannel,
+    time: f64,
+) -> Option<FamilyAnimationState> {
+    let (start_time, end_time) = family_animation_interval(animation);
+    if time < start_time || time >= end_time {
+        return None;
+    }
+    let progress = mapped_continuous_progress(
+        family_animation_timing(animation),
+        &animation.time_map,
+        time,
+    )?;
+    animation
+        .spec
+        .state_at(animation.spec.start_time + f64::from(progress) * animation.spec.duration)
+        .ok()
 }
 
 fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
@@ -1316,6 +1459,8 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         morphs: initial_scalar_property(compiled, objects.len(), Property::Morph, 0.0),
         render_geometries: vec![None; objects.len()],
         render_transforms: vec![None; objects.len()],
+        family_animations: vec![None; objects.len()],
+        family_animation_plan_indices: vec![None; objects.len()],
         objects,
     }
 }
@@ -1465,6 +1610,8 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     ));
     frame.render_geometries.push(None);
     frame.render_transforms.push(None);
+    frame.family_animations.push(None);
+    frame.family_animation_plan_indices.push(None);
 }
 
 fn reset_object_frame(
@@ -2255,12 +2402,15 @@ const fn lerp(from: f32, to: f32, progress: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use noon_compile::CompiledObject;
-    use noon_compile::CompiledScene;
+    use noon_compile::{CompiledFamilyAnimation, CompiledObject, CompiledScene};
     use noon_core::TrackId;
     use noon_core::{
         Color, CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, Property,
         RateFunction, SceneDefinition, Style, TrackDefinition, TrackTiming,
+    };
+    use noon_core::{
+        FamilyAnimationMode, FamilyAnimationSpec, RetainedAnimationMembers,
+        RetainedFamilyAnimationPlan, SemanticStore, TextResourceArena,
     };
 
     use super::*;
@@ -2277,6 +2427,97 @@ mod tests {
             )
             .expect("valid track");
         CompiledScene::compile(&scene).expect("scene must compile")
+    }
+
+    #[test]
+    fn shared_family_channel_uses_main_scheduler_and_sparse_active_publication() {
+        let object = CompiledObject::new(
+            ObjectId::new(40),
+            ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let compiled = CompiledScene::compile_objects(vec![object.clone()], &[]).unwrap();
+        let mut semantics = SemanticStore::new();
+        let leaf = semantics.insert_authoring_object();
+        let members =
+            RetainedAnimationMembers::resolve(&object.content, &TextResourceArena::new()).unwrap();
+        let plan = RetainedFamilyAnimationPlan::single_leaf(leaf, object.id, members).unwrap();
+        let spec = FamilyAnimationSpec::new(
+            FamilyAnimationMode::DrawBorderThenFill,
+            0.0,
+            4.0,
+            0.0,
+            RateFunction::Linear,
+            false,
+            false,
+        )
+        .unwrap();
+        let time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.5,
+            RateFunction::Linear,
+        )]);
+        let mut instance = SceneInstance::new(compiled);
+        instance
+            .apply_execution_patch(&ExecutionPatch::AddFamilyAnimation(
+                CompiledFamilyAnimation {
+                    target: object.id,
+                    plan: plan.clone(),
+                    spec,
+                    time_map,
+                },
+            ))
+            .unwrap();
+        let reverse = FamilyAnimationSpec::new(
+            FamilyAnimationMode::DrawBorderThenFill,
+            3.0,
+            2.0,
+            0.0,
+            RateFunction::Linear,
+            false,
+            true,
+        )
+        .unwrap();
+        instance
+            .apply_execution_patch(&ExecutionPatch::AddFamilyAnimation(
+                CompiledFamilyAnimation {
+                    target: object.id,
+                    plan,
+                    spec: reverse,
+                    time_map: CompositionTimeMap::identity(),
+                },
+            ))
+            .unwrap();
+
+        instance.seek(0.5).unwrap();
+        assert!(instance.active_family_animation_indices().is_empty());
+        instance.seek(2.0).unwrap();
+        assert_eq!(
+            instance.frame().family_animations[0]
+                .expect("mapped family channel is active")
+                .overall_progress,
+            0.5
+        );
+        assert_eq!(
+            instance
+                .active_family_animation_indices()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+        assert_eq!(instance.frame().family_animation_plan_indices[0], Some(0));
+        assert_eq!(instance.family_animation_plans().len(), 2);
+        instance.seek(4.0).unwrap();
+        assert_eq!(instance.frame().family_animation_plan_indices[0], Some(1));
+        instance.seek(2.0).unwrap();
+        assert_eq!(instance.frame().family_animation_plan_indices[0], Some(0));
+        instance.advance_to(3.0).unwrap();
+        assert_eq!(instance.frame().family_animation_plan_indices[0], Some(1));
+        instance.advance_to(5.0).unwrap();
+        assert!(instance.active_family_animation_indices().is_empty());
+        assert!(instance.frame().family_animations[0].is_none());
     }
 
     #[test]

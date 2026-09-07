@@ -15,6 +15,8 @@ fn large_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
         ..Transform2D::IDENTITY
     };
     FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: (0..OBJECT_COUNT)
             .map(|index| FrameObjectState {
@@ -40,6 +42,8 @@ fn single_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
         ..Transform2D::IDENTITY
     };
     FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
             id: ObjectId::new(1),

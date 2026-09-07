@@ -31,6 +31,8 @@ fn active_analytic_reveal_meshes_survive_cache_pressure_on_full_rebuild() {
         rectangle(3, 2.2, 1.4),
     ];
     let frame = FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.5,
         presences: vec![true; objects.len()],
         reveals: vec![0.5; objects.len()],

@@ -23,6 +23,8 @@ fn static_geometry_frame() -> FrameState {
         .collect();
 
     FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects,
         presences: vec![true; STATIC_OBJECTS],
@@ -94,6 +96,8 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
     let mut texts = TextResourceArena::new();
     let text = texts.insert(artifact.resource).unwrap();
     let mut frame = FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: (0..STATIC_OBJECTS)
             .map(|index| FrameObjectState {

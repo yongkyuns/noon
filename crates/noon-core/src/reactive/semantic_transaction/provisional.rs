@@ -84,6 +84,23 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
+    pub(super) fn ensure_plain_text_write_target(
+        &self,
+        state: &crate::SemanticObjectState,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        let crate::SemanticObjectContent::Text(handle) = &state.content else {
+            return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+        };
+        let Some(resource) = self.store.text_resources().get(*handle) else {
+            return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+        };
+        if resource.kind != crate::TextSourceKind::Plain {
+            return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+        }
+        Ok(())
+    }
+
     pub(super) fn ensure_scalar_animation_target(
         &self,
         signal: SemanticNodeId,

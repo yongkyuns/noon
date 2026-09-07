@@ -61,6 +61,12 @@ enum OrdinaryCompositionChild {
         mode: noon::SubsetDisplayMode,
         options: noon_core::AnimationOptions,
     },
+    TextWrite {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        reverse_member_order: bool,
+        options: noon_core::AnimationOptions,
+    },
     Rotate {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1446,6 +1452,16 @@ impl CanonicalAuthoringScene {
                     mode: *mode,
                     options: *options,
                 },
+                OrdinaryCompositionChild::TextWrite {
+                    target,
+                    reverse_member_order,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::TextWrite {
+                    target,
+                    reverse_member_order: *reverse_member_order,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
@@ -1598,6 +1614,15 @@ impl CanonicalAuthoringScene {
                     target,
                     ..
                 } => output.push((*entering_id, target)),
+                OrdinaryCompositionChild::TextWrite {
+                    entering_id,
+                    target,
+                    ..
+                } => {
+                    if let Some(id) = entering_id {
+                        output.push((*id, target));
+                    }
+                }
                 OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
@@ -1916,6 +1941,12 @@ impl CanonicalAuthoringScene {
                     target,
                     options,
                 } => (Some(*entering_id), target, *options),
+                OrdinaryCompositionChild::TextWrite {
+                    entering_id,
+                    target,
+                    options,
+                    ..
+                } => (*entering_id, target, *options),
                 OrdinaryCompositionChild::Fade {
                     entering_id,
                     target,
@@ -1950,7 +1981,13 @@ impl CanonicalAuthoringScene {
                 noon_core::resolve_animation_options(
                     noon_core::AnimationDefaults::MANIM,
                     options,
-                    noon_core::AnimationOptions::new(),
+                    if matches!(child, OrdinaryCompositionChild::TextWrite { .. }) {
+                        // Glyph realization owns reversal; keep the original child
+                        // options for shared schedule lowering after shape validation.
+                        noon_core::AnimationOptions::new().reverse_rate_function(false)
+                    } else {
+                        noon_core::AnimationOptions::new()
+                    },
                 )
             };
             resolved.map_err(|error| error.to_string())?;
@@ -3630,6 +3667,39 @@ mod wasm {
                 parse_object_id("subset-display family object ID", object_id)?,
                 member.semantic_mobject().clone(),
             ));
+            Ok(())
+        }
+
+        /// Append one plain-Text Write/Unwrite leaf. Glyph membership, default
+        /// duration/lag, admission, and phase scheduling remain shared Rust semantics.
+        #[wasm_bindgen(js_name = appendTextWrite)]
+        pub fn append_text_write(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            reverse_member_order: bool,
+            introducer: bool,
+            remover: bool,
+            reverse_rate_function: bool,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .introducer(introducer)
+                .remover(remover)
+                .reverse_rate_function(reverse_rate_function);
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("Text Write object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::TextWrite {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                reverse_member_order,
+                options,
+            });
             Ok(())
         }
 
@@ -6603,6 +6673,113 @@ mod tests {
         )
         .unwrap();
         assert_eq!(publication.objects.len(), 3);
+    }
+
+    #[test]
+    fn ordinary_text_write_composes_with_a_distinct_text_transform_atomically() {
+        let mut context = CanonicalAuthoringScene::default();
+        let moving = context.scene.text(noon::Text::new("MOVE")).unwrap();
+        let writing = context.scene.text(noon::Text::new("WRITE")).unwrap();
+        context.bind_mobject(ObjectId::new(0), &moving).unwrap();
+        let mut moving_target = moving.target_editor().unwrap();
+        moving_target.shift(1.0, 0.0).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            bound_transform_child(&moving, moving_target, options),
+            OrdinaryCompositionChild::TextWrite {
+                entering_id: Some(ObjectId::new(1)),
+                target: writing.clone(),
+                reverse_member_order: false,
+                options: AnimationOptions::new(),
+            },
+        ];
+
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    options,
+                )
+                .unwrap(),
+            1.0
+        );
+        assert!(context.live_contains_mobject(&writing).unwrap());
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&moving)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(1.0, 0.0)
+        );
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(1)),
+            Some(&writing.node_id())
+        );
+
+        let unwrite = [OrdinaryCompositionChild::TextWrite {
+            entering_id: None,
+            target: writing.clone(),
+            reverse_member_order: true,
+            options: options
+                .introducer(false)
+                .remover(true)
+                .reverse_rate_function(true),
+        }];
+        context
+            .validate_ordinary_mixed_composition(
+                &unwrite,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &unwrite,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert!(!context.live_contains_mobject(&writing).unwrap());
+
+        let mut rejected = CanonicalAuthoringScene::default();
+        let shared = rejected.scene.text(noon::Text::new("ONE")).unwrap();
+        let mut target = shared.target_editor().unwrap();
+        target.shift(1.0, 0.0).unwrap();
+        let conflicting = [
+            OrdinaryCompositionChild::TextWrite {
+                entering_id: Some(ObjectId::new(0)),
+                target: shared.clone(),
+                reverse_member_order: false,
+                options: AnimationOptions::new(),
+            },
+            OrdinaryCompositionChild::TransformTo {
+                entering_id: Some(ObjectId::new(1)),
+                source: shared,
+                target,
+                interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                options,
+            },
+        ];
+        let revision = rejected.scene.store().borrow().scene_revision();
+        assert!(rejected
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &conflicting,
+                AnimationOptions::new(),
+                options,
+            )
+            .is_err());
+        assert!(rejected.live_player.is_none());
+        assert!(rejected.bindings.is_empty());
+        assert_eq!(rejected.scene.store().borrow().scene_revision(), revision);
     }
 
     #[test]

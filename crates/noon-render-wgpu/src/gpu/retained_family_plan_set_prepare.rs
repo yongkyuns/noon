@@ -47,6 +47,69 @@ impl From<RetainedFamilyDrawBorderPrepareError> for RetainedFamilyPlanSetPrepare
 }
 
 impl RetainedFramePreparer {
+    /// Prepare the ordinary runtime publication with its typed, execution-derived
+    /// family plans. Direct native and direct WASM callers keep the plan/frame
+    /// boundary in-process; only the genuine worker bridge serializes this view.
+    pub fn prepare_planned_publication_visible<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        publication: &RendererPublication<'_>,
+        visible_object_indices: &[usize],
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        let received = publication.context();
+        if let Some(applied) = self.last_applied_publication {
+            if publication_is_stale(received, applied) {
+                return Err(RetainedPrepareError::StalePublication { received, applied }.into());
+            }
+        }
+        validate_visible_object_indices(publication.frame(), visible_object_indices)
+            .map_err(RetainedPrepareError::from)?;
+
+        let frame = publication.planned_family_frame();
+        if publication.active_family_animation_indices().is_empty() {
+            self.release_planned_family_realization();
+            return self
+                .prepare_publication_visible(
+                    device,
+                    queue,
+                    publication,
+                    visible_object_indices,
+                    metrics,
+                )
+                .map_err(Into::into);
+        }
+
+        let prepared = self.prepare_family_plan_set_with_changes_inner(
+            device,
+            queue,
+            &frame,
+            publication.family_animation_plans(),
+            publication.changes(),
+            publication.text_resources(),
+            publication.font_resources(),
+            publication.geometry_resources(),
+            metrics,
+            Some(visible_object_indices),
+            Some(publication.active_family_animation_indices()),
+        )?;
+        *prepared.applied_publication = Some(received);
+        Ok(prepared)
+    }
+
+    /// Drop renderer-local glyph substitution metadata before returning to the
+    /// ordinary atlas representation at operation completion.
+    pub fn release_planned_family_realization(&mut self) {
+        if self.family_plan_active_signature.is_empty() {
+            return;
+        }
+        self.family_plan_active_signature.clear();
+        self.family_plan_scratch_slots.clear();
+        self.scratch_ready = false;
+        self.prepared_generation_ready = false;
+    }
+
     /// Prepare a frame with any number of immutable family plans in one renderer pass.
     ///
     /// Runtime plan identity is selected per object, so disjoint active requests may
@@ -67,6 +130,98 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        self.prepare_family_plan_set_with_changes_inner(
+            device, queue, frame, plans, changes, texts, fonts, geometries, metrics, None, None,
+        )
+    }
+
+    /// Worker-boundary equivalent of the typed publication path. The installed
+    /// mirror maintains the sparse active set while plans and frame state remain
+    /// the same renderer inputs as direct execution.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_active_family_plan_set_with_changes<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        active_indices: &std::collections::BTreeSet<usize>,
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        self.prepare_family_plan_set_with_changes_inner(
+            device,
+            queue,
+            frame,
+            plans,
+            changes,
+            texts,
+            fonts,
+            geometries,
+            metrics,
+            None,
+            Some(active_indices),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_family_plan_set_with_changes_inner<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+        visible_object_indices: Option<&[usize]>,
+        active_indices: Option<&std::collections::BTreeSet<usize>>,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        let active_signature = active_indices
+            .map(|indices| active_family_signature(frame, plans, indices))
+            .transpose()?
+            .filter(|signature| {
+                signature.iter().all(|(index, _)| {
+                    frame.retained.objects[*index].text().is_some()
+                        && frame.family_animation(*index).is_some_and(|state| {
+                            state.mode == noon_core::FamilyAnimationMode::DrawBorderThenFill
+                        })
+                })
+            });
+        if active_signature
+            .as_ref()
+            .is_some_and(|signature| *signature == self.family_plan_active_signature)
+            && self.scratch_ready
+            && !changes.is_all()
+            && !changes.is_structural()
+        {
+            return self.prepare_cached_family_plan_set(
+                device,
+                queue,
+                frame,
+                plans,
+                changes,
+                texts,
+                fonts,
+                geometries,
+                metrics,
+                visible_object_indices,
+            );
+        }
+
+        // A changed active set is the structural boundary for renderer-local glyph
+        // rows. Rebuild the canonical baseline once; steady-state frames take the
+        // sparse path above.
+        if active_indices.is_some() {
+            self.scratch_ready = false;
+            self.family_plan_active_signature.clear();
+            self.family_plan_scratch_slots.clear();
+        }
         self.prepare_canonical_mixed_baseline(
             device,
             queue,
@@ -77,11 +232,15 @@ impl RetainedFramePreparer {
             geometries,
             metrics,
         )?;
-
         self.prepared_generation_ready = false;
-        if let Err(error) = self.apply_family_plan_set_to_scratch(frame, plans, texts, fonts) {
+        if let Err(error) = self.apply_family_plan_set_to_scratch(frame, plans, texts, fonts, active_indices.is_some()) {
             self.scratch_ready = false;
             return Err(error);
+        }
+        let cache_generation = active_signature.is_some();
+        if let Some(signature) = active_signature {
+            self.family_plan_active_signature = signature;
+            self.scratch_ready = true;
         }
 
         let geometry = self.geometry.prepare(&self.scratch);
@@ -92,6 +251,20 @@ impl RetainedFramePreparer {
             &self.snapshot_text_items,
             &geometry,
         );
+        rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
+        if let Some(indices) = visible_object_indices {
+            if let Some(projected) = project_mixed_visibility_cached(
+                frame.retained,
+                indices,
+                &self.render_items,
+                &self.render_item_ranges,
+                &mut self.visible_projection_ready,
+                &mut self.visible_projection_candidates,
+                &mut self.visible_render_items,
+            ) {
+                self.visibility_stats.record(indices.len(), projected);
+            }
+        }
         self.incremental_stats.mixed_order_rebuilds = self
             .incremental_stats
             .mixed_order_rebuilds
@@ -114,7 +287,9 @@ impl RetainedFramePreparer {
         self.snapshot_prepare_stats = stats;
         self.snapshot_metrics = Some(metrics);
         self.prepared_generation_ready = true;
-        self.scratch_ready = false;
+        if !cache_generation {
+            self.scratch_ready = false;
+        }
 
         let text = PreparedRetainedTextSnapshot {
             time: frame.retained.time,
@@ -133,7 +308,11 @@ impl RetainedFramePreparer {
             geometry,
             text_generation: self.text_generation,
             text,
-            render_items: &self.render_items,
+            render_items: if visible_object_indices.is_some() {
+                &self.visible_render_items
+            } else {
+                &self.render_items
+            },
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
@@ -146,6 +325,7 @@ impl RetainedFramePreparer {
         plans: &[RetainedFamilyAnimationPlan],
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
+        stable_rows: bool,
     ) -> Result<(), RetainedFamilyPlanSetPrepareError> {
         if frame.family_animations.len() != frame.retained.objects.len()
             || frame.family_plan_indices.len() != frame.retained.objects.len()
@@ -244,7 +424,7 @@ impl RetainedFramePreparer {
                                     run_index,
                                     texts,
                                     fonts,
-                                )?;
+                                    )?;
                             } else {
                                 self.sources.push(SourceItem::FastGlyphRun {
                                     object_id,
@@ -260,6 +440,7 @@ impl RetainedFramePreparer {
                                 object_index_usize,
                                 object_id,
                                 run_index,
+                                stable_rows,
                             )? {
                                 self.push_family_draw_border_glyph_run(
                                     &family_frame,
@@ -269,6 +450,7 @@ impl RetainedFramePreparer {
                                     run_index,
                                     texts,
                                     fonts,
+                                    stable_rows,
                                 )?;
                             } else {
                                 self.sources.push(SourceItem::FastGlyphRun {
@@ -284,6 +466,221 @@ impl RetainedFramePreparer {
         }
         Ok(())
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_cached_family_plan_set<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+        visible_object_indices: Option<&[usize]>,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        self.prepared_generation_ready = false;
+        let partial_upload_base_generation = self.text_generation;
+        if changes_include_text(frame.retained, changes) {
+            let prepared_text = self.text.prepare_with_changes(
+                device,
+                queue,
+                frame.retained,
+                changes,
+                texts,
+                fonts,
+                metrics,
+            ).map_err(RetainedPrepareError::from)?;
+            copy_local_text_snapshot_updates(
+                &mut self.snapshot_mask_quads,
+                &mut self.snapshot_color_quads,
+                &self.text_item_ranges,
+                prepared_text.items,
+                prepared_text.mask_quads,
+                prepared_text.color_quads,
+                changes,
+                &mut self.dirty_mask_ranges,
+                &mut self.dirty_color_ranges,
+            );
+            self.incremental_stats.text_snapshot_copies = self
+                .incremental_stats
+                .text_snapshot_copies
+                .saturating_add(1);
+        } else {
+            self.dirty_mask_ranges.clear();
+            self.dirty_color_ranges.clear();
+        }
+        if !self.dirty_mask_ranges.is_empty() || !self.dirty_color_ranges.is_empty() {
+            self.text_generation = self
+                .text_generation
+                .checked_add(1)
+                .expect("retained text generation counter exhausted");
+        }
+
+        let active_indices = self
+            .family_plan_active_signature
+            .iter()
+            .map(|(index, _)| *index)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut scratch_changes = Vec::new();
+        for &index in changes.object_indices() {
+            if active_indices.contains(&index) {
+                continue;
+            }
+            let Some(object) = frame.retained.objects.get(index) else {
+                continue;
+            };
+            if object.text().is_some() {
+                continue;
+            }
+            let Some(scratch_slot) = self.scratch_slots.get(index).and_then(|slot| *slot) else {
+                continue;
+            };
+            let source_geometry = frame
+                .retained
+                .render_geometry(index)
+                .or_else(|| object.geometry())
+                .ok_or(RetainedPrepareError::MissingGeometryResource)?;
+            let geometry = resolve_geometry_ref(source_geometry, geometries)?;
+            let scratch = &mut self.scratch.objects[scratch_slot];
+            scratch.content = ObjectContentRef::Geometry(geometry);
+            scratch.transform = frame.retained.render_transform(index);
+            scratch.style = object.style;
+            scratch.appearance = object.appearance;
+            self.scratch.reveals[scratch_slot] = frame.retained.reveal(index);
+            self.scratch.morphs[scratch_slot] = frame.retained.morph(index);
+            scratch_changes.push(scratch_slot);
+        }
+
+        let signature = self.family_plan_active_signature.clone();
+        let family_frame = frame.as_family_frame();
+        for (object_index, plan_index) in signature {
+            let object = &frame.retained.objects[object_index];
+            let plan = &plans[plan_index as usize];
+            let text =
+                object
+                    .text()
+                    .ok_or(RetainedFamilyDrawBorderPrepareError::MissingSourceObject(
+                        object.id,
+                    ))?;
+            let resource = texts
+                .get(text)
+                .ok_or(RetainedPrepareError::MissingTextResource)?;
+            let Some(slots) = self.family_plan_scratch_slots.get(&object_index) else {
+                // An active Text whose glyph outlines are all empty has no geometry
+                // rows to update, but still participates in the stable active set.
+                continue;
+            };
+            let Some(members) = retained_family_draw_border_then_fill_members_for_object(
+                &family_frame,
+                plan,
+                object_index,
+            ).map_err(RetainedFamilyDrawBorderPrepareError::from)? else {
+                continue;
+            };
+            for member in members {
+                let member = member.map_err(RetainedFamilyDrawBorderPrepareError::from)?;
+                let Some(&scratch_slot) = slots.get(&member.glyph) else {
+                    // Glyphs with empty outlines deliberately have no geometry row.
+                    continue;
+                };
+                let run = resource.runs.get(member.glyph.run_index as usize).ok_or(
+                    RetainedFamilyDrawBorderPrepareError::InvalidTextRun {
+                        object: object.id,
+                        run_index: member.glyph.run_index,
+                    },
+                )?;
+                let reveal = match member.phase {
+                    RetainedDrawBorderThenFillPhase::Outline { reveal } => reveal.max(0.0),
+                    RetainedDrawBorderThenFillPhase::Fill { .. } => 1.0,
+                };
+                let scratch = &mut self.scratch.objects[scratch_slot];
+                scratch.transform = object.transform;
+                scratch.style = draw_border_glyph_style(run, object.style, member.phase);
+                scratch.appearance = object.appearance;
+                self.scratch.presences[scratch_slot] = true;
+                self.scratch.reveals[scratch_slot] = reveal;
+                self.scratch.morphs[scratch_slot] = 0.0;
+                self.scratch.render_transforms[scratch_slot] = None;
+                scratch_changes.push(scratch_slot);
+            }
+        }
+        scratch_changes.sort_unstable();
+        scratch_changes.dedup();
+        self.scratch.time = frame.retained.time;
+        self.incremental_stats.scratch_reuses =
+            self.incremental_stats.scratch_reuses.saturating_add(1);
+        let scratch_changes = FrameChanges::objects(scratch_changes);
+        self.project_mixed_visibility(frame.retained, visible_object_indices);
+        let geometry = self
+            .geometry
+            .prepare_incremental(&self.scratch, &scratch_changes);
+        let outline_cache = self.outlines.stats();
+        let stats = RetainedPrepareStats {
+            outline_cache_hits: outline_cache.hits,
+            outline_cache_misses: outline_cache.misses,
+            ..self.snapshot_prepare_stats
+        };
+        self.snapshot_prepare_stats = stats;
+        self.snapshot_metrics = Some(metrics);
+        self.prepared_generation_ready = true;
+        let text = PreparedRetainedTextSnapshot {
+            time: frame.retained.time,
+            mask_quads: &self.snapshot_mask_quads,
+            color_quads: &self.snapshot_color_quads,
+            items: &self.snapshot_text_items,
+            stats: self.snapshot_text_stats,
+            atlas: self.text.atlas(),
+            partial_upload_base_generation: Some(partial_upload_base_generation),
+            dirty_mask_ranges: &self.dirty_mask_ranges,
+            dirty_color_ranges: &self.dirty_color_ranges,
+        };
+        Ok(PreparedRetainedGpuFrame {
+            applied_publication: &mut self.last_applied_publication,
+            geometry_only: false,
+            geometry,
+            text_generation: self.text_generation,
+            text,
+            render_items: if visible_object_indices.is_some() {
+                &self.visible_render_items
+            } else {
+                &self.render_items
+            },
+            stats,
+            source_geometry_slots: None,
+            render_item_ranges: None,
+        })
+    }
+}
+
+fn active_family_signature(
+    frame: &RetainedPlannedFamilyFrame<'_>,
+    plans: &[RetainedFamilyAnimationPlan],
+    active_indices: &std::collections::BTreeSet<usize>,
+) -> Result<Vec<(usize, u32)>, RetainedPlannedFamilyFrameError> {
+    active_indices
+        .iter()
+        .map(|&index| {
+            let object = frame
+                .retained
+                .objects
+                .get(index)
+                .ok_or(RetainedPlannedFamilyFrameError::InvalidObjectIndex(index))?;
+            let plan = frame
+                .family_plan_index(index)
+                .ok_or(RetainedPlannedFamilyFrameError::MissingPlanIndex(object.id))?;
+            if plan as usize >= plans.len() {
+                return Err(RetainedPlannedFamilyFrameError::InvalidPlanIndex {
+                    object: object.id,
+                    plan_index: plan,
+                    plan_count: plans.len(),
+                });
+            }
+            Ok((index, plan))
+        })
+        .collect()
 }
 
 fn selected_family_plan<'a>(

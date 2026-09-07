@@ -251,6 +251,7 @@ impl RetainedFramePreparer {
                         object_index_usize,
                         object_id,
                         run_index,
+                        false,
                     )? {
                         self.push_family_draw_border_glyph_run(
                             frame,
@@ -260,6 +261,7 @@ impl RetainedFramePreparer {
                             run_index,
                             texts,
                             fonts,
+                            false,
                         )?;
                     } else {
                         self.sources.push(SourceItem::FastGlyphRun {
@@ -281,6 +283,7 @@ impl RetainedFramePreparer {
         object_index: usize,
         object: ObjectId,
         run_index: u32,
+        stable_rows: bool,
     ) -> Result<bool, RetainedFamilyDrawBorderPrepareError> {
         let Some(members) =
             retained_family_draw_border_then_fill_members_for_object(frame, plan, object_index)?
@@ -289,7 +292,9 @@ impl RetainedFramePreparer {
         };
         for member in members {
             let member = member?;
-            if member.glyph.run_index == run_index && !draw_border_phase_is_final(member.phase) {
+            if member.glyph.run_index == run_index
+                && (stable_rows || !matches!(member.phase, RetainedDrawBorderThenFillPhase::Fill { progress } if progress >= 1.0))
+            {
                 return Ok(true);
             }
             if member.object != object {
@@ -309,6 +314,7 @@ impl RetainedFramePreparer {
         run_index: u32,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
+        stable_rows: bool,
     ) -> Result<(), RetainedFamilyDrawBorderPrepareError> {
         let object = frame.retained.objects.get(object_index).ok_or(
             RetainedFamilyDrawBorderPrepareError::MissingSourceObject(object_id),
@@ -340,10 +346,12 @@ impl RetainedFramePreparer {
                 continue;
             }
             let reveal = match member.phase {
-                RetainedDrawBorderThenFillPhase::Outline { reveal } if reveal <= 0.0 => continue,
-                RetainedDrawBorderThenFillPhase::Outline { reveal } => reveal,
+                RetainedDrawBorderThenFillPhase::Outline { reveal } => reveal.max(0.0),
                 RetainedDrawBorderThenFillPhase::Fill { .. } => 1.0,
             };
+            if reveal <= 0.0 && !stable_rows {
+                continue;
+            }
             let positioned = run.glyphs.get(member.glyph.glyph_index as usize).ok_or(
                 RetainedFamilyDrawBorderPrepareError::InvalidTextGlyph {
                     object: object_id,
@@ -360,7 +368,7 @@ impl RetainedFramePreparer {
             if path.is_empty() {
                 continue;
             }
-            self.push_geometry(
+            let scratch_slot = self.push_geometry(
                 object_id,
                 GeometryRef::VectorPath(path),
                 object.transform,
@@ -369,13 +377,15 @@ impl RetainedFramePreparer {
                 reveal,
                 0.0,
             );
+            if stable_rows {
+                self.family_plan_scratch_slots
+                    .entry(object_index)
+                    .or_default()
+                    .insert(member.glyph, scratch_slot);
+            }
         }
         Ok(())
     }
-}
-
-fn draw_border_phase_is_final(phase: RetainedDrawBorderThenFillPhase) -> bool {
-    matches!(phase, RetainedDrawBorderThenFillPhase::Fill { progress } if progress >= 1.0)
 }
 
 fn draw_border_glyph_style(
@@ -555,6 +565,8 @@ mod draw_border_tests {
         builder.accept_leaf(leaf, &object, &texts).unwrap();
         let plan = builder.finish().unwrap();
         let frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
                 id: ObjectId::new(20),

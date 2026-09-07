@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use noon_core::{
     FamilyAnimationError, FamilyAnimationState, ObjectId, RetainedFamilyAnimationMemberPlanError,
     RetainedFamilyAnimationPlan, RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition,
-    SemanticStore, SemanticStoreError, TextResourceArena,
+    SemanticStore, SemanticStoreError, TextResourceLookup,
 };
 use noon_runtime::FrameState;
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,7 @@ impl RetainedFamilyPlanTransport {
     pub fn install(
         &self,
         frame: &FrameState,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<RetainedFamilyAnimationPlan, RetainedFamilyTransportError> {
         self.validate()?;
 
@@ -187,8 +187,8 @@ mod tests {
     use noon_core::{
         FamilyAnimationMode, FontFaceIdentity, GeometryRef, GlyphRun, ObjectContentRef,
         PositionedGlyph, RateFunction, Rect, Style, TextAffineTransform, TextClusterIdentity,
-        TextDirection, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan, Transform2D,
-        Vec2,
+        TextDirection, TextRenderItem, TextResource, TextResourceArena, TextSourceKind,
+        TextSourceSpan, Transform2D, Vec2,
     };
     use noon_runtime::FrameObjectState;
 
@@ -268,6 +268,8 @@ mod tests {
         let text_id = ObjectId::new(10);
         let circle_id = ObjectId::new(11);
         let frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![
                 FrameObjectState {

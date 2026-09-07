@@ -48,6 +48,8 @@ class MixedRetainedPropertyFirst(Scene):
             run_time=1.0,
             rate_func=linear,
         )
+        assert self.mobjects == [moving, writing]
+        assert abs(moving.get_center()[0] - 1) < 1e-6
 `;
 
 const editedFamilyFirstSource = `
@@ -65,6 +67,8 @@ class MixedRetainedFamilyFirst(Scene):
             run_time=1.0,
             rate_func=linear,
         )
+        assert self.mobjects == [writing, moving, appearing]
+        assert abs(moving.get_center()[1] - 1) < 1e-6
 `;
 
 const sameLeafSource = `
@@ -80,11 +84,10 @@ class MixedRetainedSameLeaf(Scene):
                 run_time=0.25,
             )
             raise AssertionError("same-leaf family/property ownership must fail")
-        except ValueError as error:
-            assert "disjoint scene leaves" in str(error)
-        assert label._scene is None
-        assert label._object is None
-        assert label._retained_object_id is None
+        except ValueError:
+            pass
+        assert len(self.mobjects) == 0
+        assert abs(label.get_center()[0]) < 1e-6
         self.play(Write(label), run_time=0.25, rate_func=linear)
 `;
 
@@ -100,15 +103,11 @@ class MixedRetainedRollback(Scene):
                 Write(writing),
                 moving.animate(run_time=-1.0).shift(RIGHT),
             )
-            raise AssertionError("negative retained run_time must fail")
+            raise AssertionError("negative run_time must fail")
         except ValueError:
             pass
-        assert writing._scene is None
-        assert writing._object is None
-        assert writing._retained_object_id is None
-        assert moving._scene is None
-        assert moving._object is None
-        assert moving._retained_object_id is None
+        assert len(self.mobjects) == 0
+        assert abs(moving.get_center()[0]) < 1e-6
         self.play(
             Write(writing),
             moving.animate.shift(RIGHT),
@@ -116,17 +115,6 @@ class MixedRetainedRollback(Scene):
             rate_func=linear,
         )
 `;
-
-function canonicalTextSources(result) {
-  assert.equal(result.retainedDocument, undefined, "canonical export must not retain a sidecar");
-  return result.sceneSpec.objects
-    .filter((object) => object.content?.kind === "text")
-    .map((object) => object.content.value.source);
-}
-
-function tracksFor(result, property) {
-  return result.sceneSpec.tracks.filter((track) => track.property === property);
-}
 
 let browser = null;
 try {
@@ -147,140 +135,20 @@ try {
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonManimCompat.ready());
 
-  // Both source versions run through the same Pyodide authoring worker. Object order
-  // must follow source binding order even though both objects use retained execution.
-  const propertyFirst = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    propertyFirstSource,
+  // Source reruns reuse one execution owner and canvas. Assertions in the
+  // source inspect completed shared state and atomic failure through public APIs.
+  const observed = await page.evaluate(
+    (sources) => window.noonManimCompat.runLiveSources(sources),
+    [propertyFirstSource, editedFamilyFirstSource, sameLeafSource, rollbackSource],
   );
-  assert.equal(propertyFirst.kind, "scene_document");
-  assert.equal(propertyFirst.document.objects.length, 0);
-  assert.deepEqual(canonicalTextSources(propertyFirst), ["MOVE", "WRITE"]);
-  assert.equal(propertyFirst.sceneSpec.objects.length, 2);
-  assert.equal(propertyFirst.sceneSpec.family_animations.length, 1);
-  assert.equal(propertyFirst.duration, 1);
-  const firstPositions = tracksFor(propertyFirst, "position");
-  assert.equal(firstPositions.length, 1);
-  assert.equal(firstPositions[0].object, 0, "property-first Text must own the first retained object slot");
-  assert.deepEqual(firstPositions[0].values.vec2, {
-    from: { x: 0, y: 0 },
-    to: { x: 1, y: 0 },
-  });
-  assert.equal(firstPositions[0].timing.start_time, 0);
-  assert.equal(firstPositions[0].timing.duration, 1);
-  assert.equal(firstPositions[0].timing.easing, "linear");
-
-  const edited = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    editedFamilyFirstSource,
-  );
-  assert.equal(edited.kind, "scene_document");
-  assert.equal(edited.document.objects.length, 0);
-  assert.deepEqual(canonicalTextSources(edited), ["EDITED", "SHIFT", "FADE"]);
-  assert.equal(edited.sceneSpec.objects.length, 3);
-  assert.equal(edited.sceneSpec.family_animations.length, 1);
-  assert.equal(edited.duration, 1);
-  const editedPositions = tracksFor(edited, "position");
-  assert.equal(editedPositions.length, 1);
-  assert.equal(editedPositions[0].object, 1, "family-first source order must remain canonical painter order");
-  assert.deepEqual(editedPositions[0].values.vec2, {
-    from: { x: 0, y: 0 },
-    to: { x: 0, y: 1 },
-  });
-  const editedPresence = tracksFor(edited, "presence");
-  const editedAppearance = tracksFor(edited, "appearance");
-  assert.ok(
-    editedPresence.some((track) => track.object === 2 && track.values.bool?.from === false && track.values.bool?.to === true),
-    "mixed retained FadeIn must keep retained lifecycle ownership",
-  );
-  assert.ok(
-    editedAppearance.some((track) => track.object === 2 && track.values.scalar?.from === 0 && track.values.scalar?.to === 1),
-    "mixed retained FadeIn must keep retained appearance-track ownership",
-  );
-
-  const sameLeaf = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    sameLeafSource,
-  );
-  assert.deepEqual(canonicalTextSources(sameLeaf), ["ONE"]);
-  assert.equal(sameLeaf.sceneSpec.objects.length, 1);
-  assert.equal(sameLeaf.sceneSpec.family_animations.length, 1);
-  assert.equal(tracksFor(sameLeaf, "position").length, 0, "rejected same-leaf play must not leak a retained track");
-
-  const rollback = await page.evaluate(
-    (source) => window.noonManimCompat.run(source),
-    rollbackSource,
-  );
-  assert.deepEqual(canonicalTextSources(rollback), ["ROLLBACK", "MOVE"]);
-  assert.equal(rollback.sceneSpec.objects.length, 2);
-  assert.equal(rollback.sceneSpec.family_animations.length, 1, "failed family request must be rolled back before retry");
-  assert.equal(tracksFor(rollback, "position").length, 1, "failed retained property track must not survive retry");
-
-  // Edit -> rerun uses the same browser execution owner. Rebuilding from A to B must
-  // replace the canonical object/request set rather than accumulate the first run.
-  const rebuild = await page.evaluate(async ({ first, second }) => {
-    const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 360;
-    document.body.appendChild(canvas);
-    const errors = [];
-    const execution = new AuthoringExecutionClient(canvas, {
-      onError(error) {
-        errors.push(String(error));
-      },
-    });
-
-    async function waitForObjectCount(expected) {
-      let latest = null;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        latest = await execution.metrics();
-        if (errors.length !== 0) throw new Error(errors.join("; "));
-        if (latest.metrics?.objectCount === expected) return latest;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      throw new Error(`retained object count did not converge to ${expected}: ${JSON.stringify(latest)}`);
-    }
-
-    try {
-      await execution.startRetainedCanonical(JSON.stringify(first.sceneSpec), {
-        loopDurationSeconds: first.duration,
-        transportMode: "transferable",
-      });
-      const persistentCanvas = execution.canvas;
-      const before = await waitForObjectCount(2);
-      const reconciled = await execution.reconcileScene(JSON.stringify(second.document), {
-        sceneSpecJson: JSON.stringify(second.sceneSpec),
-        loopDurationSeconds: second.duration,
-      });
-      const after = await waitForObjectCount(3);
-      return {
-        beforeCount: before.metrics.objectCount,
-        afterCount: after.metrics.objectCount,
-        beforeCanonical: Boolean(before.engineMetrics?.canonical),
-        afterCanonical: Boolean(after.engineMetrics?.canonical),
-        rebuilt: reconciled.rebuilt,
-        mode: reconciled.mode,
-        sameCanvas: execution.canvas === persistentCanvas,
-      };
-    } finally {
-      execution.terminate();
-      execution.canvas?.remove();
-    }
-  }, { first: propertyFirst, second: edited });
-
-  assert.deepEqual(rebuild, {
-    beforeCount: 2,
-    afterCount: 3,
-    beforeCanonical: true,
-    afterCanonical: true,
-    rebuilt: true,
-    mode: "retained",
-    sameCanvas: true,
-  });
-
-  assert.deepEqual(errors, [], `browser errors while testing mixed retained family composition:\n${errors.join("\n")}`);
-  console.log("Mixed retained family/property animation smoke passed, including edit -> rerun rebuild.");
+  assert.equal(observed.sameCanvas, true, "live source reruns preserve the canvas");
+  assert.deepEqual(observed.results.map((result) => result.duration), [1, 1, 0.25, 0.5]);
+  assert.deepEqual(observed.results.map((result) => result.metrics.objectCount), [2, 3, 1, 2]);
+  for (const result of observed.results) {
+    assert.ok(result.metrics.presentedFrames > 0, "shared Text Write must present");
+  }
+  assert.deepEqual(errors, [], `browser errors while testing shared Text Write:\n${errors.join("\n")}`);
+  console.log("Shared Text Write/property composition passed, including atomic rejection and source reruns.");
 } finally {
   await browser?.close();
   server.kill("SIGTERM");

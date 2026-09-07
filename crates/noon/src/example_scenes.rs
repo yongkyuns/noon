@@ -5,6 +5,7 @@ pub mod draw_border_then_fill;
 pub mod family_transform_indicate;
 pub mod mixed_scalar_composition;
 pub mod ordinary_subset_display;
+pub mod text_write;
 pub mod timed_composition;
 
 use std::{error::Error, rc::Rc};

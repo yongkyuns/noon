@@ -441,6 +441,17 @@ impl RetainedExecutionFrameMirror {
         }
     }
 
+    pub(crate) fn extend_installed_text_handles(
+        &mut self,
+        additions: &HashMap<TransportTextResourceHandle, TextResourceHandle>,
+    ) {
+        self.text_handles.extend(
+            additions
+                .iter()
+                .map(|(&transport, &local)| (transport, local)),
+        );
+    }
+
     fn resolve_content(
         &self,
         content: &TransportObjectContent,
@@ -602,6 +613,8 @@ impl RetainedExecutionFrameMirror {
         self.slots = slots;
         self.slot_indices = slot_indices;
         self.frame = Some(FrameState {
+            family_animations: vec![None; objects.len()],
+            family_animation_plan_indices: vec![None; objects.len()],
             time: delta.time,
             objects: frame_objects,
             presences: objects.iter().map(|object| object.presence).collect(),
@@ -853,6 +866,8 @@ mod tests {
             version: 3,
         };
         FrameState {
+            family_animations: vec![None; 2],
+            family_animation_plan_indices: vec![None; 2],
             time: 0.0,
             objects: vec![
                 FrameObjectState {

@@ -786,6 +786,27 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage one forward plain-Text Write declaration.
+    pub fn create_text_write_animation(
+        &mut self,
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::TextWrite {
+                    target: target.into(),
+                    reverse_member_order,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a single-leaf fade declaration and return its transaction-local token.
     pub fn create_fade_animation(
         &mut self,
@@ -2083,6 +2104,9 @@ pub enum SemanticMutationTransactionError {
     InvalidSubsetDisplayMember {
         index: usize,
     },
+    InvalidTextWriteTarget {
+        index: usize,
+    },
     InvalidFadeEndpoint {
         index: usize,
     },
@@ -2467,6 +2491,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidSubsetDisplayMember { index } => write!(
                 formatter,
                 "semantic mutation {index} has an invalid subset display member index/count"
+            ),
+            Self::InvalidTextWriteTarget { index } => write!(
+                formatter,
+                "semantic mutation {index} requires one plain Text object"
             ),
             Self::InvalidFadeEndpoint { index } => write!(
                 formatter,

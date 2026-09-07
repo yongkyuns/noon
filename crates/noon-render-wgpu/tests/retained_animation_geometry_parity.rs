@@ -13,6 +13,8 @@ fn retained_geometry_frame(
     morph: f32,
 ) -> FrameState {
     FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.5,
         objects: vec![FrameObjectState {
             id: ObjectId::new(1),

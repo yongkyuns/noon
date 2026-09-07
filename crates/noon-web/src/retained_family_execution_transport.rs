@@ -1,12 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
-use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceArena};
+use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceLookup};
 use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     RetainedExecutionDeltaEnvelope, RetainedFamilyPlanTransport, RetainedFamilyTransportError,
-    RetainedFamilyTransportState,
+    RetainedFamilyTransportState, RetainedResourceBundle,
 };
 
 type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
@@ -63,9 +63,10 @@ impl RetainedFamilyExecutionObjectState {
 
 /// Additive family-animation envelope over the stable retained execution transport.
 ///
-/// Family-aware producers add sparse evaluated scheduler state plus snapshot-only
-/// immutable plan descriptors. Plan indices refer only to this snapshot plan vector;
-/// glyph IDs and renderer payloads remain renderer-local.
+/// Family-aware producers add sparse evaluated scheduler state plus immutable plan
+/// descriptors. Snapshots replace the plan set; incrementals append newly compiled
+/// plans in publication order. Plan indices therefore stay stable for the session,
+/// while glyph IDs and renderer payloads remain renderer-local.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedFamilyExecutionDeltaEnvelope {
     #[serde(flatten)]
@@ -74,6 +75,8 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
     pub family_states: Vec<RetainedFamilyExecutionObjectState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub family_plans: Vec<RetainedFamilyPlanTransport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_additions: Option<RetainedResourceBundle>,
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {
@@ -92,6 +95,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .iter()
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
+            resource_additions: None,
             retained,
         };
         envelope.validate()?;
@@ -104,18 +108,26 @@ impl RetainedFamilyExecutionDeltaEnvelope {
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
     ) -> Result<Self, RetainedFamilyExecutionTransportError> {
+        Self::planned_snapshot_indices(retained, frame, plans, 0..frame.retained.objects.len())
+    }
+
+    /// Snapshot with explicit active-plan ownership for the selected live rows.
+    pub fn planned_snapshot_indices(
+        retained: RetainedExecutionDeltaEnvelope,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        indices: impl IntoIterator<Item = usize>,
+    ) -> Result<Self, RetainedFamilyExecutionTransportError> {
         if !retained.snapshot {
             return Err(RetainedFamilyExecutionTransportError::ExpectedSnapshot);
         }
         let envelope = Self {
-            family_states: planned_family_states_for_indices(
-                frame,
-                0..frame.retained.objects.len(),
-            )?,
+            family_states: planned_family_states_for_indices(frame, indices)?,
             family_plans: plans
                 .iter()
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
+            resource_additions: None,
             retained,
         };
         envelope.validate()?;
@@ -137,6 +149,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 changes.object_indices().iter().copied(),
             )?,
             family_plans: Vec::new(),
+            resource_additions: None,
             retained,
         };
         envelope.validate()?;
@@ -149,6 +162,16 @@ impl RetainedFamilyExecutionDeltaEnvelope {
         frame: &RetainedPlannedFamilyFrame<'_>,
         changes: &FrameChanges,
     ) -> Result<Self, RetainedFamilyExecutionTransportError> {
+        Self::planned_incremental_with_plans(retained, frame, changes, &[])
+    }
+
+    /// Sparse plural-family incremental with an append-only plan suffix.
+    pub fn planned_incremental_with_plans(
+        retained: RetainedExecutionDeltaEnvelope,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        changes: &FrameChanges,
+        added_plans: &[RetainedFamilyAnimationPlan],
+    ) -> Result<Self, RetainedFamilyExecutionTransportError> {
         if retained.snapshot {
             return Err(RetainedFamilyExecutionTransportError::ExpectedIncremental);
         }
@@ -157,7 +180,11 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 frame,
                 changes.object_indices().iter().copied(),
             )?,
-            family_plans: Vec::new(),
+            family_plans: added_plans
+                .iter()
+                .map(RetainedFamilyPlanTransport::from_plan)
+                .collect(),
+            resource_additions: None,
             retained,
         };
         envelope.validate()?;
@@ -165,10 +192,6 @@ impl RetainedFamilyExecutionDeltaEnvelope {
     }
 
     pub fn validate(&self) -> Result<(), RetainedFamilyExecutionTransportError> {
-        if !self.retained.snapshot && !self.family_plans.is_empty() {
-            return Err(RetainedFamilyExecutionTransportError::IncrementalPlanInstall);
-        }
-
         let mut seen = HashSet::with_capacity(self.family_states.len());
         for entry in &self.family_states {
             if !seen.insert(entry.object) {
@@ -237,6 +260,7 @@ pub struct InstalledRetainedFamilyExecutionState {
     states: Vec<Option<FamilyAnimationState>>,
     plan_indices: Vec<Option<u32>>,
     plans: Vec<RetainedFamilyAnimationPlan>,
+    active_indices: BTreeSet<usize>,
     initialized: bool,
 }
 
@@ -245,7 +269,7 @@ impl InstalledRetainedFamilyExecutionState {
         &mut self,
         delta: &RetainedFamilyExecutionDeltaEnvelope,
         frame: &FrameState,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyExecutionTransportError> {
         delta.validate()?;
 
@@ -266,6 +290,12 @@ impl InstalledRetainedFamilyExecutionState {
             self.states = states;
             self.plan_indices = plan_indices;
             self.plans = plans;
+            self.active_indices = self
+                .states
+                .iter()
+                .enumerate()
+                .filter_map(|(index, state)| state.is_some().then_some(index))
+                .collect();
             self.initialized = true;
             return Ok(());
         }
@@ -273,17 +303,31 @@ impl InstalledRetainedFamilyExecutionState {
         if !self.initialized {
             return Err(RetainedFamilyExecutionTransportError::IncrementalBeforeSnapshot);
         }
-        if self.states.len() != frame.objects.len()
-            || self.plan_indices.len() != frame.objects.len()
+        if self.states.len() > frame.objects.len() || self.plan_indices.len() > frame.objects.len()
         {
             return Err(RetainedFamilyExecutionTransportError::FrameShapeMismatch);
         }
-
-        let updates = validated_state_updates(frame, &self.plans, &delta.family_states)?;
+        let mut plans = self.plans.clone();
+        plans.extend(
+            delta
+                .family_plans
+                .iter()
+                .map(|plan| plan.install(frame, texts))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let updates = validated_state_updates(frame, &plans, &delta.family_states)?;
+        self.states.resize(frame.objects.len(), None);
+        self.plan_indices.resize(frame.objects.len(), None);
         for (index, state, plan_index) in updates {
             self.states[index] = state;
             self.plan_indices[index] = plan_index;
+            if state.is_some() {
+                self.active_indices.insert(index);
+            } else {
+                self.active_indices.remove(&index);
+            }
         }
+        self.plans = plans;
         Ok(())
     }
 
@@ -312,6 +356,10 @@ impl InstalledRetainedFamilyExecutionState {
 
     pub fn plans(&self) -> &[RetainedFamilyAnimationPlan] {
         &self.plans
+    }
+
+    pub fn active_indices(&self) -> &BTreeSet<usize> {
+        &self.active_indices
     }
 
     /// Legacy convenience for callers that deliberately operate on one plan only.
@@ -401,10 +449,13 @@ pub enum RetainedFamilyExecutionTransportError {
     Family(RetainedFamilyTransportError),
     ExpectedSnapshot,
     ExpectedIncremental,
-    IncrementalPlanInstall,
     IncrementalBeforeSnapshot,
     MissingSnapshot,
     FrameShapeMismatch,
+    PlanSetShrank {
+        published: usize,
+        available: usize,
+    },
     InvalidObjectIndex(usize),
     DuplicateStateObject(ObjectId),
     UnknownObject(ObjectId),
@@ -431,9 +482,6 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
                 .write_str("family execution snapshot requires a retained snapshot envelope"),
             Self::ExpectedIncremental => formatter
                 .write_str("family execution incremental requires a retained incremental envelope"),
-            Self::IncrementalPlanInstall => {
-                formatter.write_str("retained family plans may only be installed by a snapshot")
-            }
             Self::IncrementalBeforeSnapshot => formatter
                 .write_str("retained family execution requires a snapshot before incrementals"),
             Self::MissingSnapshot => {
@@ -441,6 +489,13 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
             }
             Self::FrameShapeMismatch => formatter
                 .write_str("retained family state shape does not match retained frame objects"),
+            Self::PlanSetShrank {
+                published,
+                available,
+            } => write!(
+                formatter,
+                "retained family plan set shrank from {published} published plans to {available}"
+            ),
             Self::InvalidObjectIndex(index) => {
                 write!(formatter, "invalid retained family object index {index}")
             }
@@ -503,7 +558,7 @@ impl From<RetainedFamilyTransportError> for RetainedFamilyExecutionTransportErro
 mod tests {
     use noon_core::{
         Camera2DState, FamilyAnimationMode, GeometryRef, ObjectContentRef, RateFunction, Style,
-        Transform2D,
+        TextResourceArena, Transform2D,
     };
     use noon_runtime::FrameObjectState;
 
@@ -526,6 +581,8 @@ mod tests {
 
     fn frame() -> FrameState {
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
                 id: ObjectId::new(7),
@@ -688,6 +745,7 @@ mod tests {
                 RetainedFamilyPlanTransport::from_plan(&plan),
                 RetainedFamilyPlanTransport::from_plan(&plan),
             ],
+            resource_additions: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -709,6 +767,7 @@ mod tests {
             )
             .unwrap()],
             family_plans: Vec::new(),
+            resource_additions: None,
         };
         assert_eq!(
             installed
@@ -719,22 +778,86 @@ mod tests {
     }
 
     #[test]
-    fn incremental_plan_install_and_unplanned_active_state_fail_closed() {
-        let mut bad = RetainedFamilyExecutionDeltaEnvelope {
+    fn incremental_plan_append_installs_before_resolving_sparse_state() {
+        let retained_frame = frame();
+        let mut installed = InstalledRetainedFamilyExecutionState::default();
+        installed
+            .apply(
+                &family_snapshot(0.5),
+                &retained_frame,
+                &TextResourceArena::new(),
+            )
+            .unwrap();
+
+        let appended = RetainedFamilyExecutionDeltaEnvelope {
+            retained: retained(false, 1),
+            family_states: vec![RetainedFamilyExecutionObjectState::planned(
+                ObjectId::new(7),
+                Some(family_state(0.25)),
+                Some(1),
+            )
+            .unwrap()],
+            family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
+            resource_additions: None,
+        };
+        installed
+            .apply(&appended, &retained_frame, &TextResourceArena::new())
+            .unwrap();
+        assert_eq!(installed.plans().len(), 2);
+        assert_eq!(
+            installed
+                .planned_frame(&retained_frame)
+                .unwrap()
+                .family_plan_index(0),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn failed_incremental_plan_append_preserves_installed_plan_and_state() {
+        let retained_frame = frame();
+        let mut installed = InstalledRetainedFamilyExecutionState::default();
+        installed
+            .apply(
+                &family_snapshot(0.5),
+                &retained_frame,
+                &TextResourceArena::new(),
+            )
+            .unwrap();
+        let invalid = RetainedFamilyExecutionDeltaEnvelope {
             retained: retained(false, 1),
             family_states: Vec::new(),
-            family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
+            family_plans: vec![RetainedFamilyPlanTransport {
+                objects: Vec::new(),
+            }],
+            resource_additions: None,
         };
-        assert_eq!(
-            bad.validate().unwrap_err(),
-            RetainedFamilyExecutionTransportError::IncrementalPlanInstall
-        );
 
-        bad.family_plans.clear();
-        bad.family_states.push(
-            RetainedFamilyExecutionObjectState::new(ObjectId::new(7), Some(family_state(0.5)))
-                .unwrap(),
+        assert!(installed
+            .apply(&invalid, &retained_frame, &TextResourceArena::new())
+            .is_err());
+        assert_eq!(installed.plans().len(), 1);
+        assert_eq!(
+            installed
+                .frame(&retained_frame)
+                .unwrap()
+                .family_animation(0),
+            Some(family_state(0.5))
         );
+    }
+
+    #[test]
+    fn unplanned_active_state_fails_closed() {
+        let bad = RetainedFamilyExecutionDeltaEnvelope {
+            retained: retained(false, 1),
+            family_states: vec![RetainedFamilyExecutionObjectState::new(
+                ObjectId::new(7),
+                Some(family_state(0.5)),
+            )
+            .unwrap()],
+            family_plans: Vec::new(),
+            resource_additions: None,
+        };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
             .apply(
@@ -742,6 +865,7 @@ mod tests {
                     retained: retained(true, 0),
                     family_states: Vec::new(),
                     family_plans: Vec::new(),
+                    resource_additions: None,
                 },
                 &frame(),
                 &TextResourceArena::new(),
@@ -775,6 +899,7 @@ mod tests {
             )
             .unwrap()],
             family_plans: Vec::new(),
+            resource_additions: None,
         };
         assert_eq!(
             installed

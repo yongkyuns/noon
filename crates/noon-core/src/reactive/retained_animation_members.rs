@@ -1,7 +1,7 @@
 use crate::{
     plain_text_animation_members, FamilyAnimationMemberPlanBuilder, FamilyAnimationMemberPlanError,
     ObjectContentRef, RetainedObjectDefinition, SemanticNodeId, TextAnimationMember,
-    TextAnimationMemberError, TextResourceArena, TextResourceHandle,
+    TextAnimationMemberError, TextResourceHandle, TextResourceLookup,
 };
 
 /// Lightweight content-local identity for one Manim-visible animation member.
@@ -31,7 +31,7 @@ pub struct RetainedAnimationMembers {
 impl RetainedAnimationMembers {
     pub fn resolve(
         content: &ObjectContentRef,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<Self, RetainedAnimationMemberError> {
         let members = match content {
             // Geometry is one Manim-visible family leaf at this boundary. Whether a
@@ -148,7 +148,7 @@ impl FamilyAnimationMemberPlanBuilder {
         &mut self,
         semantic_leaf: SemanticNodeId,
         object: &RetainedObjectDefinition,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError> {
         let members = RetainedAnimationMembers::resolve(&object.content, texts)?;
         self.accept_leaf(semantic_leaf, object.id, members.member_count())?;
@@ -163,7 +163,8 @@ mod tests {
     use crate::{
         FontFaceIdentity, GeometryId, GeometryRef, GlyphRun, ObjectId, PositionedGlyph, Rect,
         SemanticStore, TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem,
-        TextResource, TextResourceId, TextSourceKind, TextSourceSpan, Vec2, VectorPath,
+        TextResource, TextResourceArena, TextResourceId, TextSourceKind, TextSourceSpan, Vec2,
+        VectorPath,
     };
 
     use super::*;

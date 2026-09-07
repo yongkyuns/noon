@@ -5,7 +5,7 @@ use std::{
 };
 
 use noon_compile::{CompiledChannelKey, CompiledScene, CompiledTrack};
-use noon_core::TrackId;
+use noon_core::{continuous_time_map_interval, RateFunction, TrackId, TrackTiming};
 
 use crate::SceneInstance;
 
@@ -26,12 +26,17 @@ pub struct TimelineRelowerStats {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TimelineAdvancePreview {
     requested: Vec<CompiledChannelKey>,
+    requested_family_animations: Vec<usize>,
     stats: TimelineSchedulerStats,
 }
 
 impl TimelineAdvancePreview {
     pub(crate) fn requested(&self) -> &[CompiledChannelKey] {
         &self.requested
+    }
+
+    pub(crate) fn requested_family_animations(&self) -> &[usize] {
+        &self.requested_family_animations
     }
 
     pub(crate) const fn stats(&self) -> TimelineSchedulerStats {
@@ -79,7 +84,13 @@ struct TimelineEventKey {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ScheduledTrackGroup {
-    channel: CompiledChannelKey,
+    target: ScheduledTimelineTarget,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScheduledTimelineTarget {
+    Track(CompiledChannelKey),
+    FamilyAnimation(usize),
 }
 
 /// Event-driven scheduler with stable channel slots.
@@ -101,6 +112,7 @@ pub struct TimelineEventScheduler {
     visit_epoch: Vec<u64>,
     epoch: u64,
     requested: Vec<CompiledChannelKey>,
+    requested_family_animations: Vec<usize>,
     crossed: Vec<(TimelineEventKey, EventKind)>,
     last_stats: TimelineSchedulerStats,
 }
@@ -120,6 +132,7 @@ impl TimelineEventScheduler {
             visit_epoch: Vec::new(),
             epoch: 0,
             requested: Vec::new(),
+            requested_family_animations: Vec::new(),
             crossed: Vec::new(),
             last_stats: TimelineSchedulerStats::default(),
         };
@@ -147,6 +160,16 @@ impl TimelineEventScheduler {
         for channel in compiled.channels() {
             scheduler.relower_channel(channel, compiled.channel_tracks(channel));
         }
+        for (index, animation) in compiled.family_animations().iter().enumerate() {
+            let timing = TrackTiming::new(
+                animation.spec.start_time,
+                animation.spec.duration,
+                RateFunction::Linear,
+            );
+            let (start_time, end_time) = continuous_time_map_interval(timing, &animation.time_map)
+                .expect("compiled family animation retains a validated continuous time map");
+            scheduler.append_family_animation(index, start_time, end_time);
+        }
         scheduler.last_stats = TimelineSchedulerStats::default();
         scheduler
     }
@@ -163,8 +186,12 @@ impl TimelineEventScheduler {
         &self.requested
     }
 
+    pub(crate) fn requested_family_animations(&self) -> &[usize] {
+        &self.requested_family_animations
+    }
+
     pub fn live_group_count(&self) -> usize {
-        self.group_indices.len()
+        self.groups.iter().filter(|group| group.is_some()).count()
     }
 
     pub(crate) fn next_event_time(&self) -> Option<f64> {
@@ -208,9 +235,14 @@ impl TimelineEventScheduler {
         {
             (group, self.remove_group_events(group))
         } else {
-            (self.allocate_group(channel), 0)
+            (
+                self.allocate_group(ScheduledTimelineTarget::Track(channel)),
+                0,
+            )
         };
-        self.groups[group] = Some(ScheduledTrackGroup { channel });
+        self.groups[group] = Some(ScheduledTrackGroup {
+            target: ScheduledTimelineTarget::Track(channel),
+        });
         self.group_indices.insert(channel, group);
 
         let mut inserted = 0;
@@ -234,6 +266,31 @@ impl TimelineEventScheduler {
             groups_relowered: 1,
             events_removed,
             events_inserted: inserted,
+        }
+    }
+
+    /// Append one immutable compiled family-animation channel to this scheduler.
+    /// Live semantic publication is append-only, so existing stable group slots and
+    /// their event indices never move.
+    pub(crate) fn append_family_animation(
+        &mut self,
+        animation_index: usize,
+        start_time: f64,
+        end_time: f64,
+    ) -> TimelineRelowerStats {
+        let group = self.allocate_group(ScheduledTimelineTarget::FamilyAnimation(animation_index));
+        let track = TrackId::new(animation_index as u64);
+        let events_inserted = if start_time == end_time {
+            self.insert_event(group, track, start_time, EventKind::Instant)
+        } else {
+            self.insert_event(group, track, start_time, EventKind::Start)
+                + self.insert_event(group, track, end_time, EventKind::End)
+        };
+        self.recompute_interval_activity(group, start_time, end_time);
+        TimelineRelowerStats {
+            groups_relowered: 1,
+            events_removed: 0,
+            events_inserted,
         }
     }
 
@@ -262,6 +319,7 @@ impl TimelineEventScheduler {
             }
         }
         self.requested.clear();
+        self.requested_family_animations.clear();
         self.last_stats = TimelineSchedulerStats {
             events_crossed,
             active_groups: self.active_groups.len(),
@@ -371,11 +429,22 @@ impl TimelineEventScheduler {
             request(*group);
         }
 
+        let mut requested_channels = Vec::new();
+        let mut requested_family_animations = Vec::new();
+        for group in requested_groups {
+            match self.groups[group]
+                .expect("requested scheduler group remains live")
+                .target
+            {
+                ScheduledTimelineTarget::Track(channel) => requested_channels.push(channel),
+                ScheduledTimelineTarget::FamilyAnimation(index) => {
+                    requested_family_animations.push(index)
+                }
+            }
+        }
         TimelineAdvancePreview {
-            requested: requested_groups
-                .into_iter()
-                .filter_map(|group| self.groups[group].map(|scheduled| scheduled.channel))
-                .collect(),
+            requested: requested_channels,
+            requested_family_animations,
             stats: TimelineSchedulerStats {
                 events_crossed,
                 active_groups: active_groups.len(),
@@ -384,9 +453,9 @@ impl TimelineEventScheduler {
         }
     }
 
-    fn allocate_group(&mut self, channel: CompiledChannelKey) -> usize {
+    fn allocate_group(&mut self, target: ScheduledTimelineTarget) -> usize {
         if let Some(group) = self.free_groups.pop() {
-            self.groups[group] = Some(ScheduledTrackGroup { channel });
+            self.groups[group] = Some(ScheduledTrackGroup { target });
             self.active_counts[group] = 0;
             self.active_positions[group] = usize::MAX;
             self.visit_epoch[group] = 0;
@@ -394,7 +463,7 @@ impl TimelineEventScheduler {
             return group;
         }
         let group = self.groups.len();
-        self.groups.push(Some(ScheduledTrackGroup { channel }));
+        self.groups.push(Some(ScheduledTrackGroup { target }));
         self.group_events.push(Vec::new());
         self.active_counts.push(0);
         self.active_positions.push(usize::MAX);
@@ -444,8 +513,18 @@ impl TimelineEventScheduler {
         }
     }
 
+    fn recompute_interval_activity(&mut self, group: usize, start_time: f64, end_time: f64) {
+        self.active_counts[group] = 0;
+        self.deactivate(group);
+        if self.time != f64::NEG_INFINITY && start_time <= self.time && self.time < end_time {
+            self.active_counts[group] = 1;
+            self.activate(group);
+        }
+    }
+
     fn begin_request_epoch(&mut self) {
         self.requested.clear();
+        self.requested_family_animations.clear();
         self.epoch = self.epoch.wrapping_add(1);
         if self.epoch == 0 {
             self.visit_epoch.fill(0);
@@ -468,7 +547,12 @@ impl TimelineEventScheduler {
             return;
         };
         self.visit_epoch[group] = self.epoch;
-        self.requested.push(scheduled.channel);
+        match scheduled.target {
+            ScheduledTimelineTarget::Track(channel) => self.requested.push(channel),
+            ScheduledTimelineTarget::FamilyAnimation(index) => {
+                self.requested_family_animations.push(index)
+            }
+        }
     }
 
     fn apply_event(&mut self, group: usize, kind: EventKind) {
