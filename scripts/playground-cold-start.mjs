@@ -59,7 +59,7 @@ try {
       const failures = [];
       const workers = [];
       const workerHandles = [];
-      const workerRoleCounts = { authoring: 0, engine: 0, render: 0, other: 0 };
+      const workerRoleCounts = { authoring: 0, engine: 0, render: 0, probe: 0, other: 0 };
       let authoringWorker = null;
       const origin = monotonicNow();
       page.on("worker", (worker) => {
@@ -68,12 +68,14 @@ try {
         const roleIndex = workerRoleCounts[role];
         workerRoleCounts[role] += 1;
         workers.push(event);
-        workerHandles.push({
-          worker,
-          name: `${role}-${roleIndex}`,
-          role,
-          url: event.url,
-        });
+        if (role !== "probe") {
+          workerHandles.push({
+            worker,
+            name: `${role}-${roleIndex}`,
+            role,
+            url: event.url,
+          });
+        }
         if (role === "authoring") {
           authoringWorker = worker;
         }
@@ -211,7 +213,7 @@ try {
       automaticPreload: true,
     },
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness. resourceFootprint is collected from PerformanceResourceTiming on the page and every observed live worker after first metrics. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness. resourceFootprint is collected from PerformanceResourceTiming on the page and every durable runtime worker after first metrics; disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });

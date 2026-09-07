@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(
-  new URL("./authoring-render-worker.js", import.meta.url),
+  new URL("./authoring-render-controller.js", import.meta.url),
   "utf8",
 );
 

@@ -237,6 +237,11 @@ test("resource footprint rejects missing package size and malformed timing field
 });
 
 test("worker classification covers current authoring, engine, and render entry points", () => {
+  assert.equal(
+    classifyWorkerUrl("blob:https://localhost/id#noon-render-capability-probe"),
+    "probe",
+  );
+  assert.equal(classifyWorkerUrl("blob:https://localhost/durable-worker"), "other");
   assert.equal(classifyWorkerUrl("http://localhost/web/python-worker.js"), "authoring");
   assert.equal(classifyWorkerUrl("http://localhost/web/execution-engine-worker.js"), "engine");
   assert.equal(classifyWorkerUrl("http://localhost/web/retained-execution-engine-worker.js"), "engine");
@@ -248,15 +253,16 @@ test("worker classification covers current authoring, engine, and render entry p
 
 test("summarizeWorkers preserves event order and counts worker roles", () => {
   const summary = summarizeWorkers([
+    { url: "blob:https://localhost/id#noon-render-capability-probe", atMs: 1 },
     { url: "python-worker.js", atMs: 5 },
     { url: "execution-engine-worker.js", atMs: 20 },
     { url: "execution-render-worker.js", atMs: 21 },
     { url: "editor-worker.js", atMs: 30 },
   ]);
-  assert.equal(summary.total, 4);
-  assert.deepEqual(summary.byRole, { authoring: 1, engine: 1, render: 1, other: 1 });
+  assert.equal(summary.total, 5);
+  assert.deepEqual(summary.byRole, { authoring: 1, engine: 1, render: 1, probe: 1, other: 1 });
   assert.deepEqual(
     summary.workers.map(({ role }) => role),
-    ["authoring", "engine", "render", "other"],
+    ["probe", "authoring", "engine", "render", "other"],
   );
 });

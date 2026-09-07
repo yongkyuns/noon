@@ -14,6 +14,7 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
+      - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "web/**"
   pull_request:
     paths:
@@ -26,6 +27,7 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
+      - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "web/**"
   workflow_dispatch:
 
@@ -129,6 +131,11 @@ jobs:
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
         run: node scripts/playground-browser-matrix-smoke.mjs
+      - name: Test main-thread mobile render fallback
+        if: matrix.browser == 'webkit' && matrix.profile == 'mobile-dpr2'
+        env:
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
+        run: node scripts/playground-main-thread-mobile-smoke.mjs
       - name: Upload playground diagnostics
         if: always()
         uses: actions/upload-artifact@v7

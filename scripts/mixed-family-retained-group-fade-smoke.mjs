@@ -174,6 +174,7 @@ async function startSampledSource(page, source) {
     canvas.id = "mixed-family-fade-runtime";
     canvas.width = 640;
     canvas.height = 360;
+    canvas.style.background = "#000";
     document.body.append(canvas);
     let resolveAttached;
     let rejectAttached;

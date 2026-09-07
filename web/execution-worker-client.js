@@ -5,6 +5,12 @@ import {
 } from "./execution-transport.js";
 import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { projectLegacyReactiveSceneJson } from "./legacy-reactive-projection.js";
+import { MainThreadRenderWorker } from "./main-thread-render-worker.js";
+import {
+  RENDER_HOST_MAIN_THREAD,
+  RENDER_HOST_WORKER,
+  selectExecutionRenderHost,
+} from "./render-host-selection.js";
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
@@ -35,6 +41,8 @@ export class ExecutionWorkerClient {
   #candidateEngineReject = null;
   #renderWorker = null;
   #renderPrepared = null;
+  #renderHost = null;
+  #renderHostSelection = null;
   #preparedStartReservation = null;
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
@@ -87,9 +95,14 @@ export class ExecutionWorkerClient {
     return this.#transportMode;
   }
 
+  get renderHost() {
+    return this.#renderHost;
+  }
+
   get diagnostics() {
     return Object.freeze({
       session: this.#session,
+      renderHost: this.#renderHost,
       engine: this.#ownerDiagnostics("engine"),
       render: this.#ownerDiagnostics("render"),
     });
@@ -101,7 +114,11 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
     } = {},
   ) {
-    if (this.#engineWorker !== null || this.#renderWorker !== null) {
+    if (
+      this.#engineWorker !== null ||
+      this.#renderWorker !== null ||
+      this.#preparedStartReservation !== null
+    ) {
       throw new Error("ExecutionWorkerClient is already started or prepared");
     }
     validateTransportMode(transportMode);
@@ -115,45 +132,59 @@ export class ExecutionWorkerClient {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
-    this.#transportMode = transportMode;
-    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
-    const { width, height } = this.#prepareCanvasDimensions();
-    const transferredCanvas = this.#canvas;
-    const generation = this.#lifecycleGeneration;
-
-    let canvasTransferred = false;
+    const reservation = {};
+    this.#preparedStartReservation = reservation;
     try {
-      const offscreen = this.#canvas.transferControlToOffscreen();
-      canvasTransferred = true;
-      this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
-        type: "module",
-        name: "noon-render",
-      });
-      this.#attachCurrentWorkerEvents(this.#renderWorker, RENDER_CHANNEL, "render");
-      this.#renderPrepared = this.#request(
-        this.#renderWorker,
-        "render",
-        renderEnvelope,
-        "prepare",
-        {
-          canvas: offscreen,
-          transportMode,
-          width,
-          height,
-        },
-        [offscreen],
-      );
-      const render = await this.#renderPrepared;
-      this.#fatalOwner = null;
-      return { render, transportMode };
-    } catch (error) {
-      if (generation === this.#lifecycleGeneration) {
-        this.#rollbackFailedStart(
-          error,
-          canvasTransferred && this.#canvas === transferredCanvas,
-        );
+      const generation = this.#lifecycleGeneration;
+      const renderHost = this.#selectRenderHost();
+      if (typeof renderHost !== "string") {
+        await renderHost;
+        this.#assertLifecycleCurrent(generation);
       }
-      throw error;
+
+      this.#transportMode = transportMode;
+      this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
+      const { width, height } = this.#prepareCanvasDimensions();
+      const transferredCanvas = this.#canvas;
+
+      let canvasTransferred = false;
+      try {
+        const offscreen = this.#canvas.transferControlToOffscreen();
+        canvasTransferred = true;
+        this.#renderWorker = this.#createRenderWorker();
+        this.#attachCurrentWorkerEvents(this.#renderWorker, RENDER_CHANNEL, "render");
+        this.#renderPrepared = this.#request(
+          this.#renderWorker,
+          "render",
+          renderEnvelope,
+          "prepare",
+          {
+            canvas: offscreen,
+            transportMode,
+            width,
+            height,
+          },
+          [offscreen],
+        );
+        if (this.#preparedStartReservation === reservation) {
+          this.#preparedStartReservation = null;
+        }
+        const render = await this.#renderPrepared;
+        this.#fatalOwner = null;
+        return { render, transportMode, renderHost: this.#renderHost };
+      } catch (error) {
+        if (generation === this.#lifecycleGeneration) {
+          this.#rollbackFailedStart(
+            error,
+            canvasTransferred && this.#canvas === transferredCanvas,
+          );
+        }
+        throw error;
+      }
+    } finally {
+      if (this.#preparedStartReservation === reservation) {
+        this.#preparedStartReservation = null;
+      }
     }
   }
 
@@ -382,67 +413,79 @@ export class ExecutionWorkerClient {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
-    this.#configureStart(
-      mode,
-      sceneJson,
-      loopDurationSeconds,
-      transportMode,
-      slotCapacity,
-      sceneSpecJson,
-    );
-    const { width: initialWidth, height: initialHeight } = this.#prepareCanvasDimensions();
-
-    let canvasTransferred = false;
+    const reservation = {};
+    this.#preparedStartReservation = reservation;
     try {
-      const channel = new MessageChannel();
-      const offscreen = this.#canvas.transferControlToOffscreen();
-      canvasTransferred = true;
-      this.#engineWorker = this.#createEngineWorker(mode);
-      this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
-        type: "module",
-        name: "noon-render",
-      });
+      const generation = this.#lifecycleGeneration;
+      const renderHost = this.#selectRenderHost();
+      if (typeof renderHost !== "string") {
+        await renderHost;
+        this.#assertLifecycleCurrent(generation);
+      }
 
-      const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
-      const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
-      this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
-        engine,
-        render,
-        transportMode,
-        session: this.#session,
-      }));
-
-      this.#renderWorker.postMessage(
-        renderEnvelope("init", {
-          canvas: offscreen,
-          port: channel.port2,
-          transportMode,
-          mode,
-          width: initialWidth,
-          height: initialHeight,
-        }),
-        [offscreen, channel.port2],
-      );
-      this.#postEngineInit(
-        this.#engineWorker,
-        channel.port1,
+      this.#configureStart(
         mode,
         sceneJson,
         loopDurationSeconds,
-        this.#session,
+        transportMode,
+        slotCapacity,
         sceneSpecJson,
       );
-      const ready = await this.#ready;
-      this.#playing = true;
-      this.#fatalOwner = null;
-      if (mode === EXECUTION_MODE_RETAINED) {
-        this.#hostAuthoringClient = null;
-        this.#hostCallbacks = null;
+      const { width: initialWidth, height: initialHeight } = this.#prepareCanvasDimensions();
+
+      let canvasTransferred = false;
+      try {
+        const channel = new MessageChannel();
+        const offscreen = this.#canvas.transferControlToOffscreen();
+        canvasTransferred = true;
+        this.#engineWorker = this.#createEngineWorker(mode);
+        this.#renderWorker = this.#createRenderWorker();
+
+        const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+        const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
+        this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
+          engine,
+          render,
+          transportMode,
+          session: this.#session,
+        }));
+
+        this.#renderWorker.postMessage(
+          renderEnvelope("init", {
+            canvas: offscreen,
+            port: channel.port2,
+            transportMode,
+            mode,
+            width: initialWidth,
+            height: initialHeight,
+          }),
+          [offscreen, channel.port2],
+        );
+        this.#postEngineInit(
+          this.#engineWorker,
+          channel.port1,
+          mode,
+          sceneJson,
+          loopDurationSeconds,
+          this.#session,
+          sceneSpecJson,
+        );
+        const ready = await this.#ready;
+        this.#playing = true;
+        this.#fatalOwner = null;
+        if (mode === EXECUTION_MODE_RETAINED) {
+          this.#hostAuthoringClient = null;
+          this.#hostCallbacks = null;
+        }
+        return ready;
+      } catch (error) {
+        this.#rollbackFailedStart(error, canvasTransferred);
+        throw error;
       }
-      return ready;
-    } catch (error) {
-      this.#rollbackFailedStart(error, canvasTransferred);
-      throw error;
+    } finally {
+      if (this.#preparedStartReservation === reservation) {
+        this.#preparedStartReservation = null;
+      }
     }
   }
 
@@ -1099,7 +1142,7 @@ export class ExecutionWorkerClient {
       this.#requestRender("metrics", {}),
       this.#requestEngine("metrics", {}),
     ]);
-    return { ...render, engineMetrics: engine.metrics };
+    return { ...render, engineMetrics: engine.metrics, renderHost: this.#renderHost };
   }
 
   resize(width, height, devicePixelRatio = 1) {
@@ -1240,11 +1283,11 @@ export class ExecutionWorkerClient {
     const ready =
       mode === EXECUTION_MODE_SEMANTIC
         ? await this.startSemanticExecution(semanticContextId, semanticAuthoringClient, {
-          loopDurationSeconds,
-          transportMode,
-          sharedSlotCapacity,
-          callbackSessionId: semanticCallbackSessionId,
-          initiallyPaused: !wasPlaying,
+            loopDurationSeconds,
+            transportMode,
+            sharedSlotCapacity,
+            callbackSessionId: semanticCallbackSessionId,
+            initiallyPaused: !wasPlaying,
           })
         : await this.#startMode(
             mode,
@@ -1301,6 +1344,8 @@ export class ExecutionWorkerClient {
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
     if (!preserveHostConfiguration) {
+      this.#renderHost = null;
+      this.#renderHostSelection = null;
       this.#hostAuthoringClient = null;
       this.#hostCallbacks = null;
       this.#semanticAuthoringClient = null;
@@ -1539,6 +1584,47 @@ export class ExecutionWorkerClient {
     if (replaceCanvas) {
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
+  }
+
+  #selectRenderHost() {
+    if (this.#renderHost !== null) return this.#renderHost;
+    if (this.#renderHostSelection !== null) return this.#renderHostSelection;
+
+    const selected = selectExecutionRenderHost();
+    if (typeof selected === "string") {
+      this.#renderHost = selected;
+      return selected;
+    }
+
+    const generation = this.#lifecycleGeneration;
+    const task = Promise.resolve(selected)
+      .then((host) => {
+        if (generation !== this.#lifecycleGeneration) {
+          throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+        }
+        this.#renderHost = host;
+        return host;
+      })
+      .finally(() => {
+        if (this.#renderHostSelection === task) {
+          this.#renderHostSelection = null;
+        }
+      });
+    this.#renderHostSelection = task;
+    return task;
+  }
+
+  #createRenderWorker() {
+    if (this.#renderHost === RENDER_HOST_MAIN_THREAD) {
+      return new MainThreadRenderWorker();
+    }
+    if (this.#renderHost === RENDER_HOST_WORKER) {
+      return new Worker(new URL("./execution-render-worker.js", import.meta.url), {
+        type: "module",
+        name: "noon-render",
+      });
+    }
+    throw new Error("execution render host must be selected before renderer startup");
   }
 
   #createEngineWorker(mode) {
