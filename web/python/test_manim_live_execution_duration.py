@@ -1,62 +1,79 @@
+import os
+import subprocess
 import sys
-import types
+import textwrap
 import unittest
-from unittest import mock
-
-fake_js = types.ModuleType("js")
-fake_js.noonResolveAnimationOptions = object()
-fake_js.noonResolveCompositionSchedule = object()
-fake_js.noonResolveLifecyclePlan = object()
-fake_js.noonResolveUniformCompositionSchedule = object()
-fake_js.noonValidatePresenceTransition = object()
-sys.modules.setdefault("js", fake_js)
-
-import _manim_compat  # noqa: E402
-
-_manim_compat.install()
-import _manim_phase_b  # noqa: E402, F401
-import _manim_typst  # noqa: E402
-
-_manim_typst.install()
-import _manim_canonical_scene as canonical  # noqa: E402
+from pathlib import Path
 
 
 class ManimLiveExecutionDurationTests(unittest.TestCase):
-    def test_default_helper_preserves_existing_handoff_duration(self) -> None:
-        class Context:
-            def __init__(self) -> None:
-                self.durations = []
+    def test_default_helper_preserves_shared_handoff_duration(self) -> None:
+        python_dir = Path(__file__).resolve().parent
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        existing_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            str(python_dir)
+            if not existing_pythonpath
+            else os.pathsep.join((str(python_dir), existing_pythonpath))
+        )
+        source = textwrap.dedent(
+            """
+            import sys
+            import types
+            from unittest import mock
 
-            def liveHandoffDuration(self):
-                return 4.0
+            fake_js = types.ModuleType("js")
+            fake_js.noonResolveAnimationOptions = object()
+            fake_js.noonResolveCompositionSchedule = object()
+            fake_js.noonResolveLifecyclePlan = object()
+            fake_js.noonResolveUniformCompositionSchedule = object()
+            fake_js.noonValidatePresenceTransition = object()
+            sys.modules["js"] = fake_js
 
-            def beginLiveExecution(self, duration):
-                self.durations.append(float(duration))
+            import _manim_compat
+            _manim_compat.install()
+            import _manim_phase_b  # noqa: F401
+            import _manim_typst
+            _manim_typst.install()
+            import _manim_canonical_scene as canonical
 
-        context = Context()
-        scene = object()
-        with mock.patch.object(canonical, "execution_context", return_value=context):
-            canonical.LiveExecution(scene)
-            canonical.LiveExecution(scene, 6.0)
+            class Context:
+                def __init__(self, handoff):
+                    self.handoff = handoff
+                    self.durations = []
 
-        self.assertEqual(context.durations, [4.0, 6.0])
+                def liveHandoffDuration(self):
+                    return self.handoff
 
-    def test_first_default_helper_uses_positive_bootstrap_duration(self) -> None:
-        class Context:
-            def __init__(self) -> None:
-                self.duration = None
+                def beginLiveExecution(self, duration):
+                    self.durations.append(float(duration))
 
-            def liveHandoffDuration(self):
-                return 0.0
+            returned = Context(4.0)
+            with mock.patch.object(canonical, "execution_context", return_value=returned):
+                canonical.LiveExecution(object())
+                canonical.LiveExecution(object(), 6.0)
+            assert returned.durations == [4.0, 6.0]
 
-            def beginLiveExecution(self, duration):
-                self.duration = float(duration)
-
-        context = Context()
-        with mock.patch.object(canonical, "execution_context", return_value=context):
-            canonical.LiveExecution(object())
-
-        self.assertEqual(context.duration, 1.0)
+            presegment = Context(0.0)
+            with mock.patch.object(canonical, "execution_context", return_value=presegment):
+                canonical.LiveExecution(object())
+            assert presegment.durations == [1.0]
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=python_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        )
 
 
 if __name__ == "__main__":
