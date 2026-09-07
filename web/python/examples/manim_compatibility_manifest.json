@@ -140,6 +140,21 @@
       "thumbnail_alt": "MOVE text shifting horizontally while WRITE is revealed above it",
       "thumbnail_time": 1.0,
       "order": 1090
+    },
+    {
+      "id": "compatible-text-family-fade",
+      "title": "TextFamilyFade",
+      "summary": "Lagged FadeIn/FadeOut over a VGroup of plain Text while a disjoint Text is written in parallel.",
+      "status": "ready",
+      "path": "python/examples/ordinary_text_family_fade.py",
+      "category": "manim-compatible/text",
+      "features": ["Text", "VGroup", "FadeIn", "FadeOut", "Write", "lag_ratio", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-text-family-fade.svg",
+      "thumbnail_alt": "LEFT and RIGHT text fading in as a family while WRITE appears below",
+      "thumbnail_time": 1.0,
+      "order": 1100
     }
   ]
 }
