@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="SpinIn and ShrinkToCenter preview">
+  <rect width="640" height="360" fill="#111722"/>
+  <g transform="translate(210 180) rotate(22)">
+    <rect x="-70" y="-70" width="140" height="140" rx="10" fill="#58C4DD" opacity="0.95"/>
+    <circle cx="0" cy="0" r="8" fill="#FC6255"/>
+  </g>
+  <path d="M310 180h80" stroke="#8390a8" stroke-width="8" stroke-linecap="round"/>
+  <path d="M370 155l30 25-30 25" fill="none" stroke="#8390a8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="445" y="145" width="70" height="70" rx="8" fill="#58C4DD" opacity="0.6"/>
+  <text x="320" y="320" text-anchor="middle" fill="#dbe2ef" font-family="ui-monospace,monospace" font-size="24">SpinIn → ShrinkToCenter</text>
+</svg>
