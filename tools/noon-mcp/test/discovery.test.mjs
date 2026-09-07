@@ -116,3 +116,11 @@ test("excess output, invalid startup paths and invalid limits fail", async (t) =
   await assert.rejects(createDiscovery({ repoRoot: ".", pythonExecutable: python }), /absolute/);
   await assert.rejects(createDiscovery({ repoRoot: f.root, pythonExecutable: python, timeoutMs: 0 }), /limits/);
 });
+
+test("a special-file replacement cannot block the reference reader", { timeout: 3000 }, async (t) => {
+  const f = await fixture(t);
+  const file = path.join(f.root, f.sourcePath);
+  await rm(file);
+  execFileSync("mkfifo", [file]);
+  await assert.rejects(f.service.reference({ example: "circle" }), /bounded regular file/);
+});

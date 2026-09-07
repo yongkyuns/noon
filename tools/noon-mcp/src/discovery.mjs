@@ -53,7 +53,7 @@ export async function createDiscovery({ repoRoot, pythonExecutable, timeoutMs = 
       // Do not inherit credentials, PYTHONPATH, Python startup hooks, or Git config
       // overrides. This runs trusted repository tooling, not a code sandbox.
       const env = { PATH: "/usr/bin:/bin:/usr/local/bin", LANG: "C.UTF-8", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
-      if (process.platform === "win32") throw new Error("discovery process isolation is currently qualified on POSIX hosts only");
+      if (process.platform === "win32") throw new Error("discovery process launcher currently supports POSIX hosts only");
       const result = await execute(interpreter, ["-I", "-S", "-B", exporter,
         ...selectedSymbols.flatMap((name) => ["--symbol", name]),
         ...selectedExamples.flatMap((name) => ["--example", name])], {
@@ -90,7 +90,7 @@ export async function createDiscovery({ repoRoot, pythonExecutable, timeoutMs = 
     }
     const file = await realpath(path.join(root, relative));
     if (!within(exampleRoot, file)) throw new Error("example source escapes the configured example directory");
-    const descriptor = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const descriptor = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     let bytes;
     try {
       const metadata = await descriptor.stat();
