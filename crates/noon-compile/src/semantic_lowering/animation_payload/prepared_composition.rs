@@ -1024,7 +1024,9 @@ mod tests {
             0,
             2,
             SemanticSubsetDisplayMode::OneByOneCeil,
-            AnimationOptions::new().run_time(2.0),
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
         );
         let root = transaction.create_animation_composition(
             SemanticAnimationCompositionKind::Parallel,
