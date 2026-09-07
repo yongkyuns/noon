@@ -240,6 +240,13 @@ pub enum AnimationCompositionRequest<'a> {
         mode: SubsetDisplayMode,
         options: AnimationOptions,
     },
+    /// Fade every ordered leaf while preserving the semantic family as the
+    /// scene-membership unit.
+    FamilyFade {
+        target: &'a MobjectFamily,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    },
     /// Write or unwrite one plain Text object through its Rust-derived glyph members.
     TextWrite {
         target: &'a Mobject,
@@ -864,6 +871,21 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
+    /// Fade an ordered semantic family through one atomic membership lifecycle.
+    pub fn declare_and_activate_family_fade(
+        &mut self,
+        target: &MobjectFamily,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::FamilyFade {
+            target,
+            direction,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
     /// Write or unwrite one plain Text object through shared glyph semantics.
     pub fn declare_and_activate_text_write(
         &mut self,
@@ -1223,6 +1245,18 @@ impl<'a> LiveSession<'a> {
                 Request::FamilySubsetDisplay {
                     target: target.node_id(),
                     mode: *mode,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilyFade {
+                target,
+                direction,
+                options,
+            } => {
+                self.require_family(target)?;
+                Request::FamilyFade {
+                    target: target.node_id(),
+                    direction: *direction,
                     options: *options,
                 }
             }
@@ -3956,6 +3990,153 @@ mod recursive_composition_tests {
         );
         assert!((second_center.0 - first_center.0 - 0.6).abs() < 1e-6);
         assert!((first_center.0 + second_center.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn family_fade_preserves_family_membership_and_ordered_lifecycle() {
+        let mut scene = Scene::new();
+        let label = scene.text(crate::Text::new("Fade")).unwrap();
+        let shape = scene.circle(0.25).unwrap();
+        let family = scene.family(&[&label, &shape]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let fade_in = live
+            .declare_and_activate_family_fade(
+                &family,
+                SemanticFadeDirection::In,
+                linear(1.0).introducer(true),
+            )
+            .unwrap();
+        assert_eq!(
+            scene
+                .store()
+                .borrow()
+                .semantic_family_members_checked(scene.root())
+                .unwrap(),
+            [family.node_id()]
+        );
+        assert_eq!(live.effective(&label).unwrap().appearance, 0.0);
+        assert_eq!(live.effective(&shape).unwrap().appearance, 0.0);
+        live.advance_segment_to(fade_in, fade_in.end_time())
+            .unwrap();
+        live.complete_segment(fade_in).unwrap();
+
+        let segment = live
+            .declare_and_activate_family_fade(
+                &family,
+                SemanticFadeDirection::Out,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear)
+                    .lag_ratio(0.5)
+                    .remover(true),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 0.5)
+            .unwrap();
+        assert!(
+            live.effective(&label).unwrap().appearance < live.effective(&shape).unwrap().appearance
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+
+        let store = scene.store().borrow();
+        assert!(store
+            .semantic_family_members_checked(scene.root())
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .semantic_family_members_checked(family.node_id())
+                .unwrap(),
+            [label.node_id(), shape.node_id()]
+        );
+    }
+
+    #[test]
+    fn family_fade_and_disjoint_text_write_share_one_atomic_composition() {
+        let mut scene = Scene::new();
+        let fading_text = scene.text(crate::Text::new("old")).unwrap();
+        let fading_shape = scene.square(0.5).unwrap();
+        let family = scene.family(&[&fading_text, &fading_shape]).unwrap();
+        scene
+            .add_many(&[MobjectFamilyMember::Family(&family)])
+            .unwrap();
+        let written = scene.text(crate::Text::new("new")).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+            children: vec![
+                AnimationCompositionRequest::FamilyFade {
+                    target: &family,
+                    direction: SemanticFadeDirection::Out,
+                    options: linear(1.0).remover(true),
+                },
+                AnimationCompositionRequest::TextWrite {
+                    target: &written,
+                    reverse_member_order: false,
+                    options: linear(1.0).introducer(true),
+                },
+            ],
+        };
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+
+        let store = scene.store().borrow();
+        assert_eq!(
+            store.semantic_family_members_checked(scene.root()).unwrap(),
+            [written.node_id()]
+        );
+    }
+
+    #[test]
+    fn family_fade_rejects_overlapping_text_write_before_publication() {
+        let mut scene = Scene::new();
+        let label = scene.text(crate::Text::new("same")).unwrap();
+        let family = scene.family(&[&label]).unwrap();
+        scene
+            .add_many(&[MobjectFamilyMember::Family(&family)])
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new(),
+            children: vec![
+                AnimationCompositionRequest::FamilyFade {
+                    target: &family,
+                    direction: SemanticFadeDirection::Out,
+                    options: linear(1.0).remover(true),
+                },
+                AnimationCompositionRequest::TextWrite {
+                    target: &label,
+                    reverse_member_order: false,
+                    options: linear(1.0).introducer(false).remover(false),
+                },
+            ],
+        };
+
+        assert!(scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .is_err());
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(
+            scene
+                .store()
+                .borrow()
+                .semantic_family_members_checked(scene.root())
+                .unwrap(),
+            [family.node_id()]
+        );
     }
 
     #[test]
