@@ -1,0 +1,23 @@
+name: Noon 1202 trace
+on:
+  push:
+    branches: [codex/noon-1202-trace]
+    paths: [.github/workflows/noon-1202-trace.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: f3ff356c27cf09867564f4d00a530fb400fdff32
+          persist-credentials: false
+      - name: Export exact source
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/noon-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v7
+        with:
+          name: noon-1202-source
+          path: ${{ runner.temp }}/noon-source.tar.gz
+          retention-days: 1
