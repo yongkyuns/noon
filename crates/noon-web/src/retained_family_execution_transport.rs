@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 
-use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceArena};
+use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceLookup};
 use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 use serde::{Deserialize, Serialize};
 
@@ -269,7 +269,7 @@ impl InstalledRetainedFamilyExecutionState {
         &mut self,
         delta: &RetainedFamilyExecutionDeltaEnvelope,
         frame: &FrameState,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyExecutionTransportError> {
         delta.validate()?;
 
@@ -558,7 +558,7 @@ impl From<RetainedFamilyTransportError> for RetainedFamilyExecutionTransportErro
 mod tests {
     use noon_core::{
         Camera2DState, FamilyAnimationMode, GeometryRef, ObjectContentRef, RateFunction, Style,
-        Transform2D,
+        TextResourceArena, Transform2D,
     };
     use noon_runtime::FrameObjectState;
 
@@ -745,6 +745,7 @@ mod tests {
                 RetainedFamilyPlanTransport::from_plan(&plan),
                 RetainedFamilyPlanTransport::from_plan(&plan),
             ],
+            resource_additions: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -766,6 +767,7 @@ mod tests {
             )
             .unwrap()],
             family_plans: Vec::new(),
+            resource_additions: None,
         };
         assert_eq!(
             installed
@@ -796,6 +798,7 @@ mod tests {
             )
             .unwrap()],
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
+            resource_additions: None,
         };
         installed
             .apply(&appended, &retained_frame, &TextResourceArena::new())
@@ -827,6 +830,7 @@ mod tests {
             family_plans: vec![RetainedFamilyPlanTransport {
                 objects: Vec::new(),
             }],
+            resource_additions: None,
         };
 
         assert!(installed
@@ -852,6 +856,7 @@ mod tests {
             )
             .unwrap()],
             family_plans: Vec::new(),
+            resource_additions: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -860,6 +865,7 @@ mod tests {
                     retained: retained(true, 0),
                     family_states: Vec::new(),
                     family_plans: Vec::new(),
+                    resource_additions: None,
                 },
                 &frame(),
                 &TextResourceArena::new(),
@@ -893,6 +899,7 @@ mod tests {
             )
             .unwrap()],
             family_plans: Vec::new(),
+            resource_additions: None,
         };
         assert_eq!(
             installed

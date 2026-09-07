@@ -89,7 +89,7 @@ mod wasm {
                     .render_geometries()
                     .len()
                     .max(mirror.resources().render_geometry_preparation_count()),
-                mirror.resources().geometries().len(),
+                mirror.resources().geometry_count(),
             );
 
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
