@@ -23,6 +23,7 @@ import _manim_compat as _compat
 import _manim_composition as _composition
 import _manim_draw_border_then_fill as _draw_border_then_fill
 import _manim_family_creation as _family_creation
+import _manim_lifecycle as _lifecycle
 import _manim_phase_b as _phase_b
 import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
@@ -1284,6 +1285,8 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         import _manim_rotate as _rotate
 
         animation = args[0]
+        if _canonical_subset_display_animation(scene, animation) is not None:
+            return "parallel", args, None
         if _canonical_draw_border_then_fill_animation(scene, animation) is not None:
             return "parallel", args, None
         if isinstance(animation, (_animate._AlignedGroupAnimationBuilder, _animate.Indicate)):
@@ -1436,6 +1439,30 @@ def _canonical_draw_border_then_fill_animation(scene: _base.Scene, animation: ob
     return target, family, leaves, phase_rate
 
 
+def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
+    """Classify a prepared ordinary family without inspecting member snapshots."""
+    if not isinstance(animation, _lifecycle.ShowIncreasingSubsets):
+        return None
+    family = animation.group
+    leaves = list(family.submobjects)
+    if (
+        not isinstance(family, _compat.Group)
+        or getattr(family, "_semantic_family_handle", None) is None
+        or not leaves
+        or any(
+            not isinstance(member, _base.Mobject)
+            or isinstance(member, _compat.Group)
+            or getattr(member, "_semantic_handle", None) is None
+            or (member._scene is not None and member._scene is not scene)
+            for member in leaves
+        )
+    ):
+        raise NotImplementedError(
+            "canonical subset display requires one ordinary typed direct-member family"
+        )
+    return family, leaves, animation.mode
+
+
 def _build_canonical_composition_candidate(
     self: _base.Scene,
     kind: str,
@@ -1506,6 +1533,38 @@ def _build_canonical_composition_candidate(
             if child_kwargs:
                 raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
             builder.appendWait(float(animation.run_time))
+            return
+        subset = _canonical_subset_display_animation(self, animation)
+        if subset is not None:
+            family, leaves, mode = subset
+            resolved = _options.resolve(
+                builder_args=_options.builder_args(animation),
+                default_lag_ratio=0.0,
+                play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
+                play_easing=child_kwargs.get("easing"),
+                play_rate_func=child_kwargs.get("rate_func"),
+                play_lag_ratio=child_kwargs.get("lag_ratio"),
+            )
+            if (
+                resolved.lag_ratio != 0.0
+                or resolved.path_arc != 0.0
+                or resolved.reverse_rate_function
+            ):
+                raise NotImplementedError(
+                    "canonical subset display does not support lag, path, or reverse options"
+                )
+            builder.appendFamilySubsetDisplay(
+                family._semantic_family_handle,
+                mode,
+                float(resolved.run_time),
+                str(resolved.rate_func),
+            )
+            for member in leaves:
+                if member._scene is None:
+                    reservation = reserve(member)
+                    builder.appendFamilySubsetDisplayEntering(
+                        str(reservation.object.id), member._semantic_handle
+                    )
             return
         border_fill = _canonical_draw_border_then_fill_animation(self, animation)
         if border_fill is not None:

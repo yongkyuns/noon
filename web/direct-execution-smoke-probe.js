@@ -22,6 +22,7 @@ const {
   createDirectMixedScalarCompositionSmokeRenderer,
   createDirectFamilyTransformIndicateSmokeRenderer,
   createDirectDrawBorderThenFillSmokeRenderer,
+  createDirectOrdinarySubsetDisplaySmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -1127,6 +1128,54 @@ async function directDrawBorderThenFillProof(expectedBackend) {
   }
 }
 
+async function directOrdinarySubsetDisplayProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinarySubsetDisplaySmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const [time, row, expected] of [
+      [500, 0.7, []],
+      [1000, 0.7, [-1]],
+      [2000, 0.7, [-1, 0]],
+      [3000, 0.7, [-1, 0, 1]],
+      [3000, -0.7, []],
+      [3500, -0.7, [-1]],
+      [4000, -0.7, [-1]],
+      [4500, -0.7, [0]],
+      [5000, -0.7, [0]],
+      [5500, -0.7, [1]],
+      [6000, -0.7, [1]],
+    ]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const colors = await Promise.all([-1, 0, 1].map((x) => sampleRenderedColor(canvas, x, row)));
+      for (const [index, x] of [-1, 0, 1].entries()) {
+        const visible = Math.max(colors[index].red, colors[index].green, colors[index].blue) > 70;
+        if (visible !== expected.includes(x)) {
+          throw new Error(`direct subset display threshold mismatch: ${JSON.stringify({ time, x, colors, expected })}`);
+        }
+      }
+      samples.push({ time, row, colors });
+    }
+    renderer.advanceDirectRealtime(6250);
+    await settleDirectPublication(renderer, 6250);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(6250));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 6.25
+        || renderer.objectCount() !== 6 || wake.cadence !== "idle") {
+      throw new Error("direct ordinary subset display did not complete its shared continuation");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directMovingCameraCenterProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectMovingCameraCenterSmokeRenderer(canvas);
@@ -1731,6 +1780,7 @@ async function start() {
   metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);
   metrics.familyTransformIndicate = await directFamilyTransformIndicateProof(expectedBackend);
   metrics.drawBorderThenFill = await directDrawBorderThenFillProof(expectedBackend);
+  metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);

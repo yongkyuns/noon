@@ -55,6 +55,12 @@ enum OrdinaryCompositionChild {
         outline: noon::DrawBorderThenFillOptions,
         options: noon_core::AnimationOptions,
     },
+    FamilySubsetDisplay {
+        target: noon::MobjectFamily,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        mode: noon::SubsetDisplayMode,
+        options: noon_core::AnimationOptions,
+    },
     Rotate {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1430,6 +1436,16 @@ impl CanonicalAuthoringScene {
                     outline: *outline,
                     options: *options,
                 },
+                OrdinaryCompositionChild::FamilySubsetDisplay {
+                    target,
+                    mode,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::FamilySubsetDisplay {
+                    target,
+                    mode: *mode,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
@@ -1574,6 +1590,9 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::FamilyDrawBorderThenFill { entering, .. } => {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
+                OrdinaryCompositionChild::FamilySubsetDisplay { entering, .. } => {
+                    output.extend(entering.iter().map(|(id, target)| (*id, target)));
+                }
                 OrdinaryCompositionChild::Add {
                     entering_id,
                     target,
@@ -1691,6 +1710,64 @@ impl CanonicalAuthoringScene {
                         noon_core::AnimationOptions::new(),
                     )
                     .map_err(|error| error.to_string())?;
+                    continue;
+                }
+                OrdinaryCompositionChild::FamilySubsetDisplay {
+                    target,
+                    entering,
+                    options,
+                    ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                        return Err(
+                            "ordinary subset-display family belongs to another authoring store"
+                                .into(),
+                        );
+                    }
+                    target.validate()?;
+                    let direct_members = self
+                        .scene
+                        .store()
+                        .borrow()
+                        .semantic_family_members_checked(target.node_id())
+                        .map_err(|error| error.to_string())?
+                        .to_vec();
+                    let expected_entering = direct_members
+                        .iter()
+                        .copied()
+                        .filter(|id| !self.identities.contains_key(id))
+                        .collect::<BTreeSet<_>>();
+                    let supplied_entering = entering
+                        .iter()
+                        .map(|(_, member)| member.node_id())
+                        .collect::<BTreeSet<_>>();
+                    if supplied_entering != expected_entering {
+                        return Err("ordinary subset-display wrapper identities do not match detached direct members".into());
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    for (id, member) in entering {
+                        if !std::rc::Rc::ptr_eq(self.scene.store(), member.store()) {
+                            return Err(
+                                "ordinary subset-display member belongs to another authoring store"
+                                    .into(),
+                            );
+                        }
+                        member.validate()?;
+                        if self.bindings.contains_key(id)
+                            || self.identities.contains_key(&member.node_id())
+                            || !ids.insert(*id)
+                            || !entering_nodes.insert(member.node_id())
+                        {
+                            return Err(
+                                "ordinary subset-display entering identity is already bound".into(),
+                            );
+                        }
+                    }
                     continue;
                 }
                 OrdinaryCompositionChild::FamilyDrawBorderThenFill {
@@ -1955,6 +2032,24 @@ impl CanonicalAuthoringScene {
             buff,
             center,
         )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn prepare_family_subset_display(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<(), String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), family.store()) {
+            return Err("subset-display family belongs to another authoring store".into());
+        }
+        match self.live_execution_ownership() {
+            "none" => family.prepare_subset_display(),
+            "active" | "returned" => self
+                .active_live_player()?
+                .prepare_family_subset_display(family),
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3484,6 +3579,55 @@ mod wasm {
             }
             entering.push((
                 parse_object_id("DrawBorderThenFill family object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilySubsetDisplay)]
+        pub fn append_family_subset_display(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            mode: &str,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<(), JsValue> {
+            let mode = match mode {
+                "increasing-floor" => noon::SubsetDisplayMode::IncreasingFloor,
+                "one-by-one-ceil" => noon::SubsetDisplayMode::OneByOneCeil,
+                _ => return Err(js_error("unknown subset-display mode")),
+            };
+            self.children
+                .push(OrdinaryCompositionChild::FamilySubsetDisplay {
+                    target: target.semantic_family()?,
+                    entering: Vec::new(),
+                    mode,
+                    options: Self::optional_options(child_run_time, rate_function)?,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilySubsetDisplayEntering)]
+        pub fn append_family_subset_display_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilySubsetDisplay {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error(
+                    "family entering member must follow FamilySubsetDisplay",
+                ));
+            };
+            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+                return Err(js_error(
+                    "family entering member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("subset-display family object ID", object_id)?,
                 member.semantic_mobject().clone(),
             ));
             Ok(())
@@ -5046,6 +5190,16 @@ mod wasm {
             self.inner.prepare_execution_run().map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = prepareFamilySubsetDisplay)]
+        pub fn prepare_family_subset_display(
+            &mut self,
+            family: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .prepare_family_subset_display(&family.semantic_family()?)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetTranslation)]
         pub fn live_set_translation(
             &mut self,
@@ -6449,6 +6603,62 @@ mod tests {
         )
         .unwrap();
         assert_eq!(publication.objects.len(), 3);
+    }
+
+    #[test]
+    fn ordinary_subset_display_prepares_and_publishes_family_atomically() {
+        let mut context = CanonicalAuthoringScene::default();
+        let left = context.scene.square(0.5).unwrap();
+        let right = context.scene.circle(0.25).unwrap();
+        let family = context.scene.family(&[&left, &right]).unwrap();
+        family.prepare_subset_display().unwrap();
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        let invalid = [OrdinaryCompositionChild::FamilySubsetDisplay {
+            target: family.clone(),
+            entering: vec![(ObjectId::new(0), left.clone())],
+            mode: noon::SubsetDisplayMode::IncreasingFloor,
+            options,
+        }];
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &invalid,
+                composition,
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert!(context.bindings.is_empty());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let valid = [OrdinaryCompositionChild::FamilySubsetDisplay {
+            target: family,
+            entering: vec![
+                (ObjectId::new(0), left.clone()),
+                (ObjectId::new(1), right.clone()),
+            ],
+            mode: noon::SubsetDisplayMode::OneByOneCeil,
+            options,
+        }];
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &valid,
+                    composition,
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            2.0
+        );
+        assert!(context.live_contains_mobject(&left).unwrap());
+        assert!(context.live_contains_mobject(&right).unwrap());
+        assert_eq!(context.bindings.len(), 2);
     }
 
     #[test]

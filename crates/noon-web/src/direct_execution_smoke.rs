@@ -323,6 +323,15 @@ pub async fn create_direct_draw_border_then_fill_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for ordered ordinary-family subset-display semantics.
+#[wasm_bindgen(js_name = createDirectOrdinarySubsetDisplaySmokeRenderer)]
+pub async fn create_direct_ordinary_subset_display_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_subset_display::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Browser proof that the paired ordinary continuation and its ordered Rust
 /// callback table execute through the normal direct single-context WASM host.
 #[wasm_bindgen(js_name = createDirectOrdinaryAffineCallbackContinuationSmokeRenderer)]

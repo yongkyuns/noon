@@ -37,6 +37,12 @@ pub enum SemanticTransactionAnimationIntent {
         stroke_color: Option<Color>,
         phase_rate_function: crate::RateFunction,
     },
+    SubsetDisplayMember {
+        target: SemanticTransactionNodeRef,
+        index: usize,
+        count: usize,
+        mode: crate::SemanticSubsetDisplayMode,
+    },
     Rotate {
         target: SemanticTransactionNodeRef,
         angle: f64,
@@ -79,6 +85,7 @@ impl SemanticTransactionAnimationIntent {
             Self::Rotate { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
+            | Self::SubsetDisplayMember { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
@@ -91,6 +98,7 @@ impl SemanticTransactionAnimationIntent {
             Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
+            | Self::SubsetDisplayMember { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -168,6 +176,17 @@ impl SemanticTransactionAnimation {
                 stroke_width: *stroke_width,
                 stroke_color: *stroke_color,
                 phase_rate_function: *phase_rate_function,
+            },
+            SemanticAnimationIntent::SubsetDisplayMember {
+                target,
+                index,
+                count,
+                mode,
+            } => SemanticTransactionAnimationIntent::SubsetDisplayMember {
+                target: (*target).into(),
+                index: *index,
+                count: *count,
+                mode: *mode,
             },
             SemanticAnimationIntent::Fade {
                 target,
@@ -253,6 +272,17 @@ impl SemanticTransactionAnimation {
                 stroke_width: *stroke_width,
                 stroke_color: *stroke_color,
                 phase_rate_function: *phase_rate_function,
+            },
+            SemanticTransactionAnimationIntent::SubsetDisplayMember {
+                target,
+                index,
+                count,
+                mode,
+            } => SemanticAnimationIntent::SubsetDisplayMember {
+                target: resolve_node_ref(*target, committed),
+                index: *index,
+                count: *count,
+                mode: *mode,
             },
             SemanticTransactionAnimationIntent::Fade {
                 target,
@@ -411,6 +441,18 @@ pub(super) fn preflight_transaction_animation(
                 return Err(
                     SemanticMutationTransactionError::InvalidDrawBorderThenFillOutline { index },
                 );
+            }
+        }
+        SemanticTransactionAnimationIntent::SubsetDisplayMember {
+            target,
+            index: member_index,
+            count,
+            ..
+        } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if *count == 0 || *member_index >= *count {
+                return Err(SemanticMutationTransactionError::InvalidSubsetDisplayMember { index });
             }
         }
         SemanticTransactionAnimationIntent::Fade {

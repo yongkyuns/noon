@@ -1360,6 +1360,48 @@ try {
     await stopSampledSource(page);
   }
 
+  const subsetDisplaySource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_subset_display.py"), "utf8",
+  );
+  await startSampledSource(page, subsetDisplaySource, "scene-shared-subset-display");
+  try {
+    const canvas = page.locator("#scene-shared-subset-display");
+    for (const [time, row, expected] of [
+      [0.5, 0.7, []],
+      [1, 0.7, [-1]],
+      [2, 0.7, [-1, 0]],
+      [3, 0.7, [-1, 0, 1]],
+      [3, -0.7, []],
+      [3.5, -0.7, [-1]],
+      [4, -0.7, [-1]],
+      [4.5, -0.7, [0]],
+      [5, -0.7, [0]],
+      [5.5, -0.7, [1]],
+      [6, -0.7, [1]],
+    ]) {
+      await page.evaluate(
+        (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
+        time,
+      );
+      const pixels = await canvas.screenshot();
+      for (const x of [-1, 0, 1]) {
+        const color = renderedWorldPixel(pixels, x, row);
+        const visible = Math.max(color.red, color.green, color.blue) > 70;
+        assert.equal(visible, expected.includes(x),
+          `shared subset display threshold mismatch at ${time}s, x=${x}: ${JSON.stringify(color)}`);
+      }
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(6.25), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 6.25);
+    assert.equal(result.metrics.objectCount, 6);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   // Scalar tracker continuation keeps both values and timing in the returned
   // Rust player. Python remains suspended through both tracks and the wait.
   const externalSamples = await page.evaluate(async (source) => {

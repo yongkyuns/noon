@@ -20,6 +20,15 @@ pub enum SemanticFadeDirection {
     Out,
 }
 
+/// Exact threshold rule for one ordered family subset display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticSubsetDisplayMode {
+    /// Keep every member whose one-based index is at most `floor(progress * count)`.
+    IncreasingFloor,
+    /// Keep only the member selected by `ceil(progress * count)`, with zero selecting none.
+    OneByOneCeil,
+}
+
 /// Directional translation of a faded affine endpoint relative to activation state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticFadeTranslation {
@@ -138,6 +147,13 @@ pub enum SemanticAnimationIntent {
         stroke_color: Option<Color>,
         phase_rate_function: RateFunction,
     },
+    /// Switch one direct family member at its exact ordered subset threshold.
+    SubsetDisplayMember {
+        target: SemanticNodeId,
+        index: usize,
+        count: usize,
+        mode: SemanticSubsetDisplayMode,
+    },
     /// Rotate one centered 2D object along an angular path. This remains distinct
     /// from TransformTo point correspondence even when both share affine endpoints.
     Rotate { target: SemanticNodeId, angle: f64 },
@@ -182,6 +198,7 @@ impl SemanticAnimationIntent {
             Self::TransformTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
+            | Self::SubsetDisplayMember { target, .. }
             | Self::Rotate { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
@@ -198,6 +215,7 @@ impl SemanticAnimationIntent {
             Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
+            | Self::SubsetDisplayMember { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
@@ -213,6 +231,7 @@ impl SemanticAnimationIntent {
             Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
+            | Self::SubsetDisplayMember { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -229,6 +248,7 @@ impl SemanticAnimationIntent {
             Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
+            | Self::SubsetDisplayMember { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -277,6 +297,7 @@ pub enum SemanticAnimationError {
     InvalidRotationAngle(f64),
     InvalidIndicateEndpoint,
     InvalidDrawBorderThenFillOutline,
+    InvalidSubsetDisplayMember,
     InvalidFadeEndpoint,
     InvalidAffineLifecycleEndpoint,
     Signal(SemanticSignalError),
@@ -320,6 +341,8 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidDrawBorderThenFillOutline => {
                 formatter.write_str("DrawBorderThenFill outline width and color must be finite")
             }
+            Self::InvalidSubsetDisplayMember => formatter
+                .write_str("subset display member requires a nonempty count and an in-range index"),
             Self::InvalidFadeEndpoint => formatter
                 .write_str("Fade scale, translation, and scale center must be finite 2D values"),
             Self::InvalidAffineLifecycleEndpoint => formatter.write_str(
@@ -516,6 +539,34 @@ impl SemanticStore {
                     stroke_width,
                     stroke_color,
                     phase_rate_function,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one ordered leaf of a shared subset display declaration.
+    pub fn insert_semantic_subset_display_member_animation(
+        &mut self,
+        target: SemanticNodeId,
+        index: usize,
+        count: usize,
+        mode: SemanticSubsetDisplayMode,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if count == 0 || index >= count {
+            return Err(SemanticAnimationError::InvalidSubsetDisplayMember);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::SubsetDisplayMember {
+                    target,
+                    index,
+                    count,
+                    mode,
                 },
                 options,
             )),

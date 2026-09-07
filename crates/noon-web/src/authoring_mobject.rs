@@ -1279,6 +1279,15 @@ mod wasm {
             })
         }
 
+        /// Atomically apply Manim subset-display constructor semantics to every
+        /// ordinary direct member before execution starts.
+        #[wasm_bindgen(js_name = prepareSubsetDisplay)]
+        pub fn prepare_subset_display(&self) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .prepare_subset_display()
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(getter, js_name = semanticSlot)]
         pub fn semantic_slot(&self) -> u32 {
             self.id.slot()

@@ -1,8 +1,8 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use noon_core::{
-    validate_track_definition, AnimationOptions, CompositionTimeMapStep, ObjectId,
-    PreparedSemanticMutationTransaction, Property, RateFunction, SemanticLoweringError,
+    validate_track_definition, AnimationOptions, CompositionTimeMapError, CompositionTimeMapStep,
+    ObjectId, PreparedSemanticMutationTransaction, Property, RateFunction, SemanticLoweringError,
     SemanticObjectProperty, SemanticTransactionNodeRef, SemanticTransactionReadError,
     TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues,
 };
@@ -123,6 +123,10 @@ pub enum PreparedSemanticAnimationLoweringError {
     },
     UnsupportedAffineLifecycleOptions {
         animation: SemanticTransactionNodeRef,
+    },
+    InvalidSubsetDisplayTimeMap {
+        animation: SemanticTransactionNodeRef,
+        error: CompositionTimeMapError,
     },
     UnsupportedContentChange {
         animation: SemanticTransactionNodeRef,
@@ -426,6 +430,106 @@ where
                 }
                 continue;
             }
+            PreparedSemanticScheduledAnimationPayload::SubsetDisplayMember {
+                index: member_index,
+                count,
+                mode,
+            } => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.remover
+                    || leaf.options.reverse_rate_function
+                    || leaf.options.rate_func != RateFunction::Linear
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                            animation: leaf.animation,
+                            remover: leaf.options.remover,
+                            introducer: leaf.options.introducer,
+                        },
+                    );
+                }
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    admitted.contains(&leaf.target),
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                let channels = super::affine::lower_subset_display_channels(source, from)
+                    .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
+                let lower = member_index as f64 / count as f64;
+                let upper = (member_index + 1) as f64 / count as f64;
+                for channel in channels {
+                    push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                    let visible = tracks.last_mut().expect("pushed subset display channel");
+                    match mode {
+                        noon_core::SemanticSubsetDisplayMode::IncreasingFloor => {
+                            set_subset_interval(visible, leaf, 0.0, upper, RateFunction::StepEnd)?;
+                            if upper < 1.0 {
+                                let mut hold = visible.clone();
+                                hold.values = match &visible.values {
+                                    TrackValues::Color { to, .. } => {
+                                        TrackValues::Color { from: *to, to: *to }
+                                    }
+                                    _ => unreachable!("subset display uses color channels"),
+                                };
+                                set_subset_interval(
+                                    &mut hold,
+                                    leaf,
+                                    upper,
+                                    1.0 - upper,
+                                    RateFunction::Linear,
+                                )?;
+                                tracks.push(hold);
+                            }
+                        }
+                        noon_core::SemanticSubsetDisplayMode::OneByOneCeil => {
+                            set_subset_interval(
+                                visible,
+                                leaf,
+                                lower,
+                                upper - lower,
+                                RateFunction::StepStart,
+                            )?;
+                            if upper < 1.0 {
+                                let mut hide = visible.clone();
+                                hide.values = match &visible.values {
+                                    TrackValues::Color { from, to } => TrackValues::Color {
+                                        from: *to,
+                                        to: *from,
+                                    },
+                                    _ => unreachable!("subset display uses color channels"),
+                                };
+                                hide.completion = match &visible.completion {
+                                    SemanticAnimationCompletion::Fill { paint, .. } => {
+                                        SemanticAnimationCompletion::Fill {
+                                            paint: paint.clone(),
+                                            opacity: 0.0,
+                                        }
+                                    }
+                                    SemanticAnimationCompletion::Stroke { paint, .. } => {
+                                        SemanticAnimationCompletion::Stroke {
+                                            paint: paint.clone(),
+                                            opacity: 0.0,
+                                        }
+                                    }
+                                    _ => unreachable!("subset display uses paint completions"),
+                                };
+                                set_subset_interval(
+                                    &mut hide,
+                                    leaf,
+                                    upper,
+                                    1.0 - upper,
+                                    RateFunction::StepStart,
+                                )?;
+                                tracks.push(hide);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             PreparedSemanticScheduledAnimationPayload::Fade {
                 direction,
                 endpoint,
@@ -597,6 +701,44 @@ where
         run_time: schedule.run_time(),
         tracks,
     })
+}
+
+fn set_subset_interval(
+    track: &mut PreparedSemanticAnimationTrack,
+    leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
+    start: f64,
+    duration: f64,
+    easing: RateFunction,
+) -> Result<(), PreparedSemanticAnimationLoweringError> {
+    if let Some((index, step)) = leaf.time_map.steps.iter().enumerate().find(|(_, step)| {
+        !matches!(
+            step.rate_func,
+            RateFunction::Linear
+                | RateFunction::Smooth
+                | RateFunction::RushInto
+                | RateFunction::RushFrom
+                | RateFunction::EaseInOutCubic
+        )
+    }) {
+        return Err(
+            PreparedSemanticAnimationLoweringError::InvalidSubsetDisplayTimeMap {
+                animation: leaf.animation,
+                error: CompositionTimeMapError::UnsupportedDiscreteRate {
+                    index,
+                    rate_func: step.rate_func,
+                },
+            },
+        );
+    }
+    track.timing = leaf.timing;
+    track.timing.easing = easing;
+    track.time_map = leaf.time_map.clone();
+    track.time_map.push(CompositionTimeMapStep::new(
+        start,
+        duration,
+        RateFunction::Linear,
+    ));
+    Ok(())
 }
 
 fn capture_effective<F>(

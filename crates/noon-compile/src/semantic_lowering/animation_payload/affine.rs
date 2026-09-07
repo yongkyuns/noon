@@ -531,6 +531,7 @@ where
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
             | SemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
+            | SemanticScheduledAnimationPayload::SubsetDisplayMember { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
             | SemanticScheduledAnimationPayload::Add
@@ -622,6 +623,21 @@ fn validate_leaf_matches_declaration(
                     stroke_width: *stroke_width,
                     stroke_color: *stroke_color,
                     phase_rate_function: *phase_rate_function,
+                } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::SubsetDisplayMember {
+            target,
+            index,
+            count,
+            mode,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::SubsetDisplayMember {
+                    index: *index,
+                    count: *count,
+                    mode: *mode,
                 } =>
         {
             Ok(())
@@ -1273,6 +1289,62 @@ pub(super) fn lower_draw_border_then_fill_channels(
         true,
         &mut channels,
     )?;
+    Ok(channels)
+}
+
+pub(super) fn lower_subset_display_channels(
+    source: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if !matches!(&source.content, SemanticObjectContent::Geometry(_)) {
+        return Err(AffinePayloadIssue::UnsupportedContentChange);
+    }
+    if !style_is_finite(from.style) {
+        return Err(AffinePayloadIssue::InvalidEffectiveStyle);
+    }
+    let mut channels = Vec::with_capacity(2);
+    if let Some(noon_core::SemanticPaint::Solid(color)) = source.style.fill.as_ref() {
+        let color = *color;
+        push_affine_channel(
+            source,
+            SemanticObjectProperty::FillOpacity,
+            Property::Fill,
+            TrackValues::Color {
+                from: Some(noon_core::Color {
+                    alpha: 0.0,
+                    ..color
+                }),
+                to: Some(color),
+            },
+            SemanticAnimationCompletion::Fill {
+                paint: source.style.fill.clone(),
+                opacity: 1.0,
+            },
+            true,
+            &mut channels,
+        )?;
+    }
+    if let Some(noon_core::SemanticPaint::Solid(color)) = source.style.stroke.as_ref() {
+        let color = *color;
+        push_affine_channel(
+            source,
+            SemanticObjectProperty::StrokeOpacity,
+            Property::Stroke,
+            TrackValues::Color {
+                from: Some(noon_core::Color {
+                    alpha: 0.0,
+                    ..color
+                }),
+                to: Some(color),
+            },
+            SemanticAnimationCompletion::Stroke {
+                paint: source.style.stroke.clone(),
+                opacity: 1.0,
+            },
+            true,
+            &mut channels,
+        )?;
+    }
     Ok(channels)
 }
 
