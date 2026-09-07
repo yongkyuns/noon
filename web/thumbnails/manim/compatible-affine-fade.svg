@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Affine Fade demo</title>
+  <desc id="desc">A blue circle fading and scaling between two positions.</desc>
+  <rect width="640" height="360" fill="#10141d"/>
+  <circle cx="435" cy="180" r="72" fill="#58c4dd" opacity="0.18"/>
+  <circle cx="355" cy="180" r="62" fill="#58c4dd" opacity="0.42"/>
+  <circle cx="270" cy="180" r="52" fill="#58c4dd"/>
+  <path d="M165 180h55" stroke="#8f9bb3" stroke-width="6" stroke-linecap="round"/>
+  <path d="m205 160 22 20-22 20" fill="none" stroke="#8f9bb3" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
