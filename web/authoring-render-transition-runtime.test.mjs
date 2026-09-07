@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
-import { MainThreadRenderWorker } from "./main-thread-render-worker.js";
 
 const controllerSource = await readFile(
   new URL("./authoring-render-controller.js", import.meta.url),
@@ -11,6 +10,13 @@ const controllerSource = await readFile(
 const executableSource = controllerSource
   .replace(/^import\s+[\s\S]*?;\n/gm, "")
   .replace(/^export\s+/gm, "");
+const adapterSource = await readFile(
+  new URL("./main-thread-render-worker.js", import.meta.url),
+  "utf8",
+);
+const executableAdapterSource = adapterSource
+  .replace(/^export\s+/gm, "")
+  .replace('import("./authoring-render-controller.js")', "loadControllerModule()");
 
 function unwrapControllerFactory(source) {
   const factoryStart = source.indexOf("function createAuthoringRenderController(host) {");
@@ -72,35 +78,39 @@ test("controller instances isolate dispatch and shutdown", async () => {
 });
 
 test("a terminated main-thread adapter cannot shut down a later adapter", async () => {
-  const abandoned = new MainThreadRenderWorker();
-  abandoned.terminate();
-  const active = new MainThreadRenderWorker();
-  const response = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("adapter response timed out")), 1000);
-    active.addEventListener(
-      "message",
-      (event) => {
-        clearTimeout(timeout);
-        resolve(event.data);
-      },
-      { once: true },
-    );
+  const moduleLoad = deferred();
+  const messages = [];
+  const context = vm.createContext({
+    EventTarget,
+    MessageEvent,
+    queueMicrotask,
+    loadControllerModule: () => moduleLoad.promise,
+    messages,
   });
-  active.postMessage({
-    channel: "noon.render",
-    protocolVersion: 1,
-    type: "unknown",
-    requestId: 42,
-  });
+  vm.runInContext(executableSource, context);
+  vm.runInContext(executableAdapterSource, context);
+  vm.runInContext(
+    `controllerModule = { createAuthoringRenderController };
+    abandoned = new MainThreadRenderWorker();
+    abandoned.terminate();
+    active = new MainThreadRenderWorker();
+    active.addEventListener("message", (event) => messages.push(event.data));
+    active.postMessage({
+      channel:"noon.render", protocolVersion:1, type:"unknown", requestId:42,
+    });`,
+    context,
+  );
+  moduleLoad.resolve(context.controllerModule);
+  await flushTasks();
 
-  assert.deepEqual(await response, {
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{
     channel: "noon.render",
     protocolVersion: 1,
     type: "error",
     requestId: 42,
     message: "unknown authoring render command unknown",
-  });
-  active.terminate();
+  }]);
+  vm.runInContext("active.terminate()", context);
 });
 
 class FakePort {

@@ -169,7 +169,11 @@ async function runtimeSnapshot(page) {
   return page.evaluate(async () => {
     const patch = document.querySelector("#patch-status");
     const status = document.querySelector("#status");
-    const execution = await window.__noonExampleGallery?.executionMetrics?.();
+    // A prepared canvas has no execution session yet. Metrics await session
+    // readiness, so the deferred-shell check must remain an observation only.
+    const execution = status?.dataset.executionMode && patch?.dataset.state !== "error"
+      ? await window.__noonExampleGallery?.executionMetrics?.()
+      : null;
     return {
       rendererBackend: status?.dataset.rendererBackend ?? null,
       renderHost: execution?.renderHost ?? null,
