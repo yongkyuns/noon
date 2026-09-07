@@ -17,7 +17,7 @@ import initNoonWeb, {
   resolveLifecyclePlan,
   resolveUniformCompositionSchedule,
   validatePresenceTransition,
-} from "./pkg/noon_web.js";
+} from "./pkg-authoring/noon_web.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";

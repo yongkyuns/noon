@@ -67,7 +67,7 @@ assert.ok(
 
 const STATIC_IMPORT = /\b(?:import|export)\s+(?:[^"'()]*?\s+from\s*)?["'](\.[^"']+)["']/gu;
 const DYNAMIC_IMPORT = /\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)/gu;
-const NOON_WASM_PATH = "/pkg/noon_web.js";
+const NOON_WASM_PATHS = ["/pkg/noon_web.js", "/pkg-authoring/noon_web.js"];
 
 async function readWorkerSource(moduleUrl) {
   try {
@@ -98,7 +98,7 @@ async function workerDependencyReport(entryUrl) {
       ...source.matchAll(DYNAMIC_IMPORT),
     ].map((match) => new URL(match[1], moduleUrl));
     for (const dependency of imports) {
-      if (dependency.pathname.endsWith(NOON_WASM_PATH)) {
+      if (NOON_WASM_PATHS.some((path) => dependency.pathname.endsWith(path))) {
         ownsNoonWasm = true;
         continue;
       }
