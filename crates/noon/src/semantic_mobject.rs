@@ -4,11 +4,12 @@
 //! durable edits use the canonical transaction vocabulary; snapshots are explicit
 //! migration/export adapters owned for deletion by #958/#959.
 use noon_core::{
-    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
-    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
-    SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
-    Transform2D, Vec2, VectorPath,
+    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticGeometryContent,
+    SemanticGeometryLayout, SemanticMutationImpact, SemanticMutationTransaction,
+    SemanticNodeCreation, SemanticNodeId, SemanticObjectContent, SemanticObjectProperty,
+    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
+    SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Transform2D, Vec2,
+    VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -49,6 +50,7 @@ pub struct ManimBecomeOptions {
 #[derive(Clone, Debug)]
 pub struct ManimGeometryOptions {
     geometry: GeometryRef,
+    layout: SemanticGeometryLayout,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
 }
@@ -59,6 +61,18 @@ impl ManimGeometryOptions {
             GeometryRef::circle(positive_f32("radius", radius)?),
             manim_style(Color::RED),
         ))
+    }
+
+    pub fn ellipse(width: f64, height: f64) -> Result<Self, String> {
+        let width = authoring_render_f64("width", width)?;
+        let height = authoring_render_f64("height", height)?;
+        if width <= 0.0 || height <= 0.0 {
+            return Err("Ellipse width and height must be positive".into());
+        }
+        let mut options = Self::new(GeometryRef::circle(1.0), manim_style(Color::RED));
+        options.layout = SemanticGeometryLayout::ManimEllipseControlHull;
+        options.set_scale(width * 0.5, height * 0.5)?;
+        Ok(options)
     }
 
     pub fn square(side: f64) -> Result<Self, String> {
@@ -129,6 +143,7 @@ impl ManimGeometryOptions {
     fn new(geometry: GeometryRef, style: SemanticStyle) -> Self {
         Self {
             geometry,
+            layout: SemanticGeometryLayout::GeometryBounds,
             transform: SemanticTransform2_5D::default(),
             style,
         }
@@ -176,6 +191,18 @@ impl ManimGeometryOptions {
         let value = authoring_xy_f64(x, y)?;
         self.transform.scale.x = value.x;
         self.transform.scale.y = value.y;
+        Ok(())
+    }
+
+    pub fn scale_by(&mut self, x: f64, y: f64) -> Result<(), String> {
+        let value = authoring_xy_f64(x, y)?;
+        let next_x = self.transform.scale.x * value.x;
+        let next_y = self.transform.scale.y * value.y;
+        SemanticVec3::new(next_x, next_y, self.transform.scale.z)
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+        self.transform.scale.x = next_x;
+        self.transform.scale.y = next_y;
         Ok(())
     }
 
@@ -279,7 +306,10 @@ impl ManimGeometryOptions {
         {
             return Err("geometry, transform, and style must be finite".into());
         }
-        let mut state = SemanticObjectState::new(import_geometry(store, self.geometry)?);
+        let geometry = import_geometry(store, self.geometry)?;
+        let content = SemanticGeometryContent::with_layout(geometry, self.layout)
+            .map_err(|error| error.to_owned())?;
+        let mut state = SemanticObjectState::new(content);
         state.transform = self.transform;
         state.style = self.style;
         Ok(state)
@@ -400,6 +430,7 @@ impl Mobject {
             store,
             ManimGeometryOptions {
                 geometry,
+                layout: SemanticGeometryLayout::GeometryBounds,
                 transform,
                 style,
             },
@@ -407,6 +438,13 @@ impl Mobject {
     }
     pub fn manim_circle(store: Rc<RefCell<SemanticStore>>, radius: f64) -> Result<Self, String> {
         Self::from_manim_geometry(store, ManimGeometryOptions::circle(radius)?)
+    }
+    pub fn manim_ellipse(
+        store: Rc<RefCell<SemanticStore>>,
+        width: f64,
+        height: f64,
+    ) -> Result<Self, String> {
+        Self::from_manim_geometry(store, ManimGeometryOptions::ellipse(width, height)?)
     }
     pub fn manim_square(store: Rc<RefCell<SemanticStore>>, side: f64) -> Result<Self, String> {
         Self::from_manim_geometry(store, ManimGeometryOptions::square(side)?)
@@ -1073,11 +1111,13 @@ mod tests;
 
 fn validate_content(store: &SemanticStore, content: SemanticObjectContent) -> Result<(), String> {
     match content {
-        SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => {
-            store
-                .geometry_resources()
-                .get(handle)
-                .ok_or("unknown or stale geometry resource")?;
+        SemanticObjectContent::Geometry(content) => {
+            if let StoredGeometry::Resource(handle) = content.geometry() {
+                store
+                    .geometry_resources()
+                    .get(handle)
+                    .ok_or("unknown or stale geometry resource")?;
+            }
         }
         SemanticObjectContent::Text(handle) => {
             store
@@ -1085,7 +1125,6 @@ fn validate_content(store: &SemanticStore, content: SemanticObjectContent) -> Re
                 .get(handle)
                 .ok_or("unknown or stale text resource")?;
         }
-        SemanticObjectContent::Geometry(_) => {}
     }
     Ok(())
 }

@@ -69,9 +69,9 @@ fn plan(
         .semantic_object_state_checked(semantic_target)
         .map_err(|_| TextGlyphLoweringError::MissingSemanticTarget(semantic_target.into()))?;
     let content = match (spec.mode, state.content) {
-        (_, noon_core::SemanticObjectContent::Geometry(geometry)) if family_member.is_some() => {
+        (_, noon_core::SemanticObjectContent::Geometry(content)) if family_member.is_some() => {
             ObjectContentRef::Geometry(
-                lower_semantic_geometry_value(geometry, Some(store)).map_err(|_| {
+                lower_semantic_geometry_value(content.geometry(), Some(store)).map_err(|_| {
                     TextGlyphLoweringError::MissingSemanticTarget(semantic_target.into())
                 })?,
             )

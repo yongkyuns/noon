@@ -147,6 +147,7 @@ async function directOrdinaryBecomeSemanticsProof(expectedBackend) {
     const initial = {
       fitted: await sampleRenderedColor(canvas, -2, 0),
       stretched: await sampleRenderedColor(canvas, 2, 0),
+      ellipse: await sampleRenderedColor(canvas, 0, -2.5),
       objects: renderer.objectCount(),
     };
     renderer.advanceDirectRealtime(500);
@@ -156,6 +157,8 @@ async function directOrdinaryBecomeSemanticsProof(expectedBackend) {
       fittedTall: await sampleRenderedColor(canvas, -2, 2),
       stretchedCenter: await sampleRenderedColor(canvas, 2, 0),
       stretchedWide: await sampleRenderedColor(canvas, 3.2, 0),
+      ellipseCenter: await sampleRenderedColor(canvas, 0, -2.5),
+      ellipseMajorAxis: await sampleRenderedColor(canvas, 1.3, -1.75),
       objects: renderer.objectCount(),
     };
     renderer.advanceDirectRealtime(750);
@@ -171,11 +174,13 @@ async function directOrdinaryBecomeSemanticsProof(expectedBackend) {
     const blue = (pixel) => pixel.blue > pixel.red + 30 && pixel.blue > pixel.green + 30;
     const yellow = (pixel) => pixel.red > pixel.blue + 30 && pixel.green > pixel.blue + 30;
     const magenta = (pixel) => pixel.red > pixel.green + 30 && pixel.blue > pixel.green + 30;
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
     if (metrics.backend !== expectedBackend || metrics.time !== 0.75 || metrics.cadence !== "idle"
-        || initial.objects !== 2 || replaced.objects !== 2
-        || !blue(initial.fitted) || !blue(initial.stretched)
+        || initial.objects !== 3 || replaced.objects !== 3
+        || !blue(initial.fitted) || !blue(initial.stretched) || !blue(initial.ellipse)
         || !yellow(replaced.fittedCenter) || !yellow(replaced.fittedTall)
-        || !magenta(replaced.stretchedCenter) || !magenta(replaced.stretchedWide)) {
+        || !magenta(replaced.stretchedCenter) || !magenta(replaced.stretchedWide)
+        || !cyan(replaced.ellipseCenter) || !cyan(replaced.ellipseMajorAxis)) {
       throw new Error(`direct flagged become semantics were incorrect: ${JSON.stringify(metrics)}`);
     }
     return metrics;

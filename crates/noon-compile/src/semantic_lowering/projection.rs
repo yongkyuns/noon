@@ -584,8 +584,8 @@ mod tests {
             vec![geometry, text]
         );
         assert!(matches!(
-            lowered.objects()[0].content,
-            SemanticObjectContent::Geometry(StoredGeometry::Circle { radius: 2.0 })
+            lowered.objects()[0].content.geometry(),
+            Some(StoredGeometry::Circle { radius: 2.0 })
         ));
         assert!(matches!(
             lowered.objects()[1].content,
@@ -711,8 +711,8 @@ mod tests {
         let after = lowered.objects()[0].execution_id;
         assert_eq!(after, before);
         assert!(matches!(
-            lowered.objects()[0].content,
-            SemanticObjectContent::Geometry(StoredGeometry::Circle { radius: 3.0 })
+            lowered.objects()[0].content.geometry(),
+            Some(StoredGeometry::Circle { radius: 3.0 })
         ));
         assert_eq!(lowered.objects()[0].base_transform.rotation, 0.5);
         assert_eq!(index.execution_object_id(object), Some(before));

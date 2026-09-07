@@ -41,83 +41,17 @@ class Dot(_compat.Circle):
 
 
 class Ellipse(_compat.Circle):
-    """Manim-compatible affine circle with independent width and height.
+    """Manim-compatible ellipse.
 
-    Noon keeps the renderer geometry analytic. ManimCE's observable VMobject layout,
-    however, measures the point/control-point array of its eight cubic circle segments.
-    For a rotated non-uniform ellipse that control hull is slightly larger than the
-    true analytic extrema, so layout queries intentionally reproduce Manim's hull.
+    The browser bridge replaces this initializer with shared Rust geometry and
+    layout semantics. This constructor remains only for the retained-only fallback
+    owned for deletion by #959.
     """
-
-    _CUBIC_HANDLE_FACTOR = 4.0 / 3.0 * math.tan(math.pi / 16.0)
 
     def __init__(self, width: float = 2.0, height: float = 1.0, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.stretch_to_fit_width(float(width))
         self.stretch_to_fit_height(float(height))
-
-    def _manim_layout_bounds(self) -> tuple[_base.Vec2, _base.Vec2]:
-        raw = self._current_raw()
-        radius = float(raw.geometry["circle"]["radius"])
-        transform = raw.transform
-        scale_x = float(transform["scale"]["x"])
-        scale_y = float(transform["scale"]["y"])
-        rotation = float(transform["rotation"])
-        translation_x = float(transform["translation"]["x"])
-        translation_y = float(transform["translation"]["y"])
-        sine = math.sin(rotation)
-        cosine = math.cos(rotation)
-        factor = self._CUBIC_HANDLE_FACTOR
-
-        points: list[_base.Vec2] = []
-        for index in range(8):
-            start_angle = index * math.pi / 4.0
-            end_angle = (index + 1) * math.pi / 4.0
-            start = _base.Vec2(math.cos(start_angle), math.sin(start_angle))
-            end = _base.Vec2(math.cos(end_angle), math.sin(end_angle))
-            start_tangent = _base.Vec2(-math.sin(start_angle), math.cos(start_angle))
-            end_tangent = _base.Vec2(-math.sin(end_angle), math.cos(end_angle))
-            control1 = start + factor * start_tangent
-            control2 = end - factor * end_tangent
-
-            for point in (start, control1, control2, end):
-                x = radius * point.x * scale_x
-                y = radius * point.y * scale_y
-                points.append(
-                    _base.Vec2(
-                        x * cosine - y * sine + translation_x,
-                        x * sine + y * cosine + translation_y,
-                    )
-                )
-
-        return (
-            _base.Vec2(
-                min(point.x for point in points),
-                min(point.y for point in points),
-            ),
-            _base.Vec2(
-                max(point.x for point in points),
-                max(point.y for point in points),
-            ),
-        )
-
-    @property
-    def width(self) -> float:
-        minimum, maximum = self._manim_layout_bounds()
-        return maximum.x - minimum.x
-
-    @width.setter
-    def width(self, value: float) -> None:
-        self.scale_to_fit_width(float(value))
-
-    @property
-    def height(self) -> float:
-        minimum, maximum = self._manim_layout_bounds()
-        return maximum.y - minimum.y
-
-    @height.setter
-    def height(self, value: float) -> None:
-        self.scale_to_fit_height(float(value))
 
 
 class Triangle(_compat.Path):

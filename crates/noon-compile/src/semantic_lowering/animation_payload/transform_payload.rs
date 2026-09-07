@@ -175,16 +175,16 @@ pub(super) fn is_supported_analytic_content_morph(
     source: &noon_core::SemanticObjectState,
     target: &noon_core::SemanticObjectState,
 ) -> bool {
-    use noon_core::{SemanticObjectContent::Geometry, StoredGeometry};
+    use noon_core::StoredGeometry;
 
     matches!(
-        (source.content, target.content),
+        (source.content.geometry(), target.content.geometry()),
         (
-            Geometry(StoredGeometry::Circle { .. }),
-            Geometry(StoredGeometry::Rectangle { .. })
+            Some(StoredGeometry::Circle { .. }),
+            Some(StoredGeometry::Rectangle { .. })
         ) | (
-            Geometry(StoredGeometry::Rectangle { .. }),
-            Geometry(StoredGeometry::Circle { .. })
+            Some(StoredGeometry::Rectangle { .. }),
+            Some(StoredGeometry::Circle { .. })
         )
     )
 }

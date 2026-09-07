@@ -241,6 +241,8 @@ const expectedTypeSurface = [
   "export class WasmManimGeometryOptions",
   "export class WasmAuthoringVectorPath",
   "createManimGeometry(",
+  "static ellipse(width: number, height: number): WasmManimGeometryOptions",
+  "scaleBy(x: number, y: number): void",
   "beginUnderline(buff: number): WasmManimGeometryOptions",
   "beginUnderline(handle: WasmAuthoringMobjectHandle, buff: number): WasmManimGeometryOptions",
   "beginSurroundingRectangle(",

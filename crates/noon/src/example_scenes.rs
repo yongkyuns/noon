@@ -1791,8 +1791,8 @@ impl LiveContinuation for OrdinaryCreateThenContentMorph {
                     .authored(&self.square)
                     .map_err(|error| error.to_string())?;
                 if !matches!(
-                    authored.content,
-                    noon_core::SemanticObjectContent::Geometry(StoredGeometry::Circle { .. })
+                    authored.content.geometry(),
+                    Some(StoredGeometry::Circle { .. })
                 ) || authored.style
                     != live
                         .authored(&self.circle_target)

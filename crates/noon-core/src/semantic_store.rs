@@ -488,10 +488,12 @@ impl Clone for SemanticStore {
             if let Some(node) = slot.node.as_mut() {
                 if let Some(state) = node.object_state.as_mut() {
                     match &mut state.content {
-                        crate::SemanticObjectContent::Geometry(
-                            crate::StoredGeometry::Resource(handle),
-                        ) if self.geometry_resources.get(*handle).is_some() => {
-                            handle.arena = namespace;
+                        crate::SemanticObjectContent::Geometry(content) => {
+                            if let Some(handle) = content.resource_handle_mut() {
+                                if self.geometry_resources.get(*handle).is_some() {
+                                    handle.arena = namespace;
+                                }
+                            }
                         }
                         crate::SemanticObjectContent::Text(handle)
                             if self.text_resources.get(*handle).is_some() =>
@@ -1406,8 +1408,11 @@ mod tests {
             .intern_face(&face, Arc::<[u8]>::from([1, 2, 3]))
             .unwrap();
         let cloned = first.clone();
-        let SemanticObjectContent::Geometry(StoredGeometry::Resource(c)) =
-            cloned.semantic_object_state_checked(node).unwrap().content
+        let Some(StoredGeometry::Resource(c)) = cloned
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .content
+            .geometry()
         else {
             panic!("resource content")
         };
@@ -1421,7 +1426,7 @@ mod tests {
                 .semantic_object_state_checked(foreign)
                 .unwrap()
                 .content,
-            SemanticObjectContent::Geometry(StoredGeometry::Resource(b))
+            SemanticObjectContent::from(StoredGeometry::Resource(b))
         );
         assert!(cloned.geometry_resources().get(b).is_none());
         let SemanticObjectContent::Text(cloned_text) = cloned

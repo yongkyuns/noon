@@ -6,11 +6,16 @@ use crate::{
 };
 use std::rc::Rc;
 
+const ELLIPSE_HULL_WIDTH: f64 = 3.663_013_982_517_412_6;
+const ELLIPSE_HULL_HEIGHT: f64 = 2.464_228_071_008_26;
+
 pub struct OrdinaryBecomeSemantics {
     fitted: Mobject,
     fitted_target: Mobject,
     stretched: Mobject,
     stretched_target: Mobject,
+    ellipse: Mobject,
+    ellipse_target: Mobject,
     stage: u8,
 }
 
@@ -48,14 +53,44 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
                     },
                 )
                 .map_err(|error| error.to_string())?;
+                live.become_mobject(
+                    &self.ellipse,
+                    &self.ellipse_target,
+                    ManimBecomeOptions {
+                        match_center: true,
+                        ..ManimBecomeOptions::default()
+                    },
+                )
+                .map_err(|error| error.to_string())?;
 
-                for target in [&self.fitted_target, &self.stretched_target] {
+                for target in [
+                    &self.fitted_target,
+                    &self.stretched_target,
+                    &self.ellipse_target,
+                ] {
                     if live.contains(target).map_err(|error| error.to_string())? {
                         return Err("become admitted a detached target operand".into());
                     }
                 }
                 assert_layout(live, &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
                 assert_layout(live, &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
+                assert_layout(
+                    live,
+                    &self.ellipse,
+                    0.0,
+                    -2.5,
+                    ELLIPSE_HULL_WIDTH,
+                    ELLIPSE_HULL_HEIGHT,
+                )?;
+                let ellipse_state = self.ellipse.state()?;
+                let ellipse_target_state = self.ellipse_target.state()?;
+                if ellipse_state.content != ellipse_target_state.content
+                    || ellipse_state.style != ellipse_target_state.style
+                {
+                    return Err(
+                        "become did not preserve the ellipse target content and style".into(),
+                    );
+                }
 
                 self.stage = 2;
                 live.wait_segment(0.25)
@@ -65,6 +100,14 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
             2 => {
                 assert_layout(live, &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
                 assert_layout(live, &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
+                assert_layout(
+                    live,
+                    &self.ellipse,
+                    0.0,
+                    -2.5,
+                    ELLIPSE_HULL_WIDTH,
+                    ELLIPSE_HULL_HEIGHT,
+                )?;
                 self.stage = 3;
                 Ok(ContinuationStep::Finished)
             }
@@ -117,6 +160,8 @@ pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
     let mut scene = Scene::new();
     let fitted = rectangle(&scene, 3.0, 1.0, -2.0, 0.0, 0.0, 1.0)?;
     let stretched = rectangle(&scene, 3.0, 1.0, 2.0, 0.0, 0.0, 1.0)?;
+    let mut ellipse = rectangle(&scene, 0.4, 0.4, 0.0, 0.0, 0.0, 1.0)?;
+    ellipse.set_translation(0.0, -2.5)?;
     let fitted_target = rectangle(&scene, 1.0, 2.0, 3.5, 1.0, 1.0, 0.0)?;
     let mut stretched_target_options = ManimGeometryOptions::circle(0.5)?;
     stretched_target_options.set_translation(-3.5, 0.0)?;
@@ -124,9 +169,44 @@ pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
     stretched_target_options.disable_stroke();
     let stretched_target =
         Mobject::from_manim_geometry(Rc::clone(scene.store()), stretched_target_options)?;
+    let mut ellipse_target_options = ManimGeometryOptions::ellipse(4.0, 1.5)?;
+    ellipse_target_options.set_translation(0.0, 2.5)?;
+    ellipse_target_options.set_rotation(std::f64::consts::PI / 6.0)?;
+    ellipse_target_options.set_fill(0.0, 1.0, 1.0, 1.0)?;
+    ellipse_target_options.disable_stroke();
+    let ellipse_target =
+        Mobject::from_manim_geometry(Rc::clone(scene.store()), ellipse_target_options)?;
+    let ellipse_target_bounds = ellipse_target
+        .layout_bounds()?
+        .ok_or("ellipse target has no authored layout bounds")?;
+    for (actual, expected, label) in [
+        (
+            (ellipse_target_bounds.min_x + ellipse_target_bounds.max_x) * 0.5,
+            0.0,
+            "center x",
+        ),
+        (
+            (ellipse_target_bounds.min_y + ellipse_target_bounds.max_y) * 0.5,
+            2.5,
+            "center y",
+        ),
+        (ellipse_target_bounds.width(), ELLIPSE_HULL_WIDTH, "width"),
+        (
+            ellipse_target_bounds.height(),
+            ELLIPSE_HULL_HEIGHT,
+            "height",
+        ),
+    ] {
+        if (actual - expected).abs() > 1.0e-5 {
+            return Err(format!(
+                "unexpected pre-bootstrap ellipse {label}: {actual} != {expected}"
+            ));
+        }
+    }
     scene.add_many(&[
         MobjectFamilyMember::Mobject(&fitted),
         MobjectFamilyMember::Mobject(&stretched),
+        MobjectFamilyMember::Mobject(&ellipse),
     ])?;
     scene
         .into_live_program(OrdinaryBecomeSemantics {
@@ -134,6 +214,8 @@ pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
             fitted_target,
             stretched,
             stretched_target,
+            ellipse,
+            ellipse_target,
             stage: 0,
         })
         .map_err(|error| error.to_string())
@@ -147,7 +229,7 @@ mod tests {
     fn flagged_become_preserves_source_roots_and_detached_targets() {
         let mut program = super::program().unwrap();
         let mut callbacks = RustHostCallbackTable::new();
-        assert_eq!(program.session().frame().objects.len(), 2);
+        assert_eq!(program.session().frame().objects.len(), 3);
         assert!(matches!(
             program.resume().unwrap(),
             LiveProgramStatus::Awaiting(_)
@@ -161,13 +243,13 @@ mod tests {
             program.resume().unwrap(),
             LiveProgramStatus::Awaiting(_)
         ));
-        assert_eq!(program.session().frame().objects.len(), 2);
+        assert_eq!(program.session().frame().objects.len(), 3);
         program.take_renderer_publication();
         assert_eq!(
             program.drive_to(&mut callbacks, 0.75).unwrap(),
             LiveProgramStatus::ReadyToResume
         );
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
-        assert_eq!(program.session().frame().objects.len(), 2);
+        assert_eq!(program.session().frame().objects.len(), 3);
     }
 }

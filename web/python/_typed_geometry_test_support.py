@@ -72,6 +72,12 @@ class FakeGeometryOptions:
         return FakeGeometryOptions.rectangle(side, side)
 
     @staticmethod
+    def ellipse(width, height):
+        value = FakeGeometryOptions.circle(1.0)
+        value.setScale(width / 2.0, height / 2.0)
+        return value
+
+    @staticmethod
     def rectangle(width, height):
         return FakeGeometryOptions({"rectangle": {"size": {"x": width, "y": height}}})
 
@@ -95,6 +101,11 @@ class FakeGeometryOptions:
 
     def setScale(self, x, y):
         self.snapshot["transform"]["scale"] = {"x": x, "y": y}
+
+    def scaleBy(self, x, y):
+        scale = self.snapshot["transform"]["scale"]
+        scale["x"] *= x
+        scale["y"] *= y
 
     def setColor(self, red, green, blue, alpha):
         del alpha

@@ -1665,13 +1665,13 @@ pub(super) fn lower_transform_channels(
     interpolation: noon_core::SemanticTransformInterpolation,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
     let analytic_point_transform = matches!(
-        (source.content, target.content),
+        (source.content.geometry(), target.content.geometry()),
         (
-            SemanticObjectContent::Geometry(StoredGeometry::Circle { .. }),
-            SemanticObjectContent::Geometry(StoredGeometry::Circle { .. })
+            Some(StoredGeometry::Circle { .. }),
+            Some(StoredGeometry::Circle { .. })
         ) | (
-            SemanticObjectContent::Geometry(StoredGeometry::Rectangle { .. }),
-            SemanticObjectContent::Geometry(StoredGeometry::Rectangle { .. })
+            Some(StoredGeometry::Rectangle { .. }),
+            Some(StoredGeometry::Rectangle { .. })
         )
     );
     if source.content == target.content {
@@ -1697,13 +1697,9 @@ pub(super) fn lower_transform_channels(
         return Err(AffinePayloadIssue::InvalidEffectiveStyle);
     }
 
-    let geometry = |content| match content {
-        SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) => {
-            Ok(noon_core::GeometryRef::circle(radius))
-        }
-        SemanticObjectContent::Geometry(StoredGeometry::Rectangle { size }) => {
-            Ok(noon_core::GeometryRef::Rectangle { size })
-        }
+    let geometry = |content: SemanticObjectContent| match content.geometry() {
+        Some(StoredGeometry::Circle { radius }) => Ok(noon_core::GeometryRef::circle(radius)),
+        Some(StoredGeometry::Rectangle { size }) => Ok(noon_core::GeometryRef::Rectangle { size }),
         _ => Err(AffinePayloadIssue::UnsupportedContentChange),
     };
     let target_transform = lower_semantic_transform_value(target)
