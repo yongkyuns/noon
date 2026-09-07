@@ -24,10 +24,11 @@ class ManimRotatingDemoSourceTests(unittest.TestCase):
         self.assertIn("axis=RIGHT", upstream)
         self.assertIn("about_edge=UP", upstream)
 
-    def test_manifest_keeps_rotating_demo_as_candidate_until_3d_parity(self) -> None:
+    def test_manifest_tracks_rotating_demo_migration_and_3d_parity(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         entry = next(item for item in manifest["entries"] if item["id"] == "manim-rotating-demo")
-        self.assertEqual(entry["status"], "ready")
+        self.assertEqual(entry["status"], "blocked")
+        self.assertEqual(entry["dependency"], "#61/#959")
         self.assertEqual(entry["parity_status"], "candidate")
         self.assertEqual(entry["expected_duration"], 18.0)
         self.assertEqual(
