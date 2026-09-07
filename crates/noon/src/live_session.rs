@@ -4771,8 +4771,14 @@ mod recursive_composition_tests {
             .unwrap();
         live.advance_segment_to(write, write.end_time()).unwrap();
         live.complete_segment(write).unwrap();
-        assert!(live.contains(&left).unwrap());
-        assert!(live.contains(&right).unwrap());
+        for member in [&left, &right] {
+            assert!(noon_core::semantic_scene_root_contains(
+                &scene.store().borrow(),
+                scene.root(),
+                member.node_id(),
+            )
+            .unwrap());
+        }
 
         let unwrite = live
             .declare_and_activate_family_text_write(
@@ -4784,8 +4790,14 @@ mod recursive_composition_tests {
         live.advance_segment_to(unwrite, unwrite.end_time())
             .unwrap();
         live.complete_segment(unwrite).unwrap();
-        assert!(!live.contains(&left).unwrap());
-        assert!(!live.contains(&right).unwrap());
+        for member in [&left, &right] {
+            assert!(!noon_core::semantic_scene_root_contains(
+                &scene.store().borrow(),
+                scene.root(),
+                member.node_id(),
+            )
+            .unwrap());
+        }
         let store = family.store().borrow();
         assert!(store.node(family.node_id()).is_some());
         assert_eq!(
