@@ -6662,6 +6662,49 @@ mod tests {
     }
 
     #[test]
+    fn precreated_detached_family_prepares_after_a_returned_wait() {
+        let mut context = CanonicalAuthoringScene::default();
+        let left = context.scene.square(0.5).unwrap();
+        let right = context.scene.circle(0.25).unwrap();
+        let family = context.scene.family(&[&left, &right]).unwrap();
+
+        context.begin_ordinary_wait(1.0).unwrap();
+        let mut player = context.take_execution_player(2.0, 17).unwrap();
+        player.live_advance_segment_to(1.0).unwrap();
+        player.live_complete_segment().unwrap();
+        context.return_execution_player(player).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
+
+        context.prepare_family_subset_display(&family).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = [OrdinaryCompositionChild::FamilySubsetDisplay {
+            target: family,
+            entering: vec![
+                (ObjectId::new(0), left.clone()),
+                (ObjectId::new(1), right.clone()),
+            ],
+            mode: noon::SubsetDisplayMode::OneByOneCeil,
+            options,
+        }];
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                )
+                .unwrap(),
+            2.0
+        );
+        assert_eq!(context.bindings.len(), 2);
+        assert!(context.live_contains_mobject(&left).unwrap());
+        assert!(context.live_contains_mobject(&right).unwrap());
+    }
+
+    #[test]
     fn ordinary_composition_converts_nested_typed_children_before_atomic_admission() {
         let mut context = CanonicalAuthoringScene::default();
         let bound = context.scene.circle(0.4).unwrap();

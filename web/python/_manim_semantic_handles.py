@@ -2015,7 +2015,11 @@ def _group_target_context(value: object) -> object | None:
 
     collect(value)
     if not contexts:
-        return None
+        # A detached family may have been created before the first live segment,
+        # so its wrappers do not carry per-target context markers. Once source
+        # execution resumes, the current Scene's returned player is still the
+        # one mutation authority for that same-store family.
+        return _live_primitive_context()
     context = contexts[0]
     if any(candidate is not context for candidate in contexts[1:]):
         raise RuntimeError("Group target members belong to different canonical contexts")
