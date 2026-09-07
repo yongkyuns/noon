@@ -15,8 +15,9 @@ use crate::{
     },
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
-    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
-    MobjectFamily, MobjectFamilyMember, ValueTracker,
+    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
+    FamilyArrangePlan, FamilyTranslation, Mobject, MobjectFamily, MobjectFamilyMember,
+    ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -1383,6 +1384,51 @@ impl<'a> LiveSession<'a> {
             .collect::<Vec<_>>();
         let mut transaction = SemanticMutationTransaction::new();
         for leaf in leaves {
+            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
+                .map_err(LiveSessionError::Mobject)?;
+            let mut translation = self.authored(&mobject)?.transform.translation;
+            translation.x += x;
+            translation.y += y;
+            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+        }
+        self.apply(transaction)
+    }
+
+    /// Arrange direct family members from effective runtime layout and publish
+    /// every resulting leaf translation in one semantic transaction.
+    pub fn arrange_family(
+        &mut self,
+        family: &MobjectFamily,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        center: bool,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        let mut plan = FamilyArrangePlan::begin(&self.store.borrow(), family.node_id())
+            .map_err(LiveSessionError::Mobject)?;
+        plan.observe_leaf_bounds(|leaf| {
+            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
+            self.effective_layout(&mobject)
+                .map(|layout| {
+                    Some(Bounds2D64 {
+                        min_x: layout.center.0 - layout.width * 0.5,
+                        min_y: layout.center.1 - layout.height * 0.5,
+                        max_x: layout.center.0 + layout.width * 0.5,
+                        max_y: layout.center.1 + layout.height * 0.5,
+                    })
+                })
+                .map_err(|error| error.to_string())
+        })
+        .map_err(LiveSessionError::Mobject)?;
+        let shifts = plan
+            .finish(direction_x, direction_y, buff, center)
+            .map_err(LiveSessionError::Mobject)?
+            .into_iter()
+            .flat_map(FamilyTranslation::into_shifts)
+            .collect::<Vec<_>>();
+        let mut transaction = SemanticMutationTransaction::new();
+        for (leaf, x, y) in shifts {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
                 .map_err(LiveSessionError::Mobject)?;
             let mut translation = self.authored(&mobject)?.transform.translation;
@@ -3737,6 +3783,32 @@ mod recursive_composition_tests {
             live.effective(&second).unwrap().transform.translation.x,
             0.0
         );
+    }
+
+    #[test]
+    fn live_family_arrange_uses_effective_bounds_in_one_publication() {
+        let mut scene = Scene::new();
+        let first = scene.square(0.4).unwrap();
+        let second = scene.circle(0.2).unwrap();
+        scene.add(&first).unwrap();
+        scene.add(&second).unwrap();
+        let family = scene.family(&[&first, &second]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let mut live = scene.live(&mut session);
+
+        live.arrange_family(&family, 1.0, 0.0, 0.2, true).unwrap();
+        let publication = live.publication_context();
+        let first_center = live.effective_layout(&first).unwrap().center;
+        let second_center = live.effective_layout(&second).unwrap().center;
+
+        assert_ne!(publication, before);
+        assert_eq!(
+            publication.scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        assert!((second_center.0 - first_center.0 - 0.6).abs() < 1e-6);
+        assert!((first_center.0 + second_center.0).abs() < 1e-6);
     }
 
     #[test]

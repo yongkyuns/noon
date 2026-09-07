@@ -34,7 +34,10 @@ mod text_authoring;
 pub use animation_authoring::DeclaredAnimation;
 pub use execution_segment::*;
 pub use execution_session::*;
-pub use family_authoring::{MobjectFamily, MobjectFamilyMember};
+pub use family_authoring::{
+    semantic_family_leaf_ids, FamilyArrangePlan, FamilyTranslation, MobjectFamily,
+    MobjectFamilyMember,
+};
 pub use host_callbacks::*;
 pub use live_program::*;
 pub use live_session::{

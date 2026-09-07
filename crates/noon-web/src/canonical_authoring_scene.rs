@@ -1706,7 +1706,7 @@ impl CanonicalAuthoringScene {
                         );
                     }
                     target.validate()?;
-                    let family_leaves = crate::authoring_mobject::semantic_family_leaf_ids(
+                    let family_leaves = noon::semantic_family_leaf_ids(
                         &self.scene.store().borrow(),
                         target.node_id(),
                     )?;
@@ -1936,6 +1936,25 @@ impl CanonicalAuthoringScene {
             "transferred" => Err("live execution session is running in the semantic engine".into()),
             _ => unreachable!("canonical live ownership has one closed set of states"),
         }
+    }
+
+    /// Delegate live family layout to the reusable Rust semantic facade.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_arrange_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        center: bool,
+    ) -> Result<(), String> {
+        self.active_live_player()?.live_arrange_family(
+            family,
+            direction_x,
+            direction_y,
+            buff,
+            center,
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -5294,6 +5313,21 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveArrangeFamily)]
+        pub fn live_arrange_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            center: bool,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .live_arrange_family(&family, direction_x, direction_y, buff, center)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetScale)]
         pub fn live_set_scale(
             &mut self,
@@ -6027,7 +6061,7 @@ mod tests {
     }
 
     #[test]
-    fn live_created_group_target_accepts_authoring_object_members_after_prior_plays() {
+    fn live_created_group_arrange_and_target_preserve_returned_player_after_prior_plays() {
         let mut context = CanonicalAuthoringScene::default();
         let anchor = context.scene.circle(0.3).unwrap();
         context.bind_mobject(ObjectId::new(0), &anchor).unwrap();
@@ -6060,6 +6094,29 @@ mod tests {
         let right = context
             .live_create_manim_primitive(noon::ManimPrimitiveOptions::square(0.3).unwrap())
             .unwrap();
+        let pair = context
+            .live_family(&[
+                noon::MobjectFamilyMember::Mobject(&left),
+                noon::MobjectFamilyMember::Mobject(&right),
+            ])
+            .unwrap();
+        context
+            .live_arrange_family(&pair, 1.0, 0.0, 0.15, true)
+            .unwrap();
+        let arranged_left = context
+            .active_live_player()
+            .unwrap()
+            .live_effective_layout(&left)
+            .unwrap()
+            .center;
+        let arranged_right = context
+            .active_live_player()
+            .unwrap()
+            .live_effective_layout(&right)
+            .unwrap()
+            .center;
+        assert!((arranged_right.0 - arranged_left.0 - 0.45).abs() < 1e-6);
+        assert_eq!(context.live_execution_ownership(), "returned");
         // Repeated explicit `Scene.live_execution()` helpers may adjust the loop
         // duration, but must preserve the returned continuation lease.
         context.live_player(handoff).unwrap();
@@ -6067,12 +6124,6 @@ mod tests {
         context.live_player(handoff).unwrap();
         context.live_add_mobject(ObjectId::new(2), &right).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
-        let pair = context
-            .live_family(&[
-                noon::MobjectFamilyMember::Mobject(&left),
-                noon::MobjectFamilyMember::Mobject(&right),
-            ])
-            .unwrap();
 
         let left_target = context.live_target_editor(&left).unwrap();
         let right_target = context.live_target_editor(&right).unwrap();
@@ -6121,16 +6172,46 @@ mod tests {
         resumed.live_advance_segment_to(end).unwrap();
         resumed.live_complete_segment().unwrap();
         assert_eq!(
-            resumed.live_effective(&left).unwrap().transform.translation,
-            Vec2::new(0.0, 1.0)
+            resumed
+                .live_effective(&left)
+                .unwrap()
+                .transform
+                .translation
+                .y,
+            1.0
+        );
+        assert!(
+            (f64::from(
+                resumed
+                    .live_effective(&left)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
+            ) - arranged_left.0)
+                .abs()
+                < 1e-6
         );
         assert_eq!(
             resumed
                 .live_effective(&right)
                 .unwrap()
                 .transform
-                .translation,
-            Vec2::new(0.0, 1.0)
+                .translation
+                .y,
+            1.0
+        );
+        assert!(
+            (f64::from(
+                resumed
+                    .live_effective(&right)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
+            ) - arranged_right.0)
+                .abs()
+                < 1e-6
         );
         context.return_execution_player(resumed).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");

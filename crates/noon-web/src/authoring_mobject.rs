@@ -2,9 +2,10 @@ use noon::semantic_mobject::{
     authoring_render_f64 as render_f64, authoring_xy_f64 as semantic_xy_f64,
 };
 pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
+use noon::{semantic_family_leaf_ids, FamilyArrangePlan, FamilyTranslation};
 use noon_core::{
-    Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
-    SemanticNodeKind, SemanticStore,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
+    SemanticStore,
 };
 
 /// Shared target-family construction used by frontend Group/VGroup animation builders.
@@ -87,322 +88,6 @@ impl FrontendFamilyTargetEditor {
     }
 }
 
-/// Ordered family translation over authoritative shared semantic leaf identity.
-///
-/// Frontends may retain wrapper trees for language-level identity, but the shared
-/// semantic family decides which leaves are mutated and in what order. The delta is
-/// validated once in Rust and then applied directly to each shared leaf handle.
-#[derive(Clone, Debug)]
-pub struct FrontendFamilyTranslation {
-    source_members: Vec<SemanticNodeId>,
-    next_index: usize,
-    delta: (f64, f64),
-}
-
-impl FrontendFamilyTranslation {
-    pub fn begin(
-        store: &SemanticStore,
-        source: SemanticNodeId,
-        delta_x: f64,
-        delta_y: f64,
-    ) -> Result<Self, String> {
-        let source_members = semantic_family_leaf_ids(store, source)?;
-        Self::from_members(source_members, delta_x, delta_y)
-    }
-
-    fn from_members(
-        source_members: Vec<SemanticNodeId>,
-        delta_x: f64,
-        delta_y: f64,
-    ) -> Result<Self, String> {
-        let delta = semantic_xy_f64(delta_x, delta_y)?;
-        Ok(Self {
-            source_members,
-            next_index: 0,
-            delta: (delta.x, delta.y),
-        })
-    }
-
-    fn apply_with<F>(&mut self, source_member: SemanticNodeId, apply: F) -> Result<(), String>
-    where
-        F: FnOnce((f64, f64)) -> Result<(), String>,
-    {
-        let expected = self
-            .source_members
-            .get(self.next_index)
-            .copied()
-            .ok_or_else(|| "family translation has no remaining leaves".to_owned())?;
-        if source_member != expected {
-            return Err(format!(
-                "family translation leaf mismatch at index {}: expected {expected:?}, got {source_member:?}",
-                self.next_index
-            ));
-        }
-        apply(self.delta)?;
-        self.next_index += 1;
-        Ok(())
-    }
-
-    pub fn apply(
-        &mut self,
-        source_member: SemanticNodeId,
-        member: &mut Mobject,
-    ) -> Result<(), String> {
-        self.apply_with(source_member, |delta| member.shift(delta.0, delta.1))
-    }
-
-    pub fn finish(&self) -> Result<(), String> {
-        if self.next_index != self.source_members.len() {
-            return Err(format!(
-                "family translation is incomplete: applied {} of {} leaves",
-                self.next_index,
-                self.source_members.len()
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Shared Manim family arrangement over authoritative direct-member identity.
-///
-/// The semantic store snapshots direct membership/order and recursively resolves the
-/// leaf identities each direct member owns. Frontends only feed live shared bounds
-/// for those members in the validated order; all sequencing, buffer math, optional
-/// recentering, and resulting per-member translations are computed here.
-#[derive(Clone, Debug)]
-pub struct FrontendFamilyArrangePlan {
-    members: Vec<FrontendFamilyArrangeMember>,
-    next_member: usize,
-}
-
-#[derive(Clone, Debug)]
-struct FrontendFamilyArrangeMember {
-    id: SemanticNodeId,
-    leaves: Vec<SemanticNodeId>,
-    bounds: Option<Bounds2D64>,
-}
-
-impl FrontendFamilyArrangePlan {
-    pub fn begin(store: &SemanticStore, source: SemanticNodeId) -> Result<Self, String> {
-        let direct_members = {
-            let source_node = store
-                .node(source)
-                .ok_or_else(|| format!("unknown family semantic node {source:?}"))?;
-            if !matches!(source_node.kind(), SemanticNodeKind::Family) {
-                return Err(format!("semantic node {source:?} is not a family"));
-            }
-            source_node.members().to_vec()
-        };
-
-        let mut members = Vec::with_capacity(direct_members.len());
-        for id in direct_members {
-            let node = store
-                .node(id)
-                .ok_or_else(|| format!("unknown family arrange member {id:?}"))?;
-            let leaves = match node.kind() {
-                SemanticNodeKind::AuthoringObject => vec![id],
-                SemanticNodeKind::Family => semantic_family_leaf_ids(store, id)?,
-                SemanticNodeKind::Object(_)
-                | SemanticNodeKind::Signal(_)
-                | SemanticNodeKind::Animation(_) => {
-                    return Err(format!(
-                        "family arrange member {id:?} is not an authoring object"
-                    ));
-                }
-            };
-            members.push(FrontendFamilyArrangeMember {
-                id,
-                leaves,
-                bounds: None,
-            });
-        }
-        Ok(Self {
-            members,
-            next_member: 0,
-        })
-    }
-
-    pub fn accept_member_bounds(
-        &mut self,
-        member: SemanticNodeId,
-        bounds: Option<Bounds2D64>,
-    ) -> Result<(), String> {
-        let expected = self
-            .members
-            .get(self.next_member)
-            .ok_or_else(|| "family arrange received too many direct members".to_owned())?;
-        if expected.id != member {
-            return Err(format!(
-                "family arrange member mismatch at index {}: expected {:?}, got {member:?}",
-                self.next_member, expected.id
-            ));
-        }
-        self.members[self.next_member].bounds = bounds;
-        self.next_member += 1;
-        Ok(())
-    }
-
-    pub fn ensure_complete(&self) -> Result<(), String> {
-        if self.next_member != self.members.len() {
-            return Err(format!(
-                "family arrange is incomplete: accepted {} of {} direct members",
-                self.next_member,
-                self.members.len()
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn member_count(&self) -> usize {
-        self.members.len()
-    }
-
-    pub fn finish(
-        &self,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-        center: bool,
-    ) -> Result<Vec<FrontendFamilyTranslation>, String> {
-        self.ensure_complete()?;
-        let bounds = self
-            .members
-            .iter()
-            .map(|member| member.bounds)
-            .collect::<Vec<_>>();
-        let deltas = manim_family_arrange_deltas(&bounds, direction_x, direction_y, buff, center)?;
-        self.members
-            .iter()
-            .zip(deltas)
-            .map(|(member, delta)| {
-                FrontendFamilyTranslation::from_members(member.leaves.clone(), delta.0, delta.1)
-            })
-            .collect()
-    }
-}
-
-pub(crate) fn semantic_family_leaf_ids(
-    store: &SemanticStore,
-    family: SemanticNodeId,
-) -> Result<Vec<SemanticNodeId>, String> {
-    fn collect(
-        store: &SemanticStore,
-        node_id: SemanticNodeId,
-        leaves: &mut Vec<SemanticNodeId>,
-    ) -> Result<(), String> {
-        let node = store
-            .node(node_id)
-            .ok_or_else(|| format!("unknown semantic family member {node_id:?}"))?;
-        match node.kind() {
-            SemanticNodeKind::AuthoringObject => {
-                leaves.push(node_id);
-                Ok(())
-            }
-            SemanticNodeKind::Family => {
-                for member in node.members() {
-                    collect(store, member, leaves)?;
-                }
-                Ok(())
-            }
-            SemanticNodeKind::Object(_)
-            | SemanticNodeKind::Signal(_)
-            | SemanticNodeKind::Animation(_) => Err(format!(
-                "family layout member {node_id:?} is not an authoring object"
-            )),
-        }
-    }
-
-    let root = store
-        .node(family)
-        .ok_or_else(|| format!("unknown family semantic node {family:?}"))?;
-    if !matches!(root.kind(), SemanticNodeKind::Family) {
-        return Err(format!("semantic node {family:?} is not a family"));
-    }
-
-    let mut leaves = Vec::new();
-    collect(store, family, &mut leaves)?;
-    Ok(leaves)
-}
-
-fn manim_family_arrange_deltas(
-    member_bounds: &[Option<Bounds2D64>],
-    direction_x: f64,
-    direction_y: f64,
-    buff: f64,
-    center: bool,
-) -> Result<Vec<(f64, f64)>, String> {
-    let direction = semantic_xy_f64(direction_x, direction_y)?;
-    let buff = render_f64("buffer", buff)?;
-    if member_bounds.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let critical = |bounds: Option<Bounds2D64>, x: f64, y: f64| -> (f64, f64) {
-        let Some(bounds) = bounds else {
-            return (0.0, 0.0);
-        };
-        let center_x = (bounds.min_x + bounds.max_x) * 0.5;
-        let center_y = (bounds.min_y + bounds.max_y) * 0.5;
-        (
-            if x < 0.0 {
-                bounds.min_x
-            } else if x > 0.0 {
-                bounds.max_x
-            } else {
-                center_x
-            },
-            if y < 0.0 {
-                bounds.min_y
-            } else if y > 0.0 {
-                bounds.max_y
-            } else {
-                center_y
-            },
-        )
-    };
-
-    let mut deltas = vec![(0.0, 0.0); member_bounds.len()];
-    for index in 1..member_bounds.len() {
-        let source = critical(member_bounds[index], -direction.x, -direction.y);
-        let previous = critical(member_bounds[index - 1], direction.x, direction.y);
-        deltas[index] = (
-            previous.0 + deltas[index - 1].0 - source.0 + direction.x * buff,
-            previous.1 + deltas[index - 1].1 - source.1 + direction.y * buff,
-        );
-    }
-
-    if center {
-        let mut arranged_bounds: Option<Bounds2D64> = None;
-        for (bounds, delta) in member_bounds.iter().zip(&deltas) {
-            let Some(bounds) = bounds else {
-                continue;
-            };
-            let shifted = Bounds2D64 {
-                min_x: bounds.min_x + delta.0,
-                min_y: bounds.min_y + delta.1,
-                max_x: bounds.max_x + delta.0,
-                max_y: bounds.max_y + delta.1,
-            };
-            if let Some(total) = &mut arranged_bounds {
-                total.include(shifted.min_x, shifted.min_y);
-                total.include(shifted.max_x, shifted.max_y);
-            } else {
-                arranged_bounds = Some(shifted);
-            }
-        }
-        if let Some(bounds) = arranged_bounds {
-            let center_x = (bounds.min_x + bounds.max_x) * 0.5;
-            let center_y = (bounds.min_y + bounds.max_y) * 0.5;
-            for delta in &mut deltas {
-                delta.0 -= center_x;
-                delta.1 -= center_y;
-            }
-        }
-    }
-
-    Ok(deltas)
-}
-
 #[cfg(any(target_arch = "wasm32", test))]
 fn manim_family_next_to_delta(
     source: (f64, f64),
@@ -450,10 +135,9 @@ mod wasm {
     use crate::{AuthoringSemanticIdentity, WasmRetainedNativeTextAuthoringHandle};
 
     use super::{
-        manim_family_align_to_delta, manim_family_next_to_delta, render_f64,
-        semantic_family_leaf_ids, semantic_xy_f64, Bounds2D64, FrontendFamilyArrangePlan,
-        FrontendFamilyTargetEditor, FrontendFamilyTranslation, ManimNextToArgs, Mobject,
-        SemanticNodeId, SemanticStore,
+        manim_family_align_to_delta, manim_family_next_to_delta, render_f64, semantic_xy_f64,
+        Bounds2D64, FrontendFamilyTargetEditor, ManimNextToArgs, Mobject, SemanticNodeId,
+        SemanticStore,
     };
 
     fn js_error(error: String) -> JsValue {
@@ -734,17 +418,17 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyTranslation {
         semantics: SharedSemanticStore,
-        translation: FrontendFamilyTranslation,
+        translation: FamilyTranslation,
     }
 
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyArrange {
         semantics: SharedSemanticStore,
-        plan: FrontendFamilyArrangePlan,
+        plan: FamilyArrangePlan,
         direction: (f64, f64),
         buff: f64,
         center: bool,
-        translations: Option<Vec<Option<FrontendFamilyTranslation>>>,
+        translations: Option<Vec<Option<FamilyTranslation>>>,
         next_translation: usize,
     }
 
@@ -899,12 +583,9 @@ mod wasm {
             delta_y: f64,
         ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
             self.ensure_complete()?;
-            let translation = FrontendFamilyTranslation::from_members(
-                self.expected_leaves.clone(),
-                delta_x,
-                delta_y,
-            )
-            .map_err(js_error)?;
+            let translation =
+                FamilyTranslation::from_members(self.expected_leaves.clone(), delta_x, delta_y)
+                    .map_err(js_error)?;
             Ok(WasmAuthoringFamilyTranslation {
                 semantics: Rc::clone(&self.semantics),
                 translation,
@@ -1572,8 +1253,8 @@ mod wasm {
         ) -> Result<WasmAuthoringFamilyArrange, JsValue> {
             let direction = semantic_xy_f64(direction_x, direction_y).map_err(js_error)?;
             let buff = render_f64("buffer", buff).map_err(js_error)?;
-            let plan = FrontendFamilyArrangePlan::begin(&self.semantics.borrow(), self.id)
-                .map_err(js_error)?;
+            let plan =
+                FamilyArrangePlan::begin(&self.semantics.borrow(), self.id).map_err(js_error)?;
             Ok(WasmAuthoringFamilyArrange {
                 semantics: Rc::clone(&self.semantics),
                 plan,
@@ -2288,10 +1969,6 @@ mod tests {
                 max_y: 0.25,
             }),
         ];
-        let deltas =
-            manim_family_arrange_deltas(&bounds, 2.0, 0.0, 0.25, true).expect("arrange deltas");
-        assert_eq!(deltas, vec![(-0.75, 0.0), (1.25, 0.0)]);
-
         let mut store = SemanticStore::new();
         let first = store.insert_authoring_object();
         let second = store.insert_authoring_object();
@@ -2301,10 +1978,10 @@ mod tests {
         store.add_member(outer, first).unwrap();
         store.add_member(outer, nested).unwrap();
 
-        let mut rejected = FrontendFamilyArrangePlan::begin(&store, outer).unwrap();
+        let mut rejected = FamilyArrangePlan::begin(&store, outer).unwrap();
         assert!(rejected.accept_member_bounds(nested, bounds[1]).is_err());
 
-        let mut plan = FrontendFamilyArrangePlan::begin(&store, outer).unwrap();
+        let mut plan = FamilyArrangePlan::begin(&store, outer).unwrap();
         plan.accept_member_bounds(first, bounds[0]).unwrap();
         plan.accept_member_bounds(nested, bounds[1]).unwrap();
         let translations = plan.finish(2.0, 0.0, 0.25, true).unwrap();
@@ -2819,7 +2496,7 @@ mod tests {
         let first_before = first_handle.center().unwrap();
         let second_before = second_handle.center().unwrap();
 
-        let mut translation = FrontendFamilyTranslation::begin(&store, outer, 2.5, -1.25).unwrap();
+        let mut translation = FamilyTranslation::begin(&store, outer, 2.5, -1.25).unwrap();
         translation.apply(first, &mut first_handle).unwrap();
         translation.apply(second, &mut second_handle).unwrap();
         translation.finish().unwrap();
@@ -2833,7 +2510,7 @@ mod tests {
             (second_before.0 + 2.5, second_before.1 - 1.25)
         );
 
-        let mut reordered = FrontendFamilyTranslation::begin(&store, outer, 1.0, 0.0).unwrap();
+        let mut reordered = FamilyTranslation::begin(&store, outer, 1.0, 0.0).unwrap();
         let error = reordered.apply(second, &mut second_handle).unwrap_err();
         assert!(error.contains("mismatch at index 0"));
         assert!(reordered.finish().unwrap_err().contains("incomplete"));

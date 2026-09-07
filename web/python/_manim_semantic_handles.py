@@ -1817,6 +1817,15 @@ def _group_arrange(
         return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
 
     axis = _base._as_vec2(_base.RIGHT if direction is None else direction)
+    context = _group_target_context(self)
+    if context is not None:
+        try:
+            context.liveArrangeFamily(
+                family_handle, axis.x, axis.y, float(buff), bool(center)
+            )
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return self
     arrangement = family_handle.arrangeSession(axis.x, axis.y, float(buff), bool(center))
     prepared: list[tuple[object, list[_base.Mobject], list[object]]] = []
 

@@ -51,7 +51,6 @@ impl LiveContinuation for DrawBorderThenFill {
 pub fn program() -> Result<LiveProgram<DrawBorderThenFill>, String> {
     let scene = Scene::new();
     let mut square = Mobject::manim_square(Rc::clone(scene.store()), 0.8)?;
-    square.set_translation(-1.0, 0.0)?;
     square.set_fill(
         f64::from(Color::ORANGE.red),
         f64::from(Color::ORANGE.green),
@@ -66,7 +65,6 @@ pub fn program() -> Result<LiveProgram<DrawBorderThenFill>, String> {
     )?;
     square.set_stroke_width(0.06)?;
     let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.4)?;
-    circle.set_translation(1.0, 0.0)?;
     circle.set_fill(
         f64::from(Color::PINK.red),
         f64::from(Color::PINK.green),
@@ -77,6 +75,7 @@ pub fn program() -> Result<LiveProgram<DrawBorderThenFill>, String> {
     // returns to a no-stroke final style during the fill phase.
     circle.set_stroke_width(0.0)?;
     let family = scene.family(&[&square, &circle])?;
+    family.arrange(1.0, 0.0, 1.2, true)?;
     scene
         .into_live_program(DrawBorderThenFill { family, stage: 0 })
         .map_err(|error| error.to_string())
