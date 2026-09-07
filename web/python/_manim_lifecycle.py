@@ -138,56 +138,6 @@ def _resolve_wrapper(
     )
 
 
-def _scene_add(
-    self: _compat.Scene,
-    *mobjects: object,
-    key: str | None = None,
-) -> _base.Mobject | _compat.Scene:
-    if not mobjects:
-        return self
-    leaves = [member for value in mobjects for member in _compat._leaf_mobjects(value)]
-    if key is not None and len(leaves) != 1:
-        raise ValueError("an explicit key can only be used when adding one Mobject")
-
-    for index, member in enumerate(leaves):
-        plan = _resolve_wrapper(self, member, "add", self._cursor, "Scene.add target")
-        if plan.bind:
-            _phase_b._bind_raw(self, member, key=key if index == 0 else None)
-        assert member._object is not None
-        if plan.show_now:
-            member._record_scene_presence(
-                self,
-                False,
-                True,
-                self._cursor,
-                key=f"@scene-add:{member._object.id}:{self._cursor:g}",
-            )
-
-    for value in mobjects:
-        self._register_top_level(value)
-    return leaves[0] if len(leaves) == 1 else self
-
-
-def _scene_remove(self: _compat.Scene, *mobjects: object) -> _compat.Scene:
-    leaves = [member for value in mobjects for member in _compat._leaf_mobjects(value)]
-    for member in leaves:
-        plan = _resolve_wrapper(self, member, "remove", self._cursor, "Scene.remove target")
-        if plan.hide_now:
-            assert member._object is not None
-            member._record_scene_presence(
-                self,
-                True,
-                False,
-                self._cursor,
-                key=f"@scene-remove:{member._object.id}:{self._cursor:g}",
-            )
-    identities = {id(value) for value in mobjects}
-    self._compat_top_level = [
-        value for value in self._compat_top_level if id(value) not in identities
-    ]
-    return self
-
-
 def _bind_introducer_target(self: _compat.Scene, target: object) -> None:
     leaves = _compat._leaf_mobjects(target)
     for member in leaves:
@@ -503,8 +453,6 @@ def install() -> None:
         return
     _INSTALLED = True
 
-    _compat.Scene.add = _scene_add
-    _compat.Scene.remove = _scene_remove
     _compat.Scene._bind_introducer_target = _bind_introducer_target
     _animate._bind_for_animation = _bind_for_animation
 
