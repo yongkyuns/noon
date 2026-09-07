@@ -55,6 +55,12 @@ Family requests reconstruct detached alias families with fresh semantic identiti
 
 The flat family request remains only at the external input codec. It does not install exported semantic IDs or become an engine authority. #959 owns deletion of the remaining overlapping input/export codecs and legacy authoring methods; the genuine execution-to-render worker transport remains.
 
+## Specialized constructor cut
+
+The nine specialized Python geometry factories now call typed Rust `Mobject` constructors through their WASM store. Dot, Triangle, Elbow, RoundedRectangle, AnnularSector, Sector, Annulus, DashedLine, and Underline no longer serialize a snapshot and immediately parse it back inside the same WASM context. Path calculations are shared Rust helpers; Underline reads typed semantic bounds and rejects a foreign store at its wrapper boundary.
+
+The generic snapshot constructor and geometry admission methods remain the next #958/#959 seam. Their common geometry/path caller must move to shared typed construction before those methods are deleted. Remaining snapshot-based queries, shape matchers, and explicit export/callback consumers are separate recorded migration work; the specialized constructors do not call them.
+
 ## Important separation: real transport versus accidental engine boundary
 
 The current web stack contains both categories and they must not be deleted or preserved as one unit.

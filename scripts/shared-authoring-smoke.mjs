@@ -1504,6 +1504,27 @@ try {
     await stopSampledSource(page);
   }
 
+  const specializedGeometrySource = await readFile(
+    path.join(repoRoot, "web/python/examples/specialized_geometry.py"), "utf8",
+  );
+  await startSampledSource(page, specializedGeometrySource, "scene-shared-specialized-geometry", 960, 540);
+  try {
+    const screenshot = await page.locator("#scene-shared-specialized-geometry").screenshot();
+    const dot = renderedWorldPixel(screenshot, -4, 2);
+    const rectangle = renderedWorldPixel(screenshot, -4, 0);
+    assert.ok(dot.blue > dot.red + 30 && rectangle.blue > rectangle.red + 30,
+      `typed specialized geometry must render the paired style: ${JSON.stringify({ dot, rectangle })}`);
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(1), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 1);
+    assert.equal(result.metrics.objectCount, 9);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const automaticWaitTextSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_automatic_wait_text.py"), "utf8",
   );

@@ -136,6 +136,12 @@ fn polygon_path(vertices: impl IntoIterator<Item = Vec2>) -> VectorPath {
     append_closed_group(VectorPath::new(), &vertices)
 }
 
+pub(crate) fn manim_triangle_path() -> VectorPath {
+    let (vertices, _) =
+        regular_polygon_vertices(3, 1.0, None).expect("the built-in Triangle definition is valid");
+    polygon_path(vertices)
+}
+
 fn polygram_path(vertex_groups: &[Vec<Vec2>]) -> VectorPath {
     vertex_groups.iter().fold(VectorPath::new(), |path, group| {
         append_closed_group(path, group)
@@ -370,9 +376,7 @@ impl Default for Star {
 
 impl Triangle {
     pub fn new() -> Self {
-        let (vertices, _) = regular_polygon_vertices(3, 1.0, None)
-            .expect("the built-in Triangle definition is valid");
-        Self(manim_polygon_snapshot(vertices))
+        Self(manim_path_snapshot(manim_triangle_path()))
     }
 }
 

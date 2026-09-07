@@ -1,14 +1,5 @@
 import initNoonWeb, {
   WasmAuthoringStore,
-  manimAnnularSectorSnapshotJson,
-  manimAnnulusSnapshotJson,
-  manimDashedLineSnapshotJson,
-  manimDotSnapshotJson,
-  manimElbowSnapshotJson,
-  manimRoundedRectangleSnapshotJson,
-  manimSectorSnapshotJson,
-  manimTriangleSnapshotJson,
-  manimUnderlineSnapshotJson,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
@@ -119,23 +110,23 @@ async function initializePyodide() {
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
-    authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
+    authoringStore.createManimDot(pointX, pointY, radius);
   self.noonCreateAuthoringTriangleHandle = () =>
-    authoringStore.createMobject(manimTriangleSnapshotJson());
+    authoringStore.createManimTriangle();
   self.noonCreateAuthoringElbowHandle = (...args) =>
-    authoringStore.createMobject(manimElbowSnapshotJson(...args));
+    authoringStore.createManimElbow(...args);
   self.noonCreateAuthoringRoundedRectangleHandle = (...args) =>
-    authoringStore.createMobject(manimRoundedRectangleSnapshotJson(...args));
+    authoringStore.createManimRoundedRectangle(...args);
   self.noonCreateAuthoringAnnularSectorHandle = (...args) =>
-    authoringStore.createMobject(manimAnnularSectorSnapshotJson(...args));
+    authoringStore.createManimAnnularSector(...args);
   self.noonCreateAuthoringSectorHandle = (...args) =>
-    authoringStore.createMobject(manimSectorSnapshotJson(...args));
+    authoringStore.createManimSector(...args);
   self.noonCreateAuthoringAnnulusHandle = (...args) =>
-    authoringStore.createMobject(manimAnnulusSnapshotJson(...args));
+    authoringStore.createManimAnnulus(...args);
   self.noonCreateAuthoringDashedLineHandle = (...args) =>
-    authoringStore.createMobject(manimDashedLineSnapshotJson(...args));
+    authoringStore.createManimDashedLine(...args);
   self.noonCreateAuthoringUnderlineHandle = (targetHandle, buff) =>
-    authoringStore.createMobject(manimUnderlineSnapshotJson(targetHandle.snapshotJson(), buff));
+    authoringStore.createManimUnderline(targetHandle, buff);
   self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
   self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
   self.noonCreateAuthoringRectangleHandle = (width, height) =>

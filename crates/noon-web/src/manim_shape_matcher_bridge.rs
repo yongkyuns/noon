@@ -1,5 +1,5 @@
 use noon::legacy::{
-    BackgroundRectangle, Cross, IntoSnapshot, SurroundingRectangle, Underline,
+    BackgroundRectangle, Cross, IntoSnapshot, SurroundingRectangle,
     SURROUNDING_RECTANGLE_DEFAULT_COLOR,
 };
 use noon_core::{ObjectSnapshot, Vec2, BLACK, RED};
@@ -111,16 +111,6 @@ pub fn manim_cross_snapshot_json(
     encode_snapshot(matcher.into_snapshot())
 }
 
-pub fn manim_underline_snapshot_json(
-    target_snapshot_json: &str,
-    buff: f64,
-) -> Result<String, String> {
-    let target = decode_target(target_snapshot_json)?;
-    let matcher = Underline::with_buff(&target, finite_f32("buff", buff)?)
-        .map_err(|error| error.to_string())?;
-    encode_snapshot(matcher.into_snapshot())
-}
-
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use wasm_bindgen::prelude::*;
@@ -128,7 +118,7 @@ mod wasm {
     use super::{
         manim_background_rectangle_snapshot_json, manim_background_rectangle_snapshots_json,
         manim_cross_snapshot_json, manim_surrounding_rectangle_snapshot_json,
-        manim_surrounding_rectangle_snapshots_json, manim_underline_snapshot_json,
+        manim_surrounding_rectangle_snapshots_json,
     };
 
     fn js_error(error: String) -> JsValue {
@@ -212,14 +202,6 @@ mod wasm {
         manim_cross_snapshot_json(target_snapshot_json.as_deref(), stroke_width, scale_factor)
             .map_err(js_error)
     }
-
-    #[wasm_bindgen(js_name = manimUnderlineSnapshotJson)]
-    pub fn manim_underline_snapshot(
-        target_snapshot_json: &str,
-        buff: f64,
-    ) -> Result<String, JsValue> {
-        manim_underline_snapshot_json(target_snapshot_json, buff).map_err(js_error)
-    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -229,9 +211,9 @@ pub use wasm::*;
 mod tests {
     use noon::legacy::{
         IntoSnapshot, Rectangle, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
-        DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_UNDERLINE_BUFF,
+        DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH,
     };
-    use noon_core::{GeometryRef, Vec2, BLACK, RED, SMALL_BUFF};
+    use noon_core::{GeometryRef, Vec2, BLACK, RED};
 
     use super::*;
 
@@ -353,19 +335,6 @@ mod tests {
     }
 
     #[test]
-    fn underline_bridge_uses_shared_line_matcher_semantics() {
-        let snapshot = decode(
-            &manim_underline_snapshot_json(&target_json(), f64::from(DEFAULT_UNDERLINE_BUFF))
-                .expect("valid underline"),
-        );
-        let GeometryRef::Line { start, end } = snapshot.geometry else {
-            panic!("underline must remain retained analytic line geometry")
-        };
-        assert_eq!(start, Vec2::new(-1.0, -3.0 - SMALL_BUFF));
-        assert_eq!(end, Vec2::new(3.0, -3.0 - SMALL_BUFF));
-    }
-
-    #[test]
     fn variadic_matcher_bridge_rejects_empty_or_malformed_target_sets() {
         assert!(manim_surrounding_rectangle_snapshots_json(&[], 0.1, 0.1, 0.0).is_err());
         let targets = vec![target_json(), "not json".to_owned()];
@@ -374,7 +343,6 @@ mod tests {
 
     #[test]
     fn matcher_bridge_rejects_malformed_and_non_finite_inputs() {
-        assert!(manim_underline_snapshot_json("not json", 0.1).is_err());
         assert!(
             manim_surrounding_rectangle_snapshot_json(&target_json(), f64::NAN, 0.1, 0.0).is_err()
         );

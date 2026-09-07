@@ -21,12 +21,9 @@ mod gpu_diagnostics;
 mod gpu_timestamps;
 mod legacy;
 mod lifecycle;
-mod manim_dashed_line_bridge;
-mod manim_elbow_bridge;
 mod manim_geometry_bridge;
 mod manim_path_query_bridge;
 mod manim_scale_bridge;
-mod manim_sector_bridge;
 mod manim_shape_matcher_bridge;
 #[cfg(any(target_arch = "wasm32", test))]
 mod manim_shape_matcher_handle_bridge;
@@ -64,11 +61,8 @@ pub use execution_wake::*;
 pub use family_bounds::*;
 pub use legacy::{PlayerError, ReconcileOutcome};
 pub use lifecycle::*;
-pub use manim_dashed_line_bridge::*;
-pub use manim_elbow_bridge::*;
 pub use manim_geometry_bridge::*;
 pub use manim_path_query_bridge::*;
-pub use manim_sector_bridge::*;
 pub use manim_shape_matcher_bridge::*;
 pub use renderer_observation::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]

@@ -48,21 +48,9 @@ impl Elbow {
     /// `scale_to_fit_width(width, about_point=ORIGIN)` and rotation about the
     /// origin.
     pub fn with_options(width: f32, angle: f32) -> Result<Self, ElbowAuthoringError> {
-        if !width.is_finite() {
-            return Err(ElbowAuthoringError::NonFiniteWidth(width));
-        }
-        if !angle.is_finite() {
-            return Err(ElbowAuthoringError::NonFiniteAngle(angle));
-        }
-
-        let (sin, cos) = angle.sin_cos();
-        let rotate =
-            |point: Vec2| Vec2::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
-        let path = VectorPath::new()
-            .move_to(rotate(Vec2::new(0.0, width)))
-            .line_to(rotate(Vec2::new(width, width)))
-            .line_to(rotate(Vec2::new(width, 0.0)));
-        Ok(Self(Path::new(path).into_snapshot()))
+        Ok(Self(
+            Path::new(manim_elbow_path(width, angle)?).into_snapshot(),
+        ))
     }
 
     pub fn color(mut self, color: Color) -> Self {
@@ -117,6 +105,24 @@ impl Elbow {
     pub fn snapshot(&self) -> &ObjectSnapshot {
         &self.0
     }
+}
+
+pub(crate) fn manim_elbow_path(width: f32, angle: f32) -> Result<VectorPath, ElbowAuthoringError> {
+    if !width.is_finite() {
+        return Err(ElbowAuthoringError::NonFiniteWidth(width));
+    }
+    if !angle.is_finite() {
+        return Err(ElbowAuthoringError::NonFiniteAngle(angle));
+    }
+
+    let (sin, cos) = angle.sin_cos();
+    let rotate =
+        |point: Vec2| Vec2::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
+    let path = VectorPath::new()
+        .move_to(rotate(Vec2::new(0.0, width)))
+        .line_to(rotate(Vec2::new(width, width)))
+        .line_to(rotate(Vec2::new(width, 0.0)));
+    Ok(path)
 }
 
 impl Default for Elbow {

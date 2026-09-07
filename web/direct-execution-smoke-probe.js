@@ -27,6 +27,7 @@ const {
   createDirectOrdinaryTextWriteSmokeRenderer,
   createDirectAutomaticWaitTextSmokeRenderer,
   createDirectExactPropertyTracksSmokeRenderer,
+  createDirectSpecializedGeometrySmokeRenderer,
   createDirectTextFamilyFadeSmokeRenderer,
   createDirectTextFamilyRevealSmokeRenderer,
   createDirectTextFamilyWriteSmokeRenderer,
@@ -1300,6 +1301,29 @@ async function directExactPropertyTracksProof(expectedBackend) {
   }
 }
 
+async function directSpecializedGeometryProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectSpecializedGeometrySmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    const dot = await sampleRenderedColor(canvas, -4, 2);
+    const rectangle = await sampleRenderedColor(canvas, -4, 0);
+    const metrics = { backend: renderer.rendererBackend(), objects: renderer.objectCount(),
+      drawCalls: renderer.lastDrawCalls(), dot, rectangle };
+    if (metrics.backend !== expectedBackend || metrics.objects !== 9 || metrics.drawCalls === 0
+        || dot.blue <= dot.red + 30 || rectangle.blue <= rectangle.red + 30) {
+      throw new Error(`typed specialized geometry failed to render: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directAutomaticWaitTextProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectAutomaticWaitTextSmokeRenderer(canvas);
@@ -2114,6 +2138,7 @@ async function start() {
   metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);
   metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
   metrics.exactPropertyTracks = await directExactPropertyTracksProof(expectedBackend);
+  metrics.specializedGeometry = await directSpecializedGeometryProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);
   metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);
   metrics.textFamilyWrite = await directTextFamilyWriteProof(expectedBackend);

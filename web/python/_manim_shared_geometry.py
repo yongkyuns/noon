@@ -398,7 +398,7 @@ class Underline(_compat.Line):
         if not isinstance(mobject, _base.Mobject):
             raise TypeError("Underline target must be a Mobject")
         target_handle = _shared._handle_for(mobject)
-        if target_handle is None or not hasattr(target_handle, "snapshotJson"):
+        if target_handle is None:
             raise NotImplementedError(
                 "Underline currently requires a target with shared semantic geometry"
             )

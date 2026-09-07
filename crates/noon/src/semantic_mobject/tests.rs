@@ -206,3 +206,84 @@ fn analytic_line_match_rejects_invalid_operands_before_mutation() {
     assert!(source.match_line_handle(&nonuniform).is_err());
     assert_eq!(source.state().unwrap(), before);
 }
+
+#[test]
+fn specialized_manim_geometry_uses_one_semantic_identity_per_constructor() {
+    let scene = Scene::new();
+    let before = scene.store().borrow().scene_revision();
+    let before_nodes = scene.store().borrow().len();
+
+    let dot = Mobject::manim_dot(Rc::clone(scene.store()), 1.25, -0.75, 0.08).unwrap();
+    let triangle = Mobject::manim_triangle(Rc::clone(scene.store())).unwrap();
+    let elbow =
+        Mobject::manim_elbow(Rc::clone(scene.store()), 0.2, std::f64::consts::FRAC_PI_4).unwrap();
+    let rounded =
+        Mobject::manim_rounded_rectangle(Rc::clone(scene.store()), 4.0, 2.0, 0.5).unwrap();
+    let annular = Mobject::manim_annular_sector(
+        Rc::clone(scene.store()),
+        1.0,
+        2.0,
+        std::f64::consts::FRAC_PI_2,
+        0.0,
+        9,
+        0.0,
+        0.0,
+    )
+    .unwrap();
+    let sector = Mobject::manim_sector(
+        Rc::clone(scene.store()),
+        1.0,
+        std::f64::consts::FRAC_PI_2,
+        0.0,
+        9,
+        0.0,
+        0.0,
+    )
+    .unwrap();
+    let annulus = Mobject::manim_annulus(Rc::clone(scene.store()), 1.0, 2.0, 9, 0.0, 0.0).unwrap();
+    let dashed =
+        Mobject::manim_dashed_line(Rc::clone(scene.store()), -1.0, 0.0, 1.0, 0.0, 0.05, 0.5)
+            .unwrap();
+    let underline = Mobject::manim_underline(&rounded, 0.25).unwrap();
+
+    assert_eq!(dot.center().unwrap(), (1.25, -0.75));
+    assert_eq!(dot.fill_opacity().unwrap(), 1.0);
+    assert_eq!(dot.state().unwrap().style.stroke_width, 0.0);
+    assert_eq!(
+        triangle.state().unwrap().style.stroke,
+        Some(SemanticPaint::Solid(Color::BLUE))
+    );
+    assert!(elbow.width().unwrap() > 0.0);
+    assert_eq!(underline.width().unwrap(), rounded.width().unwrap());
+    assert_eq!(underline.center().unwrap().1, -1.25);
+    for object in [triangle, elbow, rounded, annular, sector, annulus, dashed] {
+        assert!(matches!(
+            object.state().unwrap().content.geometry(),
+            Some(StoredGeometry::Resource(_))
+        ));
+    }
+    assert_eq!(scene.store().borrow().len(), before_nodes + 9);
+    assert_eq!(
+        scene.store().borrow().scene_revision().get(),
+        before.get() + 9
+    );
+}
+
+#[test]
+fn invalid_specialized_geometry_does_not_allocate_or_publish() {
+    let scene = Scene::new();
+    let before_revision = scene.store().borrow().scene_revision();
+    let before_nodes = scene.store().borrow().len();
+    let before_resources = scene.store().borrow().geometry_resources().len();
+
+    assert!(Mobject::manim_rounded_rectangle(Rc::clone(scene.store()), 0.0, 2.0, 0.5).is_err());
+    assert!(Mobject::manim_sector(Rc::clone(scene.store()), 1.0, 1.0, 0.0, 1, 0.0, 0.0).is_err());
+    assert!(
+        Mobject::manim_dashed_line(Rc::clone(scene.store()), 0.0, 0.0, 1.0, 0.0, 0.0, 0.5).is_err()
+    );
+
+    let store = scene.store().borrow();
+    assert_eq!(store.scene_revision(), before_revision);
+    assert_eq!(store.len(), before_nodes);
+    assert_eq!(store.geometry_resources().len(), before_resources);
+}
