@@ -208,6 +208,15 @@ pub async fn create_direct_moving_camera_center_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Typed Path and matcher inputs share the same live geometry publication on both targets.
+#[wasm_bindgen(js_name = createDirectLiveGeometryConstructionSmokeRenderer)]
+pub async fn create_direct_live_geometry_construction_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::live_geometry_construction::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct Rust/WASM execution of the paired live primitive construction program.
 #[wasm_bindgen(js_name = createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer)]
 pub async fn create_direct_ordinary_live_primitive_construction_smoke_renderer(

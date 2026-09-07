@@ -31,59 +31,155 @@ pub struct ManimNextToArgs {
     pub mask: (f64, f64),
 }
 
-/// Inert, fully typed input for one ordinary Manim primitive.
+/// Inert, fully typed input for one ordinary Manim geometry object.
 ///
 /// This owns no semantic identity, store, execution state, or clock. A live
 /// session consumes it in one semantic transaction after every requested
 /// constructor option has been validated against the shared semantic state.
 #[derive(Clone, Debug)]
-pub struct ManimPrimitiveOptions {
-    state: SemanticObjectState,
+pub struct ManimGeometryOptions {
+    geometry: GeometryRef,
+    transform: SemanticTransform2_5D,
+    style: SemanticStyle,
 }
 
-impl ManimPrimitiveOptions {
+impl ManimGeometryOptions {
     pub fn circle(radius: f64) -> Result<Self, String> {
-        let mut state = SemanticObjectState::new(StoredGeometry::Circle {
-            radius: positive_f32("radius", radius)?,
-        });
-        state.style = manim_style(Color::RED);
-        Ok(Self { state })
+        Ok(Self::new(
+            GeometryRef::circle(positive_f32("radius", radius)?),
+            manim_style(Color::RED),
+        ))
     }
 
     pub fn square(side: f64) -> Result<Self, String> {
-        let side = positive_f32("side", side)?;
-        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
-            size: Vec2::new(side, side),
-        });
-        state.style = manim_style(Color::WHITE);
-        Ok(Self { state })
+        Self::rectangle(side, side)
+    }
+
+    pub fn rectangle(width: f64, height: f64) -> Result<Self, String> {
+        Ok(Self::new(
+            GeometryRef::rectangle(
+                positive_f32("width", width)?,
+                positive_f32("height", height)?,
+            ),
+            manim_style(Color::WHITE),
+        ))
+    }
+
+    pub fn line(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, String> {
+        Ok(Self::new(
+            GeometryRef::line(semantic_xy(x1, y1)?, semantic_xy(x2, y2)?),
+            manim_style(Color::WHITE),
+        ))
+    }
+
+    pub fn path(path: VectorPath) -> Result<Self, String> {
+        if !path.is_finite() {
+            return Err("geometry must be finite".into());
+        }
+        Ok(Self::new(
+            GeometryRef::path(path),
+            manim_style(Color::WHITE),
+        ))
+    }
+
+    pub fn surrounding_rectangle(
+        bounds: Bounds2D64,
+        buff_x: f64,
+        buff_y: f64,
+        corner_radius: f64,
+    ) -> Result<Self, String> {
+        let mut options = Self::matcher_rectangle(bounds, buff_x, buff_y, corner_radius)?;
+        options.style = manim_style(Color::from_hex(0xFFFF00));
+        options.set_translation(
+            (bounds.min_x + bounds.max_x) * 0.5,
+            (bounds.min_y + bounds.max_y) * 0.5,
+        )?;
+        Ok(options)
+    }
+
+    pub fn background_rectangle(
+        bounds: Bounds2D64,
+        buff_x: f64,
+        buff_y: f64,
+        corner_radius: f64,
+        fill_opacity: f64,
+    ) -> Result<Self, String> {
+        let mut options = Self::matcher_rectangle(bounds, buff_x, buff_y, corner_radius)?;
+        options.style = manim_style(Color::BLACK);
+        edit_fill(&mut options.style, 0.0, 0.0, 0.0, fill_opacity)?;
+        options.style.stroke_width = 0.0;
+        options.style.stroke_opacity = 0.0;
+        options.set_translation(
+            (bounds.min_x + bounds.max_x) * 0.5,
+            (bounds.min_y + bounds.max_y) * 0.5,
+        )?;
+        Ok(options)
+    }
+
+    fn new(geometry: GeometryRef, style: SemanticStyle) -> Self {
+        Self {
+            geometry,
+            transform: SemanticTransform2_5D::default(),
+            style,
+        }
+    }
+
+    fn matcher_rectangle(
+        bounds: Bounds2D64,
+        buff_x: f64,
+        buff_y: f64,
+        corner_radius: f64,
+    ) -> Result<Self, String> {
+        for (name, value) in [
+            ("bounds.min_x", bounds.min_x),
+            ("bounds.min_y", bounds.min_y),
+            ("bounds.max_x", bounds.max_x),
+            ("bounds.max_y", bounds.max_y),
+            ("buff_x", buff_x),
+            ("buff_y", buff_y),
+        ] {
+            authoring_render_f64(name, value)?;
+        }
+        if bounds.max_x < bounds.min_x || bounds.max_y < bounds.min_y {
+            return Err("shape matcher bounds must be ordered".into());
+        }
+        let path = crate::rounded_rectangle_authoring::manim_rounded_rectangle_path(
+            positive_f32("width", bounds.width() + 2.0 * buff_x)?,
+            positive_f32("height", bounds.height() + 2.0 * buff_y)?,
+            [finite_f32("corner_radius", corner_radius)?; 4],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(Self::new(
+            GeometryRef::path(path),
+            manim_style(Color::WHITE),
+        ))
     }
 
     pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), String> {
         let value = authoring_xy_f64(x, y)?;
-        self.state.transform.translation.x = value.x;
-        self.state.transform.translation.y = value.y;
+        self.transform.translation.x = value.x;
+        self.transform.translation.y = value.y;
         Ok(())
     }
 
     pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
         let value = authoring_xy_f64(x, y)?;
-        self.state.transform.scale.x = value.x;
-        self.state.transform.scale.y = value.y;
+        self.transform.scale.x = value.x;
+        self.transform.scale.y = value.y;
         Ok(())
     }
 
     pub fn set_rotation(&mut self, angle: f64) -> Result<(), String> {
-        self.state.transform.rotation_z = authoring_render_f64("rotation", angle)?;
+        self.transform.rotation_z = authoring_render_f64("rotation", angle)?;
         Ok(())
     }
 
     pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
-        edit_color(&mut self.state.style, red, green, blue, alpha)
+        edit_color(&mut self.style, red, green, blue, alpha)
     }
 
     pub fn disable_fill(&mut self) {
-        edit_disable_fill(&mut self.state.style);
+        edit_disable_fill(&mut self.style);
     }
 
     pub fn set_fill(
@@ -93,7 +189,7 @@ impl ManimPrimitiveOptions {
         blue: f64,
         opacity: f64,
     ) -> Result<(), String> {
-        edit_fill(&mut self.state.style, red, green, blue, opacity)
+        edit_fill(&mut self.style, red, green, blue, opacity)
     }
 
     pub fn set_fill_color(
@@ -103,15 +199,15 @@ impl ManimPrimitiveOptions {
         blue: f64,
         alpha: f64,
     ) -> Result<(), String> {
-        edit_fill_color(&mut self.state.style, red, green, blue, alpha)
+        edit_fill_color(&mut self.style, red, green, blue, alpha)
     }
 
     pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        edit_fill_opacity(&mut self.state.style, opacity)
+        edit_fill_opacity(&mut self.style, opacity)
     }
 
     pub fn disable_stroke(&mut self) {
-        edit_disable_stroke(&mut self.state.style);
+        edit_disable_stroke(&mut self.style);
     }
 
     pub fn set_stroke(
@@ -121,7 +217,7 @@ impl ManimPrimitiveOptions {
         blue: f64,
         opacity: f64,
     ) -> Result<(), String> {
-        edit_stroke(&mut self.state.style, red, green, blue, opacity)
+        edit_stroke(&mut self.style, red, green, blue, opacity)
     }
 
     pub fn set_stroke_color(
@@ -131,38 +227,52 @@ impl ManimPrimitiveOptions {
         blue: f64,
         alpha: f64,
     ) -> Result<(), String> {
-        edit_stroke_color(&mut self.state.style, red, green, blue, alpha)
+        edit_stroke_color(&mut self.style, red, green, blue, alpha)
     }
 
     pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        edit_stroke_opacity(&mut self.state.style, opacity)
+        edit_stroke_opacity(&mut self.style, opacity)
     }
 
     pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
-        edit_stroke_width(&mut self.state.style, width)
+        edit_stroke_width(&mut self.style, width)
     }
 
     pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
-        self.state.style.stroke_width_mode = parse_stroke_width_mode(mode)?;
+        self.style.stroke_width_mode = parse_stroke_width_mode(mode)?;
         Ok(())
     }
 
     pub fn set_stroke_join(&mut self, join: &str) -> Result<(), String> {
-        self.state.style.stroke_join = parse_stroke_join(join)?;
+        self.style.stroke_join = parse_stroke_join(join)?;
         Ok(())
     }
 
     pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), String> {
-        self.state.style.stroke_cap = parse_stroke_cap(cap)?;
+        self.style.stroke_cap = parse_stroke_cap(cap)?;
         Ok(())
     }
 
     pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        edit_object_opacity(&mut self.state.style, opacity)
+        edit_object_opacity(&mut self.style, opacity)
     }
 
-    pub(crate) fn into_state(self) -> SemanticObjectState {
-        self.state
+    pub(crate) fn into_state(
+        self,
+        store: &mut SemanticStore,
+    ) -> Result<SemanticObjectState, String> {
+        if !self.geometry.is_finite()
+            || !self.transform.translation.is_finite()
+            || !self.transform.scale.is_finite()
+            || !self.transform.rotation_z.is_finite()
+            || !self.style.is_finite()
+        {
+            return Err("geometry, transform, and style must be finite".into());
+        }
+        let mut state = SemanticObjectState::new(import_geometry(store, self.geometry)?);
+        state.transform = self.transform;
+        state.style = self.style;
+        Ok(state)
     }
 }
 
@@ -288,6 +398,13 @@ impl Mobject {
     ) -> Result<Self, String> {
         Self::from_geometry_state(store, geometry, SemanticTransform2_5D::default(), style)
     }
+    pub fn from_manim_geometry(
+        store: Rc<RefCell<SemanticStore>>,
+        options: ManimGeometryOptions,
+    ) -> Result<Self, String> {
+        let state = options.into_state(&mut store.borrow_mut())?;
+        Self::new(store, state)
+    }
 
     fn from_geometry_state(
         store: Rc<RefCell<SemanticStore>>,
@@ -295,39 +412,27 @@ impl Mobject {
         transform: SemanticTransform2_5D,
         style: SemanticStyle,
     ) -> Result<Self, String> {
-        if !geometry.is_finite()
-            || !transform.translation.is_finite()
-            || !transform.scale.is_finite()
-            || !transform.rotation_z.is_finite()
-            || !style.is_finite()
-        {
-            return Err("geometry, transform, and style must be finite".into());
-        }
-        let content = import_geometry(&mut store.borrow_mut(), geometry)?;
-        let mut state = SemanticObjectState::new(content);
-        state.transform = transform;
-        state.style = style;
-        Self::new(store, state)
+        Self::from_manim_geometry(
+            store,
+            ManimGeometryOptions {
+                geometry,
+                transform,
+                style,
+            },
+        )
     }
     pub fn manim_circle(store: Rc<RefCell<SemanticStore>>, radius: f64) -> Result<Self, String> {
-        Self::new(store, ManimPrimitiveOptions::circle(radius)?.into_state())
+        Self::from_manim_geometry(store, ManimGeometryOptions::circle(radius)?)
     }
     pub fn manim_square(store: Rc<RefCell<SemanticStore>>, side: f64) -> Result<Self, String> {
-        Self::new(store, ManimPrimitiveOptions::square(side)?.into_state())
+        Self::from_manim_geometry(store, ManimGeometryOptions::square(side)?)
     }
     pub fn manim_rectangle(
         store: Rc<RefCell<SemanticStore>>,
         width: f64,
         height: f64,
     ) -> Result<Self, String> {
-        Self::from_geometry(
-            store,
-            GeometryRef::rectangle(
-                positive_f32("width", width)?,
-                positive_f32("height", height)?,
-            ),
-            manim_style(Color::WHITE),
-        )
+        Self::from_manim_geometry(store, ManimGeometryOptions::rectangle(width, height)?)
     }
     pub fn manim_line(
         store: Rc<RefCell<SemanticStore>>,
@@ -336,11 +441,7 @@ impl Mobject {
         x2: f64,
         y2: f64,
     ) -> Result<Self, String> {
-        Self::from_geometry(
-            store,
-            GeometryRef::line(semantic_xy(x1, y1)?, semantic_xy(x2, y2)?),
-            manim_style(Color::WHITE),
-        )
+        Self::from_manim_geometry(store, ManimGeometryOptions::line(x1, y1, x2, y2)?)
     }
 
     pub fn wire_translation(&self) -> Result<(f64, f64), String> {

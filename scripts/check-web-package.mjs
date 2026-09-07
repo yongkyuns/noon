@@ -34,6 +34,11 @@ const expectedJavascriptSurface = [
   "createManimAnnulus(",
   "createManimDashedLine(",
   "createManimUnderline(",
+  "export class WasmManimGeometryOptions",
+  "export class WasmAuthoringVectorPath",
+  "createManimGeometry(",
+  "beginSurroundingRectangle(",
+  "beginBackgroundRectangle(",
   "export class WasmAuthoringMobjectHandle",
   "export class SemanticExecutionPlayer",
   "resourceBundleBytes(",
@@ -136,9 +141,7 @@ const expectedJavascriptSurface = [
   "finishLiveFamilyTarget(",
   "liveShiftFamily(",
   "liveArrangeFamily(",
-  "beginLiveManimCircle(",
-  "beginLiveManimSquare(",
-  "liveCreateManimPrimitive(",
+  "liveCreateManimGeometry(",
   "liveCreateManimText(",
   "liveCreateManimTypst(",
   "liveMoveToPoint(",
@@ -244,6 +247,11 @@ const expectedTypeSurface = [
   "createManimAnnulus(inner_radius: number, outer_radius: number, num_components: number, center_x: number, center_y: number): WasmAuthoringMobjectHandle",
   "createManimDashedLine(start_x: number, start_y: number, end_x: number, end_y: number, dash_length: number, dashed_ratio: number): WasmAuthoringMobjectHandle",
   "createManimUnderline(target: WasmAuthoringMobjectHandle, buff: number): WasmAuthoringMobjectHandle",
+  "export class WasmManimGeometryOptions",
+  "export class WasmAuthoringVectorPath",
+  "createManimGeometry(",
+  "beginSurroundingRectangle(",
+  "beginBackgroundRectangle(",
   "export class WasmAuthoringMobjectHandle",
   "export class SemanticExecutionPlayer",
   "resourceBundleBytes(): Uint8Array",
@@ -361,9 +369,7 @@ const expectedTypeSurface = [
   "finishLiveFamilyTarget(editor: WasmAuthoringFamilyTargetEditor): WasmAuthoringFamilyHandle",
   "liveShiftFamily(handle: WasmAuthoringFamilyHandle, x: number, y: number): void",
   "liveArrangeFamily(handle: WasmAuthoringFamilyHandle, direction_x: number, direction_y: number, buff: number, center: boolean): void",
-  "beginLiveManimCircle(",
-  "beginLiveManimSquare(",
-  "liveCreateManimPrimitive(",
+  "liveCreateManimGeometry(",
   "liveCreateManimText(",
   "liveCreateManimTypst(",
   "liveMoveToPoint(",
@@ -454,6 +460,8 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryTextWriteSmokeRenderer(",
     "export function createDirectAutomaticWaitTextSmokeRenderer(",
     "export function createDirectExactPropertyTracksSmokeRenderer(",
+    "export function createDirectSpecializedGeometrySmokeRenderer(",
+    "export function createDirectLiveGeometryConstructionSmokeRenderer(",
     "export function createDirectOrdinaryFadePlaySmokeRenderer(",
     "export function createDirectOrdinaryAffineFadeSmokeRenderer(",
     "export function createDirectOrdinaryCreatePlaySmokeRenderer(",
@@ -476,6 +484,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryAffineCallbackContinuationSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryAffineContinuationSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectLiveGeometryConstructionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryCallbackSparseReadsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryCompositionPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryCompositionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -518,9 +527,18 @@ for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer"]) {
   }
 }
 for (const retired of ["textSpecJson(", "validateRetainedAuthoringDocumentJson(",
+  "createMobject(", "bindGeometry(", "updateGeometry(",
+  "beginLiveManimCircle(", "beginLiveManimSquare(", "liveCreateManimPrimitive(",
+  "export class WasmManimPrimitiveBuilder",
+  "surroundingRectangleSnapshotJson(", "backgroundRectangleSnapshotJson(",
+  "export function manimSurroundingRectangleSnapshotJson(",
+  "export function manimSurroundingRectangleSnapshotsJson(",
+  "export function manimBackgroundRectangleSnapshotJson(",
+  "export function manimBackgroundRectangleSnapshotsJson(",
+  "export function manimCrossSnapshotJson(",
   "export class RetainedNativeTextAuthoringHandle", "export class RetainedTypstAuthoringHandle"]) {
   if (javascript.includes(retired) || declarations.includes(retired)) {
-    throw new Error(`Deleted text authoring API returned to the browser package: ${retired}`);
+    throw new Error(`Deleted authoring API returned to the browser package: ${retired}`);
   }
 }
 if (wasmStats.size === 0) {

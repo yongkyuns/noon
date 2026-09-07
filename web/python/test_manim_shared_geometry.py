@@ -98,7 +98,9 @@ class ManimSharedGeometryTests(unittest.TestCase):
                     base_style(BLUE),
                 ))
 
-            fake_js.noonCreateAuthoringMobjectHandle = generic_snapshot
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, generic_snapshot)
             fake_js.noonCreateAuthoringDotHandle = dot
             fake_js.noonCreateAuthoringTriangleHandle = triangle
             sys.modules["js"] = fake_js

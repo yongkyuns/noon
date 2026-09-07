@@ -102,7 +102,9 @@ class ManimSharedElbowTests(unittest.TestCase):
                     "style": style(),
                 })
 
-            fake_js.noonCreateAuthoringMobjectHandle = generic_handle
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, generic_handle)
             fake_js.noonCreateAuthoringElbowHandle = elbow
             sys.modules["js"] = fake_js
 

@@ -196,7 +196,8 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
 
 
             store = FakeStore()
-            handles._create_handle = store.createMobject
+            import _typed_geometry_test_support as _geometry_test
+            _geometry_test.install_module_bridge(handles, store.createMobject)
             handles._create_family_handle = store.createFamily
             handles.install()
 

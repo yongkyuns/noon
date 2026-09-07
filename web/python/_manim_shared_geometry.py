@@ -295,15 +295,15 @@ def _shape_matcher_target(target: object):
             )
         return shared[0]
     handle = _shared._handle_for(target)
-    if handle is None or not hasattr(handle, "snapshotJson"):
+    if handle is None:
         raise NotImplementedError(
             "shape matcher target requires current shared semantic geometry"
         )
     return handle
 
 
-def _shape_matcher_handle(target: object, method: str, *args: float):
-    if _shared._create_handle is None:
+def _shape_matcher_options(target: object, method: str, *args: float):
+    if _shared._create_geometry_handle is None:
         raise RuntimeError("shape matchers require the shared browser geometry bridge")
     source = _shape_matcher_target(target)
     constructor = getattr(source, method, None)
@@ -311,7 +311,7 @@ def _shape_matcher_handle(target: object, method: str, *args: float):
         raise NotImplementedError(
             "shape matcher target bridge does not expose shared matcher construction"
         )
-    return _shared._create_handle(constructor(*args))
+    return constructor(*args)
 
 
 class SurroundingRectangle(RoundedRectangle):
@@ -327,21 +327,19 @@ class SurroundingRectangle(RoundedRectangle):
     ) -> None:
         buff_x, buff_y = _shape_matcher_buff(buff)
         radius = _shared._ir._finite_number("corner_radius", corner_radius)
-        _shared._attach_shared_handle(
-            self,
-            _shape_matcher_handle(
-                mobject,
-                "surroundingRectangleSnapshotJson",
-                buff_x,
-                buff_y,
-                radius,
-            ),
+        candidate = _shape_matcher_options(
+            mobject,
+            "beginSurroundingRectangle",
+            buff_x,
+            buff_y,
+            radius,
         )
+        options = dict(kwargs)
+        _shared._apply_shared_constructor_options(candidate, options)
+        _shared._apply_constructor_color(candidate, color)
+        _shared._attach_geometry_options(self, candidate, "SurroundingRectangle")
         self.buff = buff
         self.corner_radius = radius
-        _shared._apply_shared_constructor_kwargs(self, dict(kwargs))
-        if color is not None:
-            _set_shared_color(self, color)
 
 
 class BackgroundRectangle(SurroundingRectangle):
@@ -363,25 +361,22 @@ class BackgroundRectangle(SurroundingRectangle):
         )
         buff_x, buff_y = _shape_matcher_buff(buff)
         fill_value = _shared._phase_b._opacity("fill_opacity", fill_opacity)
-        _shared._attach_shared_handle(
-            self,
-            _shape_matcher_handle(
-                mobject,
-                "backgroundRectangleSnapshotJson",
-                buff_x,
-                buff_y,
-                corner_radius,
-                fill_value,
-            ),
+        candidate = _shape_matcher_options(
+            mobject,
+            "beginBackgroundRectangle",
+            buff_x,
+            buff_y,
+            corner_radius,
+            fill_value,
         )
-        self.buff = buff
-        self.corner_radius = corner_radius
         options["stroke_width"] = stroke_width
         options["stroke_opacity"] = stroke_opacity
         options["fill_opacity"] = fill_value
-        _shared._apply_shared_constructor_kwargs(self, options)
-        if color is not None:
-            _set_shared_color(self, color)
+        _shared._apply_shared_constructor_options(candidate, options)
+        _shared._apply_constructor_color(candidate, color)
+        _shared._attach_geometry_options(self, candidate, "BackgroundRectangle")
+        self.buff = buff
+        self.corner_radius = corner_radius
 
 
 class Underline(_compat.Line):

@@ -123,7 +123,9 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
                     translation["y"] = float(point_y) + dx * sine + dy * cosine
                     self.snapshot["transform"]["rotation"] += float(angle)
 
-            fake_js.noonCreateAuthoringMobjectHandle = FakeHandle
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, FakeHandle)
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -134,7 +136,8 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             _manim_rate_functions.install()
             import _manim_phase_b  # noqa: F401
             import _manim_semantic_handles as handles
-            handles._create_handle = FakeHandle
+            import _typed_geometry_test_support as _geometry_test
+            _geometry_test.install_module_bridge(handles, FakeHandle)
             handles.install()
             import _manim_animate as animate
 

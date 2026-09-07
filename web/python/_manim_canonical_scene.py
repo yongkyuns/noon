@@ -37,10 +37,8 @@ except ImportError:  # pragma: no cover - native import smoke only
 
 _INSTALLED = False
 _CHECKPOINT_TAG = object()
-_ORIGINAL_APPEND_SNAPSHOT = _ir.Scene._append_snapshot
 _ORIGINAL_AUTHORING_CHECKPOINT = _ir.Scene._authoring_checkpoint
 _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
-_ORIGINAL_REPLACE_STATIC_SNAPSHOT = _base.Scene._replace_static_snapshot
 _ORIGINAL_BIND = _base.Mobject._bind_to_scene
 _ORIGINAL_PLAY = _base.Scene.play
 _ORIGINAL_BIND_POSITION = _base.Scene.bind_position
@@ -3226,21 +3224,6 @@ def _live_execution(
     return LiveExecution(self, duration)
 
 
-def _append_snapshot(
-    self: _ir.Scene,
-    snapshot: dict[str, Any],
-    key: str | None,
-) -> _ir.Object:
-    checkpoint = _ORIGINAL_AUTHORING_CHECKPOINT(self)
-    obj = _ORIGINAL_APPEND_SNAPSHOT(self, snapshot, key)
-    try:
-        _context(self).bindGeometry(str(obj.id), _json(snapshot))
-    except Exception:
-        _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT(self, checkpoint)
-        raise
-    return obj
-
-
 def _authoring_checkpoint(self: _ir.Scene) -> tuple[object, tuple[Any, ...], int]:
     legacy = _ORIGINAL_AUTHORING_CHECKPOINT(self)
     canonical = int(_context(self).checkpoint())
@@ -3268,22 +3251,6 @@ def _restore_authoring_checkpoint(
     # installed. Browser authoring installs adapters before user scenes are built,
     # but accepting the old shape keeps direct module-level tests unsurprising.
     _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT(self, checkpoint)
-
-
-def _replace_static_snapshot(
-    self: _base.Scene,
-    obj: _ir.Object,
-    raw: _ir.Mobject,
-) -> None:
-    position = self._object_positions.get(obj.id)
-    previous = None if position is None else copy.deepcopy(self._objects[position])
-    _ORIGINAL_REPLACE_STATIC_SNAPSHOT(self, obj, raw)
-    try:
-        _context(self).updateGeometry(str(obj.id), _json(raw.to_ir()))
-    except Exception:
-        if position is not None and previous is not None:
-            self._objects[position] = previous
-        raise
 
 
 def _bind_text(
@@ -3331,10 +3298,8 @@ def install() -> None:
     _compat._STANDARD_MEMBERSHIP_VIEW = _canonical_scene_mobjects
     _compat._STANDARD_MEMBERSHIP_REGISTER = _register_membership_wrappers
 
-    _ir.Scene._append_snapshot = _append_snapshot
     _ir.Scene._authoring_checkpoint = _authoring_checkpoint
     _ir.Scene._restore_authoring_checkpoint = _restore_authoring_checkpoint
-    _base.Scene._replace_static_snapshot = _replace_static_snapshot
     _typst._RetainedTextMobject._bind_to_scene = _bind_text
     _base.Scene.to_scene_spec = _to_scene_spec
     _base.Mobject._bind_to_scene = _bind_mobject
