@@ -3785,7 +3785,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn draw_border_then_fill_holds_the_explicit_outline_through_the_reveal_phase() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let mut square = scene.square(1.0).unwrap();
         square
             .set_fill(
