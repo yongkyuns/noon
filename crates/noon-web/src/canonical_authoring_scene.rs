@@ -1924,6 +1924,63 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn finish_live_family_target_members(
+        &mut self,
+        target_members: &[noon_core::SemanticNodeId],
+    ) -> Result<noon::MobjectFamily, String> {
+        enum OwnedMember {
+            Mobject(noon::Mobject),
+            Family(noon::MobjectFamily),
+        }
+        enum MemberKind {
+            Mobject,
+            Family,
+        }
+
+        let store = std::rc::Rc::clone(self.scene.store());
+        let mut owned = Vec::with_capacity(target_members.len());
+        for &id in target_members {
+            let kind = {
+                let store = store.borrow();
+                match store.node(id).map(|node| node.kind()) {
+                    Some(
+                        noon_core::SemanticNodeKind::Object(_)
+                        | noon_core::SemanticNodeKind::AuthoringObject,
+                    ) => MemberKind::Mobject,
+                    Some(noon_core::SemanticNodeKind::Family) => MemberKind::Family,
+                    Some(
+                        noon_core::SemanticNodeKind::Signal(_)
+                        | noon_core::SemanticNodeKind::Animation(_),
+                    ) => {
+                        return Err(
+                            "live family targets require ordinary mobjects or nested families"
+                                .into(),
+                        );
+                    }
+                    None => return Err(format!("unknown live family target member {id:?}")),
+                }
+            };
+            owned.push(match kind {
+                MemberKind::Mobject => {
+                    OwnedMember::Mobject(noon::Mobject::from_node(std::rc::Rc::clone(&store), id)?)
+                }
+                MemberKind::Family => OwnedMember::Family(noon::MobjectFamily::from_node(
+                    std::rc::Rc::clone(&store),
+                    id,
+                )?),
+            });
+        }
+        let members = owned
+            .iter()
+            .map(|member| match member {
+                OwnedMember::Mobject(mobject) => noon::MobjectFamilyMember::Mobject(mobject),
+                OwnedMember::Family(family) => noon::MobjectFamilyMember::Family(family),
+            })
+            .collect::<Vec<_>>();
+        self.live_family(&members)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_manim_primitive(
         &mut self,
         options: noon::ManimPrimitiveOptions,
@@ -4859,52 +4916,8 @@ mod wasm {
                 return editor.finish();
             }
 
-            enum OwnedMember {
-                Mobject(noon::Mobject),
-                Family(noon::MobjectFamily),
-            }
-
-            let store = std::rc::Rc::clone(self.inner.scene.store());
-            let mut owned = Vec::new();
-            for &id in editor.target_member_ids()? {
-                let is_family = {
-                    let store = store.borrow();
-                    match store.node(id).map(|node| node.kind()) {
-                        Some(noon_core::SemanticNodeKind::Object(_)) => false,
-                        Some(noon_core::SemanticNodeKind::Family) => true,
-                        Some(_) => {
-                            return Err(js_error(
-                                "live family targets require ordinary mobjects or nested families",
-                            ));
-                        }
-                        None => {
-                            return Err(js_error(format!(
-                                "unknown live family target member {id:?}"
-                            )));
-                        }
-                    }
-                };
-                owned.push(if is_family {
-                    OwnedMember::Family(
-                        noon::MobjectFamily::from_node(std::rc::Rc::clone(&store), id)
-                            .map_err(js_error)?,
-                    )
-                } else {
-                    OwnedMember::Mobject(
-                        noon::Mobject::from_node(std::rc::Rc::clone(&store), id)
-                            .map_err(js_error)?,
-                    )
-                });
-            }
-            let members = owned
-                .iter()
-                .map(|member| match member {
-                    OwnedMember::Mobject(mobject) => noon::MobjectFamilyMember::Mobject(mobject),
-                    OwnedMember::Family(family) => noon::MobjectFamilyMember::Family(family),
-                })
-                .collect::<Vec<_>>();
             self.inner
-                .live_family(&members)
+                .finish_live_family_target_members(editor.target_member_ids()?)
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
@@ -5978,6 +5991,119 @@ mod tests {
         // Another owner-mediated mutation remains valid after both publications
         // and the rejected foreign member: no stale execution revision is hidden.
         context.live_target_editor(&circle).unwrap();
+    }
+
+    #[test]
+    fn live_created_group_target_accepts_authoring_object_members_after_prior_plays() {
+        let mut context = CanonicalAuthoringScene::default();
+        let anchor = context.scene.circle(0.3).unwrap();
+        context.bind_mobject(ObjectId::new(0), &anchor).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(0.5)
+            .rate_func(RateFunction::Linear);
+
+        let mut first_target = anchor.target_editor().unwrap();
+        first_target.set_translation(0.5, 0.0).unwrap();
+        context
+            .ordinary_play_transform_to(&anchor, &first_target, options)
+            .unwrap();
+        let second_target = context.live_target_editor(&anchor).unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_set_translation(&second_target, 1.0, 0.0)
+            .unwrap();
+        context
+            .ordinary_play_transform_to(&anchor, &second_target, options)
+            .unwrap();
+
+        let left = context
+            .live_create_manim_primitive(noon::ManimPrimitiveOptions::circle(0.15).unwrap())
+            .unwrap();
+        let right = context
+            .live_create_manim_primitive(noon::ManimPrimitiveOptions::square(0.3).unwrap())
+            .unwrap();
+        context.live_add_mobject(ObjectId::new(1), &left).unwrap();
+        context.live_add_mobject(ObjectId::new(2), &right).unwrap();
+        let pair = context
+            .live_family(&[
+                noon::MobjectFamilyMember::Mobject(&left),
+                noon::MobjectFamilyMember::Mobject(&right),
+            ])
+            .unwrap();
+
+        let left_target = context.live_target_editor(&left).unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_set_translation(&left_target, -0.25, 1.0)
+            .unwrap();
+        let right_target = context.live_target_editor(&right).unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_set_translation(&right_target, 0.25, 1.0)
+            .unwrap();
+        let mut editor = crate::FrontendFamilyTargetEditor::begin(
+            &context.scene.store().borrow(),
+            pair.node_id(),
+        )
+        .unwrap();
+        editor
+            .accept_member(left.node_id(), left_target.node_id())
+            .unwrap();
+        editor
+            .accept_member(right.node_id(), right_target.node_id())
+            .unwrap();
+        {
+            let store = context.scene.store().borrow();
+            for target in [&left_target, &right_target] {
+                assert!(matches!(
+                    store.node(target.node_id()).unwrap().kind(),
+                    noon_core::SemanticNodeKind::AuthoringObject
+                ));
+            }
+        }
+        let target_pair = context
+            .finish_live_family_target_members(editor.target_members().unwrap())
+            .unwrap();
+
+        let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
+            source: pair,
+            target_state: target_pair,
+            options: AnimationOptions::new()
+                .run_time(1.2)
+                .rate_func(RateFunction::Smooth)
+                .lag_ratio(0.5),
+        }];
+        context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &family_play,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&left)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(-0.25, 1.0)
+        );
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&right)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(0.25, 1.0)
+        );
     }
 
     #[test]
