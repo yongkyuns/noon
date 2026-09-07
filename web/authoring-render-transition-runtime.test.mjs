@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { MainThreadRenderWorker } from "./main-thread-render-worker.js";
 
 const controllerSource = await readFile(
   new URL("./authoring-render-controller.js", import.meta.url),
@@ -10,6 +11,20 @@ const controllerSource = await readFile(
 const executableSource = controllerSource
   .replace(/^import\s+[\s\S]*?;\n/gm, "")
   .replace(/^export\s+/gm, "");
+
+function unwrapControllerFactory(source) {
+  const factoryStart = source.indexOf("function createAuthoringRenderController(host) {");
+  const bodyStart = source.indexOf("{", factoryStart) + 1;
+  const bodyEnd = source.lastIndexOf("\n}");
+  let body = source.slice(bodyStart, bodyEnd);
+  body = body.slice(body.indexOf("let renderPort = null;"));
+  const controllerReturnStart = body.indexOf("return Object.freeze({");
+  const controllerReturnEnd = body.indexOf("});", controllerReturnStart) + 3;
+  body = body.slice(0, controllerReturnStart) + body.slice(controllerReturnEnd);
+  return `${source.slice(0, factoryStart)}let host = null;\n${body.replace(/^  /gm, "")}`;
+}
+
+const harnessSource = unwrapControllerFactory(executableSource);
 
 function deferred() {
   let resolve;
@@ -23,6 +38,71 @@ function flushTasks() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+test("controller instances isolate dispatch and shutdown", async () => {
+  const firstMessages = [];
+  const secondMessages = [];
+  const closed = [];
+  const context = vm.createContext({ firstMessages, secondMessages, closed });
+  vm.runInContext(executableSource, context);
+  vm.runInContext(
+    `first = createAuthoringRenderController({
+      postMessage: (message) => firstMessages.push(message),
+      close: () => closed.push("first"),
+    });
+    second = createAuthoringRenderController({
+      postMessage: (message) => secondMessages.push(message),
+      close: () => closed.push("second"),
+    });`,
+    context,
+  );
+
+  await vm.runInContext(
+    `first.dispatch({channel:"noon.render", protocolVersion:1, type:"unknown", requestId:11})`,
+    context,
+  );
+  vm.runInContext("first.shutdown()", context);
+  await vm.runInContext(
+    `second.dispatch({channel:"noon.render", protocolVersion:1, type:"unknown", requestId:22})`,
+    context,
+  );
+
+  assert.deepEqual(firstMessages.map(({ requestId }) => requestId), [11]);
+  assert.deepEqual(secondMessages.map(({ requestId }) => requestId), [22]);
+  assert.deepEqual(closed, ["first"]);
+});
+
+test("a terminated main-thread adapter cannot shut down a later adapter", async () => {
+  const abandoned = new MainThreadRenderWorker();
+  abandoned.terminate();
+  const active = new MainThreadRenderWorker();
+  const response = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("adapter response timed out")), 1000);
+    active.addEventListener(
+      "message",
+      (event) => {
+        clearTimeout(timeout);
+        resolve(event.data);
+      },
+      { once: true },
+    );
+  });
+  active.postMessage({
+    channel: "noon.render",
+    protocolVersion: 1,
+    type: "unknown",
+    requestId: 42,
+  });
+
+  assert.deepEqual(await response, {
+    channel: "noon.render",
+    protocolVersion: 1,
+    type: "error",
+    requestId: 42,
+    message: "unknown authoring render command unknown",
+  });
+  active.terminate();
+});
+
 class FakePort {
   constructor() {
     this.messages = [];
@@ -34,6 +114,154 @@ class FakePort {
   close() { this.closed = true; }
   postMessage(message) { this.messages.push(message); }
 }
+
+test("shutdown during asynchronous initialization cannot revive a controller", async () => {
+  const initialization = deferred();
+  const closed = [];
+  class FakeCanvas {
+    width = 10;
+    height = 10;
+    listeners = 0;
+    addEventListener() { this.listeners += 1; }
+    removeEventListener() { this.listeners = Math.max(0, this.listeners - 1); }
+  }
+  const canvas = new FakeCanvas();
+  const port = new FakePort();
+  const context = vm.createContext({
+    canvas,
+    port,
+    closed,
+    init: () => initialization.promise,
+    OffscreenCanvas: FakeCanvas,
+    MessagePort: FakePort,
+    EXECUTION_TRANSPORT_SHARED: "shared",
+    EXECUTION_TRANSPORT_TRANSFERABLE: "transferable",
+  });
+  vm.runInContext(executableSource, context);
+  vm.runInContext(
+    `controller = createAuthoringRenderController({
+      postMessage: () => {},
+      close: () => closed.push("closed"),
+    });
+    initialization = controller.dispatch({
+      channel:"noon.render",
+      protocolVersion:1,
+      type:"init",
+      port,
+      canvas,
+      transportMode:"transferable",
+      mode:"legacy",
+    });`,
+    context,
+  );
+  vm.runInContext("controller.shutdown()", context);
+  initialization.resolve();
+  await vm.runInContext("initialization", context);
+
+  assert.equal(canvas.listeners, 0);
+  assert.equal(port.closed, false, "an unadmitted port remains owned by its caller");
+  assert.deepEqual(closed, ["closed"]);
+});
+
+test("concurrent controllers share wasm initialization without sharing lifecycle", async () => {
+  const initialization = deferred();
+  const firstMessages = [];
+  const secondMessages = [];
+  let initializationCalls = 0;
+  class FakeCanvas {
+    width = 10;
+    height = 10;
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  const context = vm.createContext({
+    firstCanvas: new FakeCanvas(),
+    secondCanvas: new FakeCanvas(),
+    firstMessages,
+    secondMessages,
+    init: () => {
+      initializationCalls += 1;
+      return initialization.promise;
+    },
+    OffscreenCanvas: FakeCanvas,
+    EXECUTION_TRANSPORT_SHARED: "shared",
+    EXECUTION_TRANSPORT_TRANSFERABLE: "transferable",
+  });
+  vm.runInContext(executableSource, context);
+  vm.runInContext(
+    `first = createAuthoringRenderController({
+      postMessage: (message) => firstMessages.push(message),
+      close: () => {},
+    });
+    second = createAuthoringRenderController({
+      postMessage: (message) => secondMessages.push(message),
+      close: () => {},
+    });
+    firstPreparation = first.dispatch({
+      channel:"noon.render", protocolVersion:1, type:"prepare", requestId:1,
+      canvas:firstCanvas, transportMode:"transferable",
+    });
+    secondPreparation = second.dispatch({
+      channel:"noon.render", protocolVersion:1, type:"prepare", requestId:2,
+      canvas:secondCanvas, transportMode:"transferable",
+    });`,
+    context,
+  );
+  await Promise.resolve();
+  vm.runInContext("first.shutdown()", context);
+  initialization.resolve();
+  await vm.runInContext("Promise.all([firstPreparation, secondPreparation])", context);
+
+  assert.equal(initializationCalls, 1);
+  assert.deepEqual(firstMessages, []);
+  assert.deepEqual(secondMessages.map(({ type, requestId }) => ({ type, requestId })), [
+    { type: "prepared", requestId: 2 },
+  ]);
+});
+
+test("failed shared wasm initialization can be retried by a new controller", async () => {
+  const messages = [];
+  let initializationCalls = 0;
+  class FakeCanvas {
+    width = 10;
+    height = 10;
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  const context = vm.createContext({
+    firstCanvas: new FakeCanvas(),
+    secondCanvas: new FakeCanvas(),
+    messages,
+    init: () => {
+      initializationCalls += 1;
+      return initializationCalls === 1
+        ? Promise.reject(new Error("initialization failed"))
+        : Promise.resolve();
+    },
+    OffscreenCanvas: FakeCanvas,
+    EXECUTION_TRANSPORT_SHARED: "shared",
+    EXECUTION_TRANSPORT_TRANSFERABLE: "transferable",
+  });
+  vm.runInContext(executableSource, context);
+  await vm.runInContext(
+    `createAuthoringRenderController({postMessage:(message) => messages.push(message)})
+      .dispatch({channel:"noon.render", protocolVersion:1, type:"prepare", requestId:1,
+        canvas:firstCanvas, transportMode:"transferable"})`,
+    context,
+  );
+  await vm.runInContext(
+    `createAuthoringRenderController({postMessage:(message) => messages.push(message)})
+      .dispatch({channel:"noon.render", protocolVersion:1, type:"prepare", requestId:2,
+        canvas:secondCanvas, transportMode:"transferable"})`,
+    context,
+  );
+
+  assert.equal(initializationCalls, 2);
+  assert.deepEqual(messages.map(({ type, requestId }) => ({ type, requestId })), [
+    { type: "error", requestId: 1 },
+    { type: "prepared", requestId: 2 },
+  ]);
+});
 
 function createRenderer(renderResults) {
   return {
@@ -89,13 +317,13 @@ function createWorkerHarness(renderResults = [false, true]) {
       requestAnimationFrame(callback) { animationFrames.push(callback); },
     },
   });
-  vm.runInContext(executableSource, context);
+  vm.runInContext(harnessSource, context);
   vm.runInContext(
-    `configureAuthoringRenderHost({
+    `host = {
       postMessage: (message) => self.postMessage(message),
       close: () => self.close(),
       requestAnimationFrame: (callback) => self.requestAnimationFrame(callback),
-    });`,
+    };`,
     context,
   );
   const oldPort = new FakePort();

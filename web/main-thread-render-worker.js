@@ -5,10 +5,9 @@ export class MainThreadRenderWorker extends EventTarget {
   constructor() {
     super();
     this.#controllerPromise = import("./authoring-render-controller.js").then(
-      (controller) => {
-        if (this.#closed) return controller;
-        controller.resetAuthoringRenderController();
-        controller.configureAuthoringRenderHost({
+      (module) => {
+        if (this.#closed) return null;
+        return module.createAuthoringRenderController({
           postMessage: (message) => {
             if (this.#closed) return;
             queueMicrotask(() => {
@@ -29,7 +28,6 @@ export class MainThreadRenderWorker extends EventTarget {
               ? (handle) => globalThis.cancelAnimationFrame(handle)
               : null,
         });
-        return controller;
       },
       (error) => {
         this.#reportError(error);
@@ -45,7 +43,7 @@ export class MainThreadRenderWorker extends EventTarget {
       void this.#controllerPromise.then(async (controller) => {
         if (controller === null || this.#closed) return;
         try {
-          await controller.dispatchAuthoringRenderMessage(message);
+          await controller.dispatch(message);
         } catch (error) {
           this.#reportError(error);
         }
@@ -57,7 +55,7 @@ export class MainThreadRenderWorker extends EventTarget {
     if (this.#closed) return;
     this.#closed = true;
     void this.#controllerPromise.then((controller) => {
-      controller?.shutdownAuthoringRenderController();
+      controller?.shutdown();
     });
   }
 

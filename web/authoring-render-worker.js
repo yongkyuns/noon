@@ -1,11 +1,6 @@
-import {
-  configureAuthoringRenderHost,
-  dispatchAuthoringRenderMessage,
-  resetAuthoringRenderController,
-} from "./authoring-render-controller.js";
+import { createAuthoringRenderController } from "./authoring-render-controller.js";
 
-resetAuthoringRenderController();
-configureAuthoringRenderHost({
+const controller = createAuthoringRenderController({
   postMessage(message) {
     self.postMessage(message);
   },
@@ -23,5 +18,5 @@ configureAuthoringRenderHost({
 });
 
 self.addEventListener("message", (event) => {
-  void dispatchAuthoringRenderMessage(event.data);
+  void controller.dispatch(event.data);
 });

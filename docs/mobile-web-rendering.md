@@ -25,7 +25,7 @@ execution / semantic owner
    Rust / wgpu renderer
 ```
 
-`web/authoring-render-controller.js` contains the render state machine that previously lived directly in `authoring-render-worker.js`. The worker file is now a thin adapter. `MainThreadRenderWorker` implements the same endpoint shape with `EventTarget`/`postMessage`, but dispatches the protocol to that shared controller on the browser main thread.
+`web/authoring-render-controller.js` provides an instance-owned render controller from the state machine that previously lived directly in `authoring-render-worker.js`. Each render endpoint creates its own controller; the worker file is a thin adapter. `MainThreadRenderWorker` implements the same endpoint shape with `EventTarget`/`postMessage`, but dispatches the protocol to that shared controller on the browser main thread.
 
 There is still one authoritative `ExecutionWorkerClient`. Its engine, semantic execution, session, transport, reconnect, and recovery logic are unchanged. Only creation of the render endpoint is host-selectable.
 
@@ -52,7 +52,9 @@ Before the production canvas is transferred, it probes disposable surfaces:
 
 1. try a transferred worker surface for WebGPU or WebGL2
 2. if that fails, try a main-thread transferred `OffscreenCanvas` for WebGPU or WebGL2
-3. fail if neither surface configuration is available
+3. fail if neither surface configuration is available; a later attempt may probe again
+
+Probe worker construction failures also reach the main-thread check, and disposable probe contexts are released.
 
 This is intentionally a lightweight browser-surface preflight, not a second implementation of `wgpu` adapter selection. The definitive renderer check still occurs when the real Rust/`wgpu` renderer initializes; browser CI exercises that path end-to-end.
 
@@ -80,11 +82,12 @@ renderer backend: WebGPU | WebGL2
 - Engine and Python execution remain off the main thread as before.
 - Full renderer restart preserves the selected host for that execution client.
 - Normal termination replaces a transferred DOM canvas using the existing recovery path.
-- The main-thread controller is a single render-owner instance, matching the playground's existing one-render-owner model.
+- Each main-thread endpoint owns its controller; concurrent clients and terminated clients cannot change another endpoint’s renderer.
+- Startup is reserved before asynchronous host probing; cancellation prevents a late probe or renderer bootstrap from reviving a terminated owner.
 
 ## Browser regression coverage
 
-The cross-browser matrix keeps presentation coverage on Chromium, Firefox, and mobile WebKit. Runtime execution is required whenever the test environment exposes at least one usable Noon render host: transferred-worker WebGL2 or main-thread `OffscreenCanvas` WebGL2. An environment with neither host remains an explicit unsupported-runtime result rather than a false product failure; the capability result is saved with the job diagnostics.
+The cross-browser matrix keeps presentation coverage on Chromium, Firefox, and mobile WebKit. It calls the production host selector from the served page before starting execution, so runtime support and actual startup use the same secure browser realm and capability decision. Runtime execution is required whenever either supported host exposes a usable GPU surface. An environment with neither host remains an explicit unsupported-runtime result rather than a false product failure; the capability result is saved with the job diagnostics.
 
 This distinction matters for the current headless Firefox runner, which exposes the surrounding canvas/Worker APIs but no usable WebGL2 surface in either supported host. Mobile WebKit, by contrast, exposes the main-thread surface and therefore must execute rather than skip.
 

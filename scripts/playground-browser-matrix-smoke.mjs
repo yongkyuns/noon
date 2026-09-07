@@ -89,103 +89,44 @@ function launchOptions() {
   return { headless: true };
 }
 
-async function capabilityProbe(page) {
-  return page.evaluate(async () => {
-    const probeCanvas = document.createElement("canvas");
-    let webgl2 = false;
-    let offscreenWebgl2 = false;
-    let transferredWorkerWebgl2 = false;
-    let transferredWorkerWebgl2Error = "";
-    try {
-      webgl2 = probeCanvas.getContext("webgl2") !== null;
-    } catch {
-      webgl2 = false;
-    }
-    if (typeof OffscreenCanvas === "function") {
-      try {
-        offscreenWebgl2 = new OffscreenCanvas(2, 2).getContext("webgl2") !== null;
-      } catch {
-        offscreenWebgl2 = false;
-      }
-    }
-
-    const canTransferToWorker =
-      typeof Worker === "function" &&
-      typeof HTMLCanvasElement.prototype.transferControlToOffscreen === "function";
-    if (canTransferToWorker) {
-      const workerSource = `
-        self.onmessage = (event) => {
-          try {
-            const context = event.data.canvas.getContext("webgl2");
-            self.postMessage({ ok: context !== null, error: "" });
-          } catch (error) {
-            self.postMessage({ ok: false, error: String(error) });
-          }
-        };
-      `;
-      const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }));
-      const worker = new Worker(workerUrl);
-      try {
-        const transferCanvas = document.createElement("canvas");
-        transferCanvas.width = 2;
-        transferCanvas.height = 2;
-        const offscreen = transferCanvas.transferControlToOffscreen();
-        const result = await new Promise((resolve) => {
-          const timeout = setTimeout(
-            () => resolve({ ok: false, error: "worker WebGL2 probe timed out" }),
-            5000,
-          );
-          worker.onmessage = (event) => {
-            clearTimeout(timeout);
-            resolve(event.data);
-          };
-          worker.onerror = (event) => {
-            clearTimeout(timeout);
-            resolve({ ok: false, error: event.message || "worker WebGL2 probe crashed" });
-          };
-          worker.postMessage({ canvas: offscreen }, [offscreen]);
-        });
-        transferredWorkerWebgl2 = result?.ok === true;
-        transferredWorkerWebgl2Error = typeof result?.error === "string" ? result.error : "";
-      } catch (error) {
-        transferredWorkerWebgl2 = false;
-        transferredWorkerWebgl2Error = String(error);
-      } finally {
-        worker.terminate();
-        URL.revokeObjectURL(workerUrl);
-      }
-    }
-
-    return {
-      webAssembly: typeof WebAssembly === "object",
-      worker: typeof Worker === "function",
-      offscreenCanvas: typeof OffscreenCanvas === "function",
-      transferControlToOffscreen:
-        typeof HTMLCanvasElement.prototype.transferControlToOffscreen === "function",
-      webgl2,
-      offscreenWebgl2,
-      transferredWorkerWebgl2,
-      transferredWorkerWebgl2Error,
-      webgpu: typeof navigator.gpu !== "undefined",
-      userAgent: navigator.userAgent,
-      devicePixelRatio: window.devicePixelRatio,
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-    };
-  });
+async function baselineCapabilities(page) {
+  return page.evaluate(() => ({
+    webAssembly: typeof WebAssembly === "object",
+    worker: typeof Worker === "function",
+    offscreenCanvas: typeof OffscreenCanvas === "function",
+    transferControlToOffscreen:
+      typeof HTMLCanvasElement.prototype.transferControlToOffscreen === "function",
+    blob: typeof Blob === "function",
+    objectUrl: typeof URL.createObjectURL === "function",
+    webgpu: typeof navigator.gpu !== "undefined",
+    userAgent: navigator.userAgent,
+    devicePixelRatio: window.devicePixelRatio,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+  }));
 }
 
-function missingObservedCapabilities(capabilities) {
+function missingBaseCapabilities(capabilities) {
   return [
     ["WebAssembly", capabilities.webAssembly],
     ["Worker", capabilities.worker],
     ["OffscreenCanvas", capabilities.offscreenCanvas],
     ["transferControlToOffscreen", capabilities.transferControlToOffscreen],
-    ["WebGL2", capabilities.webgl2],
-    ["OffscreenCanvas WebGL2", capabilities.offscreenWebgl2],
-    ["transferred worker WebGL2", capabilities.transferredWorkerWebgl2],
+    ["Blob", capabilities.blob],
+    ["URL.createObjectURL", capabilities.objectUrl],
   ]
     .filter(([, available]) => !available)
     .map(([name]) => name);
+}
+
+async function selectProductionRenderHost(page) {
+  return page.evaluate(async () => {
+    try {
+      const { selectExecutionRenderHost } = await import("./render-host-selection.js");
+      return { host: await selectExecutionRenderHost(), error: null };
+    } catch (error) {
+      return { host: null, error: String(error) };
+    }
+  });
 }
 
 async function shellSnapshot(page) {
@@ -401,17 +342,6 @@ try {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
 
-  // Keep the old transferred-worker probe as diagnostic evidence. It is no longer
-  // a product support gate: Noon may select the main-thread render host when the
-  // preferred worker-hosted surface is unavailable.
-  capabilities = await capabilityProbe(page);
-  assert.equal(
-    capabilities.devicePixelRatio,
-    profile.deviceScaleFactor,
-    `${browserName}/${profileName}: unexpected DPR`,
-  );
-  const missing = missingObservedCapabilities(capabilities);
-
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
   });
@@ -420,51 +350,93 @@ try {
   assertShell(initialShell, `${browserName}/${profileName}`);
   finalRuntime = await assertDeferredRuntime(page);
 
-  const runButton = page.locator("#replace-scene");
-  await runButton.click();
-  finalRuntime = await waitForAppliedScene(page, "parity-square-and-circle");
-  runtimeSupported = true;
-  assert.ok(
-    finalRuntime.rendererBackend === "WebGL2" || finalRuntime.rendererBackend === "WebGPU",
-    `${browserName}/${profileName}: unexpected renderer backend ${finalRuntime.rendererBackend}`,
+  capabilities = await baselineCapabilities(page);
+  assert.equal(
+    capabilities.devicePixelRatio,
+    profile.deviceScaleFactor,
+    `${browserName}/${profileName}: unexpected DPR`,
   );
-  assert.ok(
-    finalRuntime.renderHost === "worker" || finalRuntime.renderHost === "main-thread",
-    `${browserName}/${profileName}: unexpected render host ${finalRuntime.renderHost}`,
-  );
-  assert.equal(finalRuntime.canvases, 1, `${browserName}/${profileName}: expected one live canvas`);
+  const missingBase = missingBaseCapabilities(capabilities);
+  let selectedHost = null;
+  let selectionError = null;
+  if (missingBase.length === 0) {
+    ({ host: selectedHost, error: selectionError } = await selectProductionRenderHost(page));
+    if (
+      selectedHost === null &&
+      !selectionError?.includes(
+        "could not initialize a GPU canvas surface in either a worker or the main thread",
+      )
+    ) {
+      throw new Error(`production render-host selection failed: ${selectionError}`);
+    }
+  }
 
-  const selectedExampleId = await chooseDifferentExample(page);
-  await editAndRerun(page, selectedExampleId);
-  await exerciseResize(page);
-  finalRuntime = await runtimeSnapshot(page);
-
-  assert.deepEqual(
-    pageErrors,
-    [],
-    `${browserName}/${profileName}: page errors:\n${pageErrors.join("\n")}`,
-  );
-  assert.deepEqual(
-    consoleErrors,
-    [],
-    `${browserName}/${profileName}: console errors:\n${consoleErrors.join("\n")}`,
-  );
-
-  await page.screenshot({ path: path.join(artifactDir, "success.png"), fullPage: true });
-  await writeDiagnostics("diagnostics.json", {
+  runtimeSupported = missingBase.length === 0 && selectedHost !== null;
+  await writeDiagnostics("runtime-support.json", {
     browser: browserName,
     browserVersion: browser.version(),
     profile: profileName,
-    runtimeSupported: true,
-    missingObservedCapabilities: missing,
+    supported: runtimeSupported,
+    missingBase,
+    selectedHost,
+    selectionError,
     capabilities,
-    runtime: finalRuntime,
-    pageErrors,
-    consoleErrors,
   });
-  console.log(
-    `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize`,
-  );
+
+  if (!runtimeSupported) {
+    const reasons = missingBase.length > 0 ? missingBase.join(", ") : selectionError;
+    console.log(
+      `↷ ${browserName}/${profileName}: runtime unsupported by production render-host selection (${reasons})`,
+    );
+  } else {
+    const runButton = page.locator("#replace-scene");
+    await runButton.click();
+    finalRuntime = await waitForAppliedScene(page, "parity-square-and-circle");
+    assert.ok(
+      finalRuntime.rendererBackend === "WebGL2" || finalRuntime.rendererBackend === "WebGPU",
+      `${browserName}/${profileName}: unexpected renderer backend ${finalRuntime.rendererBackend}`,
+    );
+    assert.equal(
+      finalRuntime.renderHost,
+      selectedHost,
+      `${browserName}/${profileName}: execution did not use the selected render host`,
+    );
+    assert.equal(finalRuntime.canvases, 1, `${browserName}/${profileName}: expected one live canvas`);
+
+    const selectedExampleId = await chooseDifferentExample(page);
+    await editAndRerun(page, selectedExampleId);
+    await exerciseResize(page);
+    finalRuntime = await runtimeSnapshot(page);
+
+    assert.deepEqual(
+      pageErrors,
+      [],
+      `${browserName}/${profileName}: page errors:
+${pageErrors.join("\n")}`,
+    );
+    assert.deepEqual(
+      consoleErrors,
+      [],
+      `${browserName}/${profileName}: console errors:
+${consoleErrors.join("\n")}`,
+    );
+
+    await page.screenshot({ path: path.join(artifactDir, "success.png"), fullPage: true });
+    await writeDiagnostics("diagnostics.json", {
+      browser: browserName,
+      browserVersion: browser.version(),
+      profile: profileName,
+      runtimeSupported: true,
+      selectedHost,
+      capabilities,
+      runtime: finalRuntime,
+      pageErrors,
+      consoleErrors,
+    });
+    console.log(
+      `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize`,
+    );
+  }
 } catch (error) {
   if (page !== null) {
     try {

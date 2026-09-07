@@ -114,7 +114,11 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
     } = {},
   ) {
-    if (this.#engineWorker !== null || this.#renderWorker !== null) {
+    if (
+      this.#engineWorker !== null ||
+      this.#renderWorker !== null ||
+      this.#preparedStartReservation !== null
+    ) {
       throw new Error("ExecutionWorkerClient is already started or prepared");
     }
     validateTransportMode(transportMode);
@@ -128,48 +132,59 @@ export class ExecutionWorkerClient {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
-    const generation = this.#lifecycleGeneration;
-    const renderHost = this.#selectRenderHost();
-    if (typeof renderHost !== "string") {
-      await renderHost;
-      this.#assertLifecycleCurrent(generation);
-    }
-
-    this.#transportMode = transportMode;
-    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
-    const { width, height } = this.#prepareCanvasDimensions();
-    const transferredCanvas = this.#canvas;
-
-    let canvasTransferred = false;
+    const reservation = {};
+    this.#preparedStartReservation = reservation;
     try {
-      const offscreen = this.#canvas.transferControlToOffscreen();
-      canvasTransferred = true;
-      this.#renderWorker = this.#createRenderWorker();
-      this.#attachCurrentWorkerEvents(this.#renderWorker, RENDER_CHANNEL, "render");
-      this.#renderPrepared = this.#request(
-        this.#renderWorker,
-        "render",
-        renderEnvelope,
-        "prepare",
-        {
-          canvas: offscreen,
-          transportMode,
-          width,
-          height,
-        },
-        [offscreen],
-      );
-      const render = await this.#renderPrepared;
-      this.#fatalOwner = null;
-      return { render, transportMode, renderHost: this.#renderHost };
-    } catch (error) {
-      if (generation === this.#lifecycleGeneration) {
-        this.#rollbackFailedStart(
-          error,
-          canvasTransferred && this.#canvas === transferredCanvas,
-        );
+      const generation = this.#lifecycleGeneration;
+      const renderHost = this.#selectRenderHost();
+      if (typeof renderHost !== "string") {
+        await renderHost;
+        this.#assertLifecycleCurrent(generation);
       }
-      throw error;
+
+      this.#transportMode = transportMode;
+      this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
+      const { width, height } = this.#prepareCanvasDimensions();
+      const transferredCanvas = this.#canvas;
+
+      let canvasTransferred = false;
+      try {
+        const offscreen = this.#canvas.transferControlToOffscreen();
+        canvasTransferred = true;
+        this.#renderWorker = this.#createRenderWorker();
+        this.#attachCurrentWorkerEvents(this.#renderWorker, RENDER_CHANNEL, "render");
+        this.#renderPrepared = this.#request(
+          this.#renderWorker,
+          "render",
+          renderEnvelope,
+          "prepare",
+          {
+            canvas: offscreen,
+            transportMode,
+            width,
+            height,
+          },
+          [offscreen],
+        );
+        if (this.#preparedStartReservation === reservation) {
+          this.#preparedStartReservation = null;
+        }
+        const render = await this.#renderPrepared;
+        this.#fatalOwner = null;
+        return { render, transportMode, renderHost: this.#renderHost };
+      } catch (error) {
+        if (generation === this.#lifecycleGeneration) {
+          this.#rollbackFailedStart(
+            error,
+            canvasTransferred && this.#canvas === transferredCanvas,
+          );
+        }
+        throw error;
+      }
+    } finally {
+      if (this.#preparedStartReservation === reservation) {
+        this.#preparedStartReservation = null;
+      }
     }
   }
 
@@ -398,71 +413,79 @@ export class ExecutionWorkerClient {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
-    const generation = this.#lifecycleGeneration;
-    const renderHost = this.#selectRenderHost();
-    if (typeof renderHost !== "string") {
-      await renderHost;
-      this.#assertLifecycleCurrent(generation);
-    }
-
-    this.#configureStart(
-      mode,
-      sceneJson,
-      loopDurationSeconds,
-      transportMode,
-      slotCapacity,
-      sceneSpecJson,
-    );
-    const { width: initialWidth, height: initialHeight } = this.#prepareCanvasDimensions();
-
-    let canvasTransferred = false;
+    const reservation = {};
+    this.#preparedStartReservation = reservation;
     try {
-      const channel = new MessageChannel();
-      const offscreen = this.#canvas.transferControlToOffscreen();
-      canvasTransferred = true;
-      this.#engineWorker = this.#createEngineWorker(mode);
-      this.#renderWorker = this.#createRenderWorker();
+      const generation = this.#lifecycleGeneration;
+      const renderHost = this.#selectRenderHost();
+      if (typeof renderHost !== "string") {
+        await renderHost;
+        this.#assertLifecycleCurrent(generation);
+      }
 
-      const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
-      const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
-      this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
-        engine,
-        render,
-        transportMode,
-        session: this.#session,
-      }));
-
-      this.#renderWorker.postMessage(
-        renderEnvelope("init", {
-          canvas: offscreen,
-          port: channel.port2,
-          transportMode,
-          mode,
-          width: initialWidth,
-          height: initialHeight,
-        }),
-        [offscreen, channel.port2],
-      );
-      this.#postEngineInit(
-        this.#engineWorker,
-        channel.port1,
+      this.#configureStart(
         mode,
         sceneJson,
         loopDurationSeconds,
-        this.#session,
+        transportMode,
+        slotCapacity,
         sceneSpecJson,
       );
-      const ready = await this.#ready;
-      this.#playing = true;
-      this.#fatalOwner = null;
-      if (mode === EXECUTION_MODE_RETAINED) {
-        this.#hostAuthoringClient = null;
-        this.#hostCallbacks = null;
+      const { width: initialWidth, height: initialHeight } = this.#prepareCanvasDimensions();
+
+      let canvasTransferred = false;
+      try {
+        const channel = new MessageChannel();
+        const offscreen = this.#canvas.transferControlToOffscreen();
+        canvasTransferred = true;
+        this.#engineWorker = this.#createEngineWorker(mode);
+        this.#renderWorker = this.#createRenderWorker();
+
+        const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+        const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
+        this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
+          engine,
+          render,
+          transportMode,
+          session: this.#session,
+        }));
+
+        this.#renderWorker.postMessage(
+          renderEnvelope("init", {
+            canvas: offscreen,
+            port: channel.port2,
+            transportMode,
+            mode,
+            width: initialWidth,
+            height: initialHeight,
+          }),
+          [offscreen, channel.port2],
+        );
+        this.#postEngineInit(
+          this.#engineWorker,
+          channel.port1,
+          mode,
+          sceneJson,
+          loopDurationSeconds,
+          this.#session,
+          sceneSpecJson,
+        );
+        const ready = await this.#ready;
+        this.#playing = true;
+        this.#fatalOwner = null;
+        if (mode === EXECUTION_MODE_RETAINED) {
+          this.#hostAuthoringClient = null;
+          this.#hostCallbacks = null;
+        }
+        return ready;
+      } catch (error) {
+        this.#rollbackFailedStart(error, canvasTransferred);
+        throw error;
       }
-      return ready;
-    } catch (error) {
-      this.#rollbackFailedStart(error, canvasTransferred);
-      throw error;
+    } finally {
+      if (this.#preparedStartReservation === reservation) {
+        this.#preparedStartReservation = null;
+      }
     }
   }
 

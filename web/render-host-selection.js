@@ -10,7 +10,10 @@ export function selectExecutionRenderHost({ force = null } = {}) {
   const requested = force ?? requestedRenderHost();
   if (requested !== null) return validateRenderHost(requested);
   if (!canProbeBrowserRenderHosts()) return RENDER_HOST_WORKER;
-  cachedAutomaticSelection ??= probeRenderHost();
+  cachedAutomaticSelection ??= probeRenderHost().catch((error) => {
+    cachedAutomaticSelection = null;
+    throw error;
+  });
   return cachedAutomaticSelection;
 }
 
@@ -76,15 +79,18 @@ async function probeWorkerGpuSurface() {
       }
     };
   `;
-  const workerUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-  const worker = new Worker(workerUrl);
+  let workerUrl = null;
+  let worker = null;
+  let timeout = null;
   try {
+    workerUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    worker = new Worker(workerUrl);
     const htmlCanvas = document.createElement("canvas");
     htmlCanvas.width = 2;
     htmlCanvas.height = 2;
     const offscreen = htmlCanvas.transferControlToOffscreen();
     const result = await new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve({ ok: false }), 3000);
+      timeout = setTimeout(() => resolve({ ok: false }), 3000);
       worker.onmessage = (event) => {
         clearTimeout(timeout);
         resolve(event.data);
@@ -99,8 +105,9 @@ async function probeWorkerGpuSurface() {
   } catch {
     return false;
   } finally {
-    worker.terminate();
-    URL.revokeObjectURL(workerUrl);
+    clearTimeout(timeout);
+    worker?.terminate();
+    if (workerUrl !== null) URL.revokeObjectURL(workerUrl);
   }
 }
 
@@ -117,7 +124,10 @@ function probeMainThreadGpuSurface() {
       if (surface.getContext("webgpu") !== null) return true;
     } catch {}
     try {
-      return surface.getContext("webgl2") !== null;
+      const context = surface.getContext("webgl2");
+      if (context === null) return false;
+      context.getExtension?.("WEBGL_lose_context")?.loseContext();
+      return true;
     } catch {
       return false;
     }

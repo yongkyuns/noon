@@ -13,7 +13,6 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
-      - "scripts/playground-browser-runtime-gate.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "web/**"
@@ -27,7 +26,6 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
-      - "scripts/playground-browser-runtime-gate.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "web/**"
@@ -132,7 +130,7 @@ jobs:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
-        run: node scripts/playground-browser-runtime-gate.mjs
+        run: node scripts/playground-browser-matrix-smoke.mjs
       - name: Test main-thread mobile render fallback
         if: matrix.browser == 'webkit' && matrix.profile == 'mobile-dpr2'
         env:
