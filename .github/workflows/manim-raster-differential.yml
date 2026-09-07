@@ -1,6 +1,11 @@
 name: Manim raster differential
 
 on:
+  pull_request:
+    paths:
+      - "web/semantic-preview-session*"
+      - "web/manim-raster-host.js"
+      - ".github/workflows/manim-raster-differential.yml"
   push:
     branches:
       - master
