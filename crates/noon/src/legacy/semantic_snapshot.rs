@@ -1,9 +1,8 @@
 //! Explicit legacy value import/export; deletion owned by #959.
 use crate::semantic_mobject::{import_geometry, legacy_solid_color, Mobject};
 use noon_core::{
-    GeometryRef, GeometryResource, ObjectSnapshot, SemanticObjectState, SemanticPaint,
-    SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, StoredGeometry, Style,
-    Transform2D,
+    GeometryRef, GeometryResource, ObjectSnapshot, SemanticStore, SemanticStyle,
+    SemanticTransform2_5D, StoredGeometry, Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 pub fn import_mobject_snapshot(
@@ -11,18 +10,12 @@ pub fn import_mobject_snapshot(
     snapshot: ObjectSnapshot,
 ) -> Result<Mobject, String> {
     validate_snapshot(&snapshot)?;
-    let mut state =
-        SemanticObjectState::new(import_geometry(&mut store.borrow_mut(), snapshot.geometry)?);
-    state.transform = SemanticTransform2_5D {
-        translation: SemanticVec3::from_vec2(snapshot.transform.translation),
-        scale: SemanticVec3::new(
-            snapshot.transform.scale.x as f64,
-            snapshot.transform.scale.y as f64,
-            1.0,
-        ),
-        rotation_z: snapshot.transform.rotation as f64,
-    };
-    state.style = authoring_style_from_legacy(snapshot.style);
+    let state = crate::semantic_object_state_from_compact(
+        &mut store.borrow_mut(),
+        snapshot.geometry,
+        snapshot.transform,
+        snapshot.style,
+    )?;
     Mobject::new(store, state)
 }
 pub fn replace_mobject_snapshot(
@@ -46,16 +39,9 @@ pub fn replace_mobject_snapshot(
         state.content =
             import_geometry(&mut object.store().borrow_mut(), snapshot.geometry)?.into();
     }
-    state.transform = SemanticTransform2_5D {
-        translation: SemanticVec3::from_vec2(snapshot.transform.translation),
-        scale: SemanticVec3::new(
-            snapshot.transform.scale.x as f64,
-            snapshot.transform.scale.y as f64,
-            1.0,
-        ),
-        rotation_z: snapshot.transform.rotation as f64,
-    };
-    state.style = authoring_style_from_legacy(snapshot.style);
+    state.transform =
+        crate::compact_value_authoring::semantic_transform_from_compact(snapshot.transform)?;
+    state.style = crate::compact_value_authoring::semantic_style_from_compact(snapshot.style)?;
     object.commit_state(state)
 }
 pub fn export_mobject_snapshot(object: &Mobject) -> Result<ObjectSnapshot, String> {
@@ -73,18 +59,6 @@ pub fn export_mobject_snapshot(object: &Mobject) -> Result<ObjectSnapshot, Strin
     })
 }
 
-fn authoring_style_from_legacy(style: Style) -> SemanticStyle {
-    let mut semantic = SemanticStyle::from_legacy(style);
-    if let Some(SemanticPaint::Solid(color)) = &mut semantic.fill {
-        semantic.fill_opacity = f64::from(color.alpha);
-        color.alpha = 1.0;
-    }
-    if let Some(SemanticPaint::Solid(color)) = &mut semantic.stroke {
-        semantic.stroke_opacity = f64::from(color.alpha);
-        color.alpha = 1.0;
-    }
-    semantic
-}
 fn export_style(style: &SemanticStyle) -> Style {
     Style {
         fill: legacy_solid_color(style.fill.as_ref(), style.fill_opacity),
@@ -136,7 +110,7 @@ fn geometry_matches(
 fn validate_snapshot(snapshot: &ObjectSnapshot) -> Result<(), String> {
     let t = snapshot.transform;
     if !snapshot.geometry.is_finite()
-        || !authoring_style_from_legacy(snapshot.style).is_finite()
+        || crate::compact_value_authoring::semantic_style_from_compact(snapshot.style).is_err()
         || ![
             t.translation.x,
             t.translation.y,

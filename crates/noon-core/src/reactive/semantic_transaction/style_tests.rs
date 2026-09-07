@@ -8,7 +8,7 @@ fn object(store: &mut SemanticStore) -> SemanticNodeId {
 }
 
 fn replacement_style() -> SemanticStyle {
-    let mut style = SemanticStyle::from_legacy(Style {
+    let mut style = SemanticStyle::from_compact(Style {
         stroke_join: StrokeJoin::Bevel,
         stroke_cap: StrokeCap::Square,
         ..Style::default()

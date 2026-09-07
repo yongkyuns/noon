@@ -2,7 +2,94 @@ use super::{
     AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
     SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
 };
-use crate::{Color, FamilyAnimationMode, RateFunction};
+use crate::{Color, CompositionTimeMap, FamilyAnimationMode, RateFunction, TrackTiming};
+
+/// Renderer-independent property driven by one exact authored object track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticObjectTrackProperty {
+    Presence,
+    Transform,
+    Position,
+    Rotation,
+    Scale,
+    Fill,
+    Stroke,
+    StrokeWidth,
+    Opacity,
+    Appearance,
+    Reveal,
+    Morph,
+}
+
+/// High-precision authored endpoints for one exact object track.
+///
+/// Object-valued endpoints retain semantic object identity until compiler lowering;
+/// execution snapshots and prepared morph payloads do not enter the semantic store.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
+    Bool {
+        from: bool,
+        to: bool,
+    },
+    Scalar {
+        from: f64,
+        to: f64,
+    },
+    Vec3 {
+        from: SemanticVec3,
+        to: SemanticVec3,
+    },
+    Color {
+        from: Option<Color>,
+        to: Option<Color>,
+    },
+    Object {
+        from: R,
+        to: R,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SemanticObjectTrackValueKind {
+    Bool,
+    Scalar,
+    Vec3,
+    Color,
+    Object,
+}
+
+impl SemanticObjectTrackProperty {
+    const fn value_kind(self) -> SemanticObjectTrackValueKind {
+        match self {
+            Self::Presence => SemanticObjectTrackValueKind::Bool,
+            Self::Transform => SemanticObjectTrackValueKind::Object,
+            Self::Position | Self::Scale => SemanticObjectTrackValueKind::Vec3,
+            Self::Fill | Self::Stroke => SemanticObjectTrackValueKind::Color,
+            Self::Rotation
+            | Self::StrokeWidth
+            | Self::Opacity
+            | Self::Appearance
+            | Self::Reveal
+            | Self::Morph => SemanticObjectTrackValueKind::Scalar,
+        }
+    }
+
+    const fn is_instant(self) -> bool {
+        matches!(self, Self::Presence)
+    }
+}
+
+impl<R> SemanticObjectTrackValues<R> {
+    const fn value_kind(&self) -> SemanticObjectTrackValueKind {
+        match self {
+            Self::Bool { .. } => SemanticObjectTrackValueKind::Bool,
+            Self::Scalar { .. } => SemanticObjectTrackValueKind::Scalar,
+            Self::Vec3 { .. } => SemanticObjectTrackValueKind::Vec3,
+            Self::Color { .. } => SemanticObjectTrackValueKind::Color,
+            Self::Object { .. } => SemanticObjectTrackValueKind::Object,
+        }
+    }
+}
 
 /// Ordered composition semantics authored before execution scheduling/lowering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,6 +232,17 @@ pub enum SemanticTransformInterpolation {
 /// deliberately absent.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationIntent {
+    /// Drive one renderer-independent object channel with exact authored timing.
+    ///
+    /// The animation node is the semantic identity and timing authority. Compiler
+    /// lowering turns this into an ordinary execution track before runtime creation.
+    ObjectPropertyTrack {
+        target: SemanticNodeId,
+        property: SemanticObjectTrackProperty,
+        values: SemanticObjectTrackValues,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+    },
     /// Transform one semantic object toward the authored state of another semantic
     /// object. The target-state node is a semantic reference, not an execution
     /// snapshot; A1.6 lowering decides when/how to snapshot and interpolate it.
@@ -223,7 +321,8 @@ pub enum SemanticAnimationIntent {
 impl SemanticAnimationIntent {
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
-            Self::TransformTo { target, .. }
+            Self::ObjectPropertyTrack { target, .. }
+            | Self::TransformTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::SubsetDisplayMember { target, .. }
@@ -241,7 +340,8 @@ impl SemanticAnimationIntent {
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target_state, .. } => Some(*target_state),
-            Self::Rotate { .. }
+            Self::ObjectPropertyTrack { .. }
+            | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
@@ -258,7 +358,8 @@ impl SemanticAnimationIntent {
 
     pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
         match self {
-            Self::TransformTo { .. }
+            Self::ObjectPropertyTrack { .. }
+            | Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
@@ -276,7 +377,8 @@ impl SemanticAnimationIntent {
 
     pub fn children(&self) -> &[SemanticNodeId] {
         match self {
-            Self::TransformTo { .. }
+            Self::ObjectPropertyTrack { .. }
+            | Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::SubsetDisplayMember { .. }
@@ -337,6 +439,7 @@ pub enum SemanticAnimationError {
     NotScalarInputSignal(SemanticNodeId),
     NativeOwnedSignal(SemanticNodeId),
     InvalidScalarTarget(f64),
+    InvalidObjectPropertyTrack,
 }
 
 impl std::fmt::Display for SemanticAnimationError {
@@ -403,6 +506,9 @@ impl std::fmt::Display for SemanticAnimationError {
                     "scalar animation target must be finite, got {value}"
                 )
             }
+            Self::InvalidObjectPropertyTrack => formatter.write_str(
+                "object property track requires matching finite endpoints and valid exact timing",
+            ),
         }
     }
 }
@@ -419,6 +525,57 @@ impl From<AnimationOptionsError> for SemanticAnimationError {
     fn from(value: AnimationOptionsError) -> Self {
         Self::Options(value)
     }
+}
+
+pub(crate) fn validate_object_property_track<R>(
+    property: SemanticObjectTrackProperty,
+    values: &SemanticObjectTrackValues<R>,
+    timing: TrackTiming,
+    time_map: &CompositionTimeMap,
+) -> Result<(), SemanticAnimationError> {
+    if property.value_kind() != values.value_kind()
+        || !timing.start_time.is_finite()
+        || !timing.duration.is_finite()
+        || timing.duration < 0.0
+        || (!property.is_instant() && timing.duration == 0.0)
+        || time_map.validate().is_err()
+        || (property.is_instant()
+            && if time_map.is_identity() {
+                timing.duration != 0.0
+            } else {
+                timing.duration == 0.0 || time_map.monotone_event_alpha().is_err()
+            })
+    {
+        return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+    }
+    match values {
+        SemanticObjectTrackValues::Scalar { from, to } => {
+            if !from.is_finite()
+                || !to.is_finite()
+                || (property == SemanticObjectTrackProperty::StrokeWidth
+                    && (*from < 0.0 || *to < 0.0))
+            {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
+        SemanticObjectTrackValues::Vec3 { from, to } => {
+            if !from.is_finite() || !to.is_finite() || from.z != 0.0 || to.z != 0.0 {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
+        SemanticObjectTrackValues::Color { from, to } => {
+            if [from, to].into_iter().flatten().any(|color| {
+                !color.red.is_finite()
+                    || !color.green.is_finite()
+                    || !color.blue.is_finite()
+                    || !color.alpha.is_finite()
+            }) {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
+        SemanticObjectTrackValues::Bool { .. } | SemanticObjectTrackValues::Object { .. } => {}
+    }
+    Ok(())
 }
 
 fn validate_authored_add_animation_options(
@@ -457,6 +614,43 @@ fn validate_authored_animation_options(
 }
 
 impl SemanticStore {
+    /// Insert one exact object-channel declaration into the semantic animation arena.
+    pub(crate) fn insert_semantic_object_property_track(
+        &mut self,
+        target: SemanticNodeId,
+        property: SemanticObjectTrackProperty,
+        values: SemanticObjectTrackValues,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        validate_object_property_track(property, &values, timing, &time_map)?;
+        if let SemanticObjectTrackValues::Object { from, to } = &values {
+            for endpoint in [*from, *to] {
+                self.semantic_object_state_checked(endpoint)?;
+                let node = self
+                    .node(endpoint)
+                    .expect("checked semantic object remains live");
+                if node.is_scene_owned() || !node.parents().is_empty() {
+                    return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+                }
+            }
+        }
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::ObjectPropertyTrack {
+                    target,
+                    property,
+                    values,
+                    timing,
+                    time_map,
+                },
+                AnimationOptions::new(),
+            )),
+        )
+    }
+
     /// Insert one activation-relative restoring Indicate declaration.
     pub fn insert_semantic_indicate_animation(
         &mut self,

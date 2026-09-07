@@ -1478,6 +1478,32 @@ try {
     await stopSampledSource(page);
   }
 
+  const exactPropertySource = await readFile(
+    path.join(repoRoot, "web/python/examples/exact_property_tracks.py"), "utf8",
+  );
+  await startSampledSource(page, exactPropertySource, "scene-shared-exact-property", 960, 540);
+  try {
+    const canvas = page.locator("#scene-shared-exact-property");
+    const samples = [];
+    for (const time of [0, 1, 2]) {
+      if (time !== 0) {
+        await page.evaluate(async (sampleTime) => {
+          await window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime);
+        }, time);
+      }
+      const screenshot = await canvas.screenshot();
+      const circle = renderedWorldPixel(screenshot, -2 + 2 * time, 1);
+      const square = renderedWorldPixel(screenshot, 0, -1);
+      assert.ok(circle.red > circle.green + 30 && square.blue > square.red + 100,
+        `paired exact-track endpoints must render at ${time}: ${JSON.stringify({ circle, square })}`);
+      samples.push(circle.red);
+    }
+    assert.ok(samples[0] > samples[1] && samples[1] > samples[2],
+      `paired exact-track opacity must decrease: ${JSON.stringify(samples)}`);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const automaticWaitTextSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_automatic_wait_text.py"), "utf8",
   );

@@ -187,6 +187,23 @@ impl Scene {
         ExecutionSession::from_semantic_root(&self.store.borrow(), self.root)
     }
 
+    /// Lower this scene and one explicit authored animation root into the shared runtime.
+    ///
+    /// The root must belong to this scene's store. Exact property tracks keep their
+    /// authored timing; other detached animation declarations are not scheduled.
+    pub fn execution_session_with_animation_root(
+        &self,
+        animation_root: &crate::DeclaredAnimation,
+    ) -> Result<ExecutionSession, String> {
+        animation_root.require_store(&self.store)?;
+        ExecutionSession::from_semantic_root_with_animation_root(
+            &self.store.borrow(),
+            self.root,
+            animation_root.node_id(),
+        )
+        .map_err(|error| error.to_string())
+    }
+
     /// Borrow the already-published execution session for supported live membership,
     /// property edits, and effective-value queries. This facade retains no scene/runtime state.
     pub fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {

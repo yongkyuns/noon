@@ -26,6 +26,7 @@ const {
   createDirectOrdinaryMembershipSmokeRenderer,
   createDirectOrdinaryTextWriteSmokeRenderer,
   createDirectAutomaticWaitTextSmokeRenderer,
+  createDirectExactPropertyTracksSmokeRenderer,
   createDirectTextFamilyFadeSmokeRenderer,
   createDirectTextFamilyRevealSmokeRenderer,
   createDirectTextFamilyWriteSmokeRenderer,
@@ -1268,6 +1269,37 @@ async function directTextFamilyFadeProof(expectedBackend) {
   }
 }
 
+async function directExactPropertyTracksProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectExactPropertyTracksSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
+    for (const time of [0, 1, 2]) {
+      renderer.advanceDirectRealtime(time * 1000);
+      await settleDirectPublication(renderer, time * 1000);
+      const circle = await sampleRenderedColor(canvas, -2 + 2 * time, 1);
+      const square = await sampleRenderedColor(canvas, 0, -1);
+      if (circle.red <= circle.green + 30 || square.blue <= square.red + 100) {
+        throw new Error(`exact property track rendered the wrong endpoint at ${time}: ${JSON.stringify({ circle, square })}`);
+      }
+      samples.push({ time, circle, square });
+    }
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 2
+        || samples[0].circle.red <= samples[1].circle.red
+        || samples[1].circle.red <= samples[2].circle.red) {
+      throw new Error(`exact property track playback lost authored opacity: ${JSON.stringify(samples)}`);
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directAutomaticWaitTextProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectAutomaticWaitTextSmokeRenderer(canvas);
@@ -2081,6 +2113,7 @@ async function start() {
   metrics.ordinaryMembership = await directOrdinaryMembershipProof(expectedBackend);
   metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);
   metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
+  metrics.exactPropertyTracks = await directExactPropertyTracksProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);
   metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);
   metrics.textFamilyWrite = await directTextFamilyWriteProof(expectedBackend);

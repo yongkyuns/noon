@@ -9,6 +9,7 @@ mod analytic_geometry_authoring;
 mod animation_authoring;
 mod arc_authoring;
 mod camera_authoring;
+mod compact_value_authoring;
 mod dashed_line_authoring;
 mod elbow_authoring;
 pub mod example_scenes;
@@ -32,6 +33,7 @@ mod shape_matcher_authoring;
 mod text_authoring;
 
 pub use animation_authoring::DeclaredAnimation;
+pub use compact_value_authoring::semantic_object_state_from_compact;
 pub use execution_segment::*;
 pub use execution_session::*;
 pub use family_authoring::{

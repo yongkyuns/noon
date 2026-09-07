@@ -84,6 +84,16 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
+    pub(super) fn existing_node_is_scene_owned_or_parented(
+        &self,
+        node: SemanticNodeId,
+        parent_is_active: impl Fn(SemanticNodeId) -> bool,
+    ) -> bool {
+        self.store.node(node).is_some_and(|node| {
+            node.is_scene_owned() || node.parents().iter().copied().any(parent_is_active)
+        })
+    }
+
     pub(super) fn ensure_text_glyph_target(
         &self,
         state: &crate::SemanticObjectState,

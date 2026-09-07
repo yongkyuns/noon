@@ -24,6 +24,26 @@ enum FamilyEdgeEvent {
 }
 
 impl FamilyEdgePreflight {
+    pub(super) fn is_detached(
+        &self,
+        catalog: &TransactionNodeCatalog<'_>,
+        member: SemanticTransactionNodeRef,
+    ) -> bool {
+        if let SemanticTransactionNodeRef::Existing(id) = member {
+            if catalog.existing_node_is_scene_owned_or_parented(id, |family| {
+                self.overrides
+                    .get(&(family.into(), member))
+                    .copied()
+                    .unwrap_or(true)
+            }) {
+                return false;
+            }
+        }
+        !self.added_order.iter().any(|(family, candidate)| {
+            *candidate == member && self.contains(catalog, *family, member)
+        })
+    }
+
     pub(super) fn add(
         &mut self,
         catalog: &TransactionNodeCatalog<'_>,

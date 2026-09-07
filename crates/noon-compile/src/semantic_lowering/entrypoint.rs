@@ -8,8 +8,8 @@ use crate::CompiledScene;
 use super::{
     lower_semantic_host_callbacks, lower_semantic_reactive_projection_for_roots,
     SemanticCompiledSceneError, SemanticExecutionIndex, SemanticExecutionProjection,
-    SemanticHostCallbackPlan, SemanticLoweringError, SemanticReactiveLoweringError,
-    SemanticReactiveProjection,
+    SemanticHostCallbackPlan, SemanticInitialAnimationError, SemanticLoweringError,
+    SemanticReactiveLoweringError, SemanticReactiveProjection,
 };
 
 /// One typed compiler handoff from the authoritative semantic scene into Noon's
@@ -77,6 +77,7 @@ pub enum SemanticExecutionLoweringError {
     Object(SemanticLoweringError),
     Reactive(SemanticReactiveLoweringError),
     Compiled(SemanticCompiledSceneError),
+    InitialAnimation(SemanticInitialAnimationError),
     MultipleCameraObjects {
         first: SemanticNodeId,
         second: SemanticNodeId,
@@ -114,6 +115,7 @@ impl std::fmt::Display for SemanticExecutionLoweringError {
             Self::Compiled(error) => {
                 write!(formatter, "compiled execution lowering failed: {error}")
             }
+            Self::InitialAnimation(error) => error.fmt(formatter),
             Self::MultipleCameraObjects { first, second } => write!(
                 formatter,
                 "semantic scene has multiple 2D camera objects: {}:{} and {}:{}",
@@ -155,7 +157,7 @@ pub fn lower_semantic_execution(
     let roots = store.scene_roots().collect::<Vec<_>>();
     let mut staged_index = index.clone();
     let projection = staged_index.lower_scene(store)?;
-    finish_semantic_execution(store, &roots, index, staged_index, projection)
+    finish_semantic_execution(store, &roots, index, staged_index, projection, None)
 }
 
 /// Canonical initial lowering scoped to one semantic scene family.
@@ -173,7 +175,31 @@ pub fn lower_semantic_execution_root(
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let mut staged_index = index.clone();
     let projection = staged_index.lower_root(store, root)?;
-    finish_semantic_execution(store, &[root], index, staged_index, projection)
+    finish_semantic_execution(store, &[root], index, staged_index, projection, None)
+}
+
+/// Lower one selected semantic scene family with an explicit exact-track animation root.
+///
+/// The animation root must be an option-free parallel composition of exact object
+/// property tracks. Its tracks enter the ordinary compiled timeline before reactive
+/// validation, so reactive driver conflicts and runtime behavior use the same typed
+/// execution domain as every other initial track.
+pub fn lower_semantic_execution_root_with_animation_root(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+    index: &mut SemanticExecutionIndex,
+    animation_root: SemanticNodeId,
+) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
+    let mut staged_index = index.clone();
+    let projection = staged_index.lower_root(store, root)?;
+    finish_semantic_execution(
+        store,
+        &[root],
+        index,
+        staged_index,
+        projection,
+        Some(animation_root),
+    )
 }
 
 fn finish_semantic_execution(
@@ -182,12 +208,17 @@ fn finish_semantic_execution(
     index: &mut SemanticExecutionIndex,
     staged_index: SemanticExecutionIndex,
     projection: SemanticExecutionProjection,
+    animation_root: Option<SemanticNodeId>,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection_for_roots(store, &projection, roots)?;
     let host_callbacks = lower_semantic_host_callbacks(store, roots);
-    let compiled =
+    let mut compiled =
         CompiledScene::from_semantic_projection_after_reactive_lowering(&projection, store)?;
+    if let Some(animation_root) = animation_root {
+        super::install_initial_animation_root(store, &staged_index, &mut compiled, animation_root)
+            .map_err(SemanticExecutionLoweringError::InitialAnimation)?;
+    }
     let camera_object = validate_camera_object(camera, &compiled)?;
     let program = ReactiveProgram::compile_for_execution_domain(
         compiled
@@ -271,18 +302,169 @@ mod tests {
     use std::sync::Arc;
 
     use noon_core::{
-        FontFaceIdentity, FontResourceArena, FontResourceLookup, GeometryResourceArena,
-        GeometryResourceLookup, GlyphRun, Property, ReactiveValue, Rect,
+        AnimationOptions, CompositionTimeMap, CompositionTimeMapStep, FontFaceIdentity,
+        FontResourceArena, FontResourceLookup, GeometryResourceArena, GeometryResourceLookup,
+        GlyphRun, Property, RateFunction, ReactiveValue, Rect, SemanticAnimationCompositionKind,
         SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectProperty,
-        SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry,
+        SemanticObjectRole, SemanticObjectState, SemanticObjectTrackProperty,
+        SemanticObjectTrackValues, SemanticStore, SemanticVec3, StoredGeometry,
         TextAffineTransform, TextDirection, TextRenderItem, TextResource, TextResourceLookup,
-        TextSourceKind, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
+        TextSourceKind, TextVectorItem, TextVectorStyle, TrackId, TrackTiming, TrackValues, Vec2,
+        VectorPath,
     };
 
     use super::*;
 
     fn circle(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
+    }
+
+    #[test]
+    fn explicit_animation_root_installs_exact_tracks_before_reactive_compilation() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let target = store.insert_semantic_object(circle(1.0));
+        let from_state = store.insert_semantic_object(circle(1.0));
+        let to_state = store.insert_semantic_object(circle(2.0));
+        store.add_semantic_family_member(root, target).unwrap();
+
+        let position_timing = TrackTiming::new(-0.5, 3.0, RateFunction::RushInto);
+        let position_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.5,
+            RateFunction::Smooth,
+        )]);
+        let presence_timing = TrackTiming::new(-0.25, 0.0, RateFunction::StepStart);
+        let mut transaction = SemanticMutationTransaction::new();
+        let position = transaction.create_object_property_track(
+            target,
+            SemanticObjectTrackProperty::Position,
+            SemanticObjectTrackValues::Vec3 {
+                from: SemanticVec3::new(1.0 / 3.0, -2.0, 0.0),
+                to: SemanticVec3::new(4.0, 5.0, 0.0),
+            },
+            position_timing,
+            position_map.clone(),
+        );
+        let presence = transaction.create_object_property_track(
+            target,
+            SemanticObjectTrackProperty::Presence,
+            SemanticObjectTrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            presence_timing,
+            CompositionTimeMap::identity(),
+        );
+        let transform = transaction.create_object_property_track(
+            target,
+            SemanticObjectTrackProperty::Transform,
+            SemanticObjectTrackValues::Object {
+                from: from_state.into(),
+                to: to_state.into(),
+            },
+            TrackTiming::new(2.5, 1.25, RateFunction::Linear),
+            CompositionTimeMap::identity(),
+        );
+        let animation_root = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            [position, presence, transform],
+            AnimationOptions::new(),
+        );
+        let committed = transaction.apply(&mut store).unwrap();
+        let animation_root = committed.resolve(animation_root).unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution_root_with_animation_root(
+            &store,
+            root,
+            &mut index,
+            animation_root,
+        )
+        .unwrap();
+        let execution = index.execution_object_id(target).unwrap();
+        let position = lowered.compiled().track(TrackId::new(0)).unwrap();
+        assert_eq!(
+            lowered.compiled().object_id_at_slot(position.object_index),
+            Some(execution)
+        );
+        assert_eq!(position.property, Property::Position);
+        assert_eq!(position.timing, position_timing);
+        assert_eq!(position.time_map, position_map);
+        assert_eq!(
+            position.values,
+            TrackValues::Vec2 {
+                from: Vec2::new((1.0 / 3.0) as f32, -2.0),
+                to: Vec2::new(4.0, 5.0),
+            }
+        );
+        let presence = lowered.compiled().track(TrackId::new(1)).unwrap();
+        assert_eq!(presence.property, Property::Presence);
+        assert_eq!(presence.timing, presence_timing);
+        assert_eq!(
+            presence.values,
+            TrackValues::Bool {
+                from: false,
+                to: true,
+            }
+        );
+        let transform = lowered.compiled().track(TrackId::new(2)).unwrap();
+        assert_eq!(transform.property, Property::Transform);
+        assert_eq!(
+            transform.timing,
+            TrackTiming::new(2.5, 1.25, RateFunction::Linear)
+        );
+        assert!(matches!(transform.values, TrackValues::Object { .. }));
+        assert_eq!(lowered.compiled().track_count(), 3);
+    }
+
+    #[test]
+    fn explicit_animation_failure_does_not_publish_projection_identity() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let prior_root = store.insert_family();
+        let selected = store.insert_semantic_object(circle(1.0));
+        let outside = store.insert_semantic_object(circle(2.0));
+        store.add_semantic_family_member(root, selected).unwrap();
+        store
+            .add_semantic_family_member(prior_root, outside)
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        let leaf = transaction.create_object_property_track(
+            outside,
+            SemanticObjectTrackProperty::Opacity,
+            SemanticObjectTrackValues::Scalar { from: 0.0, to: 1.0 },
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            CompositionTimeMap::identity(),
+        );
+        let animation_root = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            [leaf],
+            AnimationOptions::new(),
+        );
+        let committed = transaction.apply(&mut store).unwrap();
+        let animation_root = committed.resolve(animation_root).unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        lower_semantic_execution_root(&store, prior_root, &mut index).unwrap();
+        let prior_id = index.execution_object_id(outside).unwrap();
+
+        assert!(matches!(
+            lower_semantic_execution_root_with_animation_root(
+                &store,
+                root,
+                &mut index,
+                animation_root,
+            ),
+            Err(SemanticExecutionLoweringError::InitialAnimation(
+                SemanticInitialAnimationError::TargetOutsideProjection {
+                    target,
+                    ..
+                }
+            )) if target == outside
+        ));
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.execution_object_id(outside), Some(prior_id));
+        assert_eq!(index.execution_object_id(selected), None);
     }
 
     #[test]

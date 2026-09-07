@@ -357,6 +357,7 @@ fn append_compatible<Id: Copy + Ord>(
 
 #[cfg(test)]
 mod tests {
+    use noon_core::TransformTrackEndpoint;
     use noon_core::{
         Easing, GeometryRef, ObjectDefinition, ObjectId, ObjectSnapshot, Property, ScenePatch,
         StrokeCap, StrokeJoin, Style, TrackDefinition, TrackId, TrackTiming, TrackValues,
@@ -713,7 +714,18 @@ mod tests {
             id: TrackId::new(0),
             object: ObjectId::new(0),
             property: Property::Transform,
-            values: TrackValues::Object { from, to },
+            values: TrackValues::Object {
+                from: TransformTrackEndpoint {
+                    geometry: from.geometry,
+                    transform: from.transform,
+                    style: from.style,
+                },
+                to: TransformTrackEndpoint {
+                    geometry: to.geometry,
+                    transform: to.transform,
+                    style: to.style,
+                },
+            },
             timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
             time_map: noon_core::CompositionTimeMap::identity(),
         };
@@ -775,8 +787,11 @@ mod tests {
         let mut player = player();
         let before_scene = player.scene_json().expect("scene serializes");
         let before_frame = player.frame().clone();
-        let from = ObjectSnapshot::new(GeometryRef::circle(1.0));
-        let to = ObjectSnapshot::new(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
+        let from = TransformTrackEndpoint::new(GeometryRef::circle(1.0));
+        let to = TransformTrackEndpoint::new(GeometryRef::line(
+            Vec2::new(-1.0, 0.0),
+            Vec2::new(1.0, 0.0),
+        ));
         let batch = PatchBatch::new(
             0,
             vec![

@@ -24,7 +24,8 @@ use noon_compile::{
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
     lower_prepared_semantic_animation_schedule, lower_semantic_affine_animation_tracks,
     lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
-    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
+    lower_semantic_execution_root_with_animation_root, CompilePatchError,
+    EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
     PreparedScalarAnimationTrackError, PreparedScalarSignalTimelineError,
     PreparedSemanticAnimationLoweringError, PreparedSemanticAnimationScheduleError,
     SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
@@ -759,6 +760,31 @@ impl ExecutionSession {
         let mut execution_index = SemanticExecutionIndex::new();
         let reachability = SemanticExecutionReachability::from_root(store, root)?;
         let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
+        Ok(Self::from_lowered(
+            store.identity(),
+            execution_index,
+            reachability,
+            lowered,
+        ))
+    }
+
+    /// Instantiate one scene with an explicitly selected, exact authored animation graph.
+    ///
+    /// The compiler validates the graph and its targets before publishing any execution
+    /// identity. Detached animation declarations outside this root remain unscheduled.
+    pub fn from_semantic_root_with_animation_root(
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        animation_root: SemanticNodeId,
+    ) -> Result<Self, SemanticExecutionLoweringError> {
+        let mut execution_index = SemanticExecutionIndex::new();
+        let reachability = SemanticExecutionReachability::from_root(store, root)?;
+        let lowered = lower_semantic_execution_root_with_animation_root(
+            store,
+            root,
+            &mut execution_index,
+            animation_root,
+        )?;
         Ok(Self::from_lowered(
             store.identity(),
             execution_index,

@@ -6,8 +6,8 @@ use noon_core::{GeometryRef, Vec2};
 #[test]
 fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fallback() {
     use noon_core::{
-        Easing, ObjectId, ObjectSnapshot, Property, RetainedObjectDefinition, StrokeWidthMode,
-        Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+        Easing, ObjectId, Property, RetainedObjectDefinition, StrokeWidthMode, Style,
+        TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
     };
     for (mode, target_mode, target_scale_x, expected_count, expected_preparations) in [
         (
@@ -50,12 +50,12 @@ fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fal
             stroke_width_mode: mode,
             ..Style::default()
         };
-        let from = ObjectSnapshot {
+        let from = TransformTrackEndpoint {
             geometry: GeometryRef::circle(1.0),
             transform: Transform2D::IDENTITY,
             style,
         };
-        let to = ObjectSnapshot {
+        let to = TransformTrackEndpoint {
             geometry: GeometryRef::rectangle(1.0, 1.0),
             transform: Transform2D {
                 scale: Vec2::new(target_scale_x, 1.0),

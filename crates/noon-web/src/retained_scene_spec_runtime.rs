@@ -1,5 +1,5 @@
 use noon::{MathTypst, RetainedScene, Text as NativeText, Typst};
-use noon_compile::{CompileError, CompiledScene};
+use noon_compile::CompileError;
 use noon_core::{
     Color, ObjectDefinition, ObjectId, SceneDefinition, Style, TrackDefinition, Transform2D,
 };
@@ -82,13 +82,6 @@ impl CanonicalRetainedAuthoringScene {
         &self.tracks
     }
 
-    pub(crate) fn compile(&self) -> Result<CompiledScene, MixedRetainedAuthoringError> {
-        Ok(crate::retained_resource_transport::compile_retained_scene(
-            &self.scene,
-            &self.tracks,
-        )?)
-    }
-
     pub(crate) fn into_scene(self) -> RetainedScene {
         self.scene
     }
@@ -169,7 +162,7 @@ fn insert_text_object(
     Ok(())
 }
 
-fn canonical_text_color(
+pub(crate) fn canonical_text_color(
     id: ObjectId,
     transform: Transform2D,
     style: Style,

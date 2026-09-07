@@ -139,7 +139,7 @@ impl SemanticStyle {
 
     /// Compatibility adapter. Legacy `Style::opacity` becomes overall object
     /// opacity; existing color alpha remains part of each solid paint.
-    pub fn from_legacy(style: Style) -> Self {
+    pub fn from_compact(style: Style) -> Self {
         Self {
             fill: style.fill.map(SemanticPaint::Solid),
             fill_opacity: 1.0,
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn style_preserves_legacy_stroke_topology() {
-        let semantic = SemanticStyle::from_legacy(Style {
+        let semantic = SemanticStyle::from_compact(Style {
             stroke_join: StrokeJoin::Bevel,
             stroke_cap: StrokeCap::Square,
             ..Style::default()

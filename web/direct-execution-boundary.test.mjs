@@ -166,6 +166,8 @@ for (const required of [
   "createDirectOrdinaryTextWriteSmokeRenderer",
   "createDirectAutomaticWaitTextSmokeRenderer",
   "directAutomaticWaitTextProof",
+  "createDirectExactPropertyTracksSmokeRenderer",
+  "directExactPropertyTracksProof",
   "createDirectTextFamilyFadeSmokeRenderer",
   "directTextFamilyFadeProof",
   "createDirectTextFamilyWriteSmokeRenderer",

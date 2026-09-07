@@ -1,13 +1,12 @@
 use noon_core::{
-    CompositionTimeMap, GeometryRef, ObjectDefinition, ObjectId, ObjectSnapshot, ObjectStateField,
-    PatchError, Property, RateFunction, SceneDefinition, Style, TimelineError, TrackDefinition,
-    TrackId, TrackTiming, TrackValueEndpoint, TrackValues,
+    validate_track_definition, CompositionTimeMap, GeometryRef, ObjectId, ObjectStateField,
+    Property, RateFunction, Style, TimelineError, TrackDefinition, TrackId, TrackTiming,
+    TrackValueEndpoint, TrackValues, TransformTrackEndpoint,
 };
 
 #[test]
-fn bulk_construction_rejects_non_finite_transform_track_snapshot() {
-    let object = ObjectDefinition::new(ObjectId::new(7), GeometryRef::circle(1.0));
-    let from = ObjectSnapshot::new(GeometryRef::circle(1.0));
+fn transform_track_rejects_non_finite_endpoint_before_compilation() {
+    let from = TransformTrackEndpoint::new(GeometryRef::circle(1.0));
     let mut to = from.clone();
     to.style = Style {
         opacity: f32::NAN,
@@ -15,21 +14,18 @@ fn bulk_construction_rejects_non_finite_transform_track_snapshot() {
     };
     let track = TrackDefinition {
         id: TrackId::new(3),
-        object: object.id,
+        object: ObjectId::new(7),
         property: Property::Transform,
         values: TrackValues::Object { from, to },
         timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     };
-
     assert!(matches!(
-        SceneDefinition::from_parts(vec![object], vec![track]),
-        Err(PatchError::InvalidTrack(
-            TimelineError::InvalidObjectValue {
-                property: Property::Transform,
-                endpoint: TrackValueEndpoint::To,
-                field: ObjectStateField::Style,
-            }
-        ))
+        validate_track_definition(&track),
+        Err(TimelineError::InvalidObjectValue {
+            property: Property::Transform,
+            endpoint: TrackValueEndpoint::To,
+            field: ObjectStateField::Style,
+        })
     ));
 }
