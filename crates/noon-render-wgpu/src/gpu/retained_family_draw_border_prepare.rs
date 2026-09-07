@@ -368,7 +368,7 @@ impl RetainedFramePreparer {
             if path.is_empty() {
                 continue;
             }
-            self.push_geometry(
+            let scratch_slot = self.push_geometry(
                 object_id,
                 GeometryRef::VectorPath(path),
                 object.transform,
@@ -377,6 +377,12 @@ impl RetainedFramePreparer {
                 reveal,
                 0.0,
             );
+            if stable_rows {
+                self.family_plan_scratch_slots
+                    .entry(object_index)
+                    .or_default()
+                    .insert(member.glyph, scratch_slot);
+            }
         }
         Ok(())
     }

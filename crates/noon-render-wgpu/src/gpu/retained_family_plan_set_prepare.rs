@@ -246,8 +246,6 @@ impl RetainedFramePreparer {
             geometries,
             metrics,
         )?;
-        let canonical_scratch_len = self.scratch.objects.len();
-
         self.prepared_generation_ready = false;
         if let Err(error) = self.apply_family_plan_set_to_scratch(frame, plans, texts, fonts, active_indices.is_some()) {
             self.scratch_ready = false;
@@ -255,29 +253,6 @@ impl RetainedFramePreparer {
         }
         let cache_generation = active_signature.is_some();
         if let Some(signature) = active_signature {
-            let active_by_object = signature
-                .iter()
-                .map(|(index, _)| (frame.retained.objects[*index].id, *index))
-                .collect::<HashMap<_, _>>();
-            for source in &self.sources {
-                let SourceItem::Geometry {
-                    object_id,
-                    scratch_id,
-                } = source
-                else {
-                    continue;
-                };
-                let scratch_slot = scratch_id.get() as usize;
-                if scratch_slot < canonical_scratch_len {
-                    continue;
-                }
-                if let Some(&object_index) = active_by_object.get(object_id) {
-                    self.family_plan_scratch_slots
-                        .entry(object_index)
-                        .or_default()
-                        .push(scratch_slot);
-                }
-            }
             self.family_plan_active_signature = signature;
             self.scratch_ready = true;
         }
@@ -607,55 +582,41 @@ impl RetainedFramePreparer {
             let resource = texts
                 .get(text)
                 .ok_or(RetainedPrepareError::MissingTextResource)?;
-            let scratch_start = self.scratch.objects.len();
-            let source_start = self.sources.len();
-            for item in resource.render_items.iter().copied() {
-                if let TextRenderItem::GlyphRun(run_index) = item {
-                    self.push_family_draw_border_glyph_run(
-                        &family_frame,
-                        plan,
-                        object_index,
-                        object.id,
-                        run_index,
-                        texts,
-                        fonts,
-                        true,
-                    )?;
-                }
-            }
-
-            let generated_objects = self.scratch.objects.split_off(scratch_start);
-            let generated_presences = self.scratch.presences.split_off(scratch_start);
-            let generated_reveals = self.scratch.reveals.split_off(scratch_start);
-            let generated_morphs = self.scratch.morphs.split_off(scratch_start);
-            let generated_geometries = self.scratch.render_geometries.split_off(scratch_start);
-            let generated_transforms = self.scratch.render_transforms.split_off(scratch_start);
-            self.sources.truncate(source_start);
             let slots = self
                 .family_plan_scratch_slots
                 .get(&object_index)
-                .cloned()
-                .unwrap_or_default();
-            if slots.len() != generated_objects.len() {
-                return Err(
-                    RetainedFamilyPlanSetPrepareError::CachedScratchShapeChanged {
+                .expect("active family plan must retain its stable glyph rows");
+            let Some(members) = retained_family_draw_border_then_fill_members_for_object(
+                &family_frame,
+                plan,
+                object_index,
+            )? else {
+                continue;
+            };
+            for member in members {
+                let member = member?;
+                let Some(&scratch_slot) = slots.get(&member.glyph) else {
+                    // Glyphs with empty outlines deliberately have no geometry row.
+                    continue;
+                };
+                let run = resource.runs.get(member.glyph.run_index as usize).ok_or(
+                    RetainedFamilyDrawBorderPrepareError::InvalidTextRun {
                         object: object.id,
-                        expected: slots.len(),
-                        actual: generated_objects.len(),
+                        run_index: member.glyph.run_index,
                     },
-                );
-            }
-            for (generated_index, scratch_slot) in slots.into_iter().enumerate() {
-                let mut generated = generated_objects[generated_index].clone();
-                generated.id = ObjectId::new(scratch_slot as u64);
-                self.scratch.objects[scratch_slot] = generated;
-                self.scratch.presences[scratch_slot] = generated_presences[generated_index];
-                self.scratch.reveals[scratch_slot] = generated_reveals[generated_index];
-                self.scratch.morphs[scratch_slot] = generated_morphs[generated_index];
-                self.scratch.render_geometries[scratch_slot] =
-                    generated_geometries[generated_index].clone();
-                self.scratch.render_transforms[scratch_slot] =
-                    generated_transforms[generated_index];
+                )?;
+                let reveal = match member.phase {
+                    RetainedDrawBorderThenFillPhase::Outline { reveal } => reveal.max(0.0),
+                    RetainedDrawBorderThenFillPhase::Fill { .. } => 1.0,
+                };
+                let scratch = &mut self.scratch.objects[scratch_slot];
+                scratch.transform = object.transform;
+                scratch.style = draw_border_glyph_style(run, object.style, member.phase);
+                scratch.appearance = object.appearance;
+                self.scratch.presences[scratch_slot] = true;
+                self.scratch.reveals[scratch_slot] = reveal;
+                self.scratch.morphs[scratch_slot] = 0.0;
+                self.scratch.render_transforms[scratch_slot] = None;
                 scratch_changes.push(scratch_slot);
             }
         }
