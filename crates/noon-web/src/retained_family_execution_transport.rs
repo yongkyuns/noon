@@ -977,6 +977,7 @@ mod tests {
             family_states: Vec::new(),
             family_plans: vec![RetainedFamilyPlanTransport {
                 objects: Vec::new(),
+                global_span: None,
             }],
             resource_additions: None,
         };

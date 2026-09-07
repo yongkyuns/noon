@@ -48,23 +48,50 @@ impl RetainedFamilyTransportState {
 
 /// Immutable wire description of one already-flattened semantic family plan.
 ///
-/// The engine sends only authoritative retained leaf order. The render worker rebuilds
+/// The engine sends retained leaf order and, for a projected leaf, its global range.
+/// The render worker rebuilds
 /// the core plan once from the resolved snapshot + immutable text resources, so shaped
 /// glyph descriptors never cross the wire and frame-time scheduling never recomputes
 /// semantic traversal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetainedFamilyPlanTransport {
     pub objects: Vec<ObjectId>,
+    /// A single resident leaf may keep its range in a larger global sequence.
+    /// Glyph identities remain derived from immutable worker-local resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_span: Option<RetainedFamilyGlobalSpan>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetainedFamilyGlobalSpan {
+    pub first_member: u32,
+    pub total_member_count: u32,
 }
 
 impl RetainedFamilyPlanTransport {
     pub fn new(objects: Vec<ObjectId>) -> Result<Self, RetainedFamilyTransportError> {
-        let plan = Self { objects };
+        let plan = Self {
+            objects,
+            global_span: None,
+        };
         plan.validate()?;
         Ok(plan)
     }
 
     pub fn from_plan(plan: &RetainedFamilyAnimationPlan) -> Self {
+        let spans = plan.member_plan().leaves();
+        let global_span = match spans {
+            [span]
+                if span.first_member != 0
+                    || span.member_count != plan.member_plan().total_member_count() =>
+            {
+                Some(RetainedFamilyGlobalSpan {
+                    first_member: span.first_member,
+                    total_member_count: plan.member_plan().total_member_count(),
+                })
+            }
+            _ => None,
+        };
         Self {
             objects: plan
                 .member_plan()
@@ -72,12 +99,18 @@ impl RetainedFamilyPlanTransport {
                 .iter()
                 .map(|leaf| leaf.object)
                 .collect(),
+            global_span,
         }
     }
 
     pub fn validate(&self) -> Result<(), RetainedFamilyTransportError> {
         if self.objects.is_empty() {
             return Err(RetainedFamilyTransportError::EmptyPlan);
+        }
+        if self.global_span.is_some_and(|span| {
+            self.objects.len() != 1 || span.first_member > span.total_member_count
+        }) {
+            return Err(RetainedFamilyTransportError::InvalidGlobalSpan);
         }
         let mut seen = HashSet::with_capacity(self.objects.len());
         for &object in &self.objects {
@@ -149,12 +182,28 @@ impl RetainedFamilyPlanTransport {
                 .accept_leaf(leaf, &definition, texts)
                 .map_err(RetainedFamilyTransportError::Plan)?;
         }
-        builder.finish().map_err(RetainedFamilyTransportError::Plan)
+        let plan = builder
+            .finish()
+            .map_err(RetainedFamilyTransportError::Plan)?;
+        if let Some(span) = self.global_span {
+            let leaf = &plan.leaves()[0];
+            RetainedFamilyAnimationPlan::single_leaf_span(
+                leaf.span().semantic_leaf,
+                leaf.span().object,
+                leaf.members().clone(),
+                span.first_member,
+                span.total_member_count,
+            )
+            .map_err(RetainedFamilyTransportError::Plan)
+        } else {
+            Ok(plan)
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedFamilyTransportError {
+    InvalidGlobalSpan,
     EmptyPlan,
     DuplicateObject(ObjectId),
     MissingObject(ObjectId),
@@ -166,6 +215,9 @@ pub enum RetainedFamilyTransportError {
 impl std::fmt::Display for RetainedFamilyTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidGlobalSpan => {
+                formatter.write_str("invalid single-leaf global member span")
+            }
             Self::EmptyPlan => formatter.write_str("retained family transport plan has no leaves"),
             Self::DuplicateObject(object) => write!(
                 formatter,
@@ -337,6 +389,67 @@ mod tests {
         assert_eq!(
             RetainedFamilyPlanTransport::new(vec![object, object]).unwrap_err(),
             RetainedFamilyTransportError::DuplicateObject(object)
+        );
+    }
+
+    #[test]
+    fn single_leaf_span_transport_preserves_global_timing_and_checks_resource_bounds() {
+        let mut texts = TextResourceArena::new();
+        let text = texts.insert(text_resource()).unwrap();
+        let object = FrameObjectState {
+            id: ObjectId::new(12),
+            content: ObjectContentRef::Text(text),
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let members =
+            noon_core::RetainedAnimationMembers::resolve(&object.content, &texts).unwrap();
+        let plan = RetainedFamilyAnimationPlan::single_leaf_span(
+            noon_core::SemanticNodeId::new(42, 0),
+            object.id,
+            members,
+            3,
+            7,
+        )
+        .unwrap();
+        let wire = RetainedFamilyPlanTransport::from_plan(&plan);
+        let json = serde_json::to_string(&wire).unwrap();
+        assert!(!json.contains("glyph"));
+        let mut decoded: RetainedFamilyPlanTransport = serde_json::from_str(&json).unwrap();
+        let installed = decoded
+            .install_with_object_lookup(&texts, |id| (id == object.id).then_some(&object))
+            .unwrap();
+        assert_eq!(installed.leaves().len(), 1);
+        assert_eq!(installed.member_plan().total_member_count(), 7);
+        assert_eq!(installed.leaves()[0].span().first_member, 3);
+        for reverse_member_order in [false, true] {
+            let state = FamilyAnimationState {
+                reverse_member_order,
+                ..state()
+            };
+            let progress = installed
+                .member_plan()
+                .leaf_progress(state, installed.leaves()[0].span().semantic_leaf)
+                .unwrap();
+            for local in 0..2 {
+                assert_eq!(
+                    progress.member_progress(local).unwrap(),
+                    state.member_progress(local + 3, 7).unwrap()
+                );
+            }
+        }
+        // A well-formed range still must contain the resource's actual member count.
+        decoded.global_span.as_mut().unwrap().total_member_count = 4;
+        assert!(matches!(
+            decoded.install_with_object_lookup(&texts, |_| Some(&object)),
+            Err(RetainedFamilyTransportError::Plan(_))
+        ));
+        decoded.objects.push(ObjectId::new(13));
+        assert_eq!(
+            decoded.validate(),
+            Err(RetainedFamilyTransportError::InvalidGlobalSpan)
         );
     }
 }
