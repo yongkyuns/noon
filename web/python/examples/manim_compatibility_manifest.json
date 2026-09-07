@@ -125,6 +125,21 @@
       "thumbnail_alt": "Blue square illustrating spin-in and shrink-to-center lifecycle",
       "thumbnail_time": 1.0,
       "order": 1080
+    },
+    {
+      "id": "compatible-text-write",
+      "title": "TextWrite",
+      "summary": "Move one plain Text object while writing another, then remove it with Unwrite.",
+      "status": "ready",
+      "path": "python/examples/ordinary_text_write.py",
+      "category": "manim-compatible/text",
+      "features": ["Text", "Write", "Unwrite", "animate", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/compatible-text-write.svg",
+      "thumbnail_alt": "MOVE text shifting horizontally while WRITE is revealed above it",
+      "thumbnail_time": 1.0,
+      "order": 1090
     }
   ]
 }
