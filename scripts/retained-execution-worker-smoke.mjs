@@ -70,44 +70,6 @@ const browserArgs = [
 
 const textA = 4503599627370496;
 const textB = 4503599627370497;
-const retainedScene = JSON.stringify({
-  channel: "noon.authoring.retained",
-  protocol_version: 2,
-  objects: [
-    {
-      object: textA,
-      order: 1,
-      text: {
-        source: "*Hello* from _Typst!_",
-        backend: { kind: "typst", math: false },
-        font_size: 64,
-        transform: {
-          translation: { x: 0, y: 1.1 },
-          scale: { x: 1, y: 1 },
-          rotation: 0,
-        },
-        color: { red: 1, green: 1, blue: 1, alpha: 1 },
-        opacity: 1,
-      },
-    },
-    {
-      object: textB,
-      order: 4,
-      text: {
-        source: "frac(x, 2)",
-        backend: { kind: "typst", math: true },
-        font_size: 72,
-        transform: {
-          translation: { x: 0, y: -1.0 },
-          scale: { x: 1, y: 1 },
-          rotation: 0,
-        },
-        color: { red: 1, green: 0.8, blue: 0.2, alpha: 1 },
-        opacity: 0.9,
-      },
-    },
-  ],
-});
 
 async function runMode(browser, transportMode) {
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
@@ -120,7 +82,7 @@ async function runMode(browser, transportMode) {
   });
   await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
 
-  const started = await page.evaluate(async ({ mode, retainedDocumentJson }) => {
+  const started = await page.evaluate(async ({ mode, textAId, textBId }) => {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
     const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
@@ -133,21 +95,29 @@ async function runMode(browser, transportMode) {
     });
     window.retainedExecutionSmoke = { client, errors };
 
-    const scene = new wasm.AuthoringSceneCore();
-    const circle = scene.add(wasm.authoringCircle(0.65));
-    const rectangle = scene.add(wasm.authoringRectangle(1.5, 0.9));
-    const line = scene.add(wasm.authoringLine(-1.2, 0, 1.2, 0));
-    const square = scene.add(wasm.authoringSquare(0.8));
-    scene.moveTo(circle, -2.0, 0.6);
-    scene.moveTo(rectangle, 2.0, 0.6);
-    scene.moveTo(line, -1.5, -1.4);
-    scene.moveTo(square, 1.5, -1.4);
-    const sceneJson = scene.sceneJson();
-
-    const sceneSpecJson = wasm.canonicalRetainedSceneSpecJson(
-      sceneJson,
-      retainedDocumentJson,
-    );
+    const store = new wasm.WasmAuthoringStore();
+    const context = store.createSceneContext();
+    const circle = store.createManimCircle(0.65);
+    const typst = store.createManimTypst("*Hello* from _Typst!_", false, 64);
+    const rectangle = store.createManimRectangle(1.5, 0.9);
+    const line = store.createManimLine(-1.2, 0, 1.2, 0);
+    const math = store.createManimTypst("frac(x, 2)", true, 72);
+    const square = store.createManimSquare(0.8);
+    circle.setTranslation(-2.0, 0.6);
+    typst.setTranslation(0, 1.1);
+    rectangle.setTranslation(2.0, 0.6);
+    line.setTranslation(-1.5, -1.4);
+    math.setTranslation(0, -1);
+    math.setColor(1, 0.8, 0.2, 1);
+    math.setOpacity(0.9);
+    square.setTranslation(1.5, -1.4);
+    context.bindMobject("0", circle);
+    context.bindMobject(String(textAId), typst);
+    context.bindMobject("1", rectangle);
+    context.bindMobject("2", line);
+    context.bindMobject(String(textBId), math);
+    context.bindMobject("3", square);
+    const sceneSpecJson = context.sceneSpecJson("[]", "[]", "");
     const ready = await client.startRetainedCanonical(sceneSpecJson, {
       loopDurationSeconds: 4,
       transportMode: mode,
@@ -155,16 +125,14 @@ async function runMode(browser, transportMode) {
     });
     return {
       ready,
-      legacyObjectCount: JSON.parse(sceneJson).objects.length,
       canonicalObjectCount: JSON.parse(sceneSpecJson).objects.length,
       crossOriginIsolated: window.crossOriginIsolated,
       hasSharedArrayBuffer: typeof SharedArrayBuffer === "function",
     };
-  }, { mode: transportMode, retainedDocumentJson: retainedScene });
+  }, { mode: transportMode, textAId: textA, textBId: textB });
 
   assert.equal(started.crossOriginIsolated, true);
   assert.equal(started.hasSharedArrayBuffer, true);
-  assert.equal(started.legacyObjectCount, 4);
   assert.equal(started.canonicalObjectCount, 6);
   assert.equal(started.ready.transportMode, transportMode);
   assert.equal(started.ready.engine.retained, true);

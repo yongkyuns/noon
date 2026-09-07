@@ -68,45 +68,6 @@ const browserArgs = [
   "--disable-dev-shm-usage",
 ];
 
-const retainedScene = JSON.stringify({
-  channel: "noon.authoring.retained",
-  protocol_version: 2,
-  objects: [
-    {
-      object: 4503599627370496,
-      order: 1,
-      text: {
-        source: "*Hello* from _Typst!_",
-        backend: { kind: "typst", math: false },
-        font_size: 64,
-        transform: {
-          translation: { x: 0, y: 1.1 },
-          scale: { x: 1, y: 1 },
-          rotation: 0,
-        },
-        color: { red: 1, green: 1, blue: 1, alpha: 1 },
-        opacity: 1,
-      },
-    },
-    {
-      object: 4503599627370497,
-      order: 4,
-      text: {
-        source: "frac(x, 2)",
-        backend: { kind: "typst", math: true },
-        font_size: 72,
-        transform: {
-          translation: { x: 0, y: -1 },
-          scale: { x: 1, y: 1 },
-          rotation: 0,
-        },
-        color: { red: 1, green: 0.8, blue: 0.2, alpha: 1 },
-        opacity: 0.9,
-      },
-    },
-  ],
-});
-
 async function runMode(browser, transportMode) {
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
   const browserErrors = [];
@@ -118,7 +79,7 @@ async function runMode(browser, transportMode) {
   });
   await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
 
-  const result = await page.evaluate(async ({ transportMode: mode, retainedDocumentJson }) => {
+  const result = await page.evaluate(async ({ transportMode: mode }) => {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
     const scene = new wasm.AuthoringSceneCore();
@@ -131,7 +92,30 @@ async function runMode(browser, transportMode) {
     scene.moveTo(line, -1.5, -1.4);
     scene.moveTo(square, 1.5, -1.4);
     const sceneJson = scene.sceneJson();
-    const sceneSpecJson = wasm.canonicalRetainedSceneSpecJson(sceneJson, retainedDocumentJson);
+
+    const store = new wasm.WasmAuthoringStore();
+    const context = store.createSceneContext();
+    const retainedCircle = store.createManimCircle(0.65);
+    const typst = store.createManimTypst("*Hello* from _Typst!_", false, 64);
+    const retainedRectangle = store.createManimRectangle(1.5, 0.9);
+    const retainedLine = store.createManimLine(-1.2, 0, 1.2, 0);
+    const math = store.createManimTypst("frac(x, 2)", true, 72);
+    const retainedSquare = store.createManimSquare(0.8);
+    retainedCircle.setTranslation(-2.0, 0.6);
+    typst.setTranslation(0, 1.1);
+    retainedRectangle.setTranslation(2.0, 0.6);
+    retainedLine.setTranslation(-1.5, -1.4);
+    math.setTranslation(0, -1);
+    math.setColor(1, 0.8, 0.2, 1);
+    math.setOpacity(0.9);
+    retainedSquare.setTranslation(1.5, -1.4);
+    context.bindMobject("0", retainedCircle);
+    context.bindMobject("4503599627370496", typst);
+    context.bindMobject("1", retainedRectangle);
+    context.bindMobject("2", retainedLine);
+    context.bindMobject("4503599627370497", math);
+    context.bindMobject("3", retainedSquare);
+    const sceneSpecJson = context.sceneSpecJson("[]", "[]", "");
     const originalCanvas = document.querySelector("#scene");
     const devicePixelRatio = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.round(originalCanvas.clientWidth * devicePixelRatio));
@@ -350,7 +334,7 @@ async function runMode(browser, transportMode) {
       sameCanvas,
       errors,
     };
-  }, { transportMode, retainedDocumentJson: retainedScene });
+  }, { transportMode });
 
   assert.equal(result.crossOriginIsolated, true);
   assert.equal(result.hasSharedArrayBuffer, true);

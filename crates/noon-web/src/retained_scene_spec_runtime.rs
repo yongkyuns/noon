@@ -1,11 +1,9 @@
 use noon::{MathTypst, RetainedScene, Text as NativeText, Typst};
-use noon_compile::CompiledScene;
+use noon_compile::{CompileError, CompiledScene};
 use noon_core::{
     Color, ObjectDefinition, ObjectId, SceneDefinition, Style, TrackDefinition, Transform2D,
 };
 use noon_ir::{ObjectSpec, ObjectSpecContent, SceneSpec, TextSpec, TextSpecKind, TextSpecOptions};
-
-use crate::retained_authoring_wire_scene::MixedRetainedAuthoringError;
 
 /// Canonical `SceneSpec` lowered into the existing retained runtime/resource model.
 ///
@@ -217,72 +215,76 @@ fn canonical_text_color(
 }
 
 fn invalid_scene_spec(error: impl std::fmt::Display) -> MixedRetainedAuthoringError {
-    MixedRetainedAuthoringError::RetainedDocument(format!(
-        "invalid canonical mixed SceneSpec: {error}"
-    ))
+    MixedRetainedAuthoringError::InvalidInput(format!("invalid mixed scene input: {error}"))
+}
+
+#[derive(Debug)]
+pub enum MixedRetainedAuthoringError {
+    Text(noon::TextAuthoringError),
+    Compile(CompileError),
+    InvalidInput(String),
+}
+
+impl std::fmt::Display for MixedRetainedAuthoringError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text(error) => error.fmt(formatter),
+            Self::Compile(error) => error.fmt(formatter),
+            Self::InvalidInput(error) => formatter.write_str(error),
+        }
+    }
+}
+
+impl std::error::Error for MixedRetainedAuthoringError {}
+
+impl From<noon::TextAuthoringError> for MixedRetainedAuthoringError {
+    fn from(value: noon::TextAuthoringError) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<CompileError> for MixedRetainedAuthoringError {
+    fn from(value: CompileError) -> Self {
+        Self::Compile(value)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{
-        Color, GeometryRef, ObjectContentRef, Property, RateFunction, TrackTiming, TrackValues,
-        Transform2D, Vec2,
-    };
+    use std::rc::Rc;
+
+    use noon_core::{Color, ObjectContentRef, Vec2};
 
     use super::*;
-    use crate::{
-        retained_authoring_scene, retained_authoring_scene_spec, RetainedAuthoringDocument,
-        RetainedAuthoringTextObject, RetainedTextAuthoringSpec, RetainedTrackAuthoringSpec,
-    };
 
     #[test]
-    fn canonical_lowering_matches_split_runtime_and_compiled_output() {
-        let mut legacy = SceneDefinition::new();
-        let camera = legacy.add(GeometryRef::rectangle(14.0, 8.0));
-        let circle = legacy.add(GeometryRef::circle(0.5));
-        assert!(legacy.set_camera_object(camera));
-
+    fn scene_spec_materializes_one_painter_order_and_text_state() {
+        let camera = ObjectId::new(1);
         let text_id = ObjectId::new(1_u64 << 52);
-        let mut text = RetainedTextAuthoringSpec::native(
-            "Canonical Noon",
-            noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
-            48.0,
-            -1.0,
-        )
-        .unwrap();
-        text.transform = Transform2D {
-            translation: Vec2::new(1.25, -0.5),
-            rotation: 0.2,
-            scale: Vec2::new(1.5, 0.75),
-        };
-        text.set_color(Color::rgba(0.2, 0.5, 0.8, 0.9)).unwrap();
-        text.set_opacity(0.65).unwrap();
+        let circle = ObjectId::new(2);
+        let mut authored = noon::Scene::new();
+        let camera_handle = authored.camera_frame().unwrap();
+        let text_handle = authored
+            .text(
+                noon::Text::new("Canonical Noon")
+                    .with_font_size(48.0)
+                    .color(Color::rgba(0.2, 0.5, 0.8, 0.9))
+                    .set_opacity(0.65)
+                    .move_to(Vec2::new(1.25, -0.5))
+                    .scale_xy(Vec2::new(1.5, 0.75))
+                    .rotate(0.2),
+            )
+            .unwrap();
+        let circle_handle = authored.circle(0.5).unwrap();
+        let mut context = crate::CanonicalAuthoringScene::with_store(Rc::clone(authored.store()));
+        context.bind_mobject(camera, &camera_handle).unwrap();
+        context.bind_mobject(text_id, &text_handle).unwrap();
+        context.bind_mobject(circle, &circle_handle).unwrap();
+        let spec = context
+            .finalize(Vec::new(), Vec::new(), Some(camera))
+            .unwrap();
 
-        let retained = RetainedAuthoringDocument::new(vec![RetainedAuthoringTextObject {
-            object: text_id,
-            order: 1,
-            text,
-        }])
-        .unwrap();
-        let track = RetainedTrackAuthoringSpec::new(
-            text_id,
-            Property::Scale,
-            TrackValues::Vec2 {
-                from: Vec2::ONE,
-                to: Vec2::ZERO,
-            },
-            TrackTiming::new(0.0, 1.0, RateFunction::Smooth),
-        );
-
-        let canonical_spec =
-            retained_authoring_scene_spec(&legacy, retained.clone(), vec![track.clone()]).unwrap();
-        let canonical = CanonicalRetainedAuthoringScene::from_scene_spec(canonical_spec).unwrap();
-        let split = retained_authoring_scene::MixedRetainedAuthoringScene::from_parts_with_tracks(
-            &legacy,
-            retained,
-            vec![track],
-        )
-        .unwrap();
+        let canonical = CanonicalRetainedAuthoringScene::from_scene_spec(spec).unwrap();
 
         assert_eq!(
             canonical
@@ -293,28 +295,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![camera, text_id, circle]
         );
-        assert_eq!(canonical.tracks(), split.tracks());
-        assert_eq!(canonical.camera_object(), split.camera_object());
-        // Independent lowering owns distinct arena namespaces; compare the
-        // executable observations and resolved content, not process-local handles.
-        let mut canonical_runtime = noon_runtime::SceneInstance::new(canonical.compile().unwrap());
-        let mut split_runtime = noon_runtime::SceneInstance::new(split.compile().unwrap());
-        for time in [0.0, 0.5, 1.0] {
-            canonical_runtime.seek(time).unwrap();
-            split_runtime.seek(time).unwrap();
-            assert_eq!(
-                crate::determinism::normalized_frame_value(canonical_runtime.frame()),
-                crate::determinism::normalized_frame_value(split_runtime.frame()),
-            );
-        }
-
         let canonical_handle = canonical.scene().objects()[1].content.text().unwrap();
-        let split_handle = split.scene().objects()[1].content.text().unwrap();
-        assert_ne!(canonical_handle.arena, split_handle.arena);
-        assert_eq!(
-            canonical.scene().texts().get(canonical_handle),
-            split.scene().texts().get(split_handle)
-        );
+        assert!(canonical.scene().texts().get(canonical_handle).is_some());
+        assert_eq!(canonical.camera_object(), Some(camera));
         assert!(matches!(
             canonical.scene().objects()[0].content,
             ObjectContentRef::Geometry(_)

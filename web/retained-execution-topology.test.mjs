@@ -35,6 +35,24 @@ await assert.rejects(
   "retained execution must not regain a second render owner",
 );
 
+for (const filename of [
+  "retained_authoring.rs",
+  "retained_authoring_scene.rs",
+  "retained_authoring_scene_spec.rs",
+  "retained_authoring_tracks.rs",
+  "retained_authoring_wire_scene.rs",
+]) {
+  await assert.rejects(
+    access(new URL(`../crates/noon-web/src/${filename}`, import.meta.url)),
+    (error) => error?.code === "ENOENT",
+    `the split authoring schema module must stay deleted: ${filename}`,
+  );
+}
+
+assert.match(smoke, /new wasm\.WasmAuthoringStore\(\)/);
+assert.match(smoke, /\.createSceneContext\(\)/);
+assert.match(smoke, /\.bindMobject\(/);
+
 assert.match(
   smoke,
   /import\("\.\/execution-worker-client\.js"\)/,

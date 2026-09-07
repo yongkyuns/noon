@@ -1,10 +1,12 @@
 use noon_ir::{SceneSpec, SceneSpecError};
 
+use crate::retained_scene_spec_runtime::{
+    CanonicalRetainedAuthoringScene, MixedRetainedAuthoringError,
+};
 use crate::{
     CanonicalRetainedFamilyAnimationScene, CanonicalRetainedFamilyAnimationSceneError, ClockError,
-    MixedRetainedAuthoringError, MixedRetainedAuthoringScene, PlaybackClock,
-    RetainedAuthoringPlayer, RetainedAuthoringPlayerError, RetainedFamilyExecutionPlayer,
-    RetainedFamilyExecutionPlayerError,
+    PlaybackClock, RetainedAuthoringPlayer, RetainedAuthoringPlayerError,
+    RetainedFamilyExecutionPlayer, RetainedFamilyExecutionPlayerError,
 };
 
 /// Runtime selected behind the single canonical retained browser/WASM surface.
@@ -76,9 +78,10 @@ impl CanonicalRetainedEnginePlayer {
         let has_family_animations = !scene_spec.family_animations.is_empty();
         let scene_spec_json = scene_spec.to_json()?;
         let player = if !has_family_animations {
-            let mixed = MixedRetainedAuthoringScene::from_scene_spec(scene_spec)?;
+            let materialized = CanonicalRetainedAuthoringScene::from_scene_spec(scene_spec)?;
             CanonicalRetainedExecutionPlayer::Ordinary(Box::new(RetainedAuthoringPlayer::new(
-                mixed, session,
+                materialized,
+                session,
             )?))
         } else {
             let lowered = CanonicalRetainedFamilyAnimationScene::from_scene_spec(scene_spec)?;
@@ -335,64 +338,70 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        FamilyAnimationLeafBinding, FamilyAnimationMode, FamilyAnimationRequest,
-        FamilyAnimationSpec, GeometryRef, ObjectId, RateFunction, SceneDefinition, SemanticStore,
-        TrackTiming, Vec2,
+        CompositionTimeMap, FamilyAnimationLeafBinding, FamilyAnimationMode,
+        FamilyAnimationRequest, FamilyAnimationSpec, ObjectId, Property, RateFunction,
+        TrackDefinition, TrackId, TrackTiming, TrackValues, Vec2,
     };
-    use noon_ir::SceneSpec;
     use serde_json::json;
+    use std::rc::Rc;
 
     use crate::{
-        canonical_retained_scene_spec_json, InstalledRetainedExecutionMirror,
-        RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedExecutionDeltaEnvelope,
-        RetainedFamilyExecutionDeltaEnvelope, RetainedTextAuthoringSpec,
+        canonical_authoring_scene::CanonicalAuthoringScene, InstalledRetainedExecutionMirror,
+        RetainedExecutionDeltaEnvelope, RetainedFamilyExecutionDeltaEnvelope,
         RetainedTransportApplyOutcome,
     };
 
     use super::*;
 
-    fn canonical_scene_spec_json(legacy: &SceneDefinition, source: &str) -> (String, ObjectId) {
+    fn canonical_scene_json(
+        source: &str,
+        position: Option<(f64, f32)>,
+    ) -> (String, ObjectId, ObjectId) {
+        let scene = noon::Scene::new();
+        let circle = scene.circle(0.25).unwrap();
+        let text = scene.text(noon::Text::new(source)).unwrap();
+        let mut context = CanonicalAuthoringScene::with_store(Rc::clone(scene.store()));
+        let circle_id = ObjectId::new(1);
         let text_id = ObjectId::new(1_u64 << 52);
-        let retained = RetainedAuthoringDocument::new(vec![RetainedAuthoringTextObject {
-            object: text_id,
-            order: legacy.objects().len() as u32,
-            text: RetainedTextAuthoringSpec::native(
-                source,
-                noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
-                48.0,
-                -1.0,
-            )
-            .unwrap(),
-        }])
-        .unwrap();
-        let legacy_json = noon_ir::encode_scene(legacy).unwrap();
-        let retained_json = retained.to_json().unwrap();
-        (
-            canonical_retained_scene_spec_json(&legacy_json, &retained_json).unwrap(),
-            text_id,
-        )
+        context.bind_mobject(circle_id, &circle).unwrap();
+        context.bind_mobject(text_id, &text).unwrap();
+        let tracks = position
+            .map(|(duration, target_x)| vec![position_track(circle_id, duration, target_x)])
+            .unwrap_or_default();
+        let json = context
+            .finalize(tracks, Vec::new(), None)
+            .unwrap()
+            .to_json()
+            .unwrap();
+        (json, text_id, circle_id)
     }
 
-    fn family_scene_spec() -> (SceneSpec, ObjectId, ObjectId) {
-        let mut legacy = SceneDefinition::new();
-        let circle_id = legacy.add(GeometryRef::circle(0.25));
-        legacy
-            .animate_position(
-                circle_id,
-                Vec2::ZERO,
-                Vec2::new(4.0, 0.0),
-                TrackTiming::new(0.0, 4.0, RateFunction::Linear),
-            )
-            .unwrap();
-        let (scene_spec_json, text_id) = canonical_scene_spec_json(&legacy, "AB");
-        let mut scene_spec = SceneSpec::from_json(&scene_spec_json).unwrap();
+    fn position_track(object: ObjectId, duration: f64, target_x: f32) -> TrackDefinition {
+        TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Position,
+            values: TrackValues::Vec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(target_x, 0.0),
+            },
+            timing: TrackTiming::new(0.0, duration, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        }
+    }
 
-        let mut semantics = SemanticStore::new();
-        let text_leaf = semantics.insert_authoring_object();
-        let circle_leaf = semantics.insert_authoring_object();
-        let family = semantics.insert_family();
-        semantics.add_member(family, text_leaf).unwrap();
-        semantics.add_member(family, circle_leaf).unwrap();
+    fn family_scene_json(
+        additional: Option<(f64, f64, FamilyAnimationMode)>,
+    ) -> (String, ObjectId, ObjectId) {
+        let scene = noon::Scene::new();
+        let circle = scene.circle(0.25).unwrap();
+        let text = scene.text(noon::Text::new("AB")).unwrap();
+        let family = scene.family(&[&text, &circle]).unwrap();
+        let mut context = CanonicalAuthoringScene::with_store(Rc::clone(scene.store()));
+        let circle_id = ObjectId::new(1);
+        let text_id = ObjectId::new(1_u64 << 52);
+        context.bind_mobject(circle_id, &circle).unwrap();
+        context.bind_mobject(text_id, &text).unwrap();
         let family_spec = FamilyAnimationSpec::new(
             FamilyAnimationMode::Reveal,
             1.0,
@@ -403,43 +412,46 @@ mod tests {
             false,
         )
         .unwrap();
-        scene_spec.family_animations.push(
-            FamilyAnimationRequest::from_semantic_bindings(
-                &semantics,
-                family,
-                family_spec,
-                [
-                    FamilyAnimationLeafBinding::new(circle_leaf, circle_id),
-                    FamilyAnimationLeafBinding::new(text_leaf, text_id),
-                ],
-            )
-            .unwrap(),
-        );
-        scene_spec.validate().unwrap();
-        (scene_spec, text_id, circle_id)
-    }
-
-    fn append_family_request(
-        scene_spec: &mut SceneSpec,
-        start_time: f64,
-        duration: f64,
-        mode: FamilyAnimationMode,
-    ) {
-        let first = &scene_spec.family_animations[0];
-        let spec = FamilyAnimationSpec::new(
-            mode,
-            start_time,
-            duration,
-            first.spec().lag_ratio,
-            RateFunction::Linear,
-            false,
-            false,
+        let binding = || {
+            [
+                FamilyAnimationLeafBinding::new(circle.node_id(), circle_id),
+                FamilyAnimationLeafBinding::new(text.node_id(), text_id),
+            ]
+        };
+        let mut requests = vec![FamilyAnimationRequest::from_semantic_bindings(
+            &scene.store().borrow(),
+            family.node_id(),
+            family_spec,
+            binding(),
         )
-        .unwrap();
-        scene_spec.family_animations.push(
-            FamilyAnimationRequest::new(first.target(), first.bindings().to_vec(), spec).unwrap(),
-        );
-        scene_spec.validate().unwrap();
+        .unwrap()];
+        if let Some((start_time, duration, mode)) = additional {
+            let spec = FamilyAnimationSpec::new(
+                mode,
+                start_time,
+                duration,
+                1.0,
+                RateFunction::Linear,
+                false,
+                false,
+            )
+            .unwrap();
+            requests.push(
+                FamilyAnimationRequest::from_semantic_bindings(
+                    &scene.store().borrow(),
+                    family.node_id(),
+                    spec,
+                    binding(),
+                )
+                .unwrap(),
+            );
+        }
+        let json = context
+            .finalize(vec![position_track(circle_id, 4.0, 4.0)], requests, None)
+            .unwrap()
+            .to_json()
+            .unwrap();
+        (json, text_id, circle_id)
     }
 
     fn assert_family_midpoint(
@@ -483,9 +495,7 @@ mod tests {
 
     #[test]
     fn canonical_engine_emits_mixed_snapshot_and_resources() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.25));
-        let (scene_spec_json, text_id) = canonical_scene_spec_json(&legacy, "Canonical engine");
+        let (scene_spec_json, text_id, circle) = canonical_scene_json("Canonical engine", None);
 
         let mut engine =
             CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 2.0, 41).unwrap();
@@ -502,17 +512,7 @@ mod tests {
 
     #[test]
     fn canonical_engine_playback_controls_keep_resources_and_session_stable() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.25));
-        legacy
-            .animate_position(
-                circle,
-                Vec2::ZERO,
-                Vec2::new(2.0, 0.0),
-                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
-            )
-            .unwrap();
-        let (scene_spec_json, _) = canonical_scene_spec_json(&legacy, "controls");
+        let (scene_spec_json, _, _) = canonical_scene_json("controls", Some((2.0, 2.0)));
         let mut engine =
             CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 37).unwrap();
         let bundle = engine.resource_bundle_bytes().to_vec();
@@ -551,9 +551,9 @@ mod tests {
 
     #[test]
     fn canonical_engine_selects_family_execution_and_preserves_tracks() {
-        let (scene_spec, text_id, circle_id) = family_scene_spec();
-        let scene_spec_json = scene_spec.to_json().unwrap();
-        let mut engine = CanonicalRetainedEnginePlayer::new(scene_spec, 4.0, 51).unwrap();
+        let (scene_spec_json, text_id, circle_id) = family_scene_json(None);
+        let mut engine =
+            CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 51).unwrap();
         assert_eq!(engine.scene_spec_json(), scene_spec_json);
 
         let mut mirror =
@@ -583,9 +583,10 @@ mod tests {
 
     #[test]
     fn canonical_family_direct_seek_matches_forward_state() {
-        let (scene_spec, text_id, circle_id) = family_scene_spec();
+        let (scene_spec_json, text_id, circle_id) = family_scene_json(None);
 
-        let mut forward = CanonicalRetainedEnginePlayer::new(scene_spec.clone(), 4.0, 61).unwrap();
+        let mut forward =
+            CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 61).unwrap();
         let mut forward_mirror =
             InstalledRetainedExecutionMirror::from_bundle_bytes(forward.resource_bundle_bytes())
                 .unwrap();
@@ -601,7 +602,8 @@ mod tests {
             )
             .unwrap();
 
-        let mut direct = CanonicalRetainedEnginePlayer::new(scene_spec, 4.0, 62).unwrap();
+        let mut direct =
+            CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 62).unwrap();
         let mut direct_mirror =
             InstalledRetainedExecutionMirror::from_bundle_bytes(direct.resource_bundle_bytes())
                 .unwrap();
@@ -640,9 +642,10 @@ mod tests {
 
     #[test]
     fn canonical_engine_runs_sequential_family_requests_with_exact_plan_identity() {
-        let (mut scene_spec, text_id, circle_id) = family_scene_spec();
-        append_family_request(&mut scene_spec, 3.0, 1.0, FamilyAnimationMode::Reveal);
-        let mut engine = CanonicalRetainedEnginePlayer::new(scene_spec, 5.0, 71).unwrap();
+        let (scene_spec_json, text_id, circle_id) =
+            family_scene_json(Some((3.0, 1.0, FamilyAnimationMode::Reveal)));
+        let mut engine =
+            CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 5.0, 71).unwrap();
         let mut mirror =
             InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
                 .unwrap();
@@ -686,9 +689,10 @@ mod tests {
 
     #[test]
     fn canonical_engine_rejects_overlapping_family_ownership_on_same_object() {
-        let (mut scene_spec, _, _) = family_scene_spec();
-        append_family_request(&mut scene_spec, 2.5, 1.0, FamilyAnimationMode::Reveal);
-        let error = CanonicalRetainedEnginePlayer::new(scene_spec, 4.0, 72).unwrap_err();
+        let (scene_spec_json, _, _) =
+            family_scene_json(Some((2.5, 1.0, FamilyAnimationMode::Reveal)));
+        let error =
+            CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 72).unwrap_err();
         assert!(matches!(
             error,
             CanonicalRetainedEnginePlayerError::FamilyPlayer(

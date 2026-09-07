@@ -105,7 +105,7 @@ function canonicalTextObject(result, {
   objectId,
 }) {
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.retained_document, null, "the canonical export carries mixed content");
+  assert.equal("retained_document" in result, false, "mixed content needs no text sidecar");
   assert.ok(result.scene_spec, "scene result must include canonical SceneSpec");
   const object = result.scene_spec.objects[order];
   assert.equal(object.id, objectId, "text must use the scene-global object ID allocator");

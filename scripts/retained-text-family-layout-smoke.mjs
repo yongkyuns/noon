@@ -155,19 +155,18 @@ try {
 
   const result = await page.evaluate((python) => window.noonManimCompat.run(python), source);
   assert.equal(result.kind, "scene_document");
-  assert.equal(
-    result.document.objects.length,
-    0,
-    "retained family layout must not synthesize legacy placeholder geometry",
-  );
-  assert.ok(result.retainedDocument, "retained family layout scene must emit retained state");
+  assert.ok(result.sceneSpec, "retained family layout must produce a canonical scene export");
   assert.deepEqual(
-    result.retainedDocument.objects.map((object) => object.text.source),
+    result.sceneSpec.objects.map((object) => object.content.value.source),
     ["Layout A", "Layout BBB", "A", "BBBB", "Mixed"],
   );
-  const wire = JSON.stringify(result.retainedDocument);
+  assert.ok(
+    result.sceneSpec.objects.every((object) => object.content.kind === "text"),
+    "retained family layout must export typed Text objects",
+  );
+  const wire = JSON.stringify(result.sceneSpec);
   for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
-    assert.ok(!wire.includes(forbidden), `retained family layout wire must not contain ${forbidden}`);
+    assert.ok(!wire.includes(forbidden), `canonical family layout export must not contain ${forbidden}`);
   }
   assert.deepEqual(
     errors,

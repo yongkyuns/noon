@@ -5,8 +5,8 @@ use noon_core::{
 };
 use noon_ir::{SceneSpec, SceneSpecError};
 
-use crate::{
-    retained_scene_spec_runtime::CanonicalRetainedAuthoringScene, MixedRetainedAuthoringError,
+use crate::retained_scene_spec_runtime::{
+    CanonicalRetainedAuthoringScene, MixedRetainedAuthoringError,
 };
 
 /// One canonical family animation after source-level scene materialization.

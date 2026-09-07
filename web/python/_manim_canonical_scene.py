@@ -3299,7 +3299,6 @@ def _to_scene_spec(self: _base.Scene) -> dict[str, Any]:
     scene_spec_json = context.sceneSpecJson(
         _json(list(self._tracks)),
         _json([]),
-        _json([]),
         _camera_object_id(self),
     )
     return json.loads(str(scene_spec_json))

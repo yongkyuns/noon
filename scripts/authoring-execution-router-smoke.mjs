@@ -125,7 +125,9 @@ try {
     const initialCanvas = execution.canvas;
 
     const mixed = await authoring.run(mixedSource, {});
-    const mixedRetainedBackend = mixed.retainedDocument.objects[0].text.backend.kind;
+    const mixedText = mixed.sceneSpec.objects[1];
+    const mixedTextKind = mixedText.content.value.kind;
+    const mixedTextOptionsKind = mixedText.content.value.options.kind;
     const mixedSceneSpecJson = JSON.stringify(mixed.sceneSpec);
     const inFlightLegacyMetrics = execution.metrics();
     const mixedTransition = execution.reconcileScene(JSON.stringify(mixed.document), {
@@ -183,7 +185,6 @@ try {
     }
 
     const legacy = await authoring.run(legacySource, {});
-    const legacyRetainedObjectCount = legacy.retainedDocument?.objects?.length ?? -1;
     const inFlightRetainedMetrics = execution.metrics();
     const legacyTransition = execution.reconcileScene(JSON.stringify(legacy.document), {
       callbacks: legacy.callbacks,
@@ -232,7 +233,8 @@ try {
       retainedMode: AUTHORING_EXECUTION_RETAINED,
       initialReady,
       initialCanvasChanged: initialCanvas !== originalCanvas,
-      mixedRetainedBackend,
+      mixedTextKind,
+      mixedTextOptionsKind,
       legacyRaceModeBeforeMixed: preMixedRaceMetrics.executionMode,
       mixedMode: mixedResult.mode,
       mixedRebuilt: mixedResult.rebuilt,
@@ -262,7 +264,6 @@ try {
       mixedRestartSceneSpecVersion: mixedRestartSceneSpec.version,
       mixedRestartSceneSpecObjectCount: mixedRestartSceneSpec.objects.length,
       callbackError,
-      legacyRetainedObjectCount,
       retainedRaceModeBeforeLegacy: retainedRaceMetrics.executionMode,
       legacyMode: legacyResult.mode,
       legacyRebuilt: legacyResult.rebuilt,
@@ -299,7 +300,8 @@ try {
   assert.equal(result.initialCanvasChanged, false);
   assert.equal(result.initialReady.transportMode, "transferable");
   assert.equal(result.transportMode, "transferable");
-  assert.equal(result.mixedRetainedBackend, "native");
+  assert.equal(result.mixedTextKind, "plain");
+  assert.equal(result.mixedTextOptionsKind, "native_plain");
   assert.ok([result.initialMode, result.retainedMode].includes(result.legacyRaceModeBeforeMixed));
   assert.equal(result.mixedMode, result.retainedMode);
   assert.equal(result.mixedRebuilt, true);
@@ -353,7 +355,6 @@ try {
   assert.equal(result.mixedRestartSceneSpecObjectCount, 3);
   assert.match(result.callbackError, /retained authoring with Python host callbacks is not supported yet/);
 
-  assert.equal(result.legacyRetainedObjectCount, 0, "geometry-only authoring should emit an empty sidecar");
   assert.ok([result.retainedMode, result.initialMode].includes(result.retainedRaceModeBeforeLegacy));
   assert.equal(result.legacyMode, result.initialMode);
   assert.equal(result.legacyRebuilt, true);

@@ -8,7 +8,6 @@ import {
   parseAuthoringResult,
   validateCallbackSession,
   validatePatchBatch,
-  validateRetainedAuthoringDocument,
   validateSceneDocument,
   validateSceneDuration,
   validateSceneIdentities,
@@ -50,36 +49,10 @@ function workerMessage(type, payload = {}) {
   };
 }
 
-function retainedDocument(backend = { kind: "typst", math: false }) {
-  return {
-    channel: "noon.authoring.retained",
-    protocol_version: 2,
-    objects: [
-      {
-        object: 2 ** 52,
-        order: 1,
-        text: {
-          source: backend.kind === "native" ? "Native Noon" : "*Hello* from _Typst!_",
-          backend,
-          font_size: 96,
-          transform: {
-            translation: { x: 0, y: 0 },
-            scale: { x: 1, y: 1 },
-            rotation: 0,
-          },
-          color: { red: 1, green: 1, blue: 1, alpha: 1 },
-          opacity: 1,
-        },
-      },
-    ],
-  };
-}
-
 function sceneResult(overrides = {}) {
   return {
     kind: "scene_document",
     document: { version: 1, objects: [], tracks: [] },
-    retained_document: null,
     scene_spec: { version: 1, objects: [], tracks: [], camera_object: null },
     duration: 0,
     identities: { objects: [], tracks: [] },
@@ -151,7 +124,7 @@ test("requests legacy Scene export only through an explicit boolean option", asy
   );
 });
 
-test("correlates a Python request with Scene callback, retained, and duration metadata", async () => {
+test("correlates a Python request with callback, mixed content, and duration metadata", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
@@ -162,7 +135,6 @@ test("correlates a Python request with Scene callback, retained, and duration me
   const scene = { version: 1, objects: [{ id: 0 }], tracks: [] };
   const identities = { objects: [{ id: 0, key: "@object:0" }], tracks: [] };
   const callbacks = { session_id: 3, slots: [{ id: 0, objects: [0] }] };
-  const retained = retainedDocument();
   const sceneSpec = {
     version: 1,
     objects: [
@@ -178,7 +150,6 @@ test("correlates a Python request with Scene callback, retained, and duration me
       resultJson: JSON.stringify({
         kind: "scene_document",
         document: scene,
-        retained_document: retained,
         scene_spec: sceneSpec,
         duration: 2.75,
         identities,
@@ -191,7 +162,6 @@ test("correlates a Python request with Scene callback, retained, and duration me
     kind: "scene_document",
     document: scene,
     sceneSpec,
-    retainedDocument: retained,
     duration: 2.75,
     identities,
     callbacks,
@@ -484,42 +454,6 @@ test("semantic execution attachment transfers distinct control and render ports"
   await released;
   control.port2.close();
   render.port2.close();
-});
-
-test("validates retained native/Typst authoring documents and JS-safe identities", () => {
-  for (const retained of [
-    retainedDocument(),
-    retainedDocument({
-      kind: "native",
-      font_family: "DejaVu Sans Mono",
-      line_spacing: -1,
-    }),
-  ]) {
-    assert.equal(validateRetainedAuthoringDocument(retained), retained);
-  }
-
-  const unsafe = retainedDocument();
-  unsafe.objects[0].object = Number.MAX_SAFE_INTEGER + 1;
-  assert.throws(
-    () => validateRetainedAuthoringDocument(unsafe),
-    /invalid object ID/,
-  );
-
-  const duplicateOrder = retainedDocument();
-  duplicateOrder.objects.push({
-    ...structuredClone(duplicateOrder.objects[0]),
-    object: 2 ** 52 + 1,
-  });
-  assert.throws(
-    () => validateRetainedAuthoringDocument(duplicateOrder),
-    /duplicate painter orders/,
-  );
-
-  const invalidBackend = retainedDocument({ kind: "unknown" });
-  assert.throws(
-    () => validateRetainedAuthoringDocument(invalidBackend),
-    /Unsupported Python retained text backend/,
-  );
 });
 
 test("Scene duration accepts zero and rejects missing, negative, or non-finite values", () => {
