@@ -364,7 +364,6 @@ pub enum ExecutionSessionCreateError {
     TargetIsNotDetached,
     ReactiveBindingsUnsupported,
     RequiredCallbacksUnsupported,
-    UnsupportedUncreateRateFunction(RateFunction),
 }
 
 impl std::fmt::Display for ExecutionSessionCreateError {
@@ -386,11 +385,6 @@ impl std::fmt::Display for ExecutionSessionCreateError {
             Self::RequiredCallbacksUnsupported => {
                 formatter.write_str("Create does not yet support required host callbacks")
             }
-            Self::UnsupportedUncreateRateFunction(rate) => write!(
-                formatter,
-                "Uncreate currently supports only linear and smooth rate functions, got {}",
-                rate.semantic_id()
-            ),
         }
     }
 }
@@ -2133,12 +2127,12 @@ impl ExecutionSession {
         )
     }
 
-    /// Reverse one leaf's reveal and remove it at completion.
+    /// Animate one leaf through Create's reveal channel with Uncreate defaults.
     ///
     /// A detached leaf is admitted in this declaration. A leaf already mounted directly at the
-    /// execution root keeps that membership through its endpoint, then follows the same exact
-    /// reveal-lifecycle removal. Both forms therefore share one transaction, one runtime
-    /// activation, and one completion rule.
+    /// execution root keeps that membership through its endpoint. Omitted options reverse the
+    /// rate and remove the target; explicit `reverse_rate_function` and `remover` values are
+    /// honored independently. Both forms share one transaction and one runtime activation.
     pub fn declare_and_activate_uncreate(
         &mut self,
         store: &mut SemanticStore,
@@ -2147,20 +2141,19 @@ impl ExecutionSession {
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
-        let rate = options.rate_func.unwrap_or(RateFunction::Smooth);
-        if !matches!(rate, RateFunction::Linear | RateFunction::Smooth) {
-            return Err(ExecutionSessionAnimationError::CreateTarget {
-                target,
-                error: ExecutionSessionCreateError::UnsupportedUncreateRateFunction(rate),
-            });
-        }
         let admitted = self.require_uncreate_target(store, root, target)?;
+        let remover = options.remover.unwrap_or(true);
+        let reverse_rate_function = options.reverse_rate_function.unwrap_or(true);
         let mut declaration = SemanticMutationTransaction::new();
         if admitted {
             declaration.add_member(root, target);
         }
-        let animation = declaration
-            .create_create_animation(target, options.remover(true).reverse_rate_function(true));
+        let animation = declaration.create_create_animation(
+            target,
+            options
+                .remover(remover)
+                .reverse_rate_function(reverse_rate_function),
+        );
         self.declare_and_activate_prepared_animation(
             store,
             declaration,

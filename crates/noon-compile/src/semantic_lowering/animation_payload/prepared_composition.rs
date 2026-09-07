@@ -600,14 +600,7 @@ where
                 continue;
             }
             PreparedSemanticScheduledAnimationPayload::Create => {
-                if leaf.options.lag_ratio != 0.0
-                    || leaf.options.path_arc != 0.0
-                    || (leaf.options.reverse_rate_function
-                        && !matches!(
-                            leaf.options.rate_func,
-                            RateFunction::Linear | RateFunction::Smooth
-                        ))
-                {
+                if leaf.options.lag_ratio != 0.0 || leaf.options.path_arc != 0.0 {
                     return Err(
                         PreparedSemanticAnimationLoweringError::UnsupportedCreateOptions {
                             animation: leaf.animation,

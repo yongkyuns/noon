@@ -2753,36 +2753,62 @@ mod tests {
     }
 
     #[test]
-    fn uncreate_rejects_asymmetric_rate_before_admission() {
+    fn uncreate_honors_asymmetric_reversal_without_removing_kept_target() {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
-        let before_nodes = square.store().borrow().len();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
-        let before = session.publication_context();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_uncreate(
+                &square,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::RushInto)
+                    .remover(false),
+            )
+            .unwrap();
 
-        let result = scene.live(&mut session).declare_and_activate_uncreate(
-            &square,
-            AnimationOptions::new()
-                .run_time(1.0)
-                .rate_func(RateFunction::RushInto),
+        live.advance_segment_to(segment, segment.start_time() + 0.25)
+            .unwrap();
+        assert!(
+            (live.session.frame().reveal(0) - RateFunction::RushInto.evaluate(0.75)).abs() < 1e-6
         );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(live.session.frame().reveal(0), 0.0);
+    }
 
-        assert!(matches!(
-            result,
-            Err(LiveSessionError::Activation(
-                ExecutionSessionAnimationError::CreateTarget {
-                    error: ExecutionSessionCreateError::UnsupportedUncreateRateFunction(
-                        RateFunction::RushInto
-                    ),
-                    ..
-                }
-            ))
-        ));
-        assert_eq!(session.publication_context(), before);
-        assert_eq!(square.store().borrow().len(), before_nodes);
-        assert!(session.frame().objects.is_empty());
-        assert!(session.take_frame_changes().is_empty());
+    #[test]
+    fn uncreate_honors_explicit_forward_rate_and_keeps_membership() {
+        let scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_uncreate(
+                &square,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::RushInto)
+                    .reverse_rate_function(false)
+                    .remover(false),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 0.25)
+            .unwrap();
+        assert!(
+            (live.session.frame().reveal(0) - RateFunction::RushInto.evaluate(0.25)).abs() < 1e-6
+        );
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(live.session.frame().reveal(0), 1.0);
     }
 
     #[test]
