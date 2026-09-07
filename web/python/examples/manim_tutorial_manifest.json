@@ -200,6 +200,8 @@
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
       "expected_duration": 2,
+      "qualification_mode": "shared-live",
+      "expected_object_count": 3,
       "thumbnail": "thumbnails/manim/generated/show-increasing-subsets.png",
       "thumbnail_alt": "Exact-source Manim ShowIncreasingSubsetsScene",
       "thumbnail_time": 0.5,
