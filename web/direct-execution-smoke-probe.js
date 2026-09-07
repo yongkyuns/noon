@@ -1266,7 +1266,8 @@ async function directTextFamilyWriteProof(expectedBackend) {
         || samples[1].left <= 0 || samples[1].right !== 0
         || samples[2].left <= 0 || samples[2].right <= 0
         || samples[3].left <= 0 || samples[3].right <= samples[2].right
-        || samples[4].left !== 0 || samples[4].right <= 0
+        || samples[4].left <= 0 || samples[4].right <= 0
+        || samples[4].right >= samples[3].right
         || samples[5].left !== 0 || samples[5].right !== 0) {
       throw new Error(`direct Text family Write did not preserve global glyph order: ${JSON.stringify(samples)}`);
     }

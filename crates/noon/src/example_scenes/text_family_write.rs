@@ -214,7 +214,7 @@ mod tests {
             .planned_family_leaf(program.session().family_animation_plans(), object)
             .unwrap()
             .unwrap();
-        assert_eq!(leaf.total_member_count(), 5);
+        assert_eq!(leaf.span().member_count, count);
         (0..count)
             .map(|member| leaf.member_progress(member).unwrap())
             .collect()
@@ -244,8 +244,8 @@ mod tests {
             program.drive_to(&mut callbacks, 2.5).unwrap(),
             LiveProgramStatus::Awaiting(_)
         ));
-        assert_eq!(progress(&program, 1, 1), vec![0.0]);
-        assert_eq!(progress(&program, 2, 4), vec![0.25, 0.5, 0.75, 1.0]);
+        assert_eq!(progress(&program, 1, 1), vec![1.0]);
+        assert_eq!(progress(&program, 2, 4), vec![0.75, 0.5, 0.25, 0.0]);
 
         admit_completion(&mut program, &mut callbacks, 3.0);
         assert!(matches!(
