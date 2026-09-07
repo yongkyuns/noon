@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt,
     sync::Arc,
 };
@@ -198,7 +198,7 @@ pub struct RetainedResourceBundle {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RetainedResourceInventory {
-    texts: BTreeSet<TransportTextResourceHandle>,
+    texts: HashSet<TransportTextResourceHandle>,
     geometries: BTreeSet<TransportGeometryResourceHandle>,
     fonts: BTreeSet<(String, u32)>,
 }
@@ -485,6 +485,11 @@ impl RetainedResourceBundle {
                 })
                 .unwrap_or_default(),
             additions: Vec::new(),
+            text_layers: HashMap::new(),
+            geometry_layers: HashMap::new(),
+            font_layers: HashMap::new(),
+            font_layers_by_face: HashMap::new(),
+            font_arenas: HashSet::new(),
             inventory,
         })
     }
@@ -515,6 +520,11 @@ pub struct InstalledRetainedResources {
     render_geometries: Arc<[Arc<GeometryRef>]>,
     render_geometry_preparations: Vec<RenderGeometryPreparation>,
     additions: Vec<InstalledRetainedResources>,
+    text_layers: HashMap<u64, usize>,
+    geometry_layers: HashMap<u64, usize>,
+    font_layers: HashMap<u64, usize>,
+    font_layers_by_face: HashMap<(String, u32), usize>,
+    font_arenas: HashSet<u64>,
     inventory: RetainedResourceInventory,
 }
 
@@ -535,15 +545,15 @@ impl InstalledRetainedResources {
         self.render_geometry_preparations().len()
     }
 
-    pub fn texts(&self) -> &Self {
+    pub fn texts(&self) -> &dyn TextResourceLookup {
         self
     }
 
-    pub fn geometries(&self) -> &Self {
+    pub fn geometries(&self) -> &dyn GeometryResourceLookup {
         self
     }
 
-    pub fn fonts(&self) -> &Self {
+    pub fn fonts(&self) -> &dyn FontResourceLookup {
         self
     }
 
@@ -633,6 +643,7 @@ impl InstalledRetainedResources {
             }
         }
         let mut fonts = FontResourceArena::new();
+        let mut font_arenas = HashSet::new();
         let mut texts = TextResourceArena::new();
         let mut text_handles = HashMap::with_capacity(bundle.texts.len());
         for entry in bundle.texts {
@@ -643,11 +654,12 @@ impl InstalledRetainedResources {
             for run in resource.runs.iter() {
                 let key = (run.font.face_key.to_string(), run.font.face_index);
                 if let Some(bytes) = font_bytes.get(&key) {
-                    fonts
+                    let handle = fonts
                         .intern_face(&run.font, bytes.clone())
                         .map_err(|error| {
                             RetainedResourceTransportError::InvalidFont(error.to_string())
                         })?;
+                    font_arenas.insert(handle.arena);
                 } else if self.handle_for_face(&run.font).is_none() {
                     return Err(RetainedResourceTransportError::MissingFont {
                         face_key: key.0,
@@ -673,12 +685,30 @@ impl InstalledRetainedResources {
             render_geometries: Arc::from([]),
             render_geometry_preparations: Vec::new(),
             additions: Vec::new(),
+            text_layers: HashMap::new(),
+            geometry_layers: HashMap::new(),
+            font_layers: HashMap::new(),
+            font_layers_by_face: HashMap::new(),
+            font_arenas,
             inventory,
         };
         Ok(PreparedRetainedResourceAdditions { installed })
     }
 
     pub(crate) fn commit_additions(&mut self, additions: PreparedRetainedResourceAdditions) {
+        let layer = self.additions.len();
+        for handle in additions.installed.text_handles.values() {
+            self.text_layers.insert(handle.arena, layer);
+        }
+        for handle in additions.installed.geometry_handles.values() {
+            self.geometry_layers.insert(handle.arena, layer);
+        }
+        for &arena in &additions.installed.font_arenas {
+            self.font_layers.insert(arena, layer);
+        }
+        for face in &additions.installed.inventory.fonts {
+            self.font_layers_by_face.insert(face.clone(), layer);
+        }
         self.inventory
             .texts
             .extend(additions.installed.inventory.texts.iter().copied());
@@ -744,9 +774,10 @@ impl TextResourceLookup for InstalledTextResourceOverlay<'_> {
 impl InstalledRetainedResources {
     fn get_text(&self, handle: TextResourceHandle) -> Option<&TextResource> {
         self.texts.get(handle).or_else(|| {
-            self.additions
-                .iter()
-                .find_map(|resources| resources.get_text(handle))
+            self.text_layers
+                .get(&handle.arena)
+                .and_then(|&layer| self.additions.get(layer))
+                .and_then(|resources| resources.texts.get(handle))
         })
     }
 }
@@ -759,18 +790,18 @@ impl TextResourceLookup for InstalledRetainedResources {
 
 impl GeometryResourceLookup for InstalledRetainedResources {
     fn current_handle(&self, id: noon_core::GeometryId) -> Option<GeometryResourceHandle> {
-        self.geometries.current_handle(id).or_else(|| {
-            self.additions
-                .iter()
-                .find_map(|resources| resources.current_handle(id))
-        })
+        // A bare GeometryId has no arena scope and can alias the same slot in every
+        // additive layer. Incremental resources therefore resolve only by their
+        // qualified GeometryResourceHandle; this legacy helper remains base-only.
+        self.geometries.current_handle(id)
     }
 
     fn get(&self, handle: GeometryResourceHandle) -> Option<&GeometryResource> {
         self.geometries.get(handle).or_else(|| {
-            self.additions
-                .iter()
-                .find_map(|resources| GeometryResourceLookup::get(resources, handle))
+            self.geometry_layers
+                .get(&handle.arena)
+                .and_then(|&layer| self.additions.get(layer))
+                .and_then(|resources| resources.geometries.get(handle))
         })
     }
 }
@@ -778,17 +809,19 @@ impl GeometryResourceLookup for InstalledRetainedResources {
 impl FontResourceLookup for InstalledRetainedResources {
     fn handle_for_face(&self, face: &FontFaceIdentity) -> Option<noon_core::FontResourceHandle> {
         self.fonts.handle_for_face(face).or_else(|| {
-            self.additions
-                .iter()
-                .find_map(|resources| resources.handle_for_face(face))
+            self.font_layers_by_face
+                .get(&(face.face_key.to_string(), face.face_index))
+                .and_then(|&layer| self.additions.get(layer))
+                .and_then(|resources| resources.fonts.handle_for_face(face))
         })
     }
 
     fn get(&self, handle: noon_core::FontResourceHandle) -> Option<&noon_core::FontResource> {
         self.fonts.get(handle).or_else(|| {
-            self.additions
-                .iter()
-                .find_map(|resources| FontResourceLookup::get(resources, handle))
+            self.font_layers
+                .get(&handle.arena)
+                .and_then(|&layer| self.additions.get(layer))
+                .and_then(|resources| resources.fonts.get(handle))
         })
     }
 }
