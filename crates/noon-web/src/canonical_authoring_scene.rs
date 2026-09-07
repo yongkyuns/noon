@@ -7315,7 +7315,7 @@ mod tests {
             2.0
         );
         for target in [&left, &right, &writing] {
-            assert!(context.live_contains_mobject(target).unwrap());
+            assert!(context.contains_mobject(target).unwrap());
         }
         assert_eq!(context.bindings.len(), 3);
 
@@ -7339,9 +7339,9 @@ mod tests {
                 .unwrap(),
             3.0
         );
-        assert!(!context.live_contains_mobject(&left).unwrap());
-        assert!(!context.live_contains_mobject(&right).unwrap());
-        assert!(context.live_contains_mobject(&writing).unwrap());
+        assert!(!context.contains_mobject(&left).unwrap());
+        assert!(!context.contains_mobject(&right).unwrap());
+        assert!(context.contains_mobject(&writing).unwrap());
     }
 
     #[test]

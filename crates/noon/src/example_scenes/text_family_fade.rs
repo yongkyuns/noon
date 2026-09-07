@@ -204,7 +204,11 @@ mod tests {
         let frame = program.session().frame();
         assert!(!frame.is_present(0) && !frame.is_present(1));
         assert!(frame.is_present(2));
-        admit_completion(&mut program, &mut callbacks, 3.25);
+        assert_eq!(
+            program.drive_to(&mut callbacks, 3.25).unwrap(),
+            LiveProgramStatus::ReadyToResume,
+            "a clean wait completes without another renderer publication"
+        );
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     }
 }
