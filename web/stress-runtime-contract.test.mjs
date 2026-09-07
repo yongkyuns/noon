@@ -18,6 +18,10 @@ const familyCreation = await readFile(
   "utf8",
 );
 const browserSmoke = await readFile(new URL("./manim-compat-smoke.html", import.meta.url), "utf8");
+const sourceOwnedStress = await readFile(
+  new URL("../scripts/playground-stress-edit-smoke.mjs", import.meta.url),
+  "utf8",
+);
 
 assert.equal(
   noon,
@@ -83,15 +87,16 @@ assert.match(
   /concurrent retained family and ordinary animations must target[\s\S]*disjoint scene leaves/,
   "contract should reject family-vs-ordinary same-leaf ownership",
 );
-assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
-assert.match(browserSmoke, /stressResult\.duration\) - 5\.0/);
-assert.match(browserSmoke, /stressResult\.document\.objects\.length !== 800/);
-assert.match(browserSmoke, /stressTextObjects\.length !== 26/);
-assert.match(browserSmoke, /stressTextObjects = stressResult\.sceneSpec\.objects\.filter/);
-assert.match(browserSmoke, /object\.content\?\.kind === "text"/);
-assert.match(browserSmoke, /stressResult\.sceneSpec\.objects\.length !== 826/);
-assert.match(browserSmoke, /expectedObjectCount: 626/);
-assert.match(browserSmoke, /waitForRenderedState/);
-assert.match(browserSmoke, /seekTime: 3\.0/);
+assert.doesNotMatch(
+  browserSmoke,
+  /manim_parity_stress_grid\.py|retained-stress-smoke/,
+  "canonical Text stress must not re-enter the legacy SceneSpec export fixture",
+);
+assert.match(sourceOwnedStress, /example=manim-parity-stress-grid/);
+assert.match(sourceOwnedStress, /selectedExampleId === "manim-parity-stress-grid"/);
+assert.match(sourceOwnedStress, /const source = await page\.evaluate/);
+assert.match(sourceOwnedStress, /assert\.match\(source, \/rows = 20\//);
+assert.match(sourceOwnedStress, /for \(const rows of \[5, 7, 20\]\)/);
+assert.match(sourceOwnedStress, /Scene rebuilt atomically/);
 
 console.log("✓ stress runtime capability and browser-execution contract");
