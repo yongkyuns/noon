@@ -84,6 +84,9 @@ fn projected_root_path_count(
         for &parent in target_node_checked(store, node)?.parents() {
             if parent == scene_root {
                 count += 1;
+                if count > 1 {
+                    return Ok(count);
+                }
             } else {
                 stack.push(parent);
             }
@@ -115,6 +118,10 @@ fn plan_explicit_root_projection(
     let mut plans = Vec::with_capacity(affected_roots.len());
     let mut globally_promoted = HashSet::new();
     for run_head in run_heads {
+        let mut before = Some(run_head);
+        while before.is_some_and(|candidate| affected_roots.contains(&candidate)) {
+            before = before.and_then(|candidate| root_node.next_member(candidate));
+        }
         let mut root = Some(run_head);
         while let Some(current) = root.filter(|root| affected_roots.contains(root)) {
             let mut promoted = HashSet::new();
@@ -136,10 +143,6 @@ fn plan_explicit_root_projection(
                         promoted,
                     ));
                 }
-            }
-            let mut before = root_node.next_member(current);
-            while before.is_some_and(|candidate| affected_roots.contains(&candidate)) {
-                before = before.and_then(|candidate| root_node.next_member(candidate));
             }
             plans.push((current, replacements, before));
             root = root_node.next_member(current);
@@ -880,6 +883,44 @@ mod tests {
         );
         assert_eq!(store.scene_revision(), revision);
         assert!(store.node(root).unwrap().members().is_empty());
+    }
+
+    #[test]
+    fn explicit_root_planner_preserves_adjacent_replacement_blocks() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let removed_left = object(&mut store, 1.0);
+        let survivor_left = object(&mut store, 2.0);
+        let removed_right = object(&mut store, 3.0);
+        let survivor_right = object(&mut store, 4.0);
+        let tail = object(&mut store, 5.0);
+        let left_family = store.insert_family();
+        let right_family = store.insert_family();
+        for (family, members) in [
+            (left_family, [removed_left, survivor_left]),
+            (right_family, [removed_right, survivor_right]),
+        ] {
+            for member in members {
+                store.add_semantic_family_member(family, member).unwrap();
+            }
+        }
+        for member in [left_family, right_family, tail] {
+            store.add_semantic_family_member(root, member).unwrap();
+        }
+
+        plan_semantic_scene_membership(
+            &store,
+            root,
+            SemanticSceneMembershipRequest::Remove(&[removed_left, removed_right]),
+        )
+        .unwrap()
+        .apply(&mut store)
+        .unwrap();
+
+        assert_eq!(
+            store.node(root).unwrap().members(),
+            &[survivor_left, survivor_right, tail]
+        );
     }
 
     #[test]
