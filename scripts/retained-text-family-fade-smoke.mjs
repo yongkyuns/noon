@@ -40,7 +40,6 @@ from noon import *
 
 class RetainedFamilyFade(Scene):
     def construct(self):
-        self.live_execution()
         first = Text("Family A", font_size=40).shift(LEFT)
         second = Text("Family B", font_size=40).shift(RIGHT)
         family = VGroup(first, VGroup(second))
@@ -53,6 +52,12 @@ class RetainedFamilyFade(Scene):
         holder.remove(detached)
         holder.add(detached)
 
+        unsupported = VGroup(
+            Text("Unsupported A", font_size=32),
+            Text("Unsupported B", font_size=32),
+        )
+
+        self.live_execution()
         self.wait(0.25)
         assert family not in self.mobjects
 
@@ -66,15 +71,11 @@ class RetainedFamilyFade(Scene):
         assert first not in self.mobjects
         assert second not in self.mobjects
 
-        unsupported = VGroup(
-            Text("Unsupported A", font_size=32),
-            Text("Unsupported B", font_size=32),
-        )
         try:
             self.play(FadeIn(unsupported, shift=UP), run_time=0.25)
             raise AssertionError("shifted retained family FadeIn must fail")
         except NotImplementedError as error:
-            assert "shared retained family layout semantics" in str(error)
+            assert "does not support shift, scale, or target_position" in str(error)
         assert unsupported not in self.mobjects
 `;
 

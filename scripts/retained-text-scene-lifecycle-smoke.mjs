@@ -40,8 +40,8 @@ from noon import *
 
 class RetainedSceneLifecycle(Scene):
     def construct(self):
-        self.live_execution()
         label = Text("Lifecycle", font_size=48)
+        self.live_execution()
 
         self.wait(0.5)
         assert label not in self.mobjects

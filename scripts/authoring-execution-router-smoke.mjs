@@ -124,7 +124,7 @@ try {
     });
     const initialCanvas = execution.canvas;
 
-    const mixed = await authoring.run(mixedSource, {});
+    const mixed = await authoring.run(mixedSource, {}, { exportDocument: true });
     const mixedText = mixed.sceneSpec.objects[1];
     const mixedTextKind = mixedText.content.value.kind;
     const mixedTextOptionsKind = mixedText.content.value.options.kind;
@@ -184,7 +184,7 @@ try {
       callbackError = String(error);
     }
 
-    const legacy = await authoring.run(legacySource, {});
+    const legacy = await authoring.run(legacySource, {}, { exportDocument: true });
     const inFlightRetainedMetrics = execution.metrics();
     const legacyTransition = execution.reconcileScene(JSON.stringify(legacy.document), {
       callbacks: legacy.callbacks,
