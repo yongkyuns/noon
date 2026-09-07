@@ -150,15 +150,18 @@ impl PreparedSemanticPublication {
         self.entries.len()
     }
 
-    /// Conservative create patches for existing detached identities.
+    /// Conservative create patches using the held transaction's allocator identities.
     ///
     /// Prepared animation activation uses these only for fallible runtime shape validation before
     /// semantic commit. Exact net entry remains bound from the committed membership update.
-    pub fn conservative_existing_entry_patches(&self) -> Vec<ExecutionPatch> {
+    pub fn conservative_entry_patches(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+    ) -> Vec<ExecutionPatch> {
         self.entries
             .iter()
             .filter_map(|entry| {
-                let semantic = entry.object.existing()?;
+                let semantic = prepared.planned_node_id(entry.object)?;
                 let mut compiled = entry.compiled.clone();
                 compiled.id = semantic_execution_object_id(semantic);
                 Some(ExecutionPatch::CreateObject(compiled))

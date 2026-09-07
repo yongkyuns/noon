@@ -1396,7 +1396,9 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
     }
 
     fn entering_execution_object_id(&self, target: Self::Reference) -> Option<ObjectId> {
-        target.existing().map(super::semantic_execution_object_id)
+        self.prepared
+            .planned_node_id(target)
+            .map(super::semantic_execution_object_id)
     }
 
     fn family_animation_member_count(

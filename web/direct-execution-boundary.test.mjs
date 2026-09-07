@@ -155,6 +155,7 @@ for (const required of [
   "createDirectOrdinaryAffineContinuationSmokeRenderer",
   "createDirectOrdinaryAffinePlaySmokeRenderer",
   "createDirectOrdinaryCallbackSparseReadsSmokeRenderer",
+  "createDirectFocusOnSmokeRenderer",
   "createDirectLinePassingFlashSmokeRenderer",
   "createDirectOrdinaryBecomeSemanticsSmokeRenderer",
   "createDirectOrdinaryCompositionPlaySmokeRenderer",

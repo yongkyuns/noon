@@ -1569,7 +1569,7 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
             return "parallel", args, None
         if isinstance(animation, (_animate._AlignedGroupAnimationBuilder, _animate.Indicate)):
             return "parallel", args, None
-        if type(animation) is _rotate.Rotate:
+        if type(animation) in (_rotate.Rotate, _rotate.FocusOn):
             return "parallel", args, None
         affine = _canonical_affine_animation(scene, animation)
         if affine is not None and affine[0]._scene is None:
@@ -2022,6 +2022,22 @@ def _build_canonical_composition_candidate(
             if child_kwargs:
                 raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
             builder.appendWait(float(animation.run_time))
+            return
+        if isinstance(animation, _rotate.FocusOn):
+            if animation.focus_mobject is not None and (group is not None or len(animations) != 1):
+                raise NotImplementedError("FocusOn of a Mobject requires an isolated fixed-center play")
+            if animation.focus_mobject is not None and not _rotate._points_close(
+                animation.focus_mobject.get_center(), animation.focus_point
+            ):
+                raise NotImplementedError("FocusOn requires a fixed focus Mobject center")
+            child = _canonical_composition_child_options(animation, child_kwargs)
+            x, y = animation.focus_point
+            color = animation.color
+            builder.appendFocusOn(
+                float(x), float(y), float(animation.opacity),
+                float(color.red), float(color.green), float(color.blue),
+                float(child.run_time), str(child.rate_func),
+            )
             return
         passing_flash = _canonical_passing_flash_animation(self, animation)
         if passing_flash is not None:
