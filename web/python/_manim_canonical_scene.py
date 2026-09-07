@@ -2407,7 +2407,7 @@ class LiveExecution:
     for a live read or write.
     """
 
-    def __init__(self, scene: _base.Scene, duration: float = 1.0) -> None:
+    def __init__(self, scene: _base.Scene, duration: float | None = None) -> None:
         context = execution_context(scene)
         if context is None:
             raise RuntimeError(
@@ -2415,6 +2415,11 @@ class LiveExecution:
                 "canonical scalar ValueTracker tracks, and predeclared property callbacks"
             )
         self._scene = scene
+        if duration is None:
+            handoff = context.liveHandoffDuration()
+            duration = (
+                1.0 if handoff is None or float(handoff) <= 0.0 else float(handoff)
+            )
         context.beginLiveExecution(float(duration))
         self._context = context
 
@@ -2548,7 +2553,9 @@ def _declare_live_transform_to(
     )
 
 
-def _live_execution(self: _base.Scene, duration: float = 1.0) -> LiveExecution:
+def _live_execution(
+    self: _base.Scene, duration: float | None = None
+) -> LiveExecution:
     """Create an explicit typed live session for the currently supported subset."""
     return LiveExecution(self, duration)
 
