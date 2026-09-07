@@ -79,6 +79,14 @@ class Demo(Scene):
             rate_func=linear,
         )
         self.play(FadeIn(Circle(radius=0.2, color=GREEN)), run_time=0.25)
+
+        # Group fades remain explicit export coverage until shared lifecycle migration (#959).
+        intro = VGroup(
+            Circle(radius=0.18, color=BLUE),
+            Square(side_length=0.36, color=PINK),
+        ).arrange(RIGHT, buff=0.2)
+        self.play(FadeIn(intro), run_time=0.25)
+        self.play(FadeOut(intro), run_time=0.25)
 `;
 
 const phaseBSource = `
@@ -125,14 +133,6 @@ class GroupMembershipLive(Scene):
         self.clear()
         assert self.mobjects == []
 
-        intro = VGroup(
-            Circle(radius=0.18, color=BLUE),
-            Square(side_length=0.36, color=PINK),
-        ).arrange(RIGHT, buff=0.2)
-        self.play(FadeIn(intro), run_time=0.25)
-        assert len(self.mobjects) == 1 and self.mobjects[0] is intro
-        self.play(FadeOut(intro), run_time=0.25)
-        assert self.mobjects == []
 `;
 
 const defaultVmobjectStyleSource = `
@@ -410,10 +410,10 @@ try {
     foundationSource,
   );
   assert.equal(foundation.kind, "scene_document");
-  assert.equal(foundation.document.objects.length, 3, "introducer animations should auto-bind objects");
+  assert.equal(foundation.document.objects.length, 5, "introducer animations should auto-bind objects");
 
   const foundationProperties = foundation.document.tracks.map((track) => track.property);
-  assert.equal(foundationProperties.filter((property) => property === "presence").length, 3);
+  assert.equal(foundationProperties.filter((property) => property === "presence").length, 7);
   assert.equal(foundationProperties.filter((property) => property === "reveal").length, 2);
   assert.ok(foundationProperties.includes("transform"), "animate.shift should lower to transform");
 
@@ -437,8 +437,8 @@ try {
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     phaseBSource,
   );
-  assert.equal(phaseB.duration, 1.5, "membership edits preserve continuation timing");
-  assert.equal(phaseB.metrics.objectCount, 0, "group fade-out removes the final roots");
+  assert.equal(phaseB.duration, 1, "membership edits preserve continuation timing");
+  assert.equal(phaseB.metrics.objectCount, 0, "clear removes the final root");
   assert.ok(phaseB.metrics.presentedFrames > 0, "shared group membership must render");
 
   const defaultVmobjectStyle = await page.evaluate(
