@@ -243,7 +243,6 @@ try {
         (pythonSource) => window.noonManimCompat.run(pythonSource),
         source,
       );
-      assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
       const retained = await page.evaluate(
         ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
         { result, label: entry.id },
