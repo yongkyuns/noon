@@ -15,7 +15,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct RetainedFamilyExecutionDeltaEncoder {
     retained: RetainedExecutionDeltaEncoder,
-    published_plan_count: usize,
+    plan_index_remap: Vec<Option<u32>>,
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
@@ -25,13 +25,13 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::with_render_geometries(session, geometries),
-            published_plan_count: 0,
+            plan_index_remap: Vec::new(),
         }
     }
     pub const fn new(session: u32) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
-            published_plan_count: 0,
+            plan_index_remap: Vec::new(),
         }
     }
 
@@ -43,7 +43,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
         let retained = self.retained.encode_snapshot(frame.retained, camera)?;
         let envelope = RetainedFamilyExecutionDeltaEnvelope::snapshot(retained, frame, plans)?;
-        self.published_plan_count = plans.len();
+        self.plan_index_remap = (0..plans.len()).map(|index| Some(index as u32)).collect();
         Ok(envelope)
     }
 
@@ -56,8 +56,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         let retained = self.retained.encode_snapshot(frame.retained, camera)?;
         let envelope =
             RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?;
-        self.published_plan_count = plans.len();
-        Ok(envelope)
+        self.compact_planned_snapshot(envelope, plans)
     }
 
     /// Encode an authoritative snapshot for the execution rows that still own a
@@ -79,8 +78,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         let envelope = RetainedFamilyExecutionDeltaEnvelope::planned_snapshot_indices(
             retained, frame, plans, indices,
         )?;
-        self.published_plan_count = plans.len();
-        Ok(envelope)
+        self.compact_planned_snapshot(envelope, plans)
     }
 
     /// Encode one sparse family-aware retained update.
@@ -96,7 +94,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         camera: Camera2DState,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
-        let added_plans = self.unpublished_plans(plans)?;
+        self.validate_plan_count(plans)?;
         let Some(retained) = self
             .retained
             .encode_incremental(frame.retained, changes, camera)?
@@ -108,16 +106,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
         let envelope = if snapshot {
             RetainedFamilyExecutionDeltaEnvelope::snapshot(retained, frame, plans)?
         } else {
-            let mut envelope =
-                RetainedFamilyExecutionDeltaEnvelope::incremental(retained, frame, changes)?;
-            envelope.family_plans = added_plans
-                .iter()
-                .map(crate::RetainedFamilyPlanTransport::from_plan)
-                .collect();
-            envelope.validate()?;
-            envelope
+            RetainedFamilyExecutionDeltaEnvelope::incremental(retained, frame, changes)?
         };
-        self.published_plan_count = plans.len();
         Ok(Some(envelope))
     }
 
@@ -129,7 +119,32 @@ impl RetainedFamilyExecutionDeltaEncoder {
         camera: Camera2DState,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
-        let added_plans = self.unpublished_plans(plans)?;
+        self.validate_plan_count(plans)?;
+        let mut next_remap = self.plan_index_remap.clone();
+        next_remap.resize(plans.len(), None);
+        let mut added_plan_indices = Vec::new();
+        for &object_index in changes.object_indices() {
+            if frame.family_animation(object_index).is_none() {
+                continue;
+            }
+            let object = &frame.retained.objects[object_index];
+            let core_index = frame.family_plan_index(object_index).ok_or(
+                RetainedFamilyExecutionTransportError::MissingPlanIndex(object.id),
+            )? as usize;
+            let next_wire_index = next_remap.iter().flatten().count() as u32;
+            let Some(mapping) = next_remap.get_mut(core_index) else {
+                return Err(RetainedFamilyExecutionTransportError::InvalidPlanIndex {
+                    object: object.id,
+                    plan_index: core_index as u32,
+                    plan_count: plans.len(),
+                }
+                .into());
+            };
+            if mapping.is_none() {
+                *mapping = Some(next_wire_index);
+                added_plan_indices.push(core_index);
+            }
+        }
         let Some(retained) = self
             .retained
             .encode_incremental(frame.retained, changes, camera)?
@@ -138,31 +153,97 @@ impl RetainedFamilyExecutionDeltaEncoder {
         };
 
         let snapshot = retained.snapshot;
-        let envelope = if snapshot {
-            RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?
+        let mut envelope = if snapshot {
+            let envelope =
+                RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?;
+            return self.compact_planned_snapshot(envelope, plans).map(Some);
         } else {
+            let added_plans = added_plan_indices
+                .iter()
+                .map(|&index| plans[index].clone())
+                .collect::<Vec<_>>();
             RetainedFamilyExecutionDeltaEnvelope::planned_incremental_with_plans(
                 retained,
                 frame,
                 changes,
-                added_plans,
+                &added_plans,
             )?
         };
-        self.published_plan_count = plans.len();
+        remap_family_state_indices(&mut envelope, &next_remap)?;
+        self.plan_index_remap = next_remap;
         Ok(Some(envelope))
     }
 
-    fn unpublished_plans<'a>(
+    fn validate_plan_count(
         &self,
-        plans: &'a [RetainedFamilyAnimationPlan],
-    ) -> Result<&'a [RetainedFamilyAnimationPlan], RetainedFamilyExecutionTransportError> {
-        plans.get(self.published_plan_count..).ok_or(
-            RetainedFamilyExecutionTransportError::PlanSetShrank {
-                published: self.published_plan_count,
+        plans: &[RetainedFamilyAnimationPlan],
+    ) -> Result<(), RetainedFamilyExecutionTransportError> {
+        if plans.len() < self.plan_index_remap.len() {
+            return Err(RetainedFamilyExecutionTransportError::PlanSetShrank {
+                published: self.plan_index_remap.len(),
                 available: plans.len(),
-            },
-        )
+            });
+        }
+        Ok(())
     }
+
+    fn compact_planned_snapshot(
+        &mut self,
+        mut envelope: RetainedFamilyExecutionDeltaEnvelope,
+        plans: &[RetainedFamilyAnimationPlan],
+    ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
+        let mut remap = vec![None; plans.len()];
+        for entry in &envelope.family_states {
+            if entry.state.family_animation.is_none() {
+                continue;
+            }
+            let core_index = entry.family_plan_index.ok_or(
+                RetainedFamilyExecutionTransportError::MissingPlanIndex(entry.object),
+            )? as usize;
+            let next = remap.iter().flatten().count() as u32;
+            let mapping = remap.get_mut(core_index).ok_or(
+                RetainedFamilyExecutionTransportError::InvalidPlanIndex {
+                    object: entry.object,
+                    plan_index: core_index as u32,
+                    plan_count: plans.len(),
+                },
+            )?;
+            mapping.get_or_insert(next);
+        }
+        envelope.family_plans = remap
+            .iter()
+            .enumerate()
+            .filter_map(|(index, wire)| {
+                wire.map(|wire| {
+                    (
+                        wire,
+                        crate::RetainedFamilyPlanTransport::from_plan(&plans[index]),
+                    )
+                })
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_values()
+            .collect();
+        remap_family_state_indices(&mut envelope, &remap)?;
+        envelope.validate()?;
+        self.plan_index_remap = remap;
+        Ok(envelope)
+    }
+}
+
+fn remap_family_state_indices(
+    envelope: &mut RetainedFamilyExecutionDeltaEnvelope,
+    remap: &[Option<u32>],
+) -> Result<(), RetainedFamilyExecutionTransportError> {
+    for entry in &mut envelope.family_states {
+        let Some(core_index) = entry.family_plan_index else {
+            continue;
+        };
+        entry.family_plan_index = Some(remap.get(core_index as usize).copied().flatten().ok_or(
+            RetainedFamilyExecutionTransportError::MissingPlanIndex(entry.object),
+        )?);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -373,6 +454,31 @@ mod tests {
         assert_eq!(delta.family_plans.len(), 1);
         assert_eq!(delta.family_states.len(), 1);
         assert_eq!(delta.family_states[0].family_plan_index, Some(1));
+    }
+
+    #[test]
+    fn planned_snapshot_omits_inactive_historical_plan_descriptors() {
+        let (plan, frame, _) = fixture();
+        let states = [None, None];
+        let plan_indices = [None, None];
+        let inactive = RetainedPlannedFamilyFrame {
+            retained: &frame,
+            family_animations: &states,
+            family_plan_indices: &plan_indices,
+        };
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(21);
+        let snapshot = encoder
+            .encode_planned_snapshot(
+                &inactive,
+                std::slice::from_ref(&plan),
+                Camera2DState::default(),
+            )
+            .unwrap();
+        assert!(snapshot.family_plans.is_empty());
+        assert!(snapshot
+            .family_states
+            .iter()
+            .all(|entry| entry.family_plan_index.is_none()));
     }
 
     #[test]

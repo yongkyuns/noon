@@ -81,6 +81,10 @@ impl InstalledRetainedExecutionMirror {
         self.family.plans()
     }
 
+    pub fn active_family_animation_indices(&self) -> &std::collections::BTreeSet<usize> {
+        self.family.active_indices()
+    }
+
     pub fn family_plan(
         &self,
     ) -> Result<Option<&RetainedFamilyAnimationPlan>, InstalledExecutionError> {

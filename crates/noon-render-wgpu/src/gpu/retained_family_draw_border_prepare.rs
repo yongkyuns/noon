@@ -289,7 +289,7 @@ impl RetainedFramePreparer {
         };
         for member in members {
             let member = member?;
-            if member.glyph.run_index == run_index && !draw_border_phase_is_final(member.phase) {
+            if member.glyph.run_index == run_index {
                 return Ok(true);
             }
             if member.object != object {
@@ -340,8 +340,7 @@ impl RetainedFramePreparer {
                 continue;
             }
             let reveal = match member.phase {
-                RetainedDrawBorderThenFillPhase::Outline { reveal } if reveal <= 0.0 => continue,
-                RetainedDrawBorderThenFillPhase::Outline { reveal } => reveal,
+                RetainedDrawBorderThenFillPhase::Outline { reveal } => reveal.max(0.0),
                 RetainedDrawBorderThenFillPhase::Fill { .. } => 1.0,
             };
             let positioned = run.glyphs.get(member.glyph.glyph_index as usize).ok_or(

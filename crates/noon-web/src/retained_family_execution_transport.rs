@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceArena};
 use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
@@ -254,6 +254,7 @@ pub struct InstalledRetainedFamilyExecutionState {
     states: Vec<Option<FamilyAnimationState>>,
     plan_indices: Vec<Option<u32>>,
     plans: Vec<RetainedFamilyAnimationPlan>,
+    active_indices: BTreeSet<usize>,
     initialized: bool,
 }
 
@@ -283,6 +284,12 @@ impl InstalledRetainedFamilyExecutionState {
             self.states = states;
             self.plan_indices = plan_indices;
             self.plans = plans;
+            self.active_indices = self
+                .states
+                .iter()
+                .enumerate()
+                .filter_map(|(index, state)| state.is_some().then_some(index))
+                .collect();
             self.initialized = true;
             return Ok(());
         }
@@ -308,6 +315,11 @@ impl InstalledRetainedFamilyExecutionState {
         for (index, state, plan_index) in updates {
             self.states[index] = state;
             self.plan_indices[index] = plan_index;
+            if state.is_some() {
+                self.active_indices.insert(index);
+            } else {
+                self.active_indices.remove(&index);
+            }
         }
         self.plans = plans;
         Ok(())
@@ -338,6 +350,10 @@ impl InstalledRetainedFamilyExecutionState {
 
     pub fn plans(&self) -> &[RetainedFamilyAnimationPlan] {
         &self.plans
+    }
+
+    pub fn active_indices(&self) -> &BTreeSet<usize> {
+        &self.active_indices
     }
 
     /// Legacy convenience for callers that deliberately operate on one plan only.

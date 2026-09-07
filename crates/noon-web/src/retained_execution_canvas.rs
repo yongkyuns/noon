@@ -287,10 +287,9 @@ mod wasm {
             .map_err(js_error)?;
             let plans = self.mirror.family_plans();
             let family_frame = self.mirror.planned_family_frame().map_err(js_error)?;
-            let family_active = family_frame
-                .as_ref()
-                .is_some_and(|frame| frame.family_animations.iter().any(Option::is_some));
+            let family_active = !self.mirror.active_family_animation_indices().is_empty();
             let prepared = if !family_active {
+                self.preparer.release_planned_family_realization();
                 let frame = self.mirror.frame().ok_or_else(|| {
                     js_message("retained execution renderer has no frame snapshot")
                 })?;
@@ -313,11 +312,12 @@ mod wasm {
                     )
                 })?;
                 self.preparer
-                    .prepare_family_plan_set_with_changes(
+                    .prepare_active_family_plan_set_with_changes(
                         &self.device,
                         &self.queue,
                         &family_frame,
                         plans,
+                        self.mirror.active_family_animation_indices(),
                         &self.pending_changes,
                         resources.texts(),
                         resources.fonts(),
