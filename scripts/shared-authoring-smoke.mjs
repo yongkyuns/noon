@@ -1411,6 +1411,38 @@ try {
     await stopSampledSource(page);
   }
 
+  const membershipSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_membership.py"), "utf8",
+  );
+  await startSampledSource(page, membershipSource, "scene-shared-membership");
+  try {
+    const canvas = page.locator("#scene-shared-membership");
+    for (const [stage, count] of [2, 2, 1, 3, 2, 2, 0].entries()) {
+      const time = stage * 0.5 + 0.25;
+      const metrics = await page.evaluate(async (time) => {
+        const execution = window.sharedAuthoringSmoke.sampledProof.execution;
+        await execution.sampleToAuthoredTime(time);
+        return (await execution.metrics()).metrics;
+      }, time);
+      assert.equal(metrics.objectCount, count, `shared membership stage ${stage}`);
+      const color = renderedWorldPixel(await canvas.screenshot(), 0, 0);
+      const channel = stage === 2 || stage === 5 ? "green" : "blue";
+      if (count > 0) {
+        assert.ok(color[channel] > 100 && color[channel] > color.red + 40,
+          `shared membership painter order at stage ${stage}: ${JSON.stringify(color)}`);
+      }
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.5), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3.5);
+    assert.equal(result.metrics.objectCount, 0);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const subsetDisplaySource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_subset_display.py"), "utf8",
   );

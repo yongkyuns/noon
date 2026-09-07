@@ -23,6 +23,7 @@ const {
   createDirectFamilyTransformIndicateSmokeRenderer,
   createDirectDrawBorderThenFillSmokeRenderer,
   createDirectOrdinarySubsetDisplaySmokeRenderer,
+  createDirectOrdinaryMembershipSmokeRenderer,
   createDirectOrdinaryTextWriteSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
@@ -1173,6 +1174,42 @@ async function directOrdinaryTextWriteProof(expectedBackend) {
   }
 }
 
+async function directOrdinaryMembershipProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryMembershipSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const [stage, count] of [2, 2, 1, 3, 2, 2, 0].entries()) {
+      const time = stage * 500 + 250;
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const color = await sampleRenderedColor(canvas, 0, 0);
+      const channel = stage === 2 || stage === 5 ? "green" : "blue";
+      if (renderer.objectCount() !== count || (count > 0
+          && (color[channel] < 100 || color[channel] < color.red + 40))) {
+        throw new Error(`direct membership stage ${stage}: count=${renderer.objectCount()}, color=${JSON.stringify(color)}`);
+      }
+      samples.push({ time, count, color });
+    }
+    renderer.advanceDirectRealtime(3500);
+    await settleDirectPublication(renderer, 3500);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3500));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 0
+        || renderer.time() !== 3.5 || wake.cadence !== "idle") {
+      throw new Error("direct membership did not finish with an empty, idle scene");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directOrdinarySubsetDisplayProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectOrdinarySubsetDisplaySmokeRenderer(canvas);
@@ -1825,6 +1862,7 @@ async function start() {
   metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);
   metrics.familyTransformIndicate = await directFamilyTransformIndicateProof(expectedBackend);
   metrics.drawBorderThenFill = await directDrawBorderThenFillProof(expectedBackend);
+  metrics.ordinaryMembership = await directOrdinaryMembershipProof(expectedBackend);
   metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);
   metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
