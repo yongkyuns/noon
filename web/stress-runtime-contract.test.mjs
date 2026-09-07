@@ -90,7 +90,7 @@ assert.match(
 assert.doesNotMatch(
   browserSmoke,
   /manim_parity_stress_grid\.py|retained-stress-smoke/,
-  "canonical Text stress must not re-enter the legacy SceneSpec export fixture",
+  "canonical Text stress must not re-enter the legacy document export fixture",
 );
 assert.match(sourceOwnedStress, /example=manim-parity-stress-grid/);
 assert.match(sourceOwnedStress, /selectedExampleId === "manim-parity-stress-grid"/);
