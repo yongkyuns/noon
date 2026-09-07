@@ -1285,6 +1285,8 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         import _manim_rotate as _rotate
 
         animation = args[0]
+        if _canonical_text_write_animation(scene, animation) is not None:
+            return "parallel", args, None
         if _canonical_subset_display_animation(scene, animation) is not None:
             return "parallel", args, None
         if _canonical_draw_border_then_fill_animation(scene, animation) is not None:
@@ -1439,6 +1441,41 @@ def _canonical_draw_border_then_fill_animation(scene: _base.Scene, animation: ob
     return target, family, leaves, phase_rate
 
 
+def _canonical_text_write_animation(scene: _base.Scene, animation: object):
+    """Classify single plain-Text Write/Unwrite without deriving glyph state."""
+    if not isinstance(animation, _family_creation.Write):
+        return None
+    target = animation.target
+    if not isinstance(target, _typst.Text) or isinstance(target, _compat.Group):
+        return None
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError("canonical Text Write requires a typed plain Text target")
+    if animation.introducer:
+        if target._scene is not None:
+            raise ValueError("forward Text Write requires a detached plain Text target")
+    elif target._scene is not scene:
+        raise ValueError("reverse Text Write requires a plain Text target in this Scene")
+    return target
+
+
+def _canonical_text_write_options(animation: object):
+    """Return only explicitly authored leaf options; Rust resolves omitted timing."""
+    args = dict(_options.builder_args(animation))
+    path_arc = float(args.get("path_arc", 0.0))
+    if not math.isfinite(path_arc):
+        raise ValueError("Text Write path_arc must be finite")
+    if not math.isclose(path_arc, 0.0, abs_tol=1e-15):
+        raise NotImplementedError("canonical Text Write does not support path_arc")
+    run_time = args.get("run_time")
+    lag_ratio = args.get("lag_ratio")
+    rate_func = args.get("rate_func")
+    return (
+        None if run_time is None else float(run_time),
+        None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+        None if lag_ratio is None else float(lag_ratio),
+    )
+
+
 def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
     """Classify a prepared ordinary family without inspecting member snapshots."""
     if not isinstance(animation, _lifecycle.ShowIncreasingSubsets):
@@ -1533,6 +1570,35 @@ def _build_canonical_composition_candidate(
             if child_kwargs:
                 raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
             builder.appendWait(float(animation.run_time))
+            return
+        text_write = _canonical_text_write_animation(self, animation)
+        if text_write is not None:
+            if child_kwargs:
+                # Flat Scene.play options are already carried by the root request;
+                # nested groups pass their timing through their composition node.
+                unsupported = set(child_kwargs) - {"duration", "run_time", "easing", "rate_func"}
+                if unsupported:
+                    names = ", ".join(sorted(unsupported))
+                    raise NotImplementedError(
+                        f"unsupported canonical Text Write play option(s): {names}"
+                    )
+            child_run_time, rate_function, child_lag_ratio = (
+                _canonical_text_write_options(animation)
+            )
+            reservation = reserve(text_write) if animation.introducer else None
+            if animation.remover:
+                removals.append(text_write)
+            builder.appendTextWrite(
+                "" if reservation is None else str(reservation.object.id),
+                text_write._semantic_handle,
+                bool(animation.reverse),
+                bool(animation.introducer),
+                bool(animation.remover),
+                bool(animation.reverse_rate_function),
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+            )
             return
         subset = _canonical_subset_display_animation(self, animation)
         if subset is not None:

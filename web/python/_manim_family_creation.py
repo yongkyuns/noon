@@ -123,6 +123,11 @@ def _family_candidate(animation: object):
         return None
 
     if _is_write_animation(animation):
+        # A single plain Text is an ordinary typed semantic Mobject. The final
+        # canonical Scene.play wrapper routes Write/Unwrite through shared TextWrite;
+        # do not fabricate a one-member family or serialized family request.
+        if isinstance(target, _typst.Text) and not isinstance(target, _compat.Group):
+            return None
         native_text = [_native_text(member) for member in leaves]
         if not any(native_text):
             if animation.reverse or animation.remover or animation.reverse_rate_function:

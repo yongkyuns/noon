@@ -240,6 +240,12 @@ pub enum AnimationCompositionRequest<'a> {
         mode: SubsetDisplayMode,
         options: AnimationOptions,
     },
+    /// Write or unwrite one plain Text object through its Rust-derived glyph members.
+    TextWrite {
+        target: &'a Mobject,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    },
     Rotate {
         target: &'a Mobject,
         angle: f64,
@@ -824,6 +830,21 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
+    /// Write or unwrite one plain Text object through shared glyph semantics.
+    pub fn declare_and_activate_text_write(
+        &mut self,
+        target: &Mobject,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::TextWrite {
+            target,
+            reverse_member_order,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
     /// Atomically hide every direct member before activating a subset display.
     pub fn prepare_family_subset_display(
         &mut self,
@@ -1168,6 +1189,18 @@ impl<'a> LiveSession<'a> {
                 Request::FamilySubsetDisplay {
                     target: target.node_id(),
                     mode: *mode,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::TextWrite {
+                target,
+                reverse_member_order,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::TextWrite {
+                    target: target.node_id(),
+                    reverse_member_order: *reverse_member_order,
                     options: *options,
                 }
             }

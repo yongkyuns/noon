@@ -120,6 +120,11 @@ pub(crate) enum SemanticCompositionRequest {
         mode: SubsetDisplayMode,
         options: AnimationOptions,
     },
+    TextWrite {
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    },
     Rotate {
         target: SemanticNodeId,
         angle: f64,
@@ -810,6 +815,16 @@ impl ExecutionSession {
     /// Current renderer-facing runtime frame.
     pub fn frame(&self) -> &FrameState {
         self.runtime.frame()
+    }
+
+    /// Current renderer-facing frame with derived Text/family animation state.
+    pub fn planned_family_frame(&self) -> noon_runtime::RetainedPlannedFamilyFrame<'_> {
+        self.runtime.planned_family_frame()
+    }
+
+    /// Immutable derived member plans installed in this execution revision.
+    pub fn family_animation_plans(&self) -> &[noon_core::RetainedFamilyAnimationPlan] {
+        self.runtime.family_animation_plans()
     }
 
     /// Work performed by the most recent incremental execution-plan patch.
@@ -1833,6 +1848,27 @@ impl ExecutionSession {
                     SemanticAnimationCompositionKind::Parallel,
                     children,
                     composition_options,
+                ))
+            }
+            SemanticCompositionRequest::TextWrite {
+                target,
+                reverse_member_order,
+                options,
+            } => {
+                let introducer = options.introducer.unwrap_or(!reverse_member_order);
+                let remover = options.remover.unwrap_or(*reverse_member_order);
+                if introducer {
+                    admit(*target, declaration, admitted)?;
+                } else {
+                    self.require_present_draw_border_target(store, root, *target)?;
+                }
+                if remover {
+                    removals.push((root, *target));
+                }
+                Ok(declaration.create_text_write_animation(
+                    *target,
+                    *reverse_member_order,
+                    *options,
                 ))
             }
             SemanticCompositionRequest::Rotate {
