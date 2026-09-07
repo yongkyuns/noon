@@ -234,7 +234,7 @@
       "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::append_create/append_fade_in/append_fade_out"},
       "reason": "The remaining #959 retained/group migration path still constructs endpoint snapshots, presence tracks, and final handoff state in Python; canonical typed leaf fades use the shared Rust operation.",
       "replacement": "Move deterministic endpoint and lifecycle track lowering to the shared Rust facade.",
-      "migration_issue": "#959"
+      "migration_issue": "#61"
     },
     {
       "id": "animation.composition",
