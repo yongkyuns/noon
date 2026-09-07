@@ -1211,7 +1211,10 @@ pub(super) fn lower_draw_border_then_fill_channels(
         ..color
     });
     let outline_stroke = if let Some(color) = stroke_color {
-        Some(color)
+        Some(noon_core::Color {
+            alpha: from.style.stroke.map_or(1.0, |stroke| stroke.alpha),
+            ..color
+        })
     } else if from.style.stroke.is_some() && from.style.stroke_width > 0.0 {
         from.style.stroke
     } else {

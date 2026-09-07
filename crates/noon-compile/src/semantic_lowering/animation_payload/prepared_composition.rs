@@ -1045,7 +1045,10 @@ mod tests {
         let prepared = transaction.prepare(&mut store).unwrap();
         let mut captured = effective(Vec2::ZERO);
         captured.style.fill = Some(Color::GREEN);
-        captured.style.stroke = Some(Color::RED);
+        captured.style.stroke = Some(Color {
+            alpha: 0.25,
+            ..Color::RED
+        });
         captured.style.stroke_width = 0.25;
 
         let activation = lower_prepared_semantic_animation_composition(
@@ -1086,8 +1089,14 @@ mod tests {
             track.property == Property::Stroke
                 && track.values
                     == TrackValues::Color {
-                        from: Some(Color::BLUE),
-                        to: Some(Color::RED),
+                        from: Some(Color {
+                            alpha: 0.25,
+                            ..Color::BLUE
+                        }),
+                        to: Some(Color {
+                            alpha: 0.25,
+                            ..Color::RED
+                        }),
                     }
         }));
         assert!(activation.tracks().iter().any(|track| {
