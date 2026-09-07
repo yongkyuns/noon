@@ -114,7 +114,6 @@ for (const id of [
   "manim-grow-from-center",
   "manim-grow-from-edge",
   "manim-spin-in-from-nothing",
-  "manim-rotating-demo",
   "manim-using-focus-on",
   "manim-using-indicate",
   "manim-lagged-start-map",
@@ -125,6 +124,17 @@ for (const id of [
     `${id}: exact upstream source should be public before separate raster qualification`,
   );
 }
+const rotatingDemo = manifest.entries.find((entry) => entry.id === "manim-rotating-demo");
+assert.equal(
+  rotatingDemo?.status,
+  "blocked",
+  "RotatingDemo must remain blocked until broad Rotating and family Transform share semantic playback",
+);
+assert.equal(
+  rotatingDemo?.dependency,
+  "#61/#959",
+  "RotatingDemo must retain its explicit migration owners",
+);
 for (const syntheticProbeId of [
   "parity-dot-ellipse",
   "parity-add-wait-lagged-start-map",

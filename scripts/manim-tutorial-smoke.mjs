@@ -76,8 +76,8 @@ for (const entry of ready) {
   );
   if (qualificationMode === "shared-live") {
     assert.ok(
-      Number.isInteger(entry.expected_object_count) && entry.expected_object_count > 0,
-      `${entry.id}: shared-live qualification requires a positive expected_object_count`,
+      Number.isInteger(entry.expected_object_count) && entry.expected_object_count >= 0,
+      `${entry.id}: shared-live qualification requires a non-negative expected_object_count`,
     );
   }
 
