@@ -406,6 +406,65 @@ fn analytic_line_match_preserves_source_content_and_paint() {
 }
 
 #[test]
+fn manim_line_endpoints_preserve_f64_transform_and_color_is_stroke_first() {
+    let scene = Scene::new();
+    let mut line = scene.line((-1.0, -0.5), (1.0, 0.5)).unwrap();
+    line.set_scale(1.5, 0.75).unwrap();
+    line.set_rotation(std::f64::consts::FRAC_PI_6).unwrap();
+    line.set_translation(0.123_456_789_012, -2.234_567_890_123)
+        .unwrap();
+    line.set_fill(1.0, 0.0, 0.0, 0.9).unwrap();
+    line.set_stroke_color(0.2, 0.4, 0.8, 1.0).unwrap();
+    line.set_stroke_opacity(0.0).unwrap();
+    line.set_object_opacity(0.1).unwrap();
+
+    let (sine, cosine) = std::f64::consts::FRAC_PI_6.sin_cos();
+    let expected_start = (
+        -1.5 * cosine + 0.375 * sine + 0.123_456_789_012,
+        -1.5 * sine + -0.375 * cosine - 2.234_567_890_123,
+    );
+    let expected_end = (
+        1.5 * cosine - 0.375 * sine + 0.123_456_789_012,
+        1.5 * sine + 0.375 * cosine - 2.234_567_890_123,
+    );
+    assert_eq!(
+        line.manim_line_endpoints().unwrap(),
+        ManimLineEndpoints {
+            start: expected_start,
+            end: expected_end,
+        }
+    );
+    assert_eq!(line.manim_color().unwrap(), Color::rgba(0.2, 0.4, 0.8, 0.0));
+
+    assert!(scene.circle(1.0).unwrap().manim_line_endpoints().is_err());
+    let resource_style = SemanticStyle {
+        stroke: Some(SemanticPaint::Resource(7)),
+        fill: Some(SemanticPaint::Solid(Color::RED)),
+        ..SemanticStyle::default()
+    };
+    assert!(style::manim_color_from_semantic(&resource_style).is_err());
+    assert_eq!(
+        style::manim_color_from_semantic(&SemanticStyle {
+            fill: Some(SemanticPaint::Solid(Color::GREEN)),
+            fill_opacity: 0.4,
+            stroke: None,
+            ..SemanticStyle::default()
+        })
+        .unwrap(),
+        Color::rgba(Color::GREEN.red, Color::GREEN.green, Color::GREEN.blue, 0.4)
+    );
+    assert_eq!(
+        style::manim_color_from_semantic(&SemanticStyle {
+            fill: None,
+            stroke: None,
+            ..SemanticStyle::default()
+        })
+        .unwrap(),
+        Color::WHITE
+    );
+}
+
+#[test]
 fn analytic_line_match_rejects_invalid_operands_before_mutation() {
     let scene = Scene::new();
     let mut source = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();

@@ -1,5 +1,5 @@
 //! Explicit legacy value export; deletion owned by #959.
-use crate::semantic_mobject::{legacy_solid_color, Mobject};
+use crate::semantic_mobject::{solid_color_with_opacity, Mobject};
 use noon_core::{
     GeometryRef, GeometryResource, ObjectSnapshot, SemanticStore, SemanticStyle,
     SemanticTransform2_5D, StoredGeometry, Style, Transform2D,
@@ -22,8 +22,8 @@ pub fn export_mobject_snapshot(object: &Mobject) -> Result<ObjectSnapshot, Strin
 
 fn export_style(style: &SemanticStyle) -> Style {
     Style {
-        fill: legacy_solid_color(style.fill.as_ref(), style.fill_opacity),
-        stroke: legacy_solid_color(style.stroke.as_ref(), style.stroke_opacity),
+        fill: solid_color_with_opacity(style.fill.as_ref(), style.fill_opacity),
+        stroke: solid_color_with_opacity(style.stroke.as_ref(), style.stroke_opacity),
         stroke_width: style.stroke_width as f32,
         stroke_width_mode: style.stroke_width_mode,
         stroke_join: style.stroke_join,

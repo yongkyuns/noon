@@ -10,7 +10,7 @@ fn include_layout_point(bounds: &mut Option<Bounds2D64>, point: (f64, f64)) {
 fn transform_layout_point(transform: SemanticTransform2_5D, point: Vec2) -> (f64, f64) {
     transform_layout_xy(transform, f64::from(point.x), f64::from(point.y))
 }
-fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f64) -> (f64, f64) {
+pub(super) fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f64) -> (f64, f64) {
     let x = x * transform.scale.x;
     let y = y * transform.scale.y;
     let sine = transform.rotation_z.sin();

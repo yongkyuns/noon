@@ -170,6 +170,24 @@ def _set_color_preserving_opacity(
 ) -> _base.Mobject:
     """Match Manim ``set_color`` without coupling RGB to fill/stroke opacity."""
 
+    try:
+        import _manim_semantic_handles as shared
+    except ImportError:
+        shared = None
+    if shared is not None:
+        handle = shared._handle_for(self)
+        if handle is not None:
+            return shared._set_color(self, color)
+        if (
+            getattr(self, "_semantic_handle", None) is not None
+            and not bool(
+                getattr(getattr(self, "_scene", None), "_legacy_geometry_materialized", False)
+            )
+        ):
+            raise NotImplementedError(
+                "typed set_color requires the shared semantic mutation path"
+            )
+
     before = self._current_raw().style
     result = _ORIGINAL_MOBJECT_SET_COLOR(self, color)
     raw = _base._raw_mobject(self._current_raw())

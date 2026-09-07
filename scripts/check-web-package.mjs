@@ -263,6 +263,11 @@ const expectedTypeSurface = [
   "completeLiveSegment(): void",
   "export class CanonicalAuthoringSceneContext",
   "queryMobjectLayout(handle: WasmAuthoringMobjectHandle): WasmMobjectLayoutObservation",
+  "manimLineEndpoints(): WasmManimLineEndpoints",
+  "manimColor(): WasmManimColor",
+  "queryMobjectLineEndpoints(handle: WasmAuthoringMobjectHandle): WasmManimLineEndpoints",
+  "queryMobjectColor(handle: WasmAuthoringMobjectHandle): WasmManimColor",
+
   "resumeExecutionPlayer(): SemanticExecutionPlayer",
   "export class WasmMobjectLayoutObservation",
   "criticalX(direction_x: number, direction_y: number): number",

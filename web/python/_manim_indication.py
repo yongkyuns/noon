@@ -31,6 +31,7 @@ import _manim_animate as _animate
 import _manim_compat as _compat
 import _manim_composition as _composition
 import _manim_lifecycle as _lifecycle
+import _manim_semantic_handles as _semantic_handles
 
 
 _INSTALLED = False
@@ -54,12 +55,13 @@ class ShowPassingFlash:
             )
         if not isinstance(mobject, _compat.VMobject):
             raise TypeError("ShowPassingFlash only works for VMobjects")
-        raw = mobject._current_raw()
-        if "line" not in raw.geometry:
-            raise NotImplementedError(
-                "ShowPassingFlash currently qualifies the exact Line subset; "
-                "general VMobject path windows remain partial"
-            )
+        if not _semantic_handles._require_typed_manim_line(mobject):
+            raw = mobject._current_raw()
+            if "line" not in raw.geometry:
+                raise NotImplementedError(
+                    "ShowPassingFlash currently qualifies the exact Line subset; "
+                    "general VMobject path windows remain partial"
+                )
         width = float(time_width)
         if not math.isfinite(width) or width <= 0.0:
             raise NotImplementedError(

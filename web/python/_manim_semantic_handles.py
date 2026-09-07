@@ -285,6 +285,72 @@ def _live_mutation_context(value: object):
     return context if ownership in {"active", "transferred", "returned"} else None
 
 
+def _typed_manim_observation(
+    value: object,
+    handle_method: str,
+    context_method: str,
+):
+    """Read one narrow Manim observation from its current Rust authority.
+
+    Bound live objects use the execution publication; detached objects use their
+    authored semantic handle. Explicit legacy materialization remains the only
+    typed-wrapper case allowed to fall through to a raw projection.
+    """
+    scene = getattr(value, "_scene", None)
+    if bool(getattr(scene, "_legacy_geometry_materialized", False)):
+        return None
+    semantic_handle = getattr(value, "_semantic_handle", None)
+    if semantic_handle is None:
+        return None
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
+    context = _live_mutation_context(value)
+    if context is not None:
+        return getattr(context, context_method)(semantic_handle)
+    handle = _handle_for(value)
+    if handle is None:
+        raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
+    return getattr(handle, handle_method)()
+
+
+def _manim_line_endpoints_observation(value: object):
+    return _typed_manim_observation(
+        value,
+        "manimLineEndpoints",
+        "queryMobjectLineEndpoints",
+    )
+
+
+def _manim_color_observation(value: object):
+    return _typed_manim_observation(value, "manimColor", "queryMobjectColor")
+
+
+def _require_typed_manim_line(value: object) -> bool:
+    """Validate exact Line content through the current Rust observation owner."""
+    scene = getattr(value, "_scene", None)
+    if bool(getattr(scene, "_legacy_geometry_materialized", False)):
+        return False
+    semantic_handle = getattr(value, "_semantic_handle", None)
+    if semantic_handle is None:
+        return False
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        raise NotImplementedError("exact Line admission requires a valid semantic handle")
+    try:
+        _manim_line_endpoints_observation(value)
+    except Exception:
+        # Preserve ownership/effective-driver failures for an authored Line. A
+        # direct authored query is used only to classify wrong semantic content.
+        try:
+            semantic_handle.manimLineEndpoints()
+        except Exception as content_error:
+            raise NotImplementedError(
+                "ShowPassingFlash currently qualifies the exact Line subset; "
+                "general VMobject path windows remain partial"
+            ) from content_error
+        raise
+    return True
+
+
 def _canonical_target_editor_source(value: object):
     """Return the opaque source/context pair for the narrow callback-safe copy path.
 

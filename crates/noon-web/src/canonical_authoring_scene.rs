@@ -477,11 +477,15 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    /// Query one bound object's authored layout before bootstrap or its coherent
-    /// effective layout while this context owns the live runtime. A transferred
-    /// player must be returned before authoring can observe it again.
+    /// Route bound observations through the single owner of current execution.
+    /// Detached handles are queried directly by their language wrapper.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_layout(&mut self, handle: &noon::Mobject) -> Result<(f64, f64, f64, f64), String> {
+    fn mobject_observation<T>(
+        &mut self,
+        handle: &noon::Mobject,
+        authored: impl FnOnce(&noon::Mobject) -> Result<T, String>,
+        effective: impl FnOnce(&mut crate::SemanticExecutionPlayer, &noon::Mobject) -> Result<T, String>,
+    ) -> Result<T, String> {
         if self.live_player_transferred {
             return Err("live execution session is running in the semantic engine".into());
         }
@@ -492,19 +496,46 @@ impl CanonicalAuthoringScene {
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("mobject is not bound to this canonical Scene".into());
         }
-        if self.returned_player_is_stale() {
-            return authored_mobject_layout(handle);
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.live_player.as_mut() {
+                return effective(player, handle);
+            }
         }
-        if let Some(player) = self.live_player.as_mut() {
+        authored(handle)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_layout(&mut self, handle: &noon::Mobject) -> Result<(f64, f64, f64, f64), String> {
+        self.mobject_observation(handle, authored_mobject_layout, |player, handle| {
             let observed = player.live_effective_layout(handle)?;
-            return Ok((
+            Ok((
                 observed.center.0,
                 observed.center.1,
                 observed.width,
                 observed.height,
-            ));
-        }
-        authored_mobject_layout(handle)
+            ))
+        })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_line_endpoints(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<noon::ManimLineEndpoints, String> {
+        self.mobject_observation(
+            handle,
+            noon::Mobject::manim_line_endpoints,
+            crate::SemanticExecutionPlayer::live_effective_line_endpoints,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_color(&mut self, handle: &noon::Mobject) -> Result<noon_core::Color, String> {
+        self.mobject_observation(
+            handle,
+            noon::Mobject::manim_color,
+            crate::SemanticExecutionPlayer::live_effective_manim_color,
+        )
     }
 
     /// Inert bounds-dependent construction observes this runtime for bound targets,
@@ -5076,6 +5107,28 @@ mod wasm {
             })
         }
 
+        #[wasm_bindgen(js_name = queryMobjectLineEndpoints)]
+        pub fn query_mobject_line_endpoints(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<crate::WasmManimLineEndpoints, JsValue> {
+            self.inner
+                .mobject_line_endpoints(handle.semantic_mobject())
+                .map(crate::WasmManimLineEndpoints::from_endpoints)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectColor)]
+        pub fn query_mobject_color(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<crate::WasmManimColor, JsValue> {
+            self.inner
+                .mobject_color(handle.semantic_mobject())
+                .map(crate::WasmManimColor::from_color)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = declareLiveTransformTo)]
         pub fn declare_live_transform_to(
             &mut self,
@@ -8548,6 +8601,78 @@ mod tests {
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
             (2.0, -1.0, 2.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn ordinary_line_and_color_queries_follow_runtime_ownership() {
+        let mut context = CanonicalAuthoringScene::default();
+        let mut line = context.scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+        line.set_fill(0.0, 1.0, 0.0, 0.2).unwrap();
+        line.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
+        line.set_stroke_opacity(0.8).unwrap();
+        line.set_object_opacity(0.3).unwrap();
+        assert!(context.mobject_line_endpoints(&line).is_err());
+        context.bind_mobject(ObjectId::new(0), &line).unwrap();
+        let mut target = line.target_editor().unwrap();
+        target.set_translation(4.0, -2.0).unwrap();
+        target.set_stroke_color(1.0, 0.0, 0.0, 1.0).unwrap();
+        target.set_stroke_opacity(0.4).unwrap();
+        let animation = context
+            .declare_live_transform_to(
+                &line,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(
+            context.mobject_line_endpoints(&line).unwrap().start,
+            (-1.0, 0.0)
+        );
+        assert_eq!(
+            context.mobject_color(&line).unwrap(),
+            Color::rgba(0.0, 0.0, 1.0, 0.8)
+        );
+        {
+            let player = context.live_player(2.0).unwrap();
+            player.live_play_animation(&animation).unwrap();
+            player.live_advance_segment_to(1.0).unwrap();
+        }
+        let observed = context.mobject_line_endpoints(&line).unwrap();
+        assert_eq!(observed.start, (1.0, -1.0));
+        assert_eq!(observed.end, (3.0, -1.0));
+        let color = context.mobject_color(&line).unwrap();
+        assert!((color.red - 0.5).abs() < 1.0e-6);
+        assert!((color.blue - 0.5).abs() < 1.0e-6);
+        assert!((color.alpha - 0.6).abs() < 1.0e-6);
+        assert_eq!(line.manim_line_endpoints().unwrap().start, (-1.0, 0.0));
+
+        let player = context.take_execution_player(2.0, 17).unwrap();
+        assert!(context
+            .mobject_line_endpoints(&line)
+            .unwrap_err()
+            .contains("running in the semantic engine"));
+        assert!(context
+            .mobject_color(&line)
+            .unwrap_err()
+            .contains("running in the semantic engine"));
+        context.return_execution_player(player).unwrap();
+        assert_eq!(context.mobject_line_endpoints(&line).unwrap(), observed);
+        assert_eq!(context.mobject_color(&line).unwrap(), color);
+
+        // A stale returned player must not shadow later direct authored edits.
+        line.shift(1.0, 2.0).unwrap();
+        line.set_stroke_color(1.0, 1.0, 0.0, 1.0).unwrap();
+        line.set_stroke_opacity(0.7).unwrap();
+        assert_eq!(
+            context.mobject_line_endpoints(&line).unwrap().start,
+            (0.0, 2.0)
+        );
+        assert_eq!(
+            context.mobject_color(&line).unwrap(),
+            Color::rgba(1.0, 1.0, 0.0, 0.7)
         );
     }
 
