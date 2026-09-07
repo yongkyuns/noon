@@ -753,16 +753,12 @@ impl CanonicalAuthoringScene {
 
     /// Complete one canonical continuation wait in the retained live session.
     ///
-    /// Before bootstrap this remains the existing Rust authored-cursor wait for
-    /// scalar-track authoring.  Once ordinary live execution exists, the wait is
-    /// a real session segment and its endpoint is reconciled before returning to
-    /// Python continuation code.
+    /// An ordinary wait always belongs to the live execution cursor, including
+    /// the first operation in an empty scene. Pre-execution scalar declaration
+    /// keeps using the explicit `authored_wait` entry point.
     #[cfg(any(target_arch = "wasm32", test))]
     fn ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
-        if self.live_player.is_none() {
-            return self.authored_wait(duration);
-        }
-        if self.active_live_player()?.has_required_callbacks() {
+        if self.live_player.is_some() && self.active_live_player()?.has_required_callbacks() {
             return Err(
                 "ordinary endpoint-only wait cannot execute required callbacks; use a continuation"
                     .into(),
@@ -2261,6 +2257,16 @@ impl CanonicalAuthoringScene {
             "none" => {
                 Err("live primitive construction requires an active canonical session".into())
             }
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, String> {
+        match self.live_execution_ownership() {
+            "active" | "returned" => self.active_live_player()?.live_create_text(text),
+            "none" => Err("live Text construction requires an active canonical session".into()),
             "transferred" => Err("live execution session is running in the semantic engine".into()),
             _ => unreachable!("canonical live ownership has one closed set of states"),
         }
@@ -5667,6 +5673,38 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Shape and publish one detached plain Text object through the current
+        /// retained session. The object has no root membership or execution row
+        /// until a later lifecycle operation admits it.
+        #[wasm_bindgen(js_name = liveCreateManimText)]
+        pub fn live_create_manim_text(
+            &mut self,
+            source: &str,
+            font_family: &str,
+            font_size: f64,
+            line_spacing: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: f64,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            let text =
+                crate::authoring_mobject::manim_text(source, font_family, font_size, line_spacing)
+                    .map_err(js_error)?
+                    .color(Color::rgba(
+                        legacy_f32("text red", red)?,
+                        legacy_f32("text green", green)?,
+                        legacy_f32("text blue", blue)?,
+                        legacy_f32("text alpha", alpha)?,
+                    ))
+                    .set_opacity(legacy_f32("text opacity", opacity)?);
+            self.inner
+                .live_create_text(text)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = livePlayAnimation)]
         pub fn live_play_animation(
             &mut self,
@@ -8616,6 +8654,56 @@ mod tests {
         assert!(zero_wait.live_segment_wake(1_000.0).is_err());
         context.return_execution_player(zero_wait).unwrap();
         assert!(context.resume_execution_player().is_err());
+    }
+
+    #[test]
+    fn empty_wait_then_live_text_fade_reuses_one_returned_player() {
+        let mut context = CanonicalAuthoringScene::default();
+        assert_eq!(context.begin_ordinary_wait(0.5).unwrap(), 0.5);
+        let mut player = context.take_execution_player(1.0, 17).unwrap();
+        assert!(player.live_advance_segment_to(0.5).unwrap());
+        player.live_complete_segment().unwrap();
+        context.return_execution_player(player).unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
+
+        let label = context
+            .live_create_text(
+                noon::Text::new("Late")
+                    .with_font_size(36.0)
+                    .color(Color::rgba(0.2, 0.4, 0.8, 1.0)),
+            )
+            .unwrap();
+        assert_eq!(context.live_execution_ownership(), "returned");
+        assert!(!context
+            .active_live_player()
+            .unwrap()
+            .live_contains(&label)
+            .unwrap());
+
+        let end = context
+            .begin_ordinary_fade(
+                ObjectId::new(0),
+                &label,
+                SemanticFadeDirection::In,
+                noon::FadeEndpoint::default(),
+                AnimationOptions::new()
+                    .run_time(0.75)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(end, 1.25);
+        assert!(context.live_contains_mobject(&label).unwrap());
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(0)),
+            Some(&label.node_id())
+        );
+
+        let leased = context.take_execution_player(end, 18).unwrap();
+        assert!(context
+            .live_create_text(noon::Text::new("Rejected"))
+            .unwrap_err()
+            .contains("running in the semantic engine"));
+        context.return_execution_player(leased).unwrap();
     }
 
     #[test]

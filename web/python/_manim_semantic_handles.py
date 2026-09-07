@@ -487,8 +487,8 @@ def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
         handle.setColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
 
 
-def _live_primitive_context():
-    """Return the one retained context that may publish a new primitive.
+def _live_constructor_context(kind: str = "primitive"):
+    """Return the one retained context that may publish a new Mobject.
 
     Before an ordinary segment starts there is no live session to protect, so
     the normal constructor keeps the initial authoring route. Once a session
@@ -508,7 +508,9 @@ def _live_primitive_context():
     if ownership in {"active", "returned"}:
         return context
     if ownership == "transferred":
-        raise RuntimeError("live primitive construction is unavailable while execution is transferred")
+        raise RuntimeError(
+            f"live {kind} construction is unavailable while execution is transferred"
+        )
     return None
 
 
@@ -541,7 +543,7 @@ def _circle_init(
         _ORIGINAL_CIRCLE_INIT(self, radius, color=color, **kwargs)
         return
     value = _ir._positive_number("radius", radius)
-    context = _live_primitive_context()
+    context = _live_constructor_context()
     if context is not None:
         handle = _live_primitive_handle(context, "circle", value, color, kwargs)
         _attach_shared_handle(self, handle)
@@ -585,7 +587,7 @@ def _square_init(
         _ORIGINAL_SQUARE_INIT(self, side_length, color=color, **kwargs)
         return
     value = _ir._positive_number("side_length", side_length)
-    context = _live_primitive_context()
+    context = _live_constructor_context()
     if context is not None:
         handle = _live_primitive_handle(context, "square", value, color, kwargs)
         _attach_shared_handle(self, handle)
@@ -1921,7 +1923,7 @@ def _group_target_context(value: object) -> object | None:
         # so its wrappers do not carry per-target context markers. Once source
         # execution resumes, the current Scene's returned player is still the
         # one mutation authority for that same-store family.
-        return _live_primitive_context()
+        return _live_constructor_context()
     context = contexts[0]
     if any(candidate is not context for candidate in contexts[1:]):
         raise RuntimeError("Group target members belong to different canonical contexts")

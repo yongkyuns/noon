@@ -10,6 +10,33 @@ use noon_core::{
     SemanticStore,
 };
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn text_authoring_f32(field: &str, value: f64) -> Result<f32, String> {
+    let value = render_f64(field, value)? as f32;
+    if !value.is_finite() {
+        return Err(format!("{field} is outside the supported range"));
+    }
+    Ok(value)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn manim_text(
+    source: &str,
+    font_family: &str,
+    font_size: f64,
+    line_spacing: f64,
+) -> Result<noon::Text, String> {
+    let font_size = text_authoring_f32("font size", font_size)?;
+    let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
+    if line_spacing != -1.0 && line_spacing <= -1.0 {
+        return Err("line spacing must be -1 or greater than -1".to_owned());
+    }
+    Ok(noon::Text::new(source)
+        .with_font(font_family)
+        .with_font_size(font_size)
+        .with_line_spacing(line_spacing))
+}
+
 /// Shared target-family construction used by frontend Group/VGroup animation builders.
 ///
 /// The Python/JS wrapper tree is host-language identity metadata only. This editor
@@ -145,15 +172,6 @@ mod wasm {
         JsValue::from_str(&error)
     }
 
-    fn text_authoring_f32(field: &str, value: f64) -> Result<f32, JsValue> {
-        let value = render_f64(field, value).map_err(js_error)?;
-        let value = value as f32;
-        if !value.is_finite() {
-            return Err(js_error(format!("{field} is outside the supported range")));
-        }
-        Ok(value)
-    }
-
     type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
 
     #[wasm_bindgen]
@@ -262,17 +280,8 @@ mod wasm {
             font_size: f64,
             line_spacing: f64,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            let font_size = text_authoring_f32("font size", font_size)?;
-            let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
-            if line_spacing != -1.0 && line_spacing <= -1.0 {
-                return Err(js_error(
-                    "line spacing must be -1 or greater than -1".to_owned(),
-                ));
-            }
-            let text = noon::Text::new(source)
-                .with_font(font_family)
-                .with_font_size(font_size)
-                .with_line_spacing(line_spacing);
+            let text = super::manim_text(source, font_family, font_size, line_spacing)
+                .map_err(js_error)?;
             Mobject::from_text(Rc::clone(&self.semantics), text)
                 .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(|error| js_error(error.to_string()))
@@ -286,7 +295,7 @@ mod wasm {
             math: bool,
             font_size: f64,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            let font_size = text_authoring_f32("font size", font_size)?;
+            let font_size = super::text_authoring_f32("font size", font_size).map_err(js_error)?;
             let handle = if math {
                 Mobject::from_math_typst(
                     Rc::clone(&self.semantics),

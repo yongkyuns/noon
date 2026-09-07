@@ -350,6 +350,15 @@ pub async fn create_direct_text_family_fade_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for an empty wait followed by live Text construction and fading.
+#[wasm_bindgen(js_name = createDirectAutomaticWaitTextSmokeRenderer)]
+pub async fn create_direct_automatic_wait_text_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::automatic_wait_text::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct host for shared Create/Uncreate over plain Text and a Text family.
 #[wasm_bindgen(js_name = createDirectTextFamilyRevealSmokeRenderer)]
 pub async fn create_direct_text_family_reveal_smoke_renderer(

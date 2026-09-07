@@ -655,6 +655,16 @@ impl<'a> LiveSession<'a> {
         self.create_detached_mobject(options.into_state())
     }
 
+    /// Shape and publish one detached plain Text object through this live session.
+    ///
+    /// The object receives semantic identity and immutable text resources, but no
+    /// scene membership or execution row until a later Add, FadeIn, or Create.
+    pub fn create_text(&mut self, text: crate::Text) -> Result<Mobject, LiveSessionError> {
+        let state = crate::text_authoring::native_text_state(self.store, text)
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        self.create_detached_mobject(state)
+    }
+
     fn create_detached_mobject(
         &mut self,
         state: SemanticObjectState,

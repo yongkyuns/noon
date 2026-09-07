@@ -36,21 +36,40 @@ def _validated_font_size(value: float) -> float:
     return font_size
 
 
+def _validated_opacity(value: float) -> float:
+    opacity = float(value)
+    if not math.isfinite(opacity) or not 0.0 <= opacity <= 1.0:
+        raise ValueError("opacity must be finite and between 0 and 1")
+    return opacity
+
+
+def _live_text_context():
+    # Lazy import keeps standalone Text construction independent of semantic
+    # handle installation while sharing its one authoring-scope ownership test.
+    import _manim_semantic_handles
+
+    return _manim_semantic_handles._live_constructor_context("Text")
+
+
 def _new_typst_handle(source: str, math_mode: bool, font_size: float):
     if not isinstance(source, str) or source == "":
         raise ValueError("Typst source must be a non-empty string")
     font_size = _validated_font_size(font_size)
+    if _live_text_context() is not None:
+        raise NotImplementedError(
+            "Typst construction after live execution starts is not yet supported"
+        )
     if _create_authoring_typst_handle is None:
         raise RuntimeError("Typst requires Noon's shared Rust authoring runtime")
     return _create_authoring_typst_handle(source, bool(math_mode), font_size)
 
 
-def _new_native_text_handle(
+def _validated_native_text_options(
     source: str,
     font_family: str,
     font_size: float,
     line_spacing: float,
-):
+) -> tuple[str, str, float, float]:
     if not isinstance(source, str):
         raise TypeError("Text source must be a string")
     if not isinstance(font_family, str) or font_family.strip() == "":
@@ -59,6 +78,18 @@ def _new_native_text_handle(
     line_spacing = float(line_spacing)
     if not math.isfinite(line_spacing) or (line_spacing != -1.0 and line_spacing <= -1.0):
         raise ValueError("line_spacing must be -1 or a finite value greater than -1")
+    return source, font_family, font_size, line_spacing
+
+
+def _new_native_text_handle(
+    source: str,
+    font_family: str,
+    font_size: float,
+    line_spacing: float,
+):
+    source, font_family, font_size, line_spacing = _validated_native_text_options(
+        source, font_family, font_size, line_spacing
+    )
     if _create_authoring_text_handle is None:
         raise RuntimeError("Text requires Noon's shared Rust authoring runtime")
     return _create_authoring_text_handle(source, font_family, font_size, line_spacing)
@@ -99,10 +130,10 @@ class _RetainedTextMobject(_base.Mobject):
         handle: object,
         color: _base.Color,
         opacity: float,
+        *,
+        presentation_applied: bool = False,
     ) -> None:
-        opacity = float(opacity)
-        if not math.isfinite(opacity) or not 0.0 <= opacity <= 1.0:
-            raise ValueError("opacity must be finite and between 0 and 1")
+        opacity = _validated_opacity(opacity)
 
         # Do not call Mobject.__init__: that constructor requires legacy geometry.
         self._raw = None
@@ -112,8 +143,9 @@ class _RetainedTextMobject(_base.Mobject):
         self._font_size = float(font_size)
         self._semantic_handle = handle
         self._semantic_handle_fresh = True
-        self.set_color(_as_color(color))
-        self.set_opacity(opacity)
+        if not presentation_applied:
+            self.set_color(_as_color(color))
+            self.set_opacity(opacity)
 
     @property
     def font_size(self) -> float:
@@ -266,14 +298,41 @@ class Text(_RetainedTextMobject):
         color: _base.Color = _base.WHITE,
         **kwargs: Any,
     ) -> None:
-        opacity = float(kwargs.pop("opacity", 1.0))
+        opacity = _validated_opacity(kwargs.pop("opacity", 1.0))
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported Text option(s): {unsupported}")
-        handle = _new_native_text_handle(text, font, font_size, line_spacing)
+        text, font, font_size, line_spacing = _validated_native_text_options(
+            text, font, font_size, line_spacing
+        )
+        color = _as_color(color)
+        live_context = _live_text_context()
+        if live_context is None:
+            handle = _new_native_text_handle(text, font, font_size, line_spacing)
+        else:
+            handle = live_context.liveCreateManimText(
+                text,
+                font,
+                font_size,
+                line_spacing,
+                float(color.red),
+                float(color.green),
+                float(color.blue),
+                float(color.alpha),
+                opacity,
+            )
         self._font = str(font)
         self._line_spacing = float(line_spacing)
-        self._initialize_text(str(text), float(font_size), handle, color, opacity)
+        if live_context is not None:
+            self._canonical_live_target_context = live_context
+        self._initialize_text(
+            str(text),
+            float(font_size),
+            handle,
+            color,
+            opacity,
+            presentation_applied=live_context is not None,
+        )
 
     @property
     def text(self) -> str:
