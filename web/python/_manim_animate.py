@@ -50,9 +50,10 @@ def _fade_authoring_options(
 ) -> tuple[dict[str, Any], _base.Vec2, float, bool, _base.Vec2 | None]:
     """Separate `_Fade` endpoint options from generic Animation options.
 
-    Manim resolves ``target_position`` during `_Fade.__init__`, while an explicitly
-    supplied ``shift`` takes precedence over it. Preserve that authoring-time behavior
-    and leave generic timing/rate options for the shared Rust option resolver.
+    Manim resolves a Mobject ``target_position`` to a point during `_Fade.__init__`,
+    while an explicitly supplied ``shift`` takes precedence over it. Keep that
+    absolute point for Rust to resolve against activation-effective target layout;
+    leave generic timing/rate options for the shared Rust option resolver.
     """
 
     if not isinstance(target, (_base.Mobject, _compat.Group)):
@@ -74,7 +75,16 @@ def _fade_authoring_options(
             point = target_position.get_center()
         else:
             point = _base._as_vec2(target_position)
-        shift_vector = point - target.get_center()
+        # Retained/group targets still enter the #959 snapshot scheduler, which
+        # must preserve Manim's construction-time relative-vector capture until
+        # that migration path is deleted. Canonical typed leaves pass the point
+        # itself to Rust and never inspect the fade target's center in Python.
+        if isinstance(target, _compat.Group) or getattr(
+            target, "_semantic_handle", None
+        ) is None:
+            shift_vector = point - target.get_center()
+        else:
+            shift_vector = _base.ORIGIN
         point_target = True
     else:
         shift_vector = _base.ORIGIN
@@ -94,6 +104,21 @@ def _store_fade_options(
     object.__setattr__(animation, "_fade_scale_factor", scale_factor)
     object.__setattr__(animation, "_fade_point_target", point_target)
     object.__setattr__(animation, "_fade_point", point)
+
+
+def _legacy_fade_shift_vector(animation: object) -> _base.Vec2:
+    """Resolve the relative vector only for the #959 snapshot consumers."""
+
+    if not bool(getattr(animation, "_fade_point_target", False)):
+        return animation._fade_shift_vector
+    if isinstance(animation.target, _compat.Group) or getattr(
+        animation.target, "_semantic_handle", None
+    ) is None:
+        return animation._fade_shift_vector
+    point = getattr(animation, "_fade_point", None)
+    if point is None:
+        raise ValueError("legacy target_position fade is missing its resolved point")
+    return point - animation.target.get_center()
 
 
 class Transform(_ORIGINAL_TRANSFORM):
@@ -519,7 +544,7 @@ def _fade_endpoint_snapshots(
     if not isinstance(animation, (FadeIn, FadeOut)):
         return {}
 
-    shift_vector = animation._fade_shift_vector
+    shift_vector = _legacy_fade_shift_vector(animation)
     scale_factor = animation._fade_scale_factor
     if shift_vector == _base.ORIGIN and math.isclose(scale_factor, 1.0, abs_tol=1e-15):
         return {}

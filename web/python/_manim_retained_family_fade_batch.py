@@ -66,7 +66,7 @@ def _family_fade_batch(animation: object) -> _RetainedFamilyFadeBatch | None:
             "mixing retained Text and legacy Mobjects in one Group/VGroup fade is not supported"
         )
 
-    shift = _compat._as_vec2(animation._fade_shift_vector)
+    shift = _compat._as_vec2(_animate._legacy_fade_shift_vector(animation))
     scale_factor = float(animation._fade_scale_factor)
     if not math.isfinite(scale_factor):
         raise ValueError("retained text family fade scale must be finite")

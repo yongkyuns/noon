@@ -79,6 +79,28 @@ class ManimFadeEndpointTests(unittest.TestCase):
 
             from noon import FadeIn, FadeOut, RIGHT, Scene, Square, UP
 
+            class CenterCountingSquare(Square):
+                def __init__(self):
+                    super().__init__()
+                    self.center_reads = 0
+
+                def get_center(self):
+                    self.center_reads += 1
+                    return super().get_center()
+
+            # Canonical target_position records the absolute point without
+            # evaluating the fade target's center in Python. Mobject coercion
+            # still resolves the referenced object's center at construction.
+            canonical_target = CenterCountingSquare()
+            point_reference = CenterCountingSquare().shift(RIGHT * 3.0)
+            canonical_target._semantic_handle = object()
+            canonical_target.center_reads = 0
+            point_reference.center_reads = 0
+            point_fade = FadeIn(canonical_target, target_position=point_reference)
+            assert canonical_target.center_reads == 0
+            assert point_reference.center_reads == 1
+            assert point_fade._fade_point == RIGHT * 3.0
+
             def tracks(scene, object_id, property_name):
                 return [
                     track
