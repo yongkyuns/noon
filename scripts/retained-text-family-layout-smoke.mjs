@@ -124,14 +124,22 @@ class RetainedFamilyLayout(Scene):
             "align_to retained target top",
         )
 
-        typst_family = VGroup(Typst("*Typst*", font_size=36))
-        try:
-            _ = typst_family.width
-            raise AssertionError("Typst family layout must remain explicit until Rust-owned Typst bounds exist")
-        except NotImplementedError as error:
-            assert "Typst/MathTypst family layout" in str(error)
+        typst_label = Typst("*Typst*", font_size=36).shift(LEFT * 0.6)
+        typst_equation = MathTypst("x^2", font_size=36).shift(RIGHT * 0.8)
+        typst_family = VGroup(typst_label, typst_equation)
+        min_x, min_y, max_x, max_y = union_bounds(typst_label, typst_equation)
+        close(typst_family.width, max_x - min_x, "Typst family width")
+        close(typst_family.height, max_y - min_y, "Typst family height")
+        typst_family.next_to(placement_target, DOWN, buff=0.2)
+        gap = placement_target.get_critical_point(DOWN).y - typst_family.get_critical_point(UP).y
+        close(gap, 0.2, "Typst family next_to gap")
+        close(
+            typst_family.get_center().x,
+            placement_target.get_center().x,
+            "Typst family next_to alignment",
+        )
 
-        self.add(first, second, arranged_a, arranged_b, mixed_text)
+        self.add(first, second, arranged_a, arranged_b, mixed_text, typst_family)
 `;
 
 let browser = null;
@@ -158,7 +166,7 @@ try {
   assert.ok(result.sceneSpec, "retained family layout must produce a canonical scene export");
   assert.deepEqual(
     result.sceneSpec.objects.map((object) => object.content.value.source),
-    ["Layout A", "Layout BBB", "A", "BBBB", "Mixed"],
+    ["Layout A", "Layout BBB", "A", "BBBB", "Mixed", "*Typst*", "x^2"],
   );
   assert.ok(
     result.sceneSpec.objects.every((object) => object.content.kind === "text"),
@@ -174,7 +182,7 @@ try {
     `browser errors while testing retained Text family layout:\n${errors.join("\n")}`,
   );
   console.log(
-    "Retained Text family layout smoke passed: shared Rust family bounds, nested arrange, mixed geometry/Text translation, and explicit Typst layout debt all hold without legacy Text geometry.",
+    "Retained Text family layout smoke passed: shared Rust Text and Typst family bounds, nested arrange, mixed geometry/Text translation, and relative placement all hold without legacy Text geometry.",
   );
 } finally {
   await browser?.close();

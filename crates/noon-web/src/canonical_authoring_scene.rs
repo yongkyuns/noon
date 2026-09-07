@@ -2088,11 +2088,19 @@ impl CanonicalAuthoringScene {
             resolved.map_err(|error| error.to_string())?;
             match entering_id {
                 Some(id) => {
-                    if self.bindings.contains_key(&id)
-                        || self.identities.contains_key(&target.node_id())
-                        || !ids.insert(id)
-                        || !entering_nodes.insert(target.node_id())
-                    {
+                    let node = target.node_id();
+                    let detached = !self.contains_mobject(target)?;
+                    let binding_available =
+                        match (self.bindings.get(&id), self.identities.get(&node)) {
+                            (None, None) => detached,
+                            (Some(bound_node), Some(bound_id))
+                                if *bound_node == node && *bound_id == id =>
+                            {
+                                detached
+                            }
+                            _ => false,
+                        };
+                    if !binding_available || !ids.insert(id) || !entering_nodes.insert(node) {
                         return Err("ordinary composition requires unique detached targets and wrapper identities".into());
                     }
                 }
@@ -7132,6 +7140,64 @@ mod tests {
         assert_eq!(
             player.live_effective(&right).unwrap().transform.translation,
             Vec2::new(2.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn cleared_text_reenters_composition_with_its_existing_wrapper_identity() {
+        let mut context = CanonicalAuthoringScene::default();
+        let label = context.scene.text(noon::Text::new("stable")).unwrap();
+        let id = ObjectId::new(7);
+        context.bind_mobject(id, &label).unwrap();
+        context.live_player(1.0).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Clear,
+                members: Vec::new(),
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert!(!context.live_contains_mobject(&label).unwrap());
+        assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
+        assert_eq!(context.identities.get(&label.node_id()), Some(&id));
+
+        let target = context.live_target_editor(&label).unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_shift(&target, 2.0, -1.0)
+            .unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let child = OrdinaryCompositionChild::TransformTo {
+            entering_id: Some(id),
+            source: label.clone(),
+            target,
+            interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            options,
+        };
+        context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &[child],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        assert!(context.live_contains_mobject(&label).unwrap());
+        assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
+        assert_eq!(context.identities.get(&label.node_id()), Some(&id));
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&label)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(2.0, -1.0),
         );
     }
 
