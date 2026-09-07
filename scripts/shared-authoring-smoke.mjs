@@ -792,7 +792,11 @@ try {
             ) return latest;
             await new Promise((resolve) => setTimeout(resolve, 20));
           }
-          throw new Error(`live example did not render: ${JSON.stringify(latest)}`);
+          const diagnostic = JSON.stringify(
+            latest,
+            (_key, value) => typeof value === "bigint" ? value.toString() : value,
+          );
+          throw new Error(`live example did not render: ${diagnostic}`);
         }
 
         const initial = await waitForFrame();

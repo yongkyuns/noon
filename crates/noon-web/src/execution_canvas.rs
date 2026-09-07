@@ -358,13 +358,21 @@ mod wasm {
         fn live_object_count(&self) -> usize {
             match self {
                 Self::Transport(mirror) => mirror.live_object_count(),
-                Self::Direct(direct) => direct
-                    .session()
-                    .frame()
-                    .presences
-                    .iter()
-                    .filter(|present| **present)
-                    .count(),
+                Self::Direct(direct) => {
+                    let session = direct.session();
+                    session
+                        .painter_order()
+                        .iter()
+                        .filter(|&&index| {
+                            session
+                                .frame()
+                                .presences
+                                .get(index as usize)
+                                .copied()
+                                .unwrap_or(false)
+                        })
+                        .count()
+                }
             }
         }
 
@@ -925,6 +933,8 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = objectCount)]
+        /// Live painter-order objects whose runtime presence is enabled.
+        /// Retired stable frame rows are intentionally excluded.
         pub fn object_count(&self) -> usize {
             self.source.live_object_count()
         }

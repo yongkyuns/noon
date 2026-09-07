@@ -458,9 +458,21 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = objectCount)]
+        /// Live painter-order objects whose runtime presence is enabled.
+        /// Retired stable transport rows are intentionally excluded.
         pub fn object_count(&self) -> usize {
             self.mirror.frame().map_or(0, |frame| {
-                frame.presences.iter().filter(|&&present| present).count()
+                self.mirror
+                    .painter_order()
+                    .iter()
+                    .filter(|&&index| {
+                        frame
+                            .presences
+                            .get(index as usize)
+                            .copied()
+                            .unwrap_or(false)
+                    })
+                    .count()
             })
         }
 
