@@ -1,0 +1,57 @@
+name: Noon agent foundation
+
+on:
+  pull_request:
+    paths:
+      - "skills/noon-authoring/**"
+      - "scripts/noon-capabilities.py"
+      - "scripts/test_noon_capabilities.py"
+      - "scripts/check-noon-agent-skill.py"
+      - "scripts/manim-api-coverage.py"
+      - "compat/manim-v0.21.0.json"
+      - "web/python/**"
+      - "parity/manim-v0.21/upstream-examples/**"
+      - ".github/workflows/noon-agent-foundation.yml"
+  push:
+    branches: [master]
+    paths:
+      - "skills/noon-authoring/**"
+      - "scripts/noon-capabilities.py"
+      - "scripts/test_noon_capabilities.py"
+      - "scripts/check-noon-agent-skill.py"
+      - "scripts/manim-api-coverage.py"
+      - "compat/manim-v0.21.0.json"
+      - "web/python/**"
+      - "parity/manim-v0.21/upstream-examples/**"
+      - ".github/workflows/noon-agent-foundation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: noon-agent-foundation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inventory:
+    name: Capability inventory and skill contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Test offline discovery and negative cases
+        run: python -B -m unittest discover -s scripts -p test_noon_capabilities.py -v
+      - name: Validate actual checkout inventory without Manim
+        run: python -S -B scripts/noon-capabilities.py > "$RUNNER_TEMP/noon-agent-capabilities.json"
+      - name: Validate skill and current example references
+        run: python -S -B scripts/check-noon-agent-skill.py
+      - name: Upload source inventory (not runtime qualification)
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-agent-capabilities
+          path: ${{ runner.temp }}/noon-agent-capabilities.json
+          if-no-files-found: error
+          retention-days: 14

@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/playground-product-gate.yml"
+      - "skills/noon-authoring/**"
+      - "scripts/noon-capabilities.py"
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/noon/**"
