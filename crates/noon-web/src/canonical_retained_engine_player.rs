@@ -337,7 +337,7 @@ mod tests {
     use noon_core::{
         FamilyAnimationLeafBinding, FamilyAnimationMode, FamilyAnimationRequest,
         FamilyAnimationSpec, GeometryRef, ObjectId, RateFunction, SceneDefinition, SemanticStore,
-        TextResourceLookup, TrackTiming, Vec2,
+        TrackTiming, Vec2,
     };
     use noon_ir::SceneSpec;
     use serde_json::json;
