@@ -629,6 +629,21 @@ impl RetainedExecutionFrameMirror {
         self.slot_indices.get(&slot).copied()
     }
 
+    /// Resolve one semantic execution identity without searching the dense frame.
+    pub(crate) fn frame_index_for_object(&self, object: ObjectId) -> Option<usize> {
+        self.object_indices.get(&object).copied()
+    }
+
+    /// Resolve the authored fields of one sparse transport row without mutating the mirror.
+    pub(crate) fn resolve_transport_object_state(
+        &self,
+        object: &RetainedTransportObjectState,
+    ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
+        validate_object_state(object)?;
+        let content = self.resolve_content(&object.content)?;
+        Ok(frame_object(object, content))
+    }
+
     pub const fn camera(&self) -> Camera2DState {
         self.camera
     }

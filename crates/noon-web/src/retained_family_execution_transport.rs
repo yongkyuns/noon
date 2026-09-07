@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceLookup};
 use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
@@ -9,7 +9,7 @@ use crate::{
     RetainedFamilyTransportState, RetainedResourceBundle,
 };
 
-type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
+pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
 
 /// Sparse per-object family scheduler state carried alongside an ordinary retained delta.
 ///
@@ -260,8 +260,19 @@ pub struct InstalledRetainedFamilyExecutionState {
     states: Vec<Option<FamilyAnimationState>>,
     plan_indices: Vec<Option<u32>>,
     plans: Vec<RetainedFamilyAnimationPlan>,
+    plan_objects: Vec<HashSet<ObjectId>>,
     active_indices: BTreeSet<usize>,
     initialized: bool,
+}
+
+pub(crate) enum PreparedInstalledFamilyUpdate {
+    Snapshot(InstalledRetainedFamilyExecutionState),
+    Incremental {
+        frame_len: usize,
+        added_plans: Vec<RetainedFamilyAnimationPlan>,
+        added_plan_objects: Vec<HashSet<ObjectId>>,
+        updates: Vec<ValidatedFamilyStateUpdate>,
+    },
 }
 
 impl InstalledRetainedFamilyExecutionState {
@@ -271,53 +282,127 @@ impl InstalledRetainedFamilyExecutionState {
         frame: &FrameState,
         texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyExecutionTransportError> {
+        let object_indices = frame
+            .objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| (object.id, index))
+            .collect::<HashMap<_, _>>();
+        let prepared = self.prepare_with_lookup(
+            delta,
+            frame.objects.len(),
+            texts,
+            |object| object_indices.get(&object).copied(),
+            |object| {
+                object_indices
+                    .get(&object)
+                    .map(|&index| &frame.objects[index])
+            },
+        )?;
+        self.commit_prepared(prepared);
+        Ok(())
+    }
+
+    pub(crate) fn prepare_with_lookup<'a>(
+        &self,
+        delta: &RetainedFamilyExecutionDeltaEnvelope,
+        frame_len: usize,
+        texts: &(impl TextResourceLookup + ?Sized),
+        mut index_for_object: impl FnMut(ObjectId) -> Option<usize>,
+        mut object_for_id: impl FnMut(ObjectId) -> Option<&'a noon_runtime::FrameObjectState>,
+    ) -> Result<PreparedInstalledFamilyUpdate, RetainedFamilyExecutionTransportError> {
         delta.validate()?;
-
-        if delta.retained.snapshot {
-            let plans = delta
-                .family_plans
-                .iter()
-                .map(|plan| plan.install(frame, texts))
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut states = vec![None; frame.objects.len()];
-            let mut plan_indices = vec![None; frame.objects.len()];
-            for (index, state, plan_index) in
-                validated_state_updates(frame, &plans, &delta.family_states)?
-            {
-                states[index] = state;
-                plan_indices[index] = plan_index;
-            }
-            self.states = states;
-            self.plan_indices = plan_indices;
-            self.plans = plans;
-            self.active_indices = self
-                .states
-                .iter()
-                .enumerate()
-                .filter_map(|(index, state)| state.is_some().then_some(index))
-                .collect();
-            self.initialized = true;
-            return Ok(());
-        }
-
-        if !self.initialized {
+        if !delta.retained.snapshot && !self.initialized {
             return Err(RetainedFamilyExecutionTransportError::IncrementalBeforeSnapshot);
         }
-        if self.states.len() > frame.objects.len() || self.plan_indices.len() > frame.objects.len()
+        if !delta.retained.snapshot
+            && (self.states.len() > frame_len || self.plan_indices.len() > frame_len)
         {
             return Err(RetainedFamilyExecutionTransportError::FrameShapeMismatch);
         }
-        let mut plans = self.plans.clone();
-        plans.extend(
-            delta
-                .family_plans
-                .iter()
-                .map(|plan| plan.install(frame, texts))
-                .collect::<Result<Vec<_>, _>>()?,
-        );
-        let updates = validated_state_updates(frame, &plans, &delta.family_states)?;
-        self.states.resize(frame.objects.len(), None);
-        self.plan_indices.resize(frame.objects.len(), None);
+
+        let added_plans = delta
+            .family_plans
+            .iter()
+            .map(|plan| plan.install_with_object_lookup(texts, &mut object_for_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let added_plan_objects = delta
+            .family_plans
+            .iter()
+            .map(|plan| plan.objects.iter().copied().collect::<HashSet<_>>())
+            .collect::<Vec<_>>();
+
+        if delta.retained.snapshot {
+            let mut next = Self {
+                states: vec![None; frame_len],
+                plan_indices: vec![None; frame_len],
+                plans: added_plans,
+                plan_objects: added_plan_objects,
+                active_indices: BTreeSet::new(),
+                initialized: true,
+            };
+            let updates = validated_state_updates(
+                &delta.family_states,
+                frame_len,
+                next.plans.len(),
+                &mut index_for_object,
+                |plan_index, object| {
+                    next.plan_objects
+                        .get(plan_index as usize)
+                        .map(|objects| objects.contains(&object))
+                },
+            )?;
+            next.apply_updates(updates);
+            return Ok(PreparedInstalledFamilyUpdate::Snapshot(next));
+        }
+
+        let installed_count = self.plans.len();
+        let plan_count = installed_count + added_plans.len();
+        let updates = validated_state_updates(
+            &delta.family_states,
+            frame_len,
+            plan_count,
+            &mut index_for_object,
+            |plan_index, object| {
+                let index = plan_index as usize;
+                if index < installed_count {
+                    self.plan_objects
+                        .get(index)
+                        .map(|objects| objects.contains(&object))
+                } else {
+                    added_plan_objects
+                        .get(index - installed_count)
+                        .map(|objects| objects.contains(&object))
+                }
+            },
+        )?;
+        Ok(PreparedInstalledFamilyUpdate::Incremental {
+            frame_len,
+            added_plans,
+            added_plan_objects,
+            updates,
+        })
+    }
+
+    pub(crate) fn commit_prepared(&mut self, prepared: PreparedInstalledFamilyUpdate) {
+        match prepared {
+            PreparedInstalledFamilyUpdate::Snapshot(next) => *self = next,
+            PreparedInstalledFamilyUpdate::Incremental {
+                frame_len,
+                added_plans,
+                added_plan_objects,
+                updates,
+            } => {
+                self.states.resize(frame_len, None);
+                self.plan_indices.resize(frame_len, None);
+                self.plans.extend(added_plans);
+                self.plan_objects.extend(added_plan_objects);
+                self.apply_updates(updates);
+            }
+        }
+    }
+
+    fn apply_updates(&mut self, updates: Vec<ValidatedFamilyStateUpdate>) {
         for (index, state, plan_index) in updates {
             self.states[index] = state;
             self.plan_indices[index] = plan_index;
@@ -327,8 +412,6 @@ impl InstalledRetainedFamilyExecutionState {
                 self.active_indices.remove(&index);
             }
         }
-        self.plans = plans;
-        Ok(())
     }
 
     pub fn frame<'a>(
@@ -362,12 +445,6 @@ impl InstalledRetainedFamilyExecutionState {
         &self.active_indices
     }
 
-    /// Extend stable dense state rows after the retained mirror admits new slots.
-    pub(crate) fn resize_for_frame(&mut self, frame: &FrameState) {
-        self.states.resize(frame.objects.len(), None);
-        self.plan_indices.resize(frame.objects.len(), None);
-    }
-
     /// Legacy convenience for callers that deliberately operate on one plan only.
     pub fn single_plan(
         &self,
@@ -398,25 +475,28 @@ impl InstalledRetainedFamilyExecutionState {
 }
 
 fn validated_state_updates(
-    frame: &FrameState,
-    plans: &[RetainedFamilyAnimationPlan],
     entries: &[RetainedFamilyExecutionObjectState],
+    frame_len: usize,
+    plan_count: usize,
+    mut index_for_object: impl FnMut(ObjectId) -> Option<usize>,
+    mut plan_contains_object: impl FnMut(u32, ObjectId) -> Option<bool>,
 ) -> Result<Vec<ValidatedFamilyStateUpdate>, RetainedFamilyExecutionTransportError> {
     entries
         .iter()
         .map(|entry| {
-            let index = frame
-                .objects
-                .iter()
-                .position(|object| object.id == entry.object)
-                .ok_or(RetainedFamilyExecutionTransportError::UnknownObject(
-                    entry.object,
-                ))?;
+            let index = index_for_object(entry.object).ok_or(
+                RetainedFamilyExecutionTransportError::UnknownObject(entry.object),
+            )?;
+            if index >= frame_len {
+                return Err(RetainedFamilyExecutionTransportError::InvalidObjectIndex(
+                    index,
+                ));
+            }
             let state = entry.state.family_animation;
             let plan_index = match (state, entry.family_plan_index) {
                 (None, _) => None,
                 (Some(_), Some(plan_index)) => Some(plan_index),
-                (Some(_), None) if plans.len() == 1 => Some(0),
+                (Some(_), None) if plan_count == 1 => Some(0),
                 (Some(_), None) => {
                     return Err(RetainedFamilyExecutionTransportError::MissingPlanIndex(
                         entry.object,
@@ -425,14 +505,14 @@ fn validated_state_updates(
             };
 
             if let Some(plan_index) = plan_index {
-                let plan = plans.get(plan_index as usize).ok_or(
+                let owns_object = plan_contains_object(plan_index, entry.object).ok_or(
                     RetainedFamilyExecutionTransportError::InvalidPlanIndex {
                         object: entry.object,
                         plan_index,
-                        plan_count: plans.len(),
+                        plan_count,
                     },
                 )?;
-                if plan.leaf_for_object(entry.object).is_none() {
+                if !owns_object {
                     return Err(
                         RetainedFamilyExecutionTransportError::PlanDoesNotOwnObject {
                             object: entry.object,
@@ -562,6 +642,8 @@ impl From<RetainedFamilyTransportError> for RetainedFamilyExecutionTransportErro
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use noon_core::{
         Camera2DState, FamilyAnimationMode, GeometryRef, ObjectContentRef, RateFunction, Style,
         TextResourceArena, Transform2D,
@@ -811,6 +893,64 @@ mod tests {
         installed
             .apply(&appended, &retained_frame, &TextResourceArena::new())
             .unwrap();
+        assert_eq!(installed.plans().len(), 2);
+        assert_eq!(
+            installed
+                .planned_frame(&retained_frame)
+                .unwrap()
+                .family_plan_index(0),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn sparse_prepare_visits_only_changed_state_and_added_plan_leaf() {
+        let retained_frame = frame();
+        let mut installed = InstalledRetainedFamilyExecutionState::default();
+        installed
+            .apply(
+                &family_snapshot(0.5),
+                &retained_frame,
+                &TextResourceArena::new(),
+            )
+            .unwrap();
+        let appended = RetainedFamilyExecutionDeltaEnvelope {
+            retained: retained(false, 1),
+            family_states: vec![RetainedFamilyExecutionObjectState::planned(
+                ObjectId::new(7),
+                Some(family_state(0.25)),
+                Some(1),
+            )
+            .unwrap()],
+            family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
+            resource_additions: None,
+        };
+        let index_lookups = Cell::new(0);
+        let object_lookups = Cell::new(0);
+        let prepared = installed
+            .prepare_with_lookup(
+                &appended,
+                retained_frame.objects.len(),
+                &TextResourceArena::new(),
+                |object| {
+                    index_lookups.set(index_lookups.get() + 1);
+                    (object == ObjectId::new(7)).then_some(0)
+                },
+                |object| {
+                    object_lookups.set(object_lookups.get() + 1);
+                    (object == ObjectId::new(7)).then_some(&retained_frame.objects[0])
+                },
+            )
+            .unwrap();
+
+        assert_eq!(index_lookups.get(), 1);
+        assert_eq!(object_lookups.get(), 1);
+        assert_eq!(
+            installed.plans().len(),
+            1,
+            "prepare does not mutate live plans"
+        );
+        installed.commit_prepared(prepared);
         assert_eq!(installed.plans().len(), 2);
         assert_eq!(
             installed

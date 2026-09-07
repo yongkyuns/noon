@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use noon_core::{Camera2DState, ObjectContentRef, RetainedFamilyAnimationPlan};
 use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
@@ -162,39 +164,80 @@ impl InstalledRetainedExecutionMirror {
             self.validate_snapshot_resources(&delta.retained)?;
         }
 
-        // Family validation happens against the frame shape that will exist after the
-        // retained delta, but live family state is not changed until the base mirror
-        // accepts the sequence. A sparse structural delta may introduce an already
-        // active family row, so validate that case against a staged retained frame.
-        let mut next_family = self.family.clone();
-        let adds_rows = !delta.retained.snapshot
-            && delta
-                .retained
-                .objects
-                .iter()
-                .any(|object| self.wire.frame_index_for_slot(object.slot).is_none());
-        if delta.retained.snapshot || adds_rows {
-            let (outcome, preview) = self.preview_resolved_delta(&delta.retained)?;
-            if outcome == RetainedTransportApplyOutcome::DroppedStale {
-                return Ok((outcome, FrameChanges::default()));
-            }
-            next_family.apply(&delta, &preview, self.resources.texts())?;
+        // Resolve only sparse changed rows. Family validation borrows unchanged rows
+        // through the mirror's ObjectId index and overlays rows that the retained
+        // delta will update or append. Neither resident family state nor the full
+        // retained frame is cloned before commit.
+        let current = self.resolved.as_ref();
+        let mut changed_objects = HashMap::with_capacity(delta.retained.objects.len());
+        let mut next_indices = HashMap::with_capacity(delta.retained.objects.len());
+        let added_plan_objects = delta
+            .family_plans
+            .iter()
+            .flat_map(|plan| plan.objects.iter().copied())
+            .collect::<std::collections::HashSet<_>>();
+        let mut next_row = if delta.retained.snapshot {
+            0
         } else {
-            let current = self
-                .resolved
-                .as_ref()
-                .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
-            next_family.apply(&delta, current, self.resources.texts())?;
+            current
+                .ok_or(InstalledExecutionError::MissingResolvedFrame)?
+                .objects
+                .len()
+        };
+        for object in &delta.retained.objects {
+            let index = if delta.retained.snapshot {
+                let index = object.order as usize;
+                next_row = next_row.max(index + 1);
+                index
+            } else if let Some(index) = self.wire.frame_index_for_slot(object.slot) {
+                index
+            } else {
+                let index = next_row;
+                next_row += 1;
+                index
+            };
+            next_indices.insert(object.object, index);
+            if added_plan_objects.contains(&object.object) {
+                changed_objects.insert(
+                    object.object,
+                    self.wire.resolve_transport_object_state(object)?,
+                );
+            }
         }
+        let frame_len = if delta.retained.snapshot {
+            delta.retained.objects.len()
+        } else {
+            next_row
+        };
+        let snapshot = delta.retained.snapshot;
+        let prepared_family = self.family.prepare_with_lookup(
+            &delta,
+            frame_len,
+            self.resources.texts(),
+            |object| {
+                next_indices.get(&object).copied().or_else(|| {
+                    (!snapshot)
+                        .then(|| self.wire.frame_index_for_object(object))
+                        .flatten()
+                })
+            },
+            |object| {
+                changed_objects.get(&object).or_else(|| {
+                    (!snapshot)
+                        .then(|| {
+                            let index = self.wire.frame_index_for_object(object)?;
+                            current?.objects.get(index)
+                        })
+                        .flatten()
+                })
+            },
+        )?;
 
         let (outcome, changes) = self.apply(delta.retained)?;
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             return Ok((outcome, changes));
         }
-        if let Some(frame) = self.resolved.as_ref() {
-            next_family.resize_for_frame(frame);
-        }
-        self.family = next_family;
+        self.family.commit_prepared(prepared_family);
         Ok((outcome, changes))
     }
 
@@ -240,18 +283,6 @@ impl InstalledRetainedExecutionMirror {
             }
         }
         Ok(())
-    }
-
-    fn preview_resolved_delta(
-        &self,
-        delta: &RetainedExecutionDeltaEnvelope,
-    ) -> Result<(RetainedTransportApplyOutcome, FrameState), InstalledExecutionError> {
-        let mut wire = self.wire.clone();
-        let (outcome, _) = wire.apply(delta.clone())?;
-        let frame = wire
-            .frame()
-            .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        Ok((outcome, self.resolve_wire_frame(frame)))
     }
 
     fn rebuild_resolved_snapshot(&mut self) -> Result<(), InstalledExecutionError> {
@@ -616,6 +647,54 @@ mod tests {
         };
         assert!(mirror.apply_family(invalid).is_err());
         assert_ne!(mirror.frame().unwrap().time, 2.0);
+    }
+
+    #[test]
+    fn invalid_base_incremental_does_not_commit_prepared_family_state() {
+        let mut engine = engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let initial: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
+        mirror
+            .apply_family(family_snapshot(initial.clone()))
+            .unwrap();
+
+        let changed = initial.objects[0].clone();
+        let invalid = RetainedFamilyExecutionDeltaEnvelope {
+            retained: RetainedExecutionDeltaEnvelope {
+                channel: initial.channel,
+                protocol_version: initial.protocol_version,
+                session: initial.session,
+                sequence: 1,
+                snapshot: false,
+                time: 2.0,
+                camera: initial.camera,
+                objects: vec![changed.clone(), changed],
+                removed_slots: Vec::new(),
+                painter_order: None,
+            },
+            family_states: vec![RetainedFamilyExecutionObjectState::planned(
+                ObjectId::new(8),
+                Some(family_state(0.25)),
+                Some(0),
+            )
+            .unwrap()],
+            family_plans: Vec::new(),
+            resource_additions: None,
+        };
+
+        assert!(mirror.apply_family(invalid).is_err());
+        assert_ne!(mirror.frame().unwrap().time, 2.0);
+        assert_eq!(
+            mirror
+                .planned_family_frame()
+                .unwrap()
+                .unwrap()
+                .family_animation(0),
+            Some(family_state(0.5))
+        );
     }
 
     #[test]
