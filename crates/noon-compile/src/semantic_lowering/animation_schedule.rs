@@ -87,6 +87,9 @@ pub enum SemanticScheduledAnimationPayload {
         reverse_member_order: bool,
         family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     },
+    PassingFlash {
+        time_width: f64,
+    },
     Rotate {
         angle: f64,
     },
@@ -198,6 +201,9 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<noon_core::SemanticFamilyAnimationMember>,
+    },
+    PassingFlash {
+        time_width: f64,
     },
     Rotate {
         angle: f64,
@@ -602,6 +608,9 @@ fn published_payload(
             target_state,
             interpolation,
         },
+        ScheduledAnimationPayload::PassingFlash { time_width } => {
+            SemanticScheduledAnimationPayload::PassingFlash { time_width }
+        }
         ScheduledAnimationPayload::Rotate { angle } => {
             SemanticScheduledAnimationPayload::Rotate { angle }
         }
@@ -665,6 +674,9 @@ fn prepared_payload(
             target_state,
             interpolation,
         },
+        ScheduledAnimationPayload::PassingFlash { time_width } => {
+            PreparedSemanticScheduledAnimationPayload::PassingFlash { time_width }
+        }
         ScheduledAnimationPayload::Rotate { angle } => {
             PreparedSemanticScheduledAnimationPayload::Rotate { angle }
         }
@@ -753,6 +765,10 @@ enum AnimationDeclarationIntent<R> {
         mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<noon_core::SemanticFamilyAnimationMember>,
+    },
+    PassingFlash {
+        target: R,
+        time_width: f64,
     },
     Rotate {
         target: R,
@@ -950,6 +966,15 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     family_member: *family_member,
                 }
             }
+            SemanticAnimationIntent::PassingFlash { target, time_width } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::PassingFlash {
+                    target: *target,
+                    time_width: *time_width,
+                }
+            }
             SemanticAnimationIntent::Rotate { target, angle } => {
                 self.store
                     .semantic_object_state_checked(*target)
@@ -1144,6 +1169,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         reverse_member_order: *reverse_member_order,
                         family_member: *family_member,
                     },
+                    SemanticAnimationIntent::PassingFlash { target, time_width } => {
+                        AnimationDeclarationIntent::PassingFlash {
+                            target: (*target).into(),
+                            time_width: *time_width,
+                        }
+                    }
                     SemanticAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: (*target).into(),
@@ -1256,6 +1287,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         reverse_member_order: *reverse_member_order,
                         family_member: *family_member,
                     },
+                    SemanticTransactionAnimationIntent::PassingFlash { target, time_width } => {
+                        AnimationDeclarationIntent::PassingFlash {
+                            target: *target,
+                            time_width: *time_width,
+                        }
+                    }
                     SemanticTransactionAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: *target,
@@ -1317,6 +1354,7 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
             AnimationDeclarationIntent::Rotate { target, .. }
+            | AnimationDeclarationIntent::PassingFlash { target, .. }
             | AnimationDeclarationIntent::Indicate { target, .. }
             | AnimationDeclarationIntent::DrawBorderThenFill { target, .. }
             | AnimationDeclarationIntent::SubsetDisplayMember { target, .. } => {
@@ -1442,6 +1480,9 @@ enum ScheduledAnimationPayload<R> {
         mode: noon_core::FamilyAnimationMode,
         reverse_member_order: bool,
         family_member: Option<noon_core::SemanticFamilyAnimationMember>,
+    },
+    PassingFlash {
+        time_width: f64,
     },
     Rotate {
         angle: f64,
@@ -1784,6 +1825,46 @@ where
                         reverse_member_order,
                         family_member,
                     },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::PassingFlash { target, time_width } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options = resolve_animation_options(
+                AnimationDefaults {
+                    introducer: true,
+                    remover: true,
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            if !options.introducer
+                || !options.remover
+                || options.lag_ratio != 0.0
+                || options.path_arc != 0.0
+                || options.reverse_rate_function
+            {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::PassingFlash { time_width },
                     options,
                 },
             })

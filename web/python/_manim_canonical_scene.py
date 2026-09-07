@@ -22,6 +22,7 @@ import _manim_compat as _compat
 import _manim_composition as _composition
 import _manim_draw_border_then_fill as _draw_border_then_fill
 import _manim_family_creation as _family_creation
+import _manim_indication as _indication
 import _manim_lifecycle as _lifecycle
 import _manim_phase_b as _phase_b
 import _manim_rate_functions as _rate_functions
@@ -1550,6 +1551,8 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         import _manim_rotate as _rotate
 
         animation = args[0]
+        if _canonical_passing_flash_animation(scene, animation) is not None:
+            return "parallel", args, None
         if _canonical_family_reveal_animation(scene, animation) is not None:
             return "parallel", args, None
         if _canonical_text_reveal_animation(scene, animation) is not None:
@@ -1677,6 +1680,53 @@ def _canonical_indicate_animation(
     if getattr(target, handle_name, None) is None:
         raise NotImplementedError("canonical Indicate requires a shared semantic handle")
     return target, family
+
+
+def _canonical_passing_flash_animation(
+    scene: _base.Scene, animation: object
+) -> _base.Mobject | None:
+    """Classify one exact-Line PassingFlash without deriving its window tracks."""
+    if not isinstance(animation, _indication.ShowPassingFlash):
+        return None
+    target = animation.mobject
+    if not isinstance(target, _base.Mobject) or isinstance(target, _compat.Group):
+        raise NotImplementedError("canonical ShowPassingFlash requires one typed Line")
+    if target._scene not in (None, scene):
+        raise ValueError("ShowPassingFlash target belongs to another Scene")
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError("canonical ShowPassingFlash requires a typed Line")
+    if not _semantic_handles._require_typed_manim_line(target):
+        raise NotImplementedError("canonical ShowPassingFlash requires an exact Line")
+    return target
+
+
+def _canonical_passing_flash_options(
+    animation: object, play_kwargs: dict[str, object] | None = None
+):
+    """Pass explicit Python timing while Rust owns the moving-window schedule."""
+    args = dict(_options.builder_args(animation))
+    lag_ratio = args.get("lag_ratio")
+    if lag_ratio is not None and not math.isclose(
+        float(lag_ratio), 0.0, abs_tol=1e-15
+    ):
+        raise NotImplementedError("canonical ShowPassingFlash does not support lag_ratio")
+    if bool(args.get("reverse_rate_function", False)):
+        raise NotImplementedError(
+            "ShowPassingFlash reverse_rate_function=True remains partial"
+        )
+    if "path_arc" in args:
+        raise TypeError("ShowPassingFlash does not accept path_arc")
+    run_time = args.get("run_time")
+    rate_func = args.get("rate_func")
+    play_rate = _canonical_composition_rate_id(
+        {} if play_kwargs is None else play_kwargs
+    )
+    return (
+        None if run_time is None else float(run_time),
+        play_rate
+        if play_rate is not None
+        else None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+    )
 
 
 def _canonical_draw_border_then_fill_animation(scene: _base.Scene, animation: object):
@@ -1972,6 +2022,26 @@ def _build_canonical_composition_candidate(
             if child_kwargs:
                 raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
             builder.appendWait(float(animation.run_time))
+            return
+        passing_flash = _canonical_passing_flash_animation(self, animation)
+        if passing_flash is not None:
+            child_run_time, rate_function = _canonical_passing_flash_options(
+                animation, child_kwargs
+            )
+            reservation = reserve(passing_flash) if passing_flash._scene is None else None
+            entering_id = (
+                ""
+                if reservation is None or reservation.reuse_existing_identity
+                else str(reservation.object.id)
+            )
+            builder.appendPassingFlash(
+                entering_id,
+                passing_flash._semantic_handle,
+                float(animation.time_width),
+                float("nan") if child_run_time is None else child_run_time,
+                "" if rate_function is None else rate_function,
+            )
+            removals.append(passing_flash)
             return
         family_reveal = _canonical_family_reveal_animation(self, animation)
         if family_reveal is not None:

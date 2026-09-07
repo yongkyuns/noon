@@ -288,6 +288,11 @@ pub enum SemanticAnimationIntent {
         stroke_color: Option<Color>,
         phase_rate_function: RateFunction,
     },
+    /// Show a moving partial window over one exact analytic Line.
+    PassingFlash {
+        target: SemanticNodeId,
+        time_width: f64,
+    },
     /// Switch one direct family member at its exact ordered subset threshold.
     SubsetDisplayMember {
         target: SemanticNodeId,
@@ -347,6 +352,7 @@ impl SemanticAnimationIntent {
             | Self::TransformTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
+            | Self::PassingFlash { target, .. }
             | Self::SubsetDisplayMember { target, .. }
             | Self::TextGlyph { target, .. }
             | Self::Rotate { target, .. }
@@ -366,6 +372,7 @@ impl SemanticAnimationIntent {
             | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
+            | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
             | Self::TextGlyph { .. }
             | Self::Fade { .. }
@@ -384,6 +391,7 @@ impl SemanticAnimationIntent {
             | Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
+            | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
             | Self::TextGlyph { .. }
             | Self::Rotate { .. }
@@ -403,6 +411,7 @@ impl SemanticAnimationIntent {
             | Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
+            | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
             | Self::TextGlyph { .. }
             | Self::Rotate { .. }
@@ -453,6 +462,7 @@ pub enum SemanticAnimationError {
     InvalidRotationAngle(f64),
     InvalidIndicateEndpoint,
     InvalidDrawBorderThenFillOutline,
+    InvalidPassingFlash,
     InvalidSubsetDisplayMember,
     InvalidTextWriteTarget,
     InvalidFadeEndpoint,
@@ -499,6 +509,8 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidDrawBorderThenFillOutline => {
                 formatter.write_str("DrawBorderThenFill outline width and color must be finite")
             }
+            Self::InvalidPassingFlash => formatter
+                .write_str("PassingFlash requires an analytic Line and a finite positive width"),
             Self::InvalidSubsetDisplayMember => formatter
                 .write_str("subset display member requires a nonempty count and an in-range index"),
             Self::InvalidTextWriteTarget => {
@@ -792,6 +804,33 @@ impl SemanticStore {
                     stroke_color,
                     phase_rate_function,
                 },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one moving partial-window animation over an exact analytic Line.
+    pub fn insert_semantic_passing_flash_animation(
+        &mut self,
+        target: SemanticNodeId,
+        time_width: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        let state = self.semantic_object_state_checked(target)?;
+        if !time_width.is_finite()
+            || time_width <= 0.0
+            || !matches!(
+                state.content.geometry(),
+                Some(crate::StoredGeometry::Line { .. })
+            )
+        {
+            return Err(SemanticAnimationError::InvalidPassingFlash);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::PassingFlash { target, time_width },
                 options,
             )),
         )

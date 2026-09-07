@@ -95,6 +95,41 @@ impl crate::Scene {
             options,
         )
     }
+
+    /// Declare one transient flash over an exact analytic Line.
+    pub fn declare_passing_flash(
+        &self,
+        target: &Mobject,
+        time_width: f64,
+        options: AnimationOptions,
+    ) -> Result<DeclaredAnimation, String> {
+        self.require_object(target)?;
+        let options = normalized_passing_flash_options(options)?;
+        self.declare_animation(
+            SemanticAnimationIntent::PassingFlash {
+                target: target.node_id(),
+                time_width,
+            },
+            options,
+        )
+    }
+}
+
+pub(crate) fn normalized_passing_flash_options(
+    options: AnimationOptions,
+) -> Result<AnimationOptions, String> {
+    if options.introducer == Some(false)
+        || options.remover == Some(false)
+        || options.reverse_rate_function == Some(true)
+        || options.lag_ratio.is_some_and(|value| value != 0.0)
+        || options.path_arc.is_some_and(|value| value != 0.0)
+    {
+        return Err(
+            "PassingFlash has fixed transient membership and does not support lag, path arcs, or rate reversal"
+                .into(),
+        );
+    }
+    Ok(options.introducer(true).remover(true))
 }
 
 #[cfg(test)]
@@ -192,5 +227,20 @@ mod tests {
             );
         }
         assert_eq!(session.frame().time, 0.0);
+    }
+
+    #[test]
+    fn declared_passing_flash_has_fixed_transient_lifecycle() {
+        let scene = crate::Scene::new();
+        let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+        let animation = scene
+            .declare_passing_flash(&line, 0.25, AnimationOptions::new().run_time(2.0))
+            .unwrap();
+        let options = animation.options().unwrap();
+        assert_eq!(options.introducer, Some(true));
+        assert_eq!(options.remover, Some(true));
+        assert!(scene
+            .declare_passing_flash(&line, 0.25, AnimationOptions::new().remover(false),)
+            .is_err());
     }
 }

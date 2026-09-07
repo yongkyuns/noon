@@ -570,3 +570,12 @@ impl DirectNativeSignalsSmokeRenderer {
 fn js_error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
+
+/// Shared Line flash phases and reusable identity through direct Rust/WASM execution.
+#[wasm_bindgen(js_name = createDirectLinePassingFlashSmokeRenderer)]
+pub async fn create_direct_line_passing_flash_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::line_passing_flash::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}

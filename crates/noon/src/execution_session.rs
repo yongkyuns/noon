@@ -146,6 +146,11 @@ pub(crate) enum SemanticCompositionRequest {
         reverse: bool,
         options: AnimationOptions,
     },
+    PassingFlash {
+        target: SemanticNodeId,
+        time_width: f64,
+        options: AnimationOptions,
+    },
     Rotate {
         target: SemanticNodeId,
         angle: f64,
@@ -1158,11 +1163,13 @@ impl ExecutionSession {
             ExecutionSegment::from_duration(schedule.start_time(), schedule.run_time())?;
         let tracks = lower_semantic_affine_animation_tracks(store, &schedule, |object| {
             let index = self.runtime.frame_index_for_object(object)?;
-            let row = self.runtime.frame().objects.get(index)?;
+            let frame = self.runtime.frame();
+            let row = frame.objects.get(index)?;
             Some(EffectiveAnimationProperties {
                 transform: row.transform,
                 style: row.style,
                 appearance: row.appearance,
+                reveal: *frame.reveals.get(index)?,
             })
         })?;
         let family_animations =
@@ -2061,6 +2068,20 @@ impl ExecutionSession {
                 admitted,
                 removals,
             ),
+            SemanticCompositionRequest::PassingFlash {
+                target,
+                time_width,
+                options,
+            } => {
+                let options =
+                    crate::animation_authoring::normalized_passing_flash_options(*options)
+                        .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+                if self.require_uncreate_target(store, root, *target)? {
+                    admit(*target, declaration, admitted)?;
+                }
+                // The final reveal phase owns this leaf's membership removal.
+                Ok(declaration.create_passing_flash_animation(*target, *time_width, options))
+            }
             SemanticCompositionRequest::Rotate {
                 target,
                 angle,
@@ -3072,11 +3093,13 @@ impl ExecutionSession {
             play_options,
             |object| {
                 let index = self.runtime.frame_index_for_object(object)?;
-                let row = self.runtime.frame().objects.get(index)?;
+                let frame = self.runtime.frame();
+                let row = frame.objects.get(index)?;
                 Some(EffectiveAnimationProperties {
                     transform: row.transform,
                     style: row.style,
                     appearance: row.appearance,
+                    reveal: *frame.reveals.get(index)?,
                 })
             },
         )?;

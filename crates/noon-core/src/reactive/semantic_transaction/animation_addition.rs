@@ -46,6 +46,10 @@ pub enum SemanticTransactionAnimationIntent {
         stroke_color: Option<Color>,
         phase_rate_function: crate::RateFunction,
     },
+    PassingFlash {
+        target: SemanticTransactionNodeRef,
+        time_width: f64,
+    },
     SubsetDisplayMember {
         target: SemanticTransactionNodeRef,
         index: usize,
@@ -106,6 +110,7 @@ impl SemanticTransactionAnimationIntent {
             Self::Rotate { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
+            | Self::PassingFlash { target, .. }
             | Self::SubsetDisplayMember { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
@@ -129,6 +134,7 @@ impl SemanticTransactionAnimationIntent {
             | Self::TransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
+            | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
             | Self::TextGlyph { .. }
             | Self::Rotate { .. }
@@ -222,6 +228,12 @@ impl SemanticTransactionAnimation {
                 stroke_color: *stroke_color,
                 phase_rate_function: *phase_rate_function,
             },
+            SemanticAnimationIntent::PassingFlash { target, time_width } => {
+                SemanticTransactionAnimationIntent::PassingFlash {
+                    target: (*target).into(),
+                    time_width: *time_width,
+                }
+            }
             SemanticAnimationIntent::SubsetDisplayMember {
                 target,
                 index,
@@ -342,6 +354,12 @@ impl SemanticTransactionAnimation {
                 stroke_color: *stroke_color,
                 phase_rate_function: *phase_rate_function,
             },
+            SemanticTransactionAnimationIntent::PassingFlash { target, time_width } => {
+                SemanticAnimationIntent::PassingFlash {
+                    target: resolve_node_ref(*target, committed),
+                    time_width: *time_width,
+                }
+            }
             SemanticTransactionAnimationIntent::SubsetDisplayMember {
                 target,
                 index,
@@ -584,6 +602,20 @@ pub(super) fn preflight_transaction_animation(
                 );
             }
         }
+        SemanticTransactionAnimationIntent::PassingFlash { target, time_width } => {
+            catalog.ensure_animation_target(*target, index)?;
+            let state =
+                catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if !time_width.is_finite()
+                || *time_width <= 0.0
+                || !matches!(
+                    state.content.geometry(),
+                    Some(crate::StoredGeometry::Line { .. })
+                )
+            {
+                return Err(SemanticMutationTransactionError::InvalidPassingFlash { index });
+            }
+        }
         SemanticTransactionAnimationIntent::SubsetDisplayMember {
             target,
             index: member_index,
@@ -771,6 +803,9 @@ pub(super) fn commit_add_animation(
                 options,
             )
             .expect("preflighted DrawBorderThenFill insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::PassingFlash { target, time_width } => store
+            .insert_semantic_passing_flash_animation(*target, *time_width, options)
+            .expect("preflighted PassingFlash insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::SubsetDisplayMember {
             target,
             index,

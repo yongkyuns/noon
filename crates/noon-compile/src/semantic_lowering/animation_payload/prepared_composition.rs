@@ -13,10 +13,10 @@ use super::super::{
 };
 use super::affine::{
     affine_center_dependency_conflict, driver_key, lower_affine_lifecycle_channels,
-    lower_draw_border_then_fill_channels, lower_fade_channels, lower_subset_display_phases,
-    lower_transform_channels, reserve_affine_center_dependencies, validate_affine_payload,
-    validate_subset_display_time_map, AffinePayloadIssue, EffectiveAnimationProperties,
-    SemanticAnimationCompletion,
+    lower_draw_border_then_fill_channels, lower_fade_channels, lower_passing_flash_phases,
+    lower_subset_display_phases, lower_transform_channels, reserve_affine_center_dependencies,
+    validate_affine_payload, validate_subset_display_time_map, AffinePayloadIssue,
+    EffectiveAnimationProperties, SemanticAnimationCompletion,
 };
 
 use super::transform_payload::SemanticAffineAnimationField;
@@ -114,6 +114,10 @@ pub enum PreparedSemanticAnimationLoweringError {
         target: SemanticTransactionNodeRef,
     },
     InvalidEffectiveStyle {
+        animation: SemanticTransactionNodeRef,
+        target: SemanticTransactionNodeRef,
+    },
+    InvalidEffectiveReveal {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
     },
@@ -308,6 +312,41 @@ where
                     .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+                continue;
+            }
+            PreparedSemanticScheduledAnimationPayload::PassingFlash { time_width } => {
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    admitted.contains(&leaf.target),
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                let phases = lower_passing_flash_phases(source, from, time_width)
+                    .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
+                for phase in phases {
+                    if phase.reserve_driver {
+                        push_prepared_channel(leaf, phase.channel, &mut driven, &mut tracks)?;
+                    } else {
+                        tracks.push(PreparedSemanticAnimationTrack {
+                            animation: leaf.animation,
+                            target: leaf.target,
+                            execution_object_id: leaf.execution_object_id,
+                            property: phase.channel.property,
+                            completion: phase.channel.completion,
+                            values: phase.channel.values,
+                            timing: leaf.timing,
+                            time_map: leaf.time_map.clone(),
+                        });
+                    }
+                    let track = tracks.last_mut().expect("pushed PassingFlash phase");
+                    track.timing.easing = RateFunction::Linear;
+                    track.time_map.push(CompositionTimeMapStep::new(
+                        phase.start,
+                        phase.duration,
+                        leaf.options.rate_func,
+                    ));
                 }
                 continue;
             }
@@ -734,6 +773,7 @@ where
                 }
             })?,
             appearance: 1.0,
+            reveal: 1.0,
         }
     } else {
         return Err(
@@ -808,6 +848,12 @@ fn prepared_payload_error(
         }
         AffinePayloadIssue::InvalidEffectiveStyle => {
             PreparedSemanticAnimationLoweringError::InvalidEffectiveStyle {
+                animation: leaf.animation,
+                target: leaf.target,
+            }
+        }
+        AffinePayloadIssue::InvalidEffectiveReveal => {
+            PreparedSemanticAnimationLoweringError::InvalidEffectiveReveal {
                 animation: leaf.animation,
                 target: leaf.target,
             }
@@ -939,6 +985,7 @@ mod tests {
             },
             style: noon_core::Style::default(),
             appearance: 1.0,
+            reveal: 1.0,
         }
     }
 
@@ -1420,6 +1467,7 @@ mod tests {
             },
             style: noon_core::Style::default(),
             appearance: 1.0,
+            reveal: 1.0,
         };
         let activation = lower_prepared_semantic_animation_composition(
             &prepared,
