@@ -7,11 +7,6 @@ pub enum RetainedFamilyPlanSetPrepareError {
     PlannedFrame(RetainedPlannedFamilyFrameError),
     Reveal(RetainedFamilyPrepareError),
     DrawBorderThenFill(RetainedFamilyDrawBorderPrepareError),
-    CachedScratchShapeChanged {
-        object: ObjectId,
-        expected: usize,
-        actual: usize,
-    },
 }
 
 impl std::fmt::Display for RetainedFamilyPlanSetPrepareError {
@@ -21,15 +16,6 @@ impl std::fmt::Display for RetainedFamilyPlanSetPrepareError {
             Self::PlannedFrame(error) => error.fmt(formatter),
             Self::Reveal(error) => error.fmt(formatter),
             Self::DrawBorderThenFill(error) => error.fmt(formatter),
-            Self::CachedScratchShapeChanged {
-                object,
-                expected,
-                actual,
-            } => write!(
-                formatter,
-                "cached family glyph rows for object {} changed shape from {expected} to {actual}",
-                object.get()
-            ),
         }
     }
 }
@@ -582,10 +568,11 @@ impl RetainedFramePreparer {
             let resource = texts
                 .get(text)
                 .ok_or(RetainedPrepareError::MissingTextResource)?;
-            let slots = self
-                .family_plan_scratch_slots
-                .get(&object_index)
-                .expect("active family plan must retain its stable glyph rows");
+            let Some(slots) = self.family_plan_scratch_slots.get(&object_index) else {
+                // An active Text whose glyph outlines are all empty has no geometry
+                // rows to update, but still participates in the stable active set.
+                continue;
+            };
             let Some(members) = retained_family_draw_border_then_fill_members_for_object(
                 &family_frame,
                 plan,
