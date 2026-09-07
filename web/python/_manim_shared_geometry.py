@@ -15,62 +15,15 @@ import _manim_compat as _compat
 import _manim_geometry as _geometry
 import _manim_semantic_handles as _shared
 
-try:
-    from js import noonCreateAuthoringDotHandle as _create_dot_handle
-except ImportError:  # Native CPython tests keep the existing Python constructor.
-    _create_dot_handle = None
-
-try:
-    from js import noonCreateAuthoringTriangleHandle as _create_triangle_handle
-except ImportError:  # Native CPython tests keep the existing Python constructor.
-    _create_triangle_handle = None
-
-try:
-    from js import noonCreateAuthoringElbowHandle as _create_elbow_handle
-except ImportError:
-    _create_elbow_handle = None
-
-try:
-    from js import noonCreateAuthoringRoundedRectangleHandle as _create_rounded_rectangle_handle
-except ImportError:
-    _create_rounded_rectangle_handle = None
-
-try:
-    from js import noonCreateAuthoringUnderlineHandle as _create_underline_handle
-except ImportError:
-    _create_underline_handle = None
-
-try:
-    from js import noonCreateAuthoringAnnularSectorHandle as _create_annular_sector_handle
-except ImportError:
-    _create_annular_sector_handle = None
-
-try:
-    from js import noonCreateAuthoringSectorHandle as _create_sector_handle
-except ImportError:
-    _create_sector_handle = None
-
-try:
-    from js import noonCreateAuthoringAnnulusHandle as _create_annulus_handle
-except ImportError:
-    _create_annulus_handle = None
-
 _ORIGINAL_DOT_INIT = _geometry.Dot.__init__
 _ORIGINAL_TRIANGLE_INIT = _geometry.Triangle.__init__
 _INSTALLED = False
 
 
-def _set_shared_color(self: _base.Mobject, color: object) -> None:
-    """Apply Manim ``color`` through the shared semantic handle.
-
-    The generic Phase-B setter rebuilds a Python snapshot before handing it back to
-    Rust. Shared constructors must not re-enter that compatibility path: parse the
-    host color once, then use the semantic-handle mutation that preserves each
-    channel's existing opacity.
-    """
-
-    parsed = _shared._phase_b._as_color("color", color)
-    _shared._set_color(self, parsed)
+def _apply_candidate_color(candidate: object, color: object) -> None:
+    if color is not None:
+        parsed = _shared._phase_b._as_color("color", color)
+        _shared._apply_constructor_color(candidate, parsed)
 
 
 def _coordinate_mask(dim: int) -> tuple[float, float, float]:
@@ -184,7 +137,7 @@ def _dot_init(
     color: _base.Color = _base.WHITE,
     **kwargs: Any,
 ) -> None:
-    if _create_dot_handle is None:
+    if _shared._create_geometry_handle is None:
         _ORIGINAL_DOT_INIT(
             self,
             point=point,
@@ -198,58 +151,53 @@ def _dot_init(
 
     point_value = _compat._as_vec2(point)
     radius_value = _shared._ir._positive_number("radius", radius)
-    _shared._attach_shared_handle(
-        self,
-        _create_dot_handle(point_value.x, point_value.y, radius_value),
-    )
-    self.radius = radius_value
-
     options = dict(kwargs)
     options["stroke_width"] = stroke_width
     options["fill_opacity"] = fill_opacity
-    _shared._apply_shared_constructor_kwargs(self, options)
-    if color is not None:
-        _set_shared_color(self, color)
+    candidate = _shared._geometry_options.dot(
+        point_value.x, point_value.y, radius_value
+    )
+    _shared._apply_shared_constructor_options(candidate, options)
+    _apply_candidate_color(candidate, color)
+    _shared._attach_geometry_options(self, candidate, "Dot")
+    self.radius = radius_value
 
 
 def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
-    if _create_triangle_handle is None:
+    if _shared._create_geometry_handle is None:
         _ORIGINAL_TRIANGLE_INIT(self, **kwargs)
         return
 
     options = dict(kwargs)
     color = options.pop("color", None)
-    _shared._attach_shared_handle(self, _create_triangle_handle())
-    _shared._apply_shared_constructor_kwargs(self, options)
-    if color is not None:
-        _set_shared_color(self, color)
+    candidate = _shared._geometry_options.triangle()
+    _shared._apply_shared_constructor_options(candidate, options)
+    _apply_candidate_color(candidate, color)
+    _shared._attach_geometry_options(self, candidate, "Triangle")
 
 
 class Elbow(_compat.VMobject):
     """Manim-compatible Elbow backed by shared Rust geometry."""
 
     def __init__(self, width: float = 0.2, angle: float = 0.0, **kwargs: Any) -> None:
-        if _create_elbow_handle is None:
+        if _shared._create_geometry_handle is None:
             raise RuntimeError("Elbow requires the shared browser geometry bridge")
 
         width_value = _shared._ir._finite_number("width", width)
         angle_value = _shared._ir._finite_number("angle", angle)
         options = dict(kwargs)
         color = options.pop("color", None)
-        _shared._attach_shared_handle(
-            self,
-            _create_elbow_handle(width_value, angle_value),
-        )
-        _shared._apply_shared_constructor_kwargs(self, options)
-        if color is not None:
-            _set_shared_color(self, color)
+        candidate = _shared._geometry_options.elbow(width_value, angle_value)
+        _shared._apply_shared_constructor_options(candidate, options)
+        _apply_candidate_color(candidate, color)
+        _shared._attach_geometry_options(self, candidate, "Elbow")
 
 
 class RoundedRectangle(_compat.Rectangle):
     """Scalar-radius Manim RoundedRectangle backed by shared Rust geometry."""
 
     def __init__(self, corner_radius: float = 0.5, **kwargs: Any) -> None:
-        if _create_rounded_rectangle_handle is None:
+        if _shared._create_geometry_handle is None:
             raise RuntimeError("RoundedRectangle requires the shared browser geometry bridge")
         if isinstance(corner_radius, (list, tuple)):
             raise NotImplementedError(
@@ -261,16 +209,13 @@ class RoundedRectangle(_compat.Rectangle):
         height = _shared._ir._positive_number("height", options.pop("height", 2.0))
         radius = _shared._ir._finite_number("corner_radius", corner_radius)
         color = options.pop("color", None)
-        _shared._attach_shared_handle(
-            self,
-            _create_rounded_rectangle_handle(width, height, radius),
-        )
+        candidate = _shared._geometry_options.roundedRectangle(width, height, radius)
+        _shared._apply_shared_constructor_options(candidate, options)
+        _apply_candidate_color(candidate, color)
+        _shared._attach_geometry_options(self, candidate, "RoundedRectangle")
         self.width_value = width
         self.height_value = height
         self.corner_radius = radius
-        _shared._apply_shared_constructor_kwargs(self, options)
-        if color is not None:
-            _set_shared_color(self, color)
 
 
 def _shape_matcher_buff(buff: object) -> tuple[float, float]:
@@ -336,7 +281,7 @@ class SurroundingRectangle(RoundedRectangle):
         )
         options = dict(kwargs)
         _shared._apply_shared_constructor_options(candidate, options)
-        _shared._apply_constructor_color(candidate, color)
+        _apply_candidate_color(candidate, color)
         _shared._attach_geometry_options(self, candidate, "SurroundingRectangle")
         self.buff = buff
         self.corner_radius = radius
@@ -373,7 +318,7 @@ class BackgroundRectangle(SurroundingRectangle):
         options["stroke_opacity"] = stroke_opacity
         options["fill_opacity"] = fill_value
         _shared._apply_shared_constructor_options(candidate, options)
-        _shared._apply_constructor_color(candidate, color)
+        _apply_candidate_color(candidate, color)
         _shared._attach_geometry_options(self, candidate, "BackgroundRectangle")
         self.buff = buff
         self.corner_radius = corner_radius
@@ -388,7 +333,7 @@ class Underline(_compat.Line):
         buff: float = _base.SMALL_BUFF,
         **kwargs: Any,
     ) -> None:
-        if _create_underline_handle is None:
+        if _shared._create_geometry_handle is None:
             raise RuntimeError("Underline requires the shared browser shape-matcher bridge")
         if not isinstance(mobject, _base.Mobject):
             raise TypeError("Underline target must be a Mobject")
@@ -401,14 +346,16 @@ class Underline(_compat.Line):
         buff_value = _shared._ir._finite_number("buff", buff)
         options = dict(kwargs)
         color = options.pop("color", None)
-        _shared._attach_shared_handle(
-            self,
-            _create_underline_handle(target_handle, buff_value),
+        context = _shared._live_constructor_context("Underline")
+        candidate = (
+            target_handle.beginUnderline(buff_value)
+            if context is None
+            else context.beginUnderline(target_handle, buff_value)
         )
+        _shared._apply_shared_constructor_options(candidate, options)
+        _apply_candidate_color(candidate, color)
+        _shared._attach_geometry_options(self, candidate, "Underline")
         self.buff = buff_value
-        _shared._apply_shared_constructor_kwargs(self, options)
-        if color is not None:
-            _set_shared_color(self, color)
 
 
 def _sector_component_count(value: object) -> int:
@@ -434,8 +381,8 @@ def _sector_options(
     return options, component_count, center
 
 
-def _finish_sector_style(
-    self: _base.Mobject,
+def _apply_sector_style(
+    candidate: object,
     kwargs: dict[str, Any],
     *,
     fill_opacity: float,
@@ -445,9 +392,8 @@ def _finish_sector_style(
     options = dict(kwargs)
     options["fill_opacity"] = fill_opacity
     options["stroke_width"] = stroke_width
-    _shared._apply_shared_constructor_kwargs(self, options)
-    if color is not None:
-        _set_shared_color(self, color)
+    _shared._apply_shared_constructor_options(candidate, options)
+    _apply_candidate_color(candidate, color)
 
 
 class AnnularSector(_compat.VMobject):
@@ -464,7 +410,7 @@ class AnnularSector(_compat.VMobject):
         color: _base.Color = _base.WHITE,
         **kwargs: Any,
     ) -> None:
-        if _create_annular_sector_handle is None:
+        if _shared._create_geometry_handle is None:
             raise RuntimeError("AnnularSector requires the shared browser geometry bridge")
 
         options, component_count, center = _sector_options(kwargs)
@@ -472,9 +418,7 @@ class AnnularSector(_compat.VMobject):
         outer = _shared._ir._finite_number("outer_radius", outer_radius)
         angle_value = _shared._ir._finite_number("angle", angle)
         start_value = _shared._ir._finite_number("start_angle", start_angle)
-        _shared._attach_shared_handle(
-            self,
-            _create_annular_sector_handle(
+        candidate = _shared._geometry_options.annularSector(
                 inner,
                 outer,
                 angle_value,
@@ -482,28 +426,28 @@ class AnnularSector(_compat.VMobject):
                 component_count,
                 center.x,
                 center.y,
-            ),
         )
+        _apply_sector_style(
+            candidate,
+            options,
+            fill_opacity=fill_opacity,
+            stroke_width=stroke_width,
+            color=color,
+        )
+        _shared._attach_geometry_options(self, candidate, "AnnularSector")
         self.inner_radius = inner
         self.outer_radius = outer
         self.angle = angle_value
         self.start_angle = start_value
         self.num_components = component_count
         self.arc_center = center
-        _finish_sector_style(
-            self,
-            options,
-            fill_opacity=fill_opacity,
-            stroke_width=stroke_width,
-            color=color,
-        )
 
 
 class Sector(AnnularSector):
     """Manim-compatible circle sector backed by the shared Rust constructor."""
 
     def __init__(self, radius: float = 1.0, **kwargs: Any) -> None:
-        if _create_sector_handle is None:
+        if _shared._create_geometry_handle is None:
             raise RuntimeError("Sector requires the shared browser geometry bridge")
 
         options = dict(kwargs)
@@ -516,30 +460,28 @@ class Sector(AnnularSector):
         radius_value = _shared._ir._finite_number("radius", radius)
         angle_value = _shared._ir._finite_number("angle", angle)
         start_value = _shared._ir._finite_number("start_angle", start_angle)
-        _shared._attach_shared_handle(
-            self,
-            _create_sector_handle(
+        candidate = _shared._geometry_options.sector(
                 radius_value,
                 angle_value,
                 start_value,
                 component_count,
                 center.x,
                 center.y,
-            ),
         )
+        _apply_sector_style(
+            candidate,
+            options,
+            fill_opacity=fill_opacity,
+            stroke_width=stroke_width,
+            color=color,
+        )
+        _shared._attach_geometry_options(self, candidate, "Sector")
         self.inner_radius = 0.0
         self.outer_radius = radius_value
         self.angle = angle_value
         self.start_angle = start_value
         self.num_components = component_count
         self.arc_center = center
-        _finish_sector_style(
-            self,
-            options,
-            fill_opacity=fill_opacity,
-            stroke_width=stroke_width,
-            color=color,
-        )
 
 
 class Annulus(_compat.VMobject):
@@ -555,34 +497,32 @@ class Annulus(_compat.VMobject):
         mark_paths_closed: bool = False,
         **kwargs: Any,
     ) -> None:
-        if _create_annulus_handle is None:
+        if _shared._create_geometry_handle is None:
             raise RuntimeError("Annulus requires the shared browser geometry bridge")
 
         options, component_count, center = _sector_options(kwargs)
         inner = _shared._ir._finite_number("inner_radius", inner_radius)
         outer = _shared._ir._finite_number("outer_radius", outer_radius)
-        _shared._attach_shared_handle(
-            self,
-            _create_annulus_handle(
+        candidate = _shared._geometry_options.annulus(
                 inner,
                 outer,
                 component_count,
                 center.x,
                 center.y,
-            ),
         )
-        self.inner_radius = inner
-        self.outer_radius = outer
-        self.mark_paths_closed = bool(mark_paths_closed)
-        self.num_components = component_count
-        self.arc_center = center
-        _finish_sector_style(
-            self,
+        _apply_sector_style(
+            candidate,
             options,
             fill_opacity=fill_opacity,
             stroke_width=stroke_width,
             color=color,
         )
+        _shared._attach_geometry_options(self, candidate, "Annulus")
+        self.inner_radius = inner
+        self.outer_radius = outer
+        self.mark_paths_closed = bool(mark_paths_closed)
+        self.num_components = component_count
+        self.arc_center = center
 
 
 def install() -> None:
@@ -597,9 +537,8 @@ def install() -> None:
     _base.Mobject.match_x = _match_x
     _base.Mobject.match_y = _match_y
     _base.Mobject.rotate_about_origin = _rotate_about_origin
-    if _create_dot_handle is not None:
+    if _shared._create_geometry_handle is not None:
         _geometry.Dot.__init__ = _dot_init
-    if _create_triangle_handle is not None:
         _geometry.Triangle.__init__ = _triangle_init
 
     public = {

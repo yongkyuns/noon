@@ -507,6 +507,36 @@ impl CanonicalAuthoringScene {
         authored_mobject_layout(handle)
     }
 
+    /// Inert bounds-dependent construction observes this runtime for bound targets,
+    /// while fresh detached targets retain their shared authored layout.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_underline(
+        &mut self,
+        handle: &noon::Mobject,
+        buff: f64,
+    ) -> Result<noon::ManimGeometryOptions, String> {
+        if self.live_player_transferred {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        handle.validate()?;
+        let mut bounds = handle
+            .layout_bounds()?
+            .ok_or("Underline target has no layout bounds")?;
+        if self.identities.contains_key(&handle.node_id()) {
+            let (x, y, width, height) = self.mobject_layout(handle)?;
+            bounds = noon_core::Bounds2D64 {
+                min_x: x - width * 0.5,
+                max_x: x + width * 0.5,
+                min_y: y - height * 0.5,
+                max_y: y + height * 0.5,
+            };
+        }
+        noon::ManimGeometryOptions::underline(bounds, buff)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn require_pre_execution_signal_authoring(&self) -> Result<(), String> {
         if self.live_player.is_some() || self.live_player_transferred {
@@ -4992,6 +5022,18 @@ mod wasm {
             self.inner.live_execution_ownership().to_owned()
         }
 
+        #[wasm_bindgen(js_name = beginUnderline)]
+        pub fn begin_underline(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            buff: f64,
+        ) -> Result<crate::WasmManimGeometryOptions, JsValue> {
+            self.inner
+                .begin_underline(handle.semantic_mobject(), buff)
+                .map(crate::WasmManimGeometryOptions::from_options)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectLayout)]
         pub fn query_mobject_layout(
             &mut self,
@@ -8413,6 +8455,49 @@ mod tests {
             context.mobject_layout(&circle).unwrap(),
             (2.0, -1.0, 2.0, 2.0)
         );
+    }
+
+    #[test]
+    fn underline_construction_observes_live_and_fresh_detached_targets() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, -2.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let animation = context
+            .declare_live_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let player = context.live_player(2.0).unwrap();
+        player.live_play_animation(&animation).unwrap();
+        player.live_advance_segment_to(2.0).unwrap();
+        player.live_complete_segment().unwrap();
+        let options = context.begin_underline(&circle, 0.15).unwrap();
+        let underline = context.live_create_manim_geometry(options).unwrap();
+        assert_eq!(underline.center().unwrap(), (4.0, -3.15));
+        assert_eq!(underline.width().unwrap(), 2.0);
+
+        let mut options = noon::ManimGeometryOptions::circle(0.5).unwrap();
+        options.set_translation(8.0, 7.0).unwrap();
+        let detached = context.live_create_manim_geometry(options).unwrap();
+        let options = context.begin_underline(&detached, 0.15).unwrap();
+        let detached_underline = context.live_create_manim_geometry(options).unwrap();
+        assert_eq!(detached_underline.center().unwrap(), (8.0, 6.35));
+        let foreign = noon::Scene::new().circle(1.0).unwrap();
+        assert!(context
+            .begin_underline(&foreign, 0.15)
+            .unwrap_err()
+            .contains("another authoring store"));
+        let _player = context.take_execution_player(2.0, 17).unwrap();
+        assert!(context
+            .begin_underline(&circle, 0.15)
+            .unwrap_err()
+            .contains("running in the semantic engine"));
     }
 
     #[test]

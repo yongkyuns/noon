@@ -364,17 +364,79 @@ fn specialized_manim_geometry_uses_one_semantic_identity_per_constructor() {
 }
 
 #[test]
+fn specialized_options_admit_through_one_live_geometry_path_after_wait() {
+    let mut scene = Scene::new();
+    let anchor = scene.circle(0.1).unwrap();
+    scene.add(&anchor).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let wait = live.wait_segment(0.5).unwrap();
+    live.advance_segment_to(wait, wait.end_time()).unwrap();
+
+    let options = [
+        ManimGeometryOptions::dot(-4.0, 2.0, 0.3).unwrap(),
+        ManimGeometryOptions::triangle().unwrap(),
+        ManimGeometryOptions::elbow(0.8, 0.3).unwrap(),
+        ManimGeometryOptions::rounded_rectangle(2.0, 1.0, 0.2).unwrap(),
+        ManimGeometryOptions::annular_sector(0.3, 0.9, std::f64::consts::PI, 0.0, 8, 0.0, 0.0)
+            .unwrap(),
+        ManimGeometryOptions::sector(
+            0.9,
+            std::f64::consts::FRAC_PI_2,
+            std::f64::consts::FRAC_PI_4,
+            8,
+            4.0,
+            0.0,
+        )
+        .unwrap(),
+        ManimGeometryOptions::annulus(0.5, 0.9, 8, -4.0, -2.0).unwrap(),
+        ManimGeometryOptions::dashed_line(-1.0, -2.0, 1.0, -2.0, 0.2, 0.5).unwrap(),
+        ManimGeometryOptions::underline(
+            Bounds2D64 {
+                min_x: -1.0,
+                min_y: -0.5,
+                max_x: 1.0,
+                max_y: 0.5,
+            },
+            0.2,
+        )
+        .unwrap(),
+    ];
+
+    let mut admitted = Vec::new();
+    for options in options {
+        let object = live.create_manim_geometry(options).unwrap();
+        assert!(!live.contains(&object).unwrap());
+        live.add(&object).unwrap();
+        admitted.push(object);
+    }
+
+    assert_eq!(session.frame().objects.len(), 10);
+    assert_eq!(admitted[0].center().unwrap(), (-4.0, 2.0));
+    assert_eq!(admitted[8].center().unwrap(), (0.0, -0.7));
+    assert_eq!(admitted[8].width().unwrap(), 2.0);
+}
+
+#[test]
 fn invalid_specialized_geometry_does_not_allocate_or_publish() {
     let scene = Scene::new();
     let before_revision = scene.store().borrow().scene_revision();
     let before_nodes = scene.store().borrow().len();
     let before_resources = scene.store().borrow().geometry_resources().len();
 
-    assert!(Mobject::manim_rounded_rectangle(Rc::clone(scene.store()), 0.0, 2.0, 0.5).is_err());
-    assert!(Mobject::manim_sector(Rc::clone(scene.store()), 1.0, 1.0, 0.0, 1, 0.0, 0.0).is_err());
-    assert!(
-        Mobject::manim_dashed_line(Rc::clone(scene.store()), 0.0, 0.0, 1.0, 0.0, 0.0, 0.5).is_err()
-    );
+    assert!(ManimGeometryOptions::rounded_rectangle(0.0, 2.0, 0.5).is_err());
+    assert!(ManimGeometryOptions::sector(1.0, 1.0, 0.0, 1, 0.0, 0.0).is_err());
+    assert!(ManimGeometryOptions::dashed_line(0.0, 0.0, 1.0, 0.0, 0.0, 0.5).is_err());
+    assert!(ManimGeometryOptions::underline(
+        Bounds2D64 {
+            min_x: 1.0,
+            min_y: 0.0,
+            max_x: -1.0,
+            max_y: 0.0,
+        },
+        0.1,
+    )
+    .is_err());
 
     let store = scene.store().borrow();
     assert_eq!(store.scene_revision(), before_revision);

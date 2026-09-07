@@ -8,11 +8,6 @@ import noon as _base
 import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 
-try:
-    from js import noonCreateAuthoringDashedLineHandle as _create_dashed_line_handle
-except ImportError:
-    _create_dashed_line_handle = None
-
 _INSTALLED = False
 
 
@@ -27,7 +22,7 @@ class DashedLine(_compat.Line):
         dashed_ratio: float = 0.5,
         **kwargs: Any,
     ) -> None:
-        if _create_dashed_line_handle is None:
+        if _shared._create_geometry_handle is None:
             raise RuntimeError("DashedLine requires the shared browser geometry bridge")
 
         start_value = _compat._as_vec2(start)
@@ -39,23 +34,21 @@ class DashedLine(_compat.Line):
 
         options = dict(kwargs)
         color = options.pop("color", None)
-        _shared._attach_shared_handle(
-            self,
-            _create_dashed_line_handle(
+        candidate = _shared._geometry_options.dashedLine(
                 start_value.x,
                 start_value.y,
                 end_value.x,
                 end_value.y,
                 dash_length_value,
                 dashed_ratio_value,
-            ),
         )
-        self.dash_length = dash_length_value
-        self.dashed_ratio = dashed_ratio_value
-        _shared._apply_shared_constructor_kwargs(self, options)
+        _shared._apply_shared_constructor_options(candidate, options)
         if color is not None:
             parsed = _shared._phase_b._as_color("color", color)
-            _shared._set_color(self, parsed)
+            _shared._apply_constructor_color(candidate, parsed)
+        _shared._attach_geometry_options(self, candidate, "DashedLine")
+        self.dash_length = dash_length_value
+        self.dashed_ratio = dashed_ratio_value
 
 
 def install() -> None:

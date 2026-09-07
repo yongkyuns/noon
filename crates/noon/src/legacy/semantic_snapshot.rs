@@ -1,23 +1,10 @@
-//! Explicit legacy value import/export; deletion owned by #959.
+//! Explicit legacy value export/replacement; deletion owned by #959.
 use crate::semantic_mobject::{import_geometry, legacy_solid_color, Mobject};
 use noon_core::{
     GeometryRef, GeometryResource, ObjectSnapshot, SemanticStore, SemanticStyle,
     SemanticTransform2_5D, StoredGeometry, Style, Transform2D,
 };
-use std::{cell::RefCell, rc::Rc};
-pub fn import_mobject_snapshot(
-    store: Rc<RefCell<SemanticStore>>,
-    snapshot: ObjectSnapshot,
-) -> Result<Mobject, String> {
-    validate_snapshot(&snapshot)?;
-    let state = crate::semantic_object_state_from_compact(
-        &mut store.borrow_mut(),
-        snapshot.geometry,
-        snapshot.transform,
-        snapshot.style,
-    )?;
-    Mobject::new(store, state)
-}
+
 pub fn replace_mobject_snapshot(
     object: &mut Mobject,
     snapshot: ObjectSnapshot,
@@ -155,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_identical_path_import_preserves_resource_and_revision() {
+    fn repeated_identical_path_replacement_preserves_resource_and_revision() {
         let scene = crate::Scene::new();
         let path = VectorPath::new()
             .move_to(Vec2::ZERO)

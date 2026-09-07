@@ -105,9 +105,9 @@ class ManimSharedSectorTests(unittest.TestCase):
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, generic_snapshot)
-            fake_js.noonCreateAuthoringAnnularSectorHandle = annular_sector
-            fake_js.noonCreateAuthoringSectorHandle = sector
-            fake_js.noonCreateAuthoringAnnulusHandle = annulus
+            _geometry_test.install_option_factory(fake_js, "annularSector", annular_sector)
+            _geometry_test.install_option_factory(fake_js, "sector", sector)
+            _geometry_test.install_option_factory(fake_js, "annulus", annulus)
             sys.modules["js"] = fake_js
 
             import _manim_compat

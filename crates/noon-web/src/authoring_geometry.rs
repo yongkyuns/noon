@@ -174,6 +174,118 @@ impl WasmManimGeometryOptions {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = dot)]
+    pub fn dot(x: f64, y: f64, radius: f64) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::dot(x, y, radius)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = triangle)]
+    pub fn triangle() -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::triangle()
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = elbow)]
+    pub fn elbow(width: f64, angle: f64) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::elbow(width, angle)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = roundedRectangle)]
+    pub fn rounded_rectangle(width: f64, height: f64, corner_radius: f64) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::rounded_rectangle(width, height, corner_radius)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = annularSector)]
+    pub fn annular_sector(
+        inner_radius: f64,
+        outer_radius: f64,
+        angle: f64,
+        start_angle: f64,
+        num_components: u32,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::annular_sector(
+            inner_radius,
+            outer_radius,
+            angle,
+            start_angle,
+            num_components,
+            center_x,
+            center_y,
+        )
+        .map(Self::from_options)
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = sector)]
+    pub fn sector(
+        radius: f64,
+        angle: f64,
+        start_angle: f64,
+        num_components: u32,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::sector(
+            radius,
+            angle,
+            start_angle,
+            num_components,
+            center_x,
+            center_y,
+        )
+        .map(Self::from_options)
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = annulus)]
+    pub fn annulus(
+        inner_radius: f64,
+        outer_radius: f64,
+        num_components: u32,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::annulus(
+            inner_radius,
+            outer_radius,
+            num_components,
+            center_x,
+            center_y,
+        )
+        .map(Self::from_options)
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = dashedLine)]
+    pub fn dashed_line(
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        dash_length: f64,
+        dashed_ratio: f64,
+    ) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::dashed_line(
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            dash_length,
+            dashed_ratio,
+        )
+        .map(Self::from_options)
+        .map_err(js_error)
+    }
+
     pub fn path(path: WasmAuthoringVectorPath) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::path(path.path)
             .map(Self::from_options)

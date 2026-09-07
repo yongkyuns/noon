@@ -59,7 +59,7 @@ class ManimSharedDashedLineTests(unittest.TestCase):
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, generic_handle)
-            fake_js.noonCreateAuthoringDashedLineHandle = dashed_line
+            _geometry_test.install_option_factory(fake_js, "dashedLine", dashed_line)
             sys.modules["js"] = fake_js
 
             import _manim_compat
