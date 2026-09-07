@@ -404,9 +404,9 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_manim_primitive(
+    pub(crate) fn live_create_manim_geometry(
         &mut self,
-        options: noon::ManimPrimitiveOptions,
+        options: noon::ManimGeometryOptions,
     ) -> Result<noon::Mobject, String> {
         let semantics = self
             .semantics
@@ -418,7 +418,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         )
-        .create_manim_primitive(options)
+        .create_manim_geometry(options)
         .map_err(|error| error.to_string())
     }
 

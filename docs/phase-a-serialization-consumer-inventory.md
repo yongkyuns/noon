@@ -59,7 +59,9 @@ The flat family request remains only at the external input codec. It does not in
 
 The nine specialized Python geometry factories now call typed Rust `Mobject` constructors through their WASM store. Dot, Triangle, Elbow, RoundedRectangle, AnnularSector, Sector, Annulus, DashedLine, and Underline no longer serialize a snapshot and immediately parse it back inside the same WASM context. Path calculations are shared Rust helpers; Underline reads typed semantic bounds and rejects a foreign store at its wrapper boundary.
 
-The generic snapshot constructor and geometry admission methods remain the next #958/#959 seam. Their common geometry/path caller must move to shared typed construction before those methods are deleted. Remaining snapshot-based queries, shape matchers, and explicit export/callback consumers are separate recorded migration work; the specialized constructors do not call them.
+The following generic construction cut removes `createMobject`, `bindGeometry`, and `updateGeometry`. Circle, Rectangle/Square, Line, and VectorPath arguments now configure the same inert Rust geometry options and publish once through the ordinary semantic store or current live session. SurroundingRectangle and BackgroundRectangle consume authoritative mobject/family bounds into those same typed options, deleting their snapshot constructors and orphan bridge module.
+
+Remaining snapshot-based queries, raw replacement, and explicit export/callback consumers remain #958/#959 deletion work. Canonical checkpoint/restore is still used by typed-bind rollback; it now counts direct scene roots and cleans removed family bindings while preserving aliases reachable through retained roots. It is not a snapshot admission path.
 
 ## Important separation: real transport versus accidental engine boundary
 

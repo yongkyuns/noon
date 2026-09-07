@@ -34,6 +34,7 @@ const {
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
+  createDirectLiveGeometryConstructionSmokeRenderer,
   createDirectOrdinarySuccessionSmokeRenderer,
   createDirectOrdinaryUncreatePlaySmokeRenderer,
   createDirectTypstTextSmokeRenderer,
@@ -100,6 +101,35 @@ async function settleDirectPublication(renderer, wallTimeMs) {
     // next segment. Mirror the production driver's fresh wake observation.
   }
   throw new Error("direct source did not settle its presentation publications");
+}
+
+async function directLiveGeometryConstructionProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectLiveGeometryConstructionSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    const before = renderer.objectCount();
+    const path = await sampleRenderedColor(canvas, -2, 0);
+    renderer.advanceDirectRealtime(1000);
+    await settleDirectPublication(renderer, 1000);
+    renderer.advanceDirectRealtime(2000);
+    const final = await settleDirectPublication(renderer, 2000);
+    const rectangle = await sampleRenderedColor(canvas, 2, 1);
+    const metrics = { backend: renderer.rendererBackend(), before, after: renderer.objectCount(),
+      time: renderer.time(), cadence: final.cadence, path, rectangle };
+    if (metrics.backend !== expectedBackend || before !== 3 || metrics.after !== 6 ||
+        metrics.time !== 2 || metrics.cadence !== "idle" ||
+        path.blue <= path.red + 30 || rectangle.green <= rectangle.red + 30) {
+      throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
 }
 
 async function directLivePrimitiveConstructionProof(expectedBackend) {
@@ -2139,6 +2169,7 @@ async function start() {
   metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
   metrics.exactPropertyTracks = await directExactPropertyTracksProof(expectedBackend);
   metrics.specializedGeometry = await directSpecializedGeometryProof(expectedBackend);
+  metrics.liveGeometryConstruction = await directLiveGeometryConstructionProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);
   metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);
   metrics.textFamilyWrite = await directTextFamilyWriteProof(expectedBackend);

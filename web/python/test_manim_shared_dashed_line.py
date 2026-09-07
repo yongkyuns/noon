@@ -56,7 +56,9 @@ class ManimSharedDashedLineTests(unittest.TestCase):
                     "style": {"fill": {"red": 1.0, "green": 1.0, "blue": 1.0, "alpha": 0.0}, "stroke": {"red": 1.0, "green": 1.0, "blue": 1.0, "alpha": 1.0}, "stroke_width": 0.04, "stroke_width_mode": "screen_space", "stroke_join": "miter", "stroke_cap": "butt", "opacity": 1.0},
                 })
 
-            fake_js.noonCreateAuthoringMobjectHandle = generic_handle
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, generic_handle)
             fake_js.noonCreateAuthoringDashedLineHandle = dashed_line
             sys.modules["js"] = fake_js
 

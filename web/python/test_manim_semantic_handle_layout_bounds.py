@@ -94,7 +94,10 @@ class ManimSemanticHandleLayoutBoundsTests(unittest.TestCase):
                     self.snapshot[\"transform\"][\"rotation\"] += float(angle)
 
 
-            handles._create_handle = FakeHandle
+            import _typed_geometry_test_support as _geometry_test
+
+
+            _geometry_test.install_module_bridge(handles, FakeHandle)
             handles.install()
 
             from noon import (

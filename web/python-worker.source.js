@@ -1,5 +1,7 @@
 import initNoonWeb, {
   WasmAuthoringStore,
+  WasmAuthoringVectorPath,
+  WasmManimGeometryOptions,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
@@ -107,8 +109,10 @@ async function initializePyodide() {
       throw new Error("semantic continuation is not active for this Python source run");
     }
   };
-  self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
-    authoringStore.createMobject(snapshotJson);
+  self.noonAuthoringGeometryOptions = WasmManimGeometryOptions;
+  self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
+  self.noonCreateAuthoringGeometryHandle = (options) =>
+    authoringStore.createManimGeometry(options);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
     authoringStore.createManimDot(pointX, pointY, radius);
   self.noonCreateAuthoringTriangleHandle = () =>
@@ -127,12 +131,6 @@ async function initializePyodide() {
     authoringStore.createManimDashedLine(...args);
   self.noonCreateAuthoringUnderlineHandle = (targetHandle, buff) =>
     authoringStore.createManimUnderline(targetHandle, buff);
-  self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
-  self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
-  self.noonCreateAuthoringRectangleHandle = (width, height) =>
-    authoringStore.createManimRectangle(width, height);
-  self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
-    authoringStore.createManimLine(startX, startY, endX, endY);
   self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
     authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>

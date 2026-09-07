@@ -163,7 +163,9 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                 def targetEditor(self):
                     return FakeFamilyTargetEditor(self)
 
-            fake_js.noonCreateAuthoringMobjectHandle = FakeHandle
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, FakeHandle)
             fake_js.noonCreateAuthoringFamilyHandle = FakeFamilyHandle
             sys.modules["js"] = fake_js
 

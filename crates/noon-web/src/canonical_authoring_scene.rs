@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon_core::{
-    Color, FamilyAnimationRequest, ObjectId, ObjectSnapshot, SemanticObjectState, SemanticPaint,
-    SemanticStyle, SemanticTransform2_5D, Style, TextSourceKind, TrackDefinition, Transform2D,
-    Vec2,
+    Color, FamilyAnimationRequest, ObjectId, SemanticObjectState, SemanticPaint, SemanticStyle,
+    SemanticTransform2_5D, Style, TextSourceKind, TrackDefinition, Transform2D, Vec2,
 };
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction, SemanticVec3};
@@ -221,28 +220,6 @@ impl CanonicalAuthoringScene {
         Ok(frame)
     }
 
-    /// Snapshot import is an explicit compatibility boundary, never the typed bind path.
-    pub fn bind_geometry(&mut self, id: ObjectId, snapshot: ObjectSnapshot) -> Result<(), String> {
-        if self.bindings.contains_key(&id) {
-            return Err(format!("canonical object {} is already bound", id.get()));
-        }
-        let handle = noon::legacy::import_mobject_snapshot(
-            std::rc::Rc::clone(self.scene.store()),
-            snapshot,
-        )?;
-        self.bind_mobject(id, &handle)
-    }
-
-    pub fn update_geometry(
-        &mut self,
-        id: ObjectId,
-        snapshot: ObjectSnapshot,
-    ) -> Result<(), String> {
-        let node = self.node(id)?;
-        let mut handle = noon::Mobject::from_node(std::rc::Rc::clone(self.scene.store()), node)?;
-        noon::legacy::replace_mobject_snapshot(&mut handle, snapshot)
-    }
-
     fn members(&self) -> Result<Vec<noon_core::SemanticNodeId>, String> {
         self.scene
             .store()
@@ -253,7 +230,13 @@ impl CanonicalAuthoringScene {
     }
 
     pub fn checkpoint(&self) -> usize {
-        self.bindings.len()
+        self.scene
+            .store()
+            .borrow()
+            .node(self.scene.root())
+            .expect("canonical semantic scene root remains live")
+            .members()
+            .len()
     }
 
     pub fn restore(&mut self, checkpoint: usize) -> Result<(), String> {
@@ -265,6 +248,21 @@ impl CanonicalAuthoringScene {
             ));
         }
         let removed = &members[checkpoint..];
+        let candidates = {
+            let store = self.scene.store().borrow();
+            let mut candidates = BTreeSet::new();
+            let mut pending = removed.to_vec();
+            while let Some(node) = pending.pop() {
+                if !candidates.insert(node) {
+                    continue;
+                }
+                let node = store
+                    .node(node)
+                    .ok_or_else(|| "canonical rollback member is no longer live".to_string())?;
+                pending.extend(node.members().iter().copied());
+            }
+            candidates
+        };
         let mut transaction = noon_core::SemanticMutationTransaction::new();
         for node in removed {
             transaction.remove_member(self.scene.root(), *node);
@@ -272,9 +270,21 @@ impl CanonicalAuthoringScene {
         transaction
             .apply(&mut self.scene.store().borrow_mut())
             .map_err(|error| error.to_string())?;
-        self.bindings.retain(|_, node| !removed.contains(node));
-        for node in removed {
-            self.identities.remove(node);
+        let unreachable = {
+            let store = self.scene.store().borrow();
+            candidates
+                .into_iter()
+                .filter_map(|node| {
+                    let bound = self.identities.get(&node).copied()?;
+                    (!noon_core::semantic_scene_root_contains(&store, self.scene.root(), node)
+                        .expect("validated rollback candidates and scene root remain live"))
+                    .then_some((node, bound))
+                })
+                .collect::<Vec<_>>()
+        };
+        for (node, id) in unreachable {
+            self.identities.remove(&node);
+            self.bindings.remove(&id);
         }
         Ok(())
     }
@@ -2246,14 +2256,14 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_manim_primitive(
+    fn live_create_manim_geometry(
         &mut self,
-        options: noon::ManimPrimitiveOptions,
+        options: noon::ManimGeometryOptions,
     ) -> Result<noon::Mobject, String> {
         match self.live_execution_ownership() {
             "active" | "returned" => self
                 .active_live_player()?
-                .live_create_manim_primitive(options),
+                .live_create_manim_geometry(options),
             "none" => {
                 Err("live primitive construction requires an active canonical session".into())
             }
@@ -2613,13 +2623,6 @@ impl CanonicalAuthoringScene {
         spec.camera_object = camera_object;
         spec.validate().map_err(|error| error.to_string())?;
         Ok(spec)
-    }
-
-    fn node(&self, id: ObjectId) -> Result<noon_core::SemanticNodeId, String> {
-        self.bindings
-            .get(&id)
-            .copied()
-            .ok_or_else(|| format!("unknown canonical object {}", id.get()))
     }
 }
 
@@ -3034,15 +3037,6 @@ mod wasm {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     }
 
-    /// Consumed, inert input for one fully configured ordinary Circle or Square.
-    ///
-    /// The candidate carries only shared typed semantic state. It has no store,
-    /// semantic node, execution slot, or renderer work before live publication.
-    #[wasm_bindgen]
-    pub struct WasmManimPrimitiveBuilder {
-        options: noon::ManimPrimitiveOptions,
-    }
-
     /// Consumed, inert input for one flat ordinary transform composition.
     ///
     /// This owns opaque shared handles and unresolved semantic options only. It
@@ -3399,134 +3393,6 @@ mod wasm {
                     options,
                 });
             Ok(())
-        }
-    }
-
-    #[wasm_bindgen]
-    impl WasmManimPrimitiveBuilder {
-        #[wasm_bindgen(js_name = setTranslation)]
-        pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.options.set_translation(x, y).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setScale)]
-        pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.options.set_scale(x, y).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setRotation)]
-        pub fn set_rotation(&mut self, angle: f64) -> Result<(), JsValue> {
-            self.options.set_rotation(angle).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setColor)]
-        pub fn set_color(
-            &mut self,
-            red: f64,
-            green: f64,
-            blue: f64,
-            alpha: f64,
-        ) -> Result<(), JsValue> {
-            self.options
-                .set_color(red, green, blue, alpha)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = disableFill)]
-        pub fn disable_fill(&mut self) {
-            self.options.disable_fill();
-        }
-
-        #[wasm_bindgen(js_name = setFill)]
-        pub fn set_fill(
-            &mut self,
-            red: f64,
-            green: f64,
-            blue: f64,
-            opacity: f64,
-        ) -> Result<(), JsValue> {
-            self.options
-                .set_fill(red, green, blue, opacity)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setFillColor)]
-        pub fn set_fill_color(
-            &mut self,
-            red: f64,
-            green: f64,
-            blue: f64,
-            alpha: f64,
-        ) -> Result<(), JsValue> {
-            self.options
-                .set_fill_color(red, green, blue, alpha)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setFillOpacity)]
-        pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
-            self.options.set_fill_opacity(opacity).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = disableStroke)]
-        pub fn disable_stroke(&mut self) {
-            self.options.disable_stroke();
-        }
-
-        #[wasm_bindgen(js_name = setStroke)]
-        pub fn set_stroke(
-            &mut self,
-            red: f64,
-            green: f64,
-            blue: f64,
-            opacity: f64,
-        ) -> Result<(), JsValue> {
-            self.options
-                .set_stroke(red, green, blue, opacity)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setStrokeColor)]
-        pub fn set_stroke_color(
-            &mut self,
-            red: f64,
-            green: f64,
-            blue: f64,
-            alpha: f64,
-        ) -> Result<(), JsValue> {
-            self.options
-                .set_stroke_color(red, green, blue, alpha)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setStrokeOpacity)]
-        pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
-            self.options.set_stroke_opacity(opacity).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setStrokeWidth)]
-        pub fn set_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
-            self.options.set_stroke_width(width).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setStrokeWidthMode)]
-        pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), JsValue> {
-            self.options.set_stroke_width_mode(mode).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setStrokeJoin)]
-        pub fn set_stroke_join(&mut self, join: &str) -> Result<(), JsValue> {
-            self.options.set_stroke_join(join).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setStrokeCap)]
-        pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), JsValue> {
-            self.options.set_stroke_cap(cap).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setObjectOpacity)]
-        pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
-            self.options.set_object_opacity(opacity).map_err(js_error)
         }
     }
 
@@ -5659,38 +5525,14 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        /// Start an inert Circle constructor request. It owns no semantic identity
-        /// until `liveCreateManimPrimitive` consumes it through the retained session.
-        #[wasm_bindgen(js_name = beginLiveManimCircle)]
-        pub fn begin_live_manim_circle(
-            &self,
-            radius: f64,
-        ) -> Result<WasmManimPrimitiveBuilder, JsValue> {
-            noon::ManimPrimitiveOptions::circle(radius)
-                .map(|options| WasmManimPrimitiveBuilder { options })
-                .map_err(js_error)
-        }
-
-        /// Start an inert Square constructor request. See `beginLiveManimCircle`.
-        #[wasm_bindgen(js_name = beginLiveManimSquare)]
-        pub fn begin_live_manim_square(
-            &self,
-            side: f64,
-        ) -> Result<WasmManimPrimitiveBuilder, JsValue> {
-            noon::ManimPrimitiveOptions::square(side)
-                .map(|options| WasmManimPrimitiveBuilder { options })
-                .map_err(js_error)
-        }
-
-        /// Validate and publish a fully configured primitive in one retained live
-        /// transaction. The consumed candidate has no identity before this call.
-        #[wasm_bindgen(js_name = liveCreateManimPrimitive)]
-        pub fn live_create_manim_primitive(
+        /// Publish a fully configured geometry through the current live session.
+        #[wasm_bindgen(js_name = liveCreateManimGeometry)]
+        pub fn live_create_manim_geometry(
             &mut self,
-            candidate: WasmManimPrimitiveBuilder,
+            candidate: crate::WasmManimGeometryOptions,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             self.inner
-                .live_create_manim_primitive(candidate.options)
+                .live_create_manim_geometry(candidate.options)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
@@ -6213,28 +6055,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = bindGeometry)]
-        pub fn bind_geometry(
-            &mut self,
-            object_id: &str,
-            snapshot_json: &str,
-        ) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            let snapshot = parse_json::<ObjectSnapshot>("geometry snapshot", snapshot_json)?;
-            self.inner.bind_geometry(id, snapshot).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = updateGeometry)]
-        pub fn update_geometry(
-            &mut self,
-            object_id: &str,
-            snapshot_json: &str,
-        ) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            let snapshot = parse_json::<ObjectSnapshot>("geometry snapshot", snapshot_json)?;
-            self.inner.update_geometry(id, snapshot).map_err(js_error)
-        }
-
         pub fn checkpoint(&self) -> u32 {
             u32::try_from(self.inner.checkpoint()).expect("canonical object count fits u32")
         }
@@ -6277,7 +6097,7 @@ pub use wasm::*;
 mod tests {
     use noon_core::{
         AnimationOptions, GeometryRef, HostCallbackId, RateFunction, SemanticMutationTransaction,
-        SemanticVec3, Transform2D, Vec2,
+        SemanticVec3, Vec2,
     };
     use noon_ir::{ObjectSpecContent, TextSpecKind};
 
@@ -6477,6 +6297,97 @@ mod tests {
     }
 
     #[test]
+    fn family_checkpoint_tracks_root_prefix_and_restores_descendant_bindings_atomically() {
+        let mut context = CanonicalAuthoringScene::default();
+        let anchor = context.scene.circle(0.25).unwrap();
+        context.bind_mobject(ObjectId::new(0), &anchor).unwrap();
+        let checkpoint = context.checkpoint();
+
+        let left = context.scene.circle(0.5).unwrap();
+        let right = context.scene.square(0.5).unwrap();
+        let family = context.scene.family(&[&left, &right]).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                members: vec![OwnedSceneMembershipMember::Family(family)],
+                bindings: vec![
+                    (ObjectId::new(1), left.clone()),
+                    (ObjectId::new(2), right.clone()),
+                ],
+            })
+            .unwrap();
+        assert_eq!(context.checkpoint(), checkpoint + 1);
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(1)),
+            Some(&left.node_id())
+        );
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(2)),
+            Some(&right.node_id())
+        );
+
+        context.restore(checkpoint).unwrap();
+        assert_eq!(context.root_membership_keys().unwrap().len(), checkpoint);
+        assert!(!context.bindings.contains_key(&ObjectId::new(1)));
+        assert!(!context.bindings.contains_key(&ObjectId::new(2)));
+        assert!(!context.identities.contains_key(&left.node_id()));
+        assert!(!context.identities.contains_key(&right.node_id()));
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(0)),
+            Some(&anchor.node_id())
+        );
+
+        let revision = context.scene.store().borrow().scene_revision();
+        let bindings = context.bindings.clone();
+        let identities = context.identities.clone();
+        assert!(context.restore(checkpoint + 1).is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(context.bindings, bindings);
+        assert_eq!(context.identities, identities);
+    }
+
+    #[test]
+    fn checkpoint_restore_keeps_a_binding_reachable_through_a_retained_alias() {
+        let mut context = CanonicalAuthoringScene::default();
+        let shared = context.scene.circle(0.5).unwrap();
+        let retained = context.scene.family(&[&shared]).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                members: vec![OwnedSceneMembershipMember::Family(retained)],
+                bindings: vec![(ObjectId::new(0), shared.clone())],
+            })
+            .unwrap();
+        let checkpoint = context.checkpoint();
+
+        let temporary = context.scene.square(0.5).unwrap();
+        let alias = context.scene.family(&[&shared, &temporary]).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_member(context.scene.root(), alias.node_id());
+        transaction
+            .apply(&mut context.scene.store().borrow_mut())
+            .unwrap();
+        context
+            .bindings
+            .insert(ObjectId::new(1), temporary.node_id());
+        context
+            .identities
+            .insert(temporary.node_id(), ObjectId::new(1));
+
+        context.restore(checkpoint).unwrap();
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(0)),
+            Some(&shared.node_id())
+        );
+        assert_eq!(
+            context.identities.get(&shared.node_id()),
+            Some(&ObjectId::new(0))
+        );
+        assert!(!context.bindings.contains_key(&ObjectId::new(1)));
+        assert!(!context.identities.contains_key(&temporary.node_id()));
+    }
+
+    #[test]
     fn live_membership_uses_the_existing_session_and_registers_detached_handles() {
         let mut context = CanonicalAuthoringScene::default();
         let anchor = context.scene.circle(0.5).unwrap();
@@ -6522,7 +6433,10 @@ mod tests {
             .live_set_translation(&appended, 2.0, -1.0)
             .unwrap();
 
-        assert_eq!(context.node(ObjectId::new(2)).unwrap(), appended.node_id());
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(2)),
+            Some(&appended.node_id())
+        );
         assert_eq!(
             context
                 .active_live_player()
@@ -6603,20 +6517,12 @@ mod tests {
     #[test]
     fn mixed_bind_events_define_the_canonical_object_stream_directly() {
         let mut context = CanonicalAuthoringScene::default();
-        context
-            .bind_geometry(
-                ObjectId::new(0),
-                ObjectSnapshot::new(GeometryRef::circle(0.5)),
-            )
-            .unwrap();
+        let circle = context.scene.circle(0.5).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         let label = context.scene.text(noon::Text::new("A")).unwrap();
         context.bind_mobject(ObjectId::new(1), &label).unwrap();
-        context
-            .bind_geometry(
-                ObjectId::new(2),
-                ObjectSnapshot::new(GeometryRef::rectangle(1.0, 1.0)),
-            )
-            .unwrap();
+        let square = context.scene.rectangle(1.0, 1.0).unwrap();
+        context.bind_mobject(ObjectId::new(2), &square).unwrap();
 
         let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
         assert_eq!(
@@ -6735,36 +6641,25 @@ mod tests {
     fn updates_preserve_slots_and_append_checkpoint_restore_reclaims_failed_binds() {
         let mut context = CanonicalAuthoringScene::default();
         let first = ObjectId::new(0);
-        context
-            .bind_geometry(first, ObjectSnapshot::new(GeometryRef::circle(0.5)))
-            .unwrap();
+        let mut circle = context.scene.circle(0.5).unwrap();
+        context.bind_mobject(first, &circle).unwrap();
         let checkpoint = context.checkpoint();
         let temporary = context.scene.text(noon::Text::new("temporary")).unwrap();
         context.bind_mobject(ObjectId::new(1), &temporary).unwrap();
         // Checkpoint rollback is intentionally append-only: an update to an
         // existing slot remains visible after the failed bind is reclaimed.
-        context
-            .update_geometry(first, ObjectSnapshot::new(GeometryRef::circle(0.75)))
-            .unwrap();
+        circle.shift(0.75, 0.0).unwrap();
         context.restore(checkpoint).unwrap();
         let exported = context.finalize(Vec::new(), Vec::new(), None).unwrap();
         let ObjectSpecContent::Geometry(geometry) = &exported.objects[0].content else {
             panic!("first object must remain geometry-backed");
         };
-        assert_eq!(geometry, &GeometryRef::circle(0.75));
+        assert_eq!(geometry, &GeometryRef::circle(0.5));
+        assert_eq!(exported.objects[0].transform.translation.x, 0.75);
 
-        let mut replacement = ObjectSnapshot::new(GeometryRef::circle(1.0));
-        replacement.transform = Transform2D {
-            translation: Vec2::new(2.0, -1.0),
-            ..Transform2D::default()
-        };
-        context.update_geometry(first, replacement).unwrap();
-        context
-            .bind_geometry(
-                ObjectId::new(1),
-                ObjectSnapshot::new(GeometryRef::rectangle(2.0, 1.0)),
-            )
-            .unwrap();
+        circle.move_to(2.0, -1.0).unwrap();
+        let rectangle = context.scene.rectangle(2.0, 1.0).unwrap();
+        context.bind_mobject(ObjectId::new(1), &rectangle).unwrap();
 
         let spec = context
             .finalize(Vec::new(), Vec::new(), Some(first))
@@ -6773,18 +6668,6 @@ mod tests {
         assert_eq!(spec.objects[0].id, first);
         assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
         assert_eq!(spec.camera_object, Some(first));
-    }
-
-    #[test]
-    fn content_domain_cannot_change_after_binding() {
-        let mut context = CanonicalAuthoringScene::default();
-        let id = ObjectId::new(7);
-        let text = context.scene.text(noon::Text::new("stable")).unwrap();
-        context.bind_mobject(id, &text).unwrap();
-        let error = context
-            .update_geometry(id, ObjectSnapshot::new(GeometryRef::circle(1.0)))
-            .unwrap_err();
-        assert!(error.contains("geometry required"));
     }
 
     #[test]
@@ -6963,10 +6846,10 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "returned");
 
         let left = context
-            .live_create_manim_primitive(noon::ManimPrimitiveOptions::circle(0.15).unwrap())
+            .live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.15).unwrap())
             .unwrap();
         let right = context
-            .live_create_manim_primitive(noon::ManimPrimitiveOptions::square(0.3).unwrap())
+            .live_create_manim_geometry(noon::ManimGeometryOptions::square(0.3).unwrap())
             .unwrap();
         let pair = context
             .live_family(&[
@@ -8368,7 +8251,7 @@ mod tests {
         let returned = context.take_execution_player(1.0, 73).unwrap();
         context.return_execution_player(returned).unwrap();
         let pulse = context
-            .live_create_manim_primitive(noon::ManimPrimitiveOptions::circle(0.05).unwrap())
+            .live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.05).unwrap())
             .unwrap();
         context
             .active_live_player()

@@ -134,8 +134,11 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
                         shift_y = target_y - point_y - direction_y * float(buff)
                     self.shift(shift_x, shift_y)
 
-            fake_js.noonCreateAuthoringMobjectHandle = FakeHandle
-            handles._create_handle = FakeHandle
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, FakeHandle)
+            import _typed_geometry_test_support as _geometry_test
+            _geometry_test.install_module_bridge(handles, FakeHandle)
             handles.install()
 
             from noon import Circle, DEFAULT_FRAME_WIDTH, PI, Path, RIGHT, VectorPath

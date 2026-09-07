@@ -69,8 +69,13 @@ class ManimSharedConstructorTests(unittest.TestCase):
                 @property
                 def wireHasStroke(self): return self.snapshot["style"]["stroke"] is not None
 
-            def generic_snapshot(*args, **kwargs):
-                raise AssertionError("primitive constructor must not create a Python snapshot handle")
+            def typed_geometry(snapshot_json):
+                snapshot = json.loads(snapshot_json)
+                geometry = snapshot["geometry"]
+                calls.append(next(iter(geometry)))
+                result = FakeHandle(geometry, WHITE)
+                result.snapshot = snapshot
+                return result
 
             RED = (0xFC/255, 0x62/255, 0x55/255)
             WHITE = (1.0, 1.0, 1.0)
@@ -87,11 +92,9 @@ class ManimSharedConstructorTests(unittest.TestCase):
                 calls.append("line")
                 return FakeHandle({"line": {"start": {"x": float(sx), "y": float(sy)}, "end": {"x": float(ex), "y": float(ey)}}}, WHITE)
 
-            fake_js.noonCreateAuthoringMobjectHandle = generic_snapshot
-            fake_js.noonCreateAuthoringCircleHandle = circle
-            fake_js.noonCreateAuthoringSquareHandle = square
-            fake_js.noonCreateAuthoringRectangleHandle = rectangle
-            fake_js.noonCreateAuthoringLineHandle = line
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, typed_geometry)
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -103,7 +106,7 @@ class ManimSharedConstructorTests(unittest.TestCase):
             for name in ("Circle", "Rectangle", "Line"):
                 setattr(_manim_compat._ir, name, lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Python IR constructor was called")))
 
-            from noon import BLUE, Circle, Line, Rectangle, Square
+            from noon import BLUE, Circle, Line, Path, Rectangle, Square, VectorPath
 
             c = Circle(1.5)
             r = Rectangle()
@@ -122,8 +125,9 @@ class ManimSharedConstructorTests(unittest.TestCase):
                 opacity=0.8,
             )
             l = Line((-2.0, 1.0, 0.0), (3.0, -1.0, 0.0))
+            p = Path(VectorPath().move_to((0.0, 0.0)).line_to((1.0, 0.0)), stroke=None)
 
-            assert calls == ["circle", "rectangle", "square", "line"]
+            assert calls == ["circle", "rectangle", "rectangle", "line", "vector_path"]
             assert abs(c.style["stroke_width"] - 0.04) < 1e-12
             assert c.style["stroke_width_mode"] == "screen_space"
             assert c.style["stroke_join"] == "miter"
@@ -139,6 +143,7 @@ class ManimSharedConstructorTests(unittest.TestCase):
             assert abs(s.transform["rotation"] - 0.4) < 1e-12
             assert abs(s.style["opacity"] - 0.8) < 1e-12
             assert l.start.x == -2.0 and l.end.x == 3.0
+            assert p.style["stroke"] is None
             """
         )
         completed = subprocess.run(

@@ -31,11 +31,13 @@ class CanonicalLineMatchTests(unittest.TestCase):
                     allocations.append(self)
 
             fake_js = types.ModuleType("js")
-            fake_js.noonCreateAuthoringMobjectHandle = lambda snapshot: (_ for _ in ()).throw(
-                AssertionError("generic snapshot construction is forbidden")
-            )
-            fake_js.noonCreateAuthoringLineHandle = lambda x1, y1, x2, y2: LineHandle(
-                (x1, y1), (x2, y2)
+            import _typed_geometry_test_support as _geometry_test
+            _geometry_test.install_js_bridge(
+                fake_js,
+                lambda snapshot: LineHandle(
+                    tuple(json.loads(snapshot)["geometry"]["line"]["start"].values()),
+                    tuple(json.loads(snapshot)["geometry"]["line"]["end"].values()),
+                ),
             )
             fake_js.noonResolveAnimationOptions = lambda *args: None
             sys.modules["js"] = fake_js
@@ -45,7 +47,7 @@ class CanonicalLineMatchTests(unittest.TestCase):
             import _manim_phase_b  # installs the complete compatibility Mobject surface
             import _manim_semantic_handles as handles
             handles.install()
-            assert handles._create_line_handle is not None
+            assert handles._create_geometry_handle is not None
             assert manim.Line.__init__ is handles._line_init
             import _manim_geometry  # installs match_points
             import _manim_updaters as updaters

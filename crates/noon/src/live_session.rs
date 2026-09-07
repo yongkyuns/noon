@@ -644,15 +644,22 @@ impl<'a> LiveSession<'a> {
         MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::Mobject)
     }
 
-    /// Publish one fully validated detached Manim primitive through this session.
+    /// Publish one fully validated detached Manim geometry object through this session.
     ///
     /// The new identity has no root membership, execution slot, or frame work
     /// until [`Self::add`] admits it.
-    pub fn create_manim_primitive(
+    pub fn create_manim_geometry(
         &mut self,
-        options: crate::ManimPrimitiveOptions,
+        options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, LiveSessionError> {
-        self.create_detached_mobject(options.into_state())
+        {
+            let store = self.store.borrow();
+            self.session.require_published_store(&store)?;
+        }
+        let state = options
+            .into_state(&mut self.store.borrow_mut())
+            .map_err(LiveSessionError::Mobject)?;
+        self.create_detached_mobject(state)
     }
 
     /// Shape and publish one detached plain Text object through this live session.
@@ -2383,7 +2390,7 @@ mod tests {
     }
 
     #[test]
-    fn live_primitive_creation_is_detached_atomic_and_admits_locally() {
+    fn live_geometry_creation_is_detached_atomic_and_admits_locally() {
         let mut scene = Scene::new();
         let anchor = scene.circle(0.5).unwrap();
         scene.add(&anchor).unwrap();
@@ -2392,15 +2399,15 @@ mod tests {
         let before = live.session.publication_context();
         live.session.take_frame_changes();
 
-        let mut invalid = crate::ManimPrimitiveOptions::circle(0.25).unwrap();
+        let mut invalid = crate::ManimGeometryOptions::circle(0.25).unwrap();
         assert!(invalid.set_stroke_width(-0.1).is_err());
         assert_eq!(live.session.publication_context(), before);
         assert!(live.session.take_frame_changes().is_empty());
 
-        let mut options = crate::ManimPrimitiveOptions::circle(0.25).unwrap();
+        let mut options = crate::ManimGeometryOptions::circle(0.25).unwrap();
         options.set_translation(2.0, -1.0).unwrap();
         options.set_fill(0.0, 0.4, 1.0, 0.6).unwrap();
-        let circle = live.create_manim_primitive(options).unwrap();
+        let circle = live.create_manim_geometry(options).unwrap();
         assert_eq!(
             live.session.publication_context().scene_revision(),
             before.scene_revision().checked_next().unwrap()
@@ -2427,6 +2434,35 @@ mod tests {
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation.x,
             2.0
+        );
+    }
+
+    #[test]
+    fn stale_live_geometry_rejects_before_importing_path_resources() {
+        use noon_core::{Vec2, VectorPath};
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before_resources = scene.store().borrow().geometry_resources().len();
+        let path = crate::ManimGeometryOptions::path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 1.0)),
+        )
+        .unwrap();
+
+        Mobject::manim_circle(Rc::clone(scene.store()), 0.1).unwrap();
+        let mut live = scene.live(&mut session);
+        assert!(matches!(
+            live.create_manim_geometry(path),
+            Err(LiveSessionError::Publication(
+                ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            ))
+        ));
+        assert_eq!(
+            scene.store().borrow().geometry_resources().len(),
+            before_resources
         );
     }
 
@@ -4741,10 +4777,10 @@ mod recursive_composition_tests {
         let wait = live.wait_segment(1.0).unwrap();
         live.advance_segment_to(wait, wait.end_time()).unwrap();
         let first = live
-            .create_manim_primitive(crate::ManimPrimitiveOptions::square(0.5).unwrap())
+            .create_manim_geometry(crate::ManimGeometryOptions::square(0.5).unwrap())
             .unwrap();
         let second = live
-            .create_manim_primitive(crate::ManimPrimitiveOptions::circle(0.25).unwrap())
+            .create_manim_geometry(crate::ManimGeometryOptions::circle(0.25).unwrap())
             .unwrap();
         let family = live
             .family(&[

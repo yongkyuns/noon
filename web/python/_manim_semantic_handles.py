@@ -158,31 +158,18 @@ _compat.Group.arrange = _manim_arrange
 _ir = _base._ir
 
 try:
-    from js import noonCreateAuthoringMobjectHandle as _create_handle
+    from js import noonAuthoringGeometryOptions as _geometry_options
+    from js import noonAuthoringVectorPath as _authoring_vector_path
+    from js import noonCreateAuthoringGeometryHandle as _create_geometry_handle
 except ImportError:  # Native CPython tests do not have the browser bridge.
-    _create_handle = None
+    _geometry_options = None
+    _authoring_vector_path = None
+    _create_geometry_handle = None
 
 try:
     from js import noonCreateAuthoringFamilyHandle as _create_family_handle
 except ImportError:  # Older/mock bridges may expose only leaf Mobject handles.
     _create_family_handle = None
-
-try:
-    from js import noonCreateAuthoringCircleHandle as _create_circle_handle
-except ImportError:
-    _create_circle_handle = None
-try:
-    from js import noonCreateAuthoringSquareHandle as _create_square_handle
-except ImportError:
-    _create_square_handle = None
-try:
-    from js import noonCreateAuthoringRectangleHandle as _create_rectangle_handle
-except ImportError:
-    _create_rectangle_handle = None
-try:
-    from js import noonCreateAuthoringLineHandle as _create_line_handle
-except ImportError:
-    _create_line_handle = None
 
 _INSTALLED = False
 _ORIGINAL_INIT = _base.Mobject.__init__
@@ -514,22 +501,107 @@ def _live_constructor_context(kind: str = "primitive"):
     return None
 
 
-def _live_primitive_handle(
-    context: object,
-    shape: str,
-    size: float,
-    color: _base.Color | None,
-    kwargs: dict[str, Any],
-):
-    begin = (
-        context.beginLiveManimCircle
-        if shape == "circle"
-        else context.beginLiveManimSquare
-    )
-    candidate = begin(size)
-    _apply_shared_constructor_options(candidate, kwargs)
-    _apply_constructor_color(candidate, color)
-    return context.liveCreateManimPrimitive(candidate)
+def _vector_path_options(path: dict[str, Any]):
+    if set(path) != {"commands"}:
+        raise ValueError("shared vector path supports commands only")
+    candidate = _authoring_vector_path()
+    for command in path["commands"]:
+        if command == "close":
+            candidate.close()
+        elif isinstance(command, dict) and set(command) == {"move_to"}:
+            point = command["move_to"]["to"]
+            candidate.moveTo(float(point["x"]), float(point["y"]))
+        elif isinstance(command, dict) and set(command) == {"line_to"}:
+            point = command["line_to"]["to"]
+            candidate.lineTo(float(point["x"]), float(point["y"]))
+        elif isinstance(command, dict) and set(command) == {"quadratic_to"}:
+            values = command["quadratic_to"]
+            control, point = values["control"], values["to"]
+            candidate.quadraticTo(
+                float(control["x"]), float(control["y"]),
+                float(point["x"]), float(point["y"]),
+            )
+        elif isinstance(command, dict) and set(command) == {"cubic_to"}:
+            values = command["cubic_to"]
+            first, second, point = values["control1"], values["control2"], values["to"]
+            candidate.cubicTo(
+                float(first["x"]), float(first["y"]),
+                float(second["x"]), float(second["y"]),
+                float(point["x"]), float(point["y"]),
+            )
+        else:
+            raise ValueError("unsupported vector path command")
+    return _geometry_options.path(candidate)
+
+
+def _geometry_options_from_raw(raw: _ir.Mobject):
+    geometry = raw.geometry
+    if len(geometry) != 1:
+        raise ValueError("shared geometry must contain exactly one geometry variant")
+    if "circle" in geometry:
+        options = _geometry_options.circle(float(geometry["circle"]["radius"]))
+    elif "rectangle" in geometry:
+        size = geometry["rectangle"]["size"]
+        options = _geometry_options.rectangle(float(size["x"]), float(size["y"]))
+    elif "line" in geometry:
+        line = geometry["line"]
+        start, end = line["start"], line["end"]
+        options = _geometry_options.line(
+            float(start["x"]), float(start["y"]),
+            float(end["x"]), float(end["y"]),
+        )
+    elif "vector_path" in geometry:
+        options = _vector_path_options(geometry["vector_path"])
+    else:
+        raise ValueError("shared geometry supports circle, rectangle, line, or vector path")
+
+    transform = raw.transform
+    translation, scale = transform["translation"], transform["scale"]
+    options.setTranslation(float(translation["x"]), float(translation["y"]))
+    options.setRotation(float(transform["rotation"]))
+    options.setScale(float(scale["x"]), float(scale["y"]))
+
+    style = raw.style
+    # Width editing intentionally materializes a default stroke in shared Rust.
+    # Apply it before the authored paints so an explicit absent stroke stays absent.
+    options.setStrokeWidth(float(style["stroke_width"]))
+    options.setStrokeWidthMode(style["stroke_width_mode"])
+    options.setStrokeJoin(style["stroke_join"])
+    options.setStrokeCap(style["stroke_cap"])
+    fill = style["fill"]
+    if fill is None:
+        options.disableFill()
+    else:
+        options.setFill(
+            float(fill["red"]), float(fill["green"]),
+            float(fill["blue"]), float(fill["alpha"]),
+        )
+    stroke = style["stroke"]
+    if stroke is None:
+        options.disableStroke()
+    else:
+        options.setStroke(
+            float(stroke["red"]), float(stroke["green"]),
+            float(stroke["blue"]), float(stroke["alpha"]),
+        )
+    options.setObjectOpacity(float(style["opacity"]))
+    return options
+
+
+def _consume_geometry_options(options: object, kind: str = "geometry"):
+    context = _live_constructor_context(kind)
+    if context is None:
+        return _create_geometry_handle(options), None
+    return context.liveCreateManimGeometry(options), context
+
+
+def _attach_geometry_options(
+    self: _base.Mobject, options: object, kind: str = "geometry"
+) -> None:
+    handle, context = _consume_geometry_options(options, kind)
+    _attach_shared_handle(self, handle)
+    if context is not None:
+        self._canonical_live_target_context = context
 
 
 def _circle_init(
@@ -539,19 +611,14 @@ def _circle_init(
     color: _base.Color | None = None,
     **kwargs: Any,
 ) -> None:
-    if _create_circle_handle is None:
+    if _create_geometry_handle is None:
         _ORIGINAL_CIRCLE_INIT(self, radius, color=color, **kwargs)
         return
     value = _ir._positive_number("radius", radius)
-    context = _live_constructor_context()
-    if context is not None:
-        handle = _live_primitive_handle(context, "circle", value, color, kwargs)
-        _attach_shared_handle(self, handle)
-        self._canonical_live_target_context = context
-    else:
-        _attach_shared_handle(self, _create_circle_handle(value))
-        _apply_shared_constructor_kwargs(self, kwargs)
-        _apply_constructor_color(self._semantic_handle, color)
+    options = _geometry_options.circle(value)
+    _apply_shared_constructor_options(options, kwargs)
+    _apply_constructor_color(options, color)
+    _attach_geometry_options(self, options, "Circle")
     self.radius = value
 
 
@@ -563,17 +630,17 @@ def _rectangle_init(
     color: _base.Color | None = None,
     **kwargs: Any,
 ) -> None:
-    if _create_rectangle_handle is None:
+    if _create_geometry_handle is None:
         _ORIGINAL_RECTANGLE_INIT(self, width, height, color=color, **kwargs)
         return
     width_value = _ir._positive_number("width", width)
     height_value = _ir._positive_number("height", height)
-    _attach_shared_handle(self, _create_rectangle_handle(width_value, height_value))
+    options = _geometry_options.rectangle(width_value, height_value)
+    _apply_shared_constructor_options(options, kwargs)
+    _apply_constructor_color(options, color)
+    _attach_geometry_options(self, options, "Rectangle")
     self.width_value = width_value
     self.height_value = height_value
-    _apply_shared_constructor_kwargs(self, kwargs)
-    if color is not None:
-        self.set_color(color)
 
 
 def _square_init(
@@ -583,19 +650,14 @@ def _square_init(
     color: _base.Color | None = None,
     **kwargs: Any,
 ) -> None:
-    if _create_square_handle is None:
+    if _create_geometry_handle is None:
         _ORIGINAL_SQUARE_INIT(self, side_length, color=color, **kwargs)
         return
     value = _ir._positive_number("side_length", side_length)
-    context = _live_constructor_context()
-    if context is not None:
-        handle = _live_primitive_handle(context, "square", value, color, kwargs)
-        _attach_shared_handle(self, handle)
-        self._canonical_live_target_context = context
-    else:
-        _attach_shared_handle(self, _create_square_handle(value))
-        _apply_shared_constructor_kwargs(self, kwargs)
-        _apply_constructor_color(self._semantic_handle, color)
+    options = _geometry_options.square(value)
+    _apply_shared_constructor_options(options, kwargs)
+    _apply_constructor_color(options, color)
+    _attach_geometry_options(self, options, "Square")
     self.side_length = value
     self.width_value = value
     self.height_value = value
@@ -636,35 +698,27 @@ def _line_init(
         self.start = start_value
         self.end = end_value
         return
-    if _create_line_handle is None:
+    if _create_geometry_handle is None:
         _ORIGINAL_LINE_INIT(self, start, end, color=color, **kwargs)
         return
-    _attach_shared_handle(
-        self,
-        _create_line_handle(start_value.x, start_value.y, end_value.x, end_value.y),
+    options = _geometry_options.line(
+        start_value.x, start_value.y, end_value.x, end_value.y
     )
+    _apply_shared_constructor_options(options, kwargs)
+    _apply_constructor_color(options, color)
+    _attach_geometry_options(self, options, "Line")
     self.start = start_value
     self.end = end_value
-    _apply_shared_constructor_kwargs(self, kwargs)
-    if color is not None:
-        self.set_color(color)
 
 
 def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
     _ORIGINAL_INIT(self, raw)
-    if _create_handle is not None:
-        # Preserve exact Python authoring opacity before the wire/render snapshot
-        # lowers color alpha to f32. The semantic handle owns the f64 API contract.
-        fill = raw.style.get("fill")
-        stroke = raw.style.get("stroke")
-        fill_opacity = None if fill is None else float(fill["alpha"])
-        stroke_opacity = None if stroke is None else float(stroke["alpha"])
-        self._semantic_handle = _create_handle(_snapshot_json(raw))
+    if _create_geometry_handle is not None:
+        handle, context = _consume_geometry_options(_geometry_options_from_raw(raw))
+        self._semantic_handle = handle
         self._semantic_handle_fresh = True
-        if fill_opacity is not None:
-            self._semantic_handle.setFillOpacity(fill_opacity)
-        if stroke_opacity is not None:
-            self._semantic_handle.setStrokeOpacity(stroke_opacity)
+        if context is not None:
+            self._canonical_live_target_context = context
         # The handle is now authoritative for detached state. Keeping a second Python
         # snapshot here would recreate exactly the ownership split #61 is removing.
         self._raw = None
@@ -2007,7 +2061,7 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
 
 def install() -> None:
     global _INSTALLED, _GROUP_COPY_DELEGATE
-    if _INSTALLED or _create_handle is None:
+    if _INSTALLED or _create_geometry_handle is None:
         return
     _INSTALLED = True
 
@@ -2045,14 +2099,10 @@ def install() -> None:
     _compat.VMobject.get_stroke_opacity = _get_stroke_opacity
     _compat._bounds_for = _compat_bounds_for
 
-    if _create_circle_handle is not None:
-        _compat.Circle.__init__ = _circle_init
-    if _create_square_handle is not None:
-        _compat.Square.__init__ = _square_init
-    if _create_rectangle_handle is not None:
-        _compat.Rectangle.__init__ = _rectangle_init
-    if _create_line_handle is not None:
-        _compat.Line.__init__ = _line_init
+    _compat.Circle.__init__ = _circle_init
+    _compat.Square.__init__ = _square_init
+    _compat.Rectangle.__init__ = _rectangle_init
+    _compat.Line.__init__ = _line_init
 
     if _create_family_handle is not None:
         _GROUP_COPY_DELEGATE = _compat.Group.copy

@@ -123,8 +123,9 @@ class ManimSharedUnderlineTests(unittest.TestCase):
                     "style": style(),
                 })
 
-            fake_js.noonCreateAuthoringMobjectHandle = generic_handle
-            fake_js.noonCreateAuthoringRectangleHandle = rectangle_handle
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, generic_handle)
             fake_js.noonCreateAuthoringUnderlineHandle = underline_handle
             sys.modules["js"] = fake_js
 

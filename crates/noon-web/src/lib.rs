@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod authoring_facade;
+#[cfg(target_arch = "wasm32")]
+mod authoring_geometry;
 mod authoring_mobject;
 mod authoring_options;
 mod canonical_authoring_scene;
@@ -24,8 +26,7 @@ mod lifecycle;
 mod manim_geometry_bridge;
 mod manim_path_query_bridge;
 mod manim_scale_bridge;
-mod manim_shape_matcher_bridge;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 mod manim_shape_matcher_handle_bridge;
 mod renderer_observation;
 #[cfg(feature = "renderer")]
@@ -45,6 +46,8 @@ mod semantic_execution_player;
 mod semantic_snapshot;
 
 pub use authoring_facade::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_geometry::*;
 pub use authoring_mobject::*;
 pub use authoring_options::*;
 pub use canonical_authoring_scene::*;
@@ -63,7 +66,6 @@ pub use legacy::{PlayerError, ReconcileOutcome};
 pub use lifecycle::*;
 pub use manim_geometry_bridge::*;
 pub use manim_path_query_bridge::*;
-pub use manim_shape_matcher_bridge::*;
 pub use renderer_observation::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_execution_canvas::*;

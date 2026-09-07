@@ -433,6 +433,26 @@ impl MobjectFamily {
             .map_err(|error| error.to_string())
     }
 
+    /// Aggregate the current layout bounds of this family's authoritative leaves.
+    pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, String> {
+        let leaves = semantic_family_leaf_ids(&self.store.borrow(), self.node)?;
+        let mut bounds: Option<Bounds2D64> = None;
+        for leaf in leaves {
+            let Some(leaf_bounds) =
+                Mobject::from_node(Rc::clone(&self.store), leaf)?.layout_bounds()?
+            else {
+                continue;
+            };
+            if let Some(bounds) = &mut bounds {
+                bounds.include(leaf_bounds.min_x, leaf_bounds.min_y);
+                bounds.include(leaf_bounds.max_x, leaf_bounds.max_y);
+            } else {
+                bounds = Some(leaf_bounds);
+            }
+        }
+        Ok(bounds)
+    }
+
     /// Arrange direct family members from authored layout bounds and publish all
     /// resulting leaf translations in one semantic transaction.
     pub fn arrange(
@@ -564,5 +584,36 @@ mod tests {
         );
         assert!((second_center.0 - first_center.0 - 0.6).abs() < 1e-6);
         assert!((first_center.0 + second_center.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn family_layout_bounds_follow_nested_and_aliased_semantic_leaves() {
+        let scene = Scene::new();
+        let mut first = scene.rectangle(2.0, 1.0).unwrap();
+        first.shift(-2.0, 0.0).unwrap();
+        let mut second = scene.circle(0.5).unwrap();
+        second.shift(2.0, 1.0).unwrap();
+
+        let outer = {
+            let mut store = scene.store().borrow_mut();
+            let nested = store.insert_family();
+            store.add_member(nested, first.node_id()).unwrap();
+            store.add_member(nested, second.node_id()).unwrap();
+            let outer = store.insert_family();
+            store.add_member(outer, first.node_id()).unwrap();
+            store.add_member(outer, nested).unwrap();
+            outer
+        };
+        let family = MobjectFamily::from_node(Rc::clone(scene.store()), outer).unwrap();
+
+        assert_eq!(
+            family.layout_bounds().unwrap(),
+            Some(Bounds2D64 {
+                min_x: -3.0,
+                min_y: -0.5,
+                max_x: 2.5,
+                max_y: 1.5,
+            })
+        );
     }
 }
