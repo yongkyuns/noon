@@ -1554,23 +1554,35 @@ impl SemanticExecutionPlayer {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
         if snapshot || changes.is_all() || changes.is_structural() || !self.snapshot_sent {
+            let indices = (0..self.session.frame().objects.len())
+                .filter(|index| {
+                    self.session
+                        .execution_slot_for_frame_index(*index)
+                        .is_some()
+                })
+                .collect::<Vec<_>>();
+            let text_handles = indices
+                .iter()
+                .filter_map(|&index| self.session.frame().objects[index].text())
+                .collect::<Vec<_>>();
             let mut delta = self
                 .encoder
                 .encode_planned_snapshot_indices(
                     &self.session.planned_family_frame(),
                     self.session.family_animation_plans(),
                     camera,
-                    (0..self.session.frame().objects.len()).filter(|index| {
-                        self.session
-                            .execution_slot_for_frame_index(*index)
-                            .is_some()
-                    }),
+                    indices,
                 )
                 .map_err(|e| e.to_string())?;
-            self.attach_resource_additions(&mut delta)?;
+            self.attach_resource_additions(&mut delta, text_handles)?;
             self.snapshot_sent = true;
             Ok(Some(delta))
         } else {
+            let text_handles = changes
+                .object_indices()
+                .iter()
+                .filter_map(|&index| self.session.frame().objects.get(index)?.text())
+                .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder
                 .encode_planned_incremental(
@@ -1583,7 +1595,7 @@ impl SemanticExecutionPlayer {
             else {
                 return Ok(None);
             };
-            self.attach_resource_additions(&mut delta)?;
+            self.attach_resource_additions(&mut delta, text_handles)?;
             Ok(Some(delta))
         }
     }
@@ -1591,28 +1603,12 @@ impl SemanticExecutionPlayer {
     fn attach_resource_additions(
         &mut self,
         delta: &mut RetainedFamilyExecutionDeltaEnvelope,
+        text_handles: impl IntoIterator<Item = noon_core::TextResourceHandle>,
     ) -> Result<(), String> {
-        let referenced = delta
-            .retained
-            .objects
-            .iter()
-            .filter_map(|object| match &object.content {
-                crate::TransportObjectContent::Text { text } => Some(*text),
-                crate::TransportObjectContent::Geometry { .. } => None,
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        let handles = self.session.frame().objects.iter().filter_map(|object| {
-            let handle = object.text()?;
-            referenced
-                .contains(&crate::TransportTextResourceHandle::from_source_handle(
-                    handle,
-                ))
-                .then_some(handle)
-        });
         self.encoder
             .attach_resource_additions(
                 delta,
-                handles,
+                text_handles,
                 self.session.text_resources(),
                 self.session.geometry_resources(),
                 self.session.font_resources(),

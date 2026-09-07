@@ -58,14 +58,27 @@ impl RetainedFamilyExecutionDeltaEncoder {
         geometries: &impl GeometryResourceLookup,
         fonts: &impl FontResourceLookup,
     ) -> Result<(), RetainedResourceTransportError> {
-        let mut additions =
-            RetainedResourceBundle::capture(text_handles, texts, geometries, fonts)?;
-        let mut next = self.resources.clone();
-        additions.retain_additions(&mut next);
-        if !additions.is_empty() {
-            envelope.resource_additions = Some(additions);
+        let new_texts = text_handles
+            .into_iter()
+            .filter(|handle| {
+                !self.resources.contains_text(
+                    crate::TransportTextResourceHandle::from_source_handle(*handle),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if new_texts.is_empty() {
+            return Ok(());
         }
-        self.resources = next;
+        let mut additions = RetainedResourceBundle::capture_additions(
+            new_texts,
+            texts,
+            geometries,
+            fonts,
+            &self.resources,
+        )?;
+        additions.retain_additions(&mut self.resources);
+        debug_assert!(!additions.is_empty());
+        envelope.resource_additions = Some(additions);
         Ok(())
     }
 
