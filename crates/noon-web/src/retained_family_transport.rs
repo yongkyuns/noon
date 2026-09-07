@@ -268,6 +268,8 @@ mod tests {
         let text_id = ObjectId::new(10);
         let circle_id = ObjectId::new(11);
         let frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![
                 FrameObjectState {

@@ -346,6 +346,7 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             | SemanticAnimationIntent::Indicate { target, .. }
             | SemanticAnimationIntent::DrawBorderThenFill { target, .. }
             | SemanticAnimationIntent::SubsetDisplayMember { target, .. }
+            | SemanticAnimationIntent::TextWrite { target, .. }
             | SemanticAnimationIntent::Fade { target, .. }
             | SemanticAnimationIntent::AffineLifecycle { target, .. }
             | SemanticAnimationIntent::Create { target }

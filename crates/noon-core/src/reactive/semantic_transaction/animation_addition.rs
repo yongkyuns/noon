@@ -479,7 +479,7 @@ pub(super) fn preflight_transaction_animation(
             catalog.ensure_animation_target(*target, index)?;
             let state =
                 catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
-            catalog.ensure_plain_text_write_target(&state, index)?;
+            catalog.ensure_plain_text_write_target(state, index)?;
         }
         SemanticTransactionAnimationIntent::Fade {
             target, endpoint, ..

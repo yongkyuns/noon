@@ -373,10 +373,6 @@ impl RetainedFramePreparer {
     }
 }
 
-fn draw_border_phase_is_final(phase: RetainedDrawBorderThenFillPhase) -> bool {
-    matches!(phase, RetainedDrawBorderThenFillPhase::Fill { progress } if progress >= 1.0)
-}
-
 fn draw_border_glyph_style(
     run: &GlyphRun,
     object_style: Style,
@@ -554,6 +550,8 @@ mod draw_border_tests {
         builder.accept_leaf(leaf, &object, &texts).unwrap();
         let plan = builder.finish().unwrap();
         let frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
                 id: ObjectId::new(20),

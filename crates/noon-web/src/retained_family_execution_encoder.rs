@@ -318,6 +318,8 @@ mod tests {
         let plan = builder.finish().unwrap();
 
         let frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.5,
             objects: vec![
                 FrameObjectState {

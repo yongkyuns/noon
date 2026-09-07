@@ -112,6 +112,8 @@ fn benchmark_size(object_count: usize, config: Config) {
 fn build_frame(object_count: usize) -> FrameState {
     assert!(object_count > 0, "benchmark sizes must be positive");
     FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: (0..object_count)
             .map(|index| FrameObjectState {

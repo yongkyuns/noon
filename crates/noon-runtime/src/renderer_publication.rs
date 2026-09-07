@@ -72,6 +72,7 @@ impl RendererPublication<'_> {
 }
 
 impl<'a> RendererPublication<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         context: PublicationContext,
         frame: &'a FrameState,

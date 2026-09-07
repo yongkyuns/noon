@@ -575,6 +575,8 @@ mod tests {
 
     fn frame() -> FrameState {
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
                 id: ObjectId::new(7),

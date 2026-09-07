@@ -44,6 +44,8 @@ fn analytic_instance_buffer_grows_geometrically_only_at_capacity_boundary() {
 
 fn circle_frame(object_count: usize) -> FrameState {
     FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: (0..object_count)
             .map(|index| FrameObjectState {

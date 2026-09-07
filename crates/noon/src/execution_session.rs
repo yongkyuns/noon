@@ -829,6 +829,11 @@ impl ExecutionSession {
         self.runtime.family_animation_plans()
     }
 
+    /// Sparse runtime-owned set of object rows with active glyph animation state.
+    pub fn active_family_animation_indices(&self) -> &std::collections::BTreeSet<usize> {
+        self.runtime.active_family_animation_indices()
+    }
+
     /// Work performed by the most recent incremental execution-plan patch.
     pub const fn last_patch_stats(&self) -> noon_runtime::RuntimePatchStats {
         self.runtime.last_patch_stats()

@@ -1495,6 +1495,8 @@ mod tests {
 
     fn test_frame() -> FrameState {
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![
                 FrameObjectState {
@@ -1541,6 +1543,8 @@ mod tests {
             .quadratic_to(Vec2::new(0.0, 0.75), Vec2::new(0.5, -0.5))
             .close();
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![
                 FrameObjectState {

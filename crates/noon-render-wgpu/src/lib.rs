@@ -2223,6 +2223,8 @@ mod tests {
         let morphs = vec![0.0; objects.len()];
         let render_geometries = vec![None; objects.len()];
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 1.25,
             objects,
             presences,
@@ -3538,6 +3540,8 @@ mod structural_execution_delta_tests {
     fn removing_one_of_100k_objects_retires_one_packed_slot_without_rebuild() {
         let count = 100_000usize;
         let mut frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: (0..count).map(|id| circle(id as u64)).collect(),
             presences: vec![true; count],
@@ -3565,6 +3569,8 @@ mod structural_execution_delta_tests {
     #[test]
     fn reentering_a_retired_non_tail_row_reuses_its_painter_slot_without_rebuild() {
         let mut frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: (0..3).map(circle).collect(),
             presences: vec![true; 3],
@@ -3600,6 +3606,8 @@ mod structural_execution_delta_tests {
     fn appended_analytic_object_packs_only_the_new_slot() {
         let count = 10_000usize;
         let mut frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: (0..count).map(|id| circle(id as u64)).collect(),
             presences: vec![true; count],

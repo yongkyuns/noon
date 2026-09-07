@@ -673,6 +673,8 @@ impl ExecutionFrameMirror {
         self.slot_indices.clear();
         self.object_slots.clear();
         let mut frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: delta.time,
             objects: Vec::with_capacity(count),
             presences: Vec::with_capacity(count),

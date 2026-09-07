@@ -464,6 +464,8 @@ mod tests {
     fn frame(objects: Vec<FrameObjectState>) -> FrameState {
         let count = objects.len();
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects,
             presences: vec![true; count],

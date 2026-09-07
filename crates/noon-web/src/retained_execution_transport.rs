@@ -602,6 +602,8 @@ impl RetainedExecutionFrameMirror {
         self.slots = slots;
         self.slot_indices = slot_indices;
         self.frame = Some(FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: delta.time,
             objects: frame_objects,
             presences: objects.iter().map(|object| object.presence).collect(),
@@ -853,6 +855,8 @@ mod tests {
             version: 3,
         };
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![
                 FrameObjectState {

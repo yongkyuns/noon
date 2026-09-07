@@ -25,6 +25,8 @@ fn style(join: StrokeJoin, cap: StrokeCap) -> Style {
 
 fn frame(geometry: GeometryRef, style: Style) -> FrameState {
     FrameState {
+        family_animations: Vec::new(),
+        family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
             id: ObjectId::new(0),

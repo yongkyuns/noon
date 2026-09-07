@@ -78,7 +78,8 @@ impl RetainedFramePreparer {
                 return Err(RetainedPrepareError::StalePublication { received, applied }.into());
             }
         }
-        validate_visible_object_indices(publication.frame(), visible_object_indices)?;
+        validate_visible_object_indices(publication.frame(), visible_object_indices)
+            .map_err(RetainedPrepareError::from)?;
 
         let frame = publication.planned_family_frame();
         if publication.active_family_animation_indices().is_empty() {
@@ -527,7 +528,7 @@ impl RetainedFramePreparer {
                 texts,
                 fonts,
                 metrics,
-            )?;
+            ).map_err(RetainedPrepareError::from)?;
             copy_local_text_snapshot_updates(
                 &mut self.snapshot_mask_quads,
                 &mut self.snapshot_color_quads,
@@ -660,10 +661,10 @@ impl RetainedFramePreparer {
         self.incremental_stats.scratch_reuses =
             self.incremental_stats.scratch_reuses.saturating_add(1);
         let scratch_changes = FrameChanges::objects(scratch_changes);
+        self.project_mixed_visibility(frame.retained, visible_object_indices);
         let geometry = self
             .geometry
             .prepare_incremental(&self.scratch, &scratch_changes);
-        self.project_mixed_visibility(frame.retained, visible_object_indices);
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
             outline_cache_hits: outline_cache.hits,

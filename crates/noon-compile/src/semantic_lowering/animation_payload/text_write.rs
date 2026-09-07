@@ -1,5 +1,5 @@
 use noon_core::{
-    FamilyAnimationMode, FamilyAnimationSpec, ObjectContentRef, ObjectId, RateFunction,
+    FamilyAnimationMode, FamilyAnimationSpec, ObjectContentRef, ObjectId,
     RetainedAnimationMemberError, RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError,
     RetainedFamilyAnimationPlan, SemanticNodeId, SemanticStore, SemanticTransactionNodeRef,
 };
@@ -383,7 +383,7 @@ mod tests {
         let target = plain_text(&mut store);
         let index = index(&store);
 
-        let prepare = |kind, store: &mut SemanticStore| {
+        let declare = |kind| {
             let mut transaction = SemanticMutationTransaction::new();
             let first = transaction.create_text_write_animation(
                 target,
@@ -400,10 +400,11 @@ mod tests {
                 [first, second],
                 AnimationOptions::new(),
             );
-            (transaction.prepare(store).unwrap(), root)
+            (transaction, root)
         };
 
-        let (parallel, root) = prepare(SemanticAnimationCompositionKind::Parallel, &mut store);
+        let (transaction, root) = declare(SemanticAnimationCompositionKind::Parallel);
+        let parallel = transaction.prepare(&mut store).unwrap();
         assert!(matches!(
             lower_prepared_semantic_animation_composition(
                 &parallel,
@@ -419,7 +420,8 @@ mod tests {
         ));
         drop(parallel);
 
-        let (sequence, root) = prepare(SemanticAnimationCompositionKind::Sequence, &mut store);
+        let (transaction, root) = declare(SemanticAnimationCompositionKind::Sequence);
+        let sequence = transaction.prepare(&mut store).unwrap();
         let lowered = lower_prepared_semantic_animation_composition(
             &sequence,
             &index,

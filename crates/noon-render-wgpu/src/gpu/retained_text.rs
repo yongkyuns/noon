@@ -861,6 +861,8 @@ impl Default for RetainedFramePreparer {
             text: RetainedTextQuadPreparer::default(),
             outlines: GlyphOutlineCache::default(),
             scratch: FrameState {
+                family_animations: Vec::new(),
+                family_animation_plan_indices: Vec::new(),
                 time: 0.0,
                 objects: Vec::new(),
                 presences: Vec::new(),
@@ -2823,6 +2825,8 @@ mod tests {
         let text = texts.insert(artifact.resource).unwrap();
         (
             FrameState {
+                family_animations: Vec::new(),
+                family_animation_plan_indices: Vec::new(),
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
@@ -2867,6 +2871,8 @@ mod tests {
         let text = texts.insert(artifact.resource).unwrap();
         (
             FrameState {
+                family_animations: Vec::new(),
+                family_animation_plan_indices: Vec::new(),
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
@@ -2920,6 +2926,8 @@ mod tests {
             }
         };
         FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![path(1, 0.0), path(2, 0.2)],
             presences: vec![true, true],
