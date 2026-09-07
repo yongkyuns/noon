@@ -1501,7 +1501,11 @@ fn family_state_at(
     time: f64,
 ) -> Option<FamilyAnimationState> {
     let (start_time, end_time) = family_animation_interval(animation);
-    if time < start_time || time >= end_time {
+    // Keep the exact endpoint available for one coherent publication. Completion
+    // reconciliation applies lifecycle removals after that publication; expiring
+    // here would briefly expose the object's canonical state between an Unwrite
+    // endpoint and its atomic removal.
+    if time < start_time || time > end_time {
         return None;
     }
     let progress = mapped_continuous_progress(
@@ -2605,8 +2609,24 @@ mod tests {
         instance.advance_to(3.0).unwrap();
         assert_eq!(instance.frame().family_animation_plan_indices[0], Some(1));
         instance.advance_to(5.0).unwrap();
+        let endpoint = instance.frame().family_animations[0]
+            .expect("reverse family channel retains its exact endpoint");
+        assert_eq!(endpoint.overall_progress, 1.0);
+        assert!(endpoint.reverse_member_order);
+        assert_eq!(instance.frame().family_animation_plan_indices[0], Some(1));
+        instance.advance_to(5.0 + 1e-9).unwrap();
         assert!(instance.active_family_animation_indices().is_empty());
         assert!(instance.frame().family_animations[0].is_none());
+
+        let forward = &instance.compiled.family_animations()[0];
+        let (_, forward_end) = family_animation_interval(forward);
+        assert_eq!(
+            family_state_at(forward, forward_end)
+                .expect("forward family channel retains its exact endpoint")
+                .overall_progress,
+            1.0
+        );
+        assert!(family_state_at(forward, forward_end + 1e-9).is_none());
     }
 
     #[test]
