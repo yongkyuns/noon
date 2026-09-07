@@ -604,6 +604,14 @@ pub(super) fn commit_add_animation(
                 options,
             )
             .expect("preflighted DrawBorderThenFill insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::SubsetDisplayMember {
+            target,
+            index,
+            count,
+            mode,
+        } => store
+            .insert_semantic_subset_display_member_animation(*target, *index, *count, *mode, options)
+            .expect("preflighted subset display insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Fade {
             target,
             direction,

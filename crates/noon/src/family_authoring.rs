@@ -492,12 +492,12 @@ pub(crate) fn prepare_subset_display_transaction(
     let mut transaction = SemanticMutationTransaction::new();
     for member in members {
         let mut style = store
-            .semantic_object_state_checked(*member)
+            .semantic_object_state_checked(member)
             .map_err(|_| "subset display supports direct object members, not nested families")?
             .style
             .clone();
         crate::semantic_mobject::edit_manim_opacity(&mut style, 0.0)?;
-        transaction.replace_style(*member, style);
+        transaction.replace_style(member, style);
     }
     Ok(transaction)
 }

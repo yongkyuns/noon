@@ -6611,7 +6611,7 @@ mod tests {
         let left = context.scene.square(0.5).unwrap();
         let right = context.scene.circle(0.25).unwrap();
         let family = context.scene.family(&[&left, &right]).unwrap();
-        family.prepare_subset_display().unwrap();
+        context.prepare_family_subset_display(&family).unwrap();
         let options = AnimationOptions::new()
             .run_time(2.0)
             .rate_func(RateFunction::Linear);

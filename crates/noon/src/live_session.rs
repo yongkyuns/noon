@@ -1767,8 +1767,7 @@ mod tests {
     use super::*;
     use crate::{CallbackAdvance, ExecutionSessionCreateError, Scene};
     use noon_core::{
-        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticNodeCreation, SemanticPaint,
-        SemanticVec3,
+        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
     };
 
     #[test]
@@ -4255,11 +4254,11 @@ mod recursive_composition_tests {
             .unwrap();
         assert_eq!(result.impacts().len(), 2);
         assert_eq!(
-            session.publication_context().scene_revision.get(),
-            before.scene_revision.get() + 1
+            session.publication_context().scene_revision().get(),
+            before.scene_revision().get() + 1
         );
-        assert_eq!(session.frame().objects()[0].style.fill.unwrap().alpha, 0.0);
-        assert_eq!(session.frame().objects()[1].style.fill.unwrap().alpha, 0.0);
+        assert_eq!(session.frame().objects[0].style.fill.unwrap().alpha, 0.0);
+        assert_eq!(session.frame().objects[1].style.fill.unwrap().alpha, 0.0);
     }
 
     #[test]
@@ -4322,7 +4321,7 @@ mod recursive_composition_tests {
         let nested_member = scene.square(1.0).unwrap();
         let nested = scene.family(&[&nested_member]).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
-        let outer = transaction.create_node(SemanticNodeCreation::family());
+        let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
         transaction.add_member(outer, first.node_id());
         transaction.add_member(outer, nested.node_id());
         let result = transaction.apply(&mut scene.store().borrow_mut()).unwrap();
