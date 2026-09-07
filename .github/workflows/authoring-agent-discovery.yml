@@ -1,0 +1,52 @@
+name: Agent discovery MCP
+on:
+  pull_request:
+    paths:
+      - "tools/noon-mcp/**"
+      - "scripts/noon-capabilities.py"
+      - "scripts/manim-api-coverage.py"
+      - "compat/manim-v0.21.0.json"
+      - "web/python/**"
+      - ".github/workflows/authoring-agent-discovery.yml"
+  push:
+    branches: [master]
+    paths:
+      - "tools/noon-mcp/**"
+      - "scripts/noon-capabilities.py"
+      - "scripts/manim-api-coverage.py"
+      - "compat/manim-v0.21.0.json"
+      - "web/python/**"
+      - ".github/workflows/authoring-agent-discovery.yml"
+permissions:
+  contents: read
+concurrency:
+  group: agent-discovery-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  discovery:
+    name: MCP contracts (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/noon-mcp
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/noon-mcp/package-lock.json
+      - name: Install exact locked dependencies without lifecycle hooks
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify service boundaries and real stdio client
+        run: npm test
+      - name: Preserve explicit CI topology registration
+        run: node ../../web/ci-workflow-topology.test.mjs
