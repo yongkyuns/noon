@@ -32,11 +32,11 @@ fmt_lint() {
 }
 
 fast_tests() {
-  cargo test --workspace --all-features --lib
+  cargo test --workspace --all-features --lib --no-fail-fast
 }
 
 all_tests() {
-  cargo test --workspace --all-features
+  cargo test --workspace --all-features --no-fail-fast
 }
 
 web_check() {
