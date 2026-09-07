@@ -1,0 +1,31 @@
+name: Preview raster failure excerpts
+on:
+  push:
+    branches: [codex/noon-raster-diagnosis]
+    paths: [.github/workflows/authoring-ci-diagnostics.yml]
+permissions:
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Print bounded failure excerpts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import os, urllib.request, re
+          url = 'https://api.github.com/repos/yongkyuns/noon/actions/jobs/101871029582/logs'
+          req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(req, timeout=30) as response:
+              text = response.read(20_000_000).decode('utf-8', 'replace')
+          lines = text.splitlines()
+          selected = set()
+          for i, line in enumerate(lines):
+              if re.search(r'Traceback|AssertionError|Error:|##\[error\]|failed \([0-9]', line):
+                  selected.update(range(max(0, i-3), min(len(lines), i+18)))
+          excerpt = '\n'.join(lines[i] for i in sorted(selected))
+          print('Failed raster job excerpt (bounded, original log unchanged):')
+          print(excerpt[-24000:] or '\n'.join(lines[-100:])[-16000:])
+          PY
