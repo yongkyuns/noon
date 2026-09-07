@@ -1319,6 +1319,14 @@ try {
   await startSampledSource(page, drawBorderThenFillSource, "scene-shared-draw-border-then-fill");
   try {
     const canvas = page.locator("#scene-shared-draw-border-then-fill");
+    await page.evaluate(() => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.5));
+    const outlineFrame = await canvas.screenshot();
+    const outline = renderedWorldPixel(outlineFrame, -1, 0.4);
+    const unfilled = renderedWorldPixel(outlineFrame, -1, 0);
+    assert.ok(outline.red > 120 && outline.green > 120 && outline.blue < 100,
+      "shared DrawBorderThenFill must reveal the yellow outline in phase one");
+    assert.ok(Math.max(unfilled.red, unfilled.green, unfilled.blue) < 40,
+      "shared DrawBorderThenFill must keep fill transparent in phase one");
     for (const [time, x] of [[1.5, -1], [2, -1], [2.5, 1], [3, 1]]) {
       await page.evaluate(
         (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
