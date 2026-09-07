@@ -5286,6 +5286,8 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             run_time: f64,
             rate_function: &str,
+            remover: bool,
+            reverse_rate_function: bool,
         ) -> Result<f64, JsValue> {
             let id = parse_object_id("object ID", object_id)?;
             target.id_in_store(self.inner.scene.store(), "ordinary Uncreate animation")?;
@@ -5297,7 +5299,9 @@ mod wasm {
                 })?;
             let options = noon_core::AnimationOptions::new()
                 .run_time(run_time)
-                .rate_func(rate_function);
+                .rate_func(rate_function)
+                .remover(remover)
+                .reverse_rate_function(reverse_rate_function);
             self.inner
                 .ordinary_play_uncreate(id, target.semantic_mobject(), options)
                 .map_err(js_error)
@@ -5311,6 +5315,8 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             run_time: f64,
             rate_function: &str,
+            remover: bool,
+            reverse_rate_function: bool,
         ) -> Result<f64, JsValue> {
             let id = parse_object_id("object ID", object_id)?;
             target.id_in_store(self.inner.scene.store(), "ordinary Uncreate animation")?;
@@ -5322,7 +5328,9 @@ mod wasm {
                 })?;
             let options = noon_core::AnimationOptions::new()
                 .run_time(run_time)
-                .rate_func(rate_function);
+                .rate_func(rate_function)
+                .remover(remover)
+                .reverse_rate_function(reverse_rate_function);
             self.inner
                 .begin_ordinary_uncreate(id, target.semantic_mobject(), options)
                 .map_err(js_error)

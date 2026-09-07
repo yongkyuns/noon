@@ -1214,14 +1214,7 @@ def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> o
 
 
 def _canonical_uncreate_options(animation: object, kwargs: dict[str, object]) -> object | None:
-    if getattr(animation, "reverse_rate_function", None) is not True:
-        return None
-    if getattr(animation, "remover", None) is not True:
-        return None
-    resolved = _canonical_affine_options(animation, kwargs)
-    if resolved is None or resolved.rate_func not in {"linear", "smooth"}:
-        return None
-    return resolved
+    return _canonical_affine_options(animation, kwargs)
 
 
 def _play_canonical_create(
@@ -1284,12 +1277,20 @@ def _play_canonical_create(
             if _semantic_continuation_active(self)
             else (context.ordinaryPlayUncreate if remove else context.ordinaryPlayCreate)
         )
-        method(
+        arguments = [
             object_id,
             handle,
             float(resolved.run_time),
             str(resolved.rate_func),
-        )
+        ]
+        if remove:
+            arguments.extend(
+                [
+                    bool(getattr(animation, "remover", True)),
+                    bool(getattr(animation, "reverse_rate_function", True)),
+                ]
+            )
+        method(*arguments)
     except Exception as error:
         raise ValueError(str(error)) from None
     if reservation is not None:
@@ -1299,7 +1300,7 @@ def _play_canonical_create(
             register(target)
 
     def completed() -> None:
-        if remove:
+        if remove and bool(getattr(animation, "remover", True)):
             _reconcile_fade_membership(self, target, "out")
 
     if _async_continuation_active(self):
