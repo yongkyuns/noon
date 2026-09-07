@@ -3,8 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
-const workerSource = await readFile(new URL("./authoring-render-worker.js", import.meta.url), "utf8");
-const executableSource = workerSource.replace(/^import\s+[\s\S]*?;\n/gm, "");
+const controllerSource = await readFile(
+  new URL("./authoring-render-controller.js", import.meta.url),
+  "utf8",
+);
+const executableSource = controllerSource
+  .replace(/^import\s+[\s\S]*?;\n/gm, "")
+  .replace(/^export\s+/gm, "");
 
 function deferred() {
   let resolve;
@@ -79,13 +84,20 @@ function createWorkerHarness(renderResults = [false, true]) {
     drainRendererGpuDiagnostics: () => true,
     formatGpuDiagnostic: String,
     self: {
-      addEventListener() {},
       close() {},
       postMessage(message) { mainMessages.push(message); },
       requestAnimationFrame(callback) { animationFrames.push(callback); },
     },
   });
   vm.runInContext(executableSource, context);
+  vm.runInContext(
+    `configureAuthoringRenderHost({
+      postMessage: (message) => self.postMessage(message),
+      close: () => self.close(),
+      requestAnimationFrame: (callback) => self.requestAnimationFrame(callback),
+    });`,
+    context,
+  );
   const oldPort = new FakePort();
   const nextPort = new FakePort();
   const oldRenderer = createRenderer([true]);

@@ -174,7 +174,7 @@ async function capabilityProbe(page) {
   });
 }
 
-function missingRuntimeCapabilities(capabilities) {
+function missingObservedCapabilities(capabilities) {
   return [
     ["WebAssembly", capabilities.webAssembly],
     ["Worker", capabilities.worker],
@@ -225,11 +225,13 @@ function assertShell(snapshot, label) {
 }
 
 async function runtimeSnapshot(page) {
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
     const patch = document.querySelector("#patch-status");
     const status = document.querySelector("#status");
+    const execution = await window.__noonExampleGallery?.executionMetrics?.();
     return {
       rendererBackend: status?.dataset.rendererBackend ?? null,
+      renderHost: execution?.renderHost ?? null,
       executionMode: status?.dataset.executionMode ?? null,
       runtimeStartup: status?.dataset.runtimeStartup ?? null,
       statusState: status?.dataset.state ?? null,
@@ -346,13 +348,9 @@ async function editAndRerun(page, expectedExampleId) {
   }, editMarker);
 
   const runButton = page.locator("#replace-scene");
-  // click waits for the control to be enabled, including pending source loads.
   await runButton.click();
   await waitForAppliedScene(page, expectedExampleId);
 
-  // CodeMirror installs a JS accessor on the hidden textarea. Playwright's
-  // inputValue() reads the native backing value and bypasses that accessor, so
-  // inspect the same stable integration surface that the playground itself uses.
   const source = await page.evaluate(() => document.querySelector("#python-scene-source")?.value ?? "");
   assert.ok(source.includes(editMarker), `${browserName}/${profileName}: edited source was not retained`);
 }
@@ -403,17 +401,16 @@ try {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
 
-  // Probe the exact transferred-canvas worker path before Noon starts. Main-thread
-  // OffscreenCanvas WebGL2 is not sufficient: WebKit can advertise it while
-  // returning null only after an HTML canvas is transferred into a worker.
+  // Keep the old transferred-worker probe as diagnostic evidence. It is no longer
+  // a product support gate: Noon may select the main-thread render host when the
+  // preferred worker-hosted surface is unavailable.
   capabilities = await capabilityProbe(page);
   assert.equal(
     capabilities.devicePixelRatio,
     profile.deviceScaleFactor,
     `${browserName}/${profileName}: unexpected DPR`,
   );
-  const missing = missingRuntimeCapabilities(capabilities);
-  runtimeSupported = missing.length === 0;
+  const missing = missingObservedCapabilities(capabilities);
 
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
@@ -423,66 +420,51 @@ try {
   assertShell(initialShell, `${browserName}/${profileName}`);
   finalRuntime = await assertDeferredRuntime(page);
 
-  if (!runtimeSupported) {
-    await page.screenshot({ path: path.join(artifactDir, "unsupported.png"), fullPage: true });
-    await writeDiagnostics("diagnostics.json", {
-      browser: browserName,
-      browserVersion: browser.version(),
-      profile: profileName,
-      runtimeSupported: false,
-      missingCapabilities: missing,
-      capabilities,
-      runtime: finalRuntime,
-      pageErrors,
-      consoleErrors,
-    });
-    console.log(
-      `↷ ${browserName}/${profileName}: runtime unsupported by capability probe (${missing.join(", ")})`,
-    );
-  } else {
-    const runButton = page.locator("#replace-scene");
-    // Source loading can disable Run after the shell appears. The locator's
-    // actionability wait observes readiness at the click, without a stale snapshot.
-    await runButton.click();
-    finalRuntime = await waitForAppliedScene(page, "parity-square-and-circle");
-    assert.ok(
-      finalRuntime.rendererBackend === "WebGL2" || finalRuntime.rendererBackend === "WebGPU",
-      `${browserName}/${profileName}: unexpected renderer backend ${finalRuntime.rendererBackend}`,
-    );
-    assert.equal(finalRuntime.canvases, 1, `${browserName}/${profileName}: expected one live canvas`);
+  const runButton = page.locator("#replace-scene");
+  await runButton.click();
+  finalRuntime = await waitForAppliedScene(page, "parity-square-and-circle");
+  runtimeSupported = true;
+  assert.ok(
+    finalRuntime.rendererBackend === "WebGL2" || finalRuntime.rendererBackend === "WebGPU",
+    `${browserName}/${profileName}: unexpected renderer backend ${finalRuntime.rendererBackend}`,
+  );
+  assert.ok(
+    finalRuntime.renderHost === "worker" || finalRuntime.renderHost === "main-thread",
+    `${browserName}/${profileName}: unexpected render host ${finalRuntime.renderHost}`,
+  );
+  assert.equal(finalRuntime.canvases, 1, `${browserName}/${profileName}: expected one live canvas`);
 
-    const selectedExampleId = await chooseDifferentExample(page);
-    await editAndRerun(page, selectedExampleId);
-    await exerciseResize(page);
-    finalRuntime = await runtimeSnapshot(page);
+  const selectedExampleId = await chooseDifferentExample(page);
+  await editAndRerun(page, selectedExampleId);
+  await exerciseResize(page);
+  finalRuntime = await runtimeSnapshot(page);
 
-    assert.deepEqual(
-      pageErrors,
-      [],
-      `${browserName}/${profileName}: page errors:\n${pageErrors.join("\n")}`,
-    );
-    assert.deepEqual(
-      consoleErrors,
-      [],
-      `${browserName}/${profileName}: console errors:\n${consoleErrors.join("\n")}`,
-    );
+  assert.deepEqual(
+    pageErrors,
+    [],
+    `${browserName}/${profileName}: page errors:\n${pageErrors.join("\n")}`,
+  );
+  assert.deepEqual(
+    consoleErrors,
+    [],
+    `${browserName}/${profileName}: console errors:\n${consoleErrors.join("\n")}`,
+  );
 
-    await page.screenshot({ path: path.join(artifactDir, "success.png"), fullPage: true });
-    await writeDiagnostics("diagnostics.json", {
-      browser: browserName,
-      browserVersion: browser.version(),
-      profile: profileName,
-      runtimeSupported: true,
-      missingCapabilities: [],
-      capabilities,
-      runtime: finalRuntime,
-      pageErrors,
-      consoleErrors,
-    });
-    console.log(
-      `✓ ${browserName}/${profileName}: ${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize`,
-    );
-  }
+  await page.screenshot({ path: path.join(artifactDir, "success.png"), fullPage: true });
+  await writeDiagnostics("diagnostics.json", {
+    browser: browserName,
+    browserVersion: browser.version(),
+    profile: profileName,
+    runtimeSupported: true,
+    missingObservedCapabilities: missing,
+    capabilities,
+    runtime: finalRuntime,
+    pageErrors,
+    consoleErrors,
+  });
+  console.log(
+    `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize`,
+  );
 } catch (error) {
   if (page !== null) {
     try {

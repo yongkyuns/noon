@@ -161,9 +161,11 @@ test("engine and render requests use independent issuance spaces", async () => {
   const metrics = await metricsPromise;
   assert.deepEqual(metrics.metrics, { ready: true });
   assert.deepEqual(metrics.engineMetrics, { host: {} });
+  assert.equal(metrics.renderHost, "worker");
 
   assert.deepEqual(client.diagnostics, {
     session: 1,
+    renderHost: "worker",
     engine: {
       nextRequestId: 1,
       pendingRequests: 0,

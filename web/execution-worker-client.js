@@ -5,6 +5,12 @@ import {
 } from "./execution-transport.js";
 import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { projectLegacyReactiveSceneJson } from "./legacy-reactive-projection.js";
+import { MainThreadRenderWorker } from "./main-thread-render-worker.js";
+import {
+  RENDER_HOST_MAIN_THREAD,
+  RENDER_HOST_WORKER,
+  selectExecutionRenderHost,
+} from "./render-host-selection.js";
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
@@ -35,6 +41,8 @@ export class ExecutionWorkerClient {
   #candidateEngineReject = null;
   #renderWorker = null;
   #renderPrepared = null;
+  #renderHost = null;
+  #renderHostSelection = null;
   #preparedStartReservation = null;
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
@@ -87,9 +95,14 @@ export class ExecutionWorkerClient {
     return this.#transportMode;
   }
 
+  get renderHost() {
+    return this.#renderHost;
+  }
+
   get diagnostics() {
     return Object.freeze({
       session: this.#session,
+      renderHost: this.#renderHost,
       engine: this.#ownerDiagnostics("engine"),
       render: this.#ownerDiagnostics("render"),
     });
@@ -115,20 +128,23 @@ export class ExecutionWorkerClient {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
+    const generation = this.#lifecycleGeneration;
+    const renderHost = this.#selectRenderHost();
+    if (typeof renderHost !== "string") {
+      await renderHost;
+      this.#assertLifecycleCurrent(generation);
+    }
+
     this.#transportMode = transportMode;
     this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
     const { width, height } = this.#prepareCanvasDimensions();
     const transferredCanvas = this.#canvas;
-    const generation = this.#lifecycleGeneration;
 
     let canvasTransferred = false;
     try {
       const offscreen = this.#canvas.transferControlToOffscreen();
       canvasTransferred = true;
-      this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
-        type: "module",
-        name: "noon-render",
-      });
+      this.#renderWorker = this.#createRenderWorker();
       this.#attachCurrentWorkerEvents(this.#renderWorker, RENDER_CHANNEL, "render");
       this.#renderPrepared = this.#request(
         this.#renderWorker,
@@ -145,7 +161,7 @@ export class ExecutionWorkerClient {
       );
       const render = await this.#renderPrepared;
       this.#fatalOwner = null;
-      return { render, transportMode };
+      return { render, transportMode, renderHost: this.#renderHost };
     } catch (error) {
       if (generation === this.#lifecycleGeneration) {
         this.#rollbackFailedStart(
@@ -382,6 +398,13 @@ export class ExecutionWorkerClient {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
+    const generation = this.#lifecycleGeneration;
+    const renderHost = this.#selectRenderHost();
+    if (typeof renderHost !== "string") {
+      await renderHost;
+      this.#assertLifecycleCurrent(generation);
+    }
+
     this.#configureStart(
       mode,
       sceneJson,
@@ -398,10 +421,7 @@ export class ExecutionWorkerClient {
       const offscreen = this.#canvas.transferControlToOffscreen();
       canvasTransferred = true;
       this.#engineWorker = this.#createEngineWorker(mode);
-      this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
-        type: "module",
-        name: "noon-render",
-      });
+      this.#renderWorker = this.#createRenderWorker();
 
       const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
       const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
@@ -1099,7 +1119,7 @@ export class ExecutionWorkerClient {
       this.#requestRender("metrics", {}),
       this.#requestEngine("metrics", {}),
     ]);
-    return { ...render, engineMetrics: engine.metrics };
+    return { ...render, engineMetrics: engine.metrics, renderHost: this.#renderHost };
   }
 
   resize(width, height, devicePixelRatio = 1) {
@@ -1240,11 +1260,11 @@ export class ExecutionWorkerClient {
     const ready =
       mode === EXECUTION_MODE_SEMANTIC
         ? await this.startSemanticExecution(semanticContextId, semanticAuthoringClient, {
-          loopDurationSeconds,
-          transportMode,
-          sharedSlotCapacity,
-          callbackSessionId: semanticCallbackSessionId,
-          initiallyPaused: !wasPlaying,
+            loopDurationSeconds,
+            transportMode,
+            sharedSlotCapacity,
+            callbackSessionId: semanticCallbackSessionId,
+            initiallyPaused: !wasPlaying,
           })
         : await this.#startMode(
             mode,
@@ -1301,6 +1321,8 @@ export class ExecutionWorkerClient {
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
     if (!preserveHostConfiguration) {
+      this.#renderHost = null;
+      this.#renderHostSelection = null;
       this.#hostAuthoringClient = null;
       this.#hostCallbacks = null;
       this.#semanticAuthoringClient = null;
@@ -1539,6 +1561,47 @@ export class ExecutionWorkerClient {
     if (replaceCanvas) {
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
+  }
+
+  #selectRenderHost() {
+    if (this.#renderHost !== null) return this.#renderHost;
+    if (this.#renderHostSelection !== null) return this.#renderHostSelection;
+
+    const selected = selectExecutionRenderHost();
+    if (typeof selected === "string") {
+      this.#renderHost = selected;
+      return selected;
+    }
+
+    const generation = this.#lifecycleGeneration;
+    const task = Promise.resolve(selected)
+      .then((host) => {
+        if (generation !== this.#lifecycleGeneration) {
+          throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+        }
+        this.#renderHost = host;
+        return host;
+      })
+      .finally(() => {
+        if (this.#renderHostSelection === task) {
+          this.#renderHostSelection = null;
+        }
+      });
+    this.#renderHostSelection = task;
+    return task;
+  }
+
+  #createRenderWorker() {
+    if (this.#renderHost === RENDER_HOST_MAIN_THREAD) {
+      return new MainThreadRenderWorker();
+    }
+    if (this.#renderHost === RENDER_HOST_WORKER) {
+      return new Worker(new URL("./execution-render-worker.js", import.meta.url), {
+        type: "module",
+        name: "noon-render",
+      });
+    }
+    throw new Error("execution render host must be selected before renderer startup");
   }
 
   #createEngineWorker(mode) {
