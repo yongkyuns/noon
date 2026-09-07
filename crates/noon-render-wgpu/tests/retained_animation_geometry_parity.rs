@@ -54,8 +54,8 @@ fn assert_prepares_path(frame: &FrameState) {
         .unwrap();
 
     assert!(prepared
-        .geometry_render_batches()
-        .iter()
+        .geometry_render_chunks()
+        .flat_map(|chunk| chunk.render_batches.iter())
         .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
     if frame.render_transforms[0].is_some() {
         assert_eq!(prepared.geometry_stats().geometry_cache_misses, 1);

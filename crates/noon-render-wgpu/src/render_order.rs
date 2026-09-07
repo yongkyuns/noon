@@ -1,7 +1,8 @@
 use std::{collections::HashSet, ops::Range};
 
 use crate::{
-    FramePreparer, MegaPathBatch, PreparedFrame, PreparedSlot, RenderStats, VisibleProjectionKey,
+    FramePreparer, MegaPathBatch, PreparedFrame, PreparedRenderChunk, PreparedSlot, RenderStats,
+    VisibleProjectionKey,
 };
 use noon_runtime::{FrameChanges, FrameState};
 
@@ -101,6 +102,8 @@ impl std::fmt::Display for VisibleRenderError {
 impl std::error::Error for VisibleRenderError {}
 
 impl FramePreparer {
+    const RENDER_ORDER_CHUNK_SIZE: usize = 64;
+
     /// Install the runtime-derived painter permutation without relocating or
     /// re-realizing stable object slots. Callers need invoke this only for the
     /// initial frame or a publication carrying a painter-order change.
@@ -328,6 +331,104 @@ impl FramePreparer {
             push_slot_batches(&mut self.render_batches, slot);
         }
     }
+
+    /// Rebuild fixed-size painter partitions intersecting `range`.
+    ///
+    /// Stored batches stop at partition boundaries, bounding a reordered scene to
+    /// at most one extra draw break per partition while keeping an adjacent reorder
+    /// proportional to its affected partition. Immutable geometry and mega-path
+    /// streams remain shared globally.
+    pub(crate) fn rebuild_render_order_chunks(&mut self, range: Option<Range<usize>>) {
+        if self.individual_path_draws || !self.render_order_keys.is_empty() {
+            self.render_chunks.clear();
+            self.render_chunks_active = false;
+            self.render_order_batch_count = 0;
+            self.render_order_mega_batch_count = 0;
+            self.render_order_mega_path_count = 0;
+            return;
+        }
+        let position_count = if self.painter_order_indices.is_empty() {
+            self.slots.len()
+        } else {
+            self.painter_order_indices.len()
+        };
+        let chunk_count = position_count.div_ceil(Self::RENDER_ORDER_CHUNK_SIZE);
+        let rebuild_all = range.is_none();
+        if !rebuild_all && chunk_count < self.render_chunks.len() {
+            for chunk in &self.render_chunks[chunk_count..] {
+                self.render_order_batch_count -= chunk.render_batches.len();
+                self.render_order_mega_batch_count -= chunk.mega_path_batches.len();
+                self.render_order_mega_path_count -= chunk
+                    .mega_path_batches
+                    .iter()
+                    .map(|batch| batch.path_count)
+                    .sum::<usize>();
+            }
+        }
+        self.render_chunks
+            .resize_with(chunk_count, PreparedRenderChunk::default);
+        self.render_chunks.truncate(chunk_count);
+        if position_count == 0 {
+            self.render_chunks_active = range.is_some();
+            self.render_order_batch_count = 0;
+            self.render_order_mega_batch_count = 0;
+            self.render_order_mega_path_count = 0;
+            return;
+        }
+
+        let activate_chunks = range.is_some();
+        let affected = range.unwrap_or(0..position_count);
+        let first_chunk = affected.start.min(position_count - 1) / Self::RENDER_ORDER_CHUNK_SIZE;
+        let last_position = affected.end.max(affected.start + 1).min(position_count) - 1;
+        let last_chunk = last_position / Self::RENDER_ORDER_CHUNK_SIZE;
+        if rebuild_all {
+            self.render_order_batch_count = 0;
+            self.render_order_mega_batch_count = 0;
+            self.render_order_mega_path_count = 0;
+        }
+        for chunk_index in first_chunk..=last_chunk {
+            let start = chunk_index * Self::RENDER_ORDER_CHUNK_SIZE;
+            let end = (start + Self::RENDER_ORDER_CHUNK_SIZE).min(position_count);
+            let mut raw = Vec::with_capacity((end - start) * 2);
+            for position in start..end {
+                let object_index = self
+                    .painter_order_indices
+                    .get(position)
+                    .map_or(position, |&index| index as usize);
+                if let Some(slot) = self.slots.get(object_index).copied() {
+                    push_slot_batches(&mut raw, slot);
+                }
+            }
+            let mut render_batches = Vec::new();
+            let mut mega_path_batches = Vec::new();
+            project_mega_render_batches(self, &raw, &mut render_batches, &mut mega_path_batches);
+            if !rebuild_all {
+                let old = &self.render_chunks[chunk_index];
+                self.render_order_batch_count -= old.render_batches.len();
+                self.render_order_mega_batch_count -= old.mega_path_batches.len();
+                self.render_order_mega_path_count -= old
+                    .mega_path_batches
+                    .iter()
+                    .map(|batch| batch.path_count)
+                    .sum::<usize>();
+            }
+            self.render_order_batch_count += render_batches.len();
+            self.render_order_mega_batch_count += mega_path_batches.len();
+            self.render_order_mega_path_count += mega_path_batches
+                .iter()
+                .map(|batch| batch.path_count)
+                .sum::<usize>();
+            self.render_chunks[chunk_index] = PreparedRenderChunk {
+                render_batches,
+                mega_path_batches,
+            };
+            self.render_order_positions_visited += end - start;
+            self.render_order_chunks_rebuilt += 1;
+        }
+        if activate_chunks {
+            self.render_chunks_active = true;
+        }
+    }
 }
 
 fn project_mega_render_batches(
@@ -418,6 +519,7 @@ fn projected_frame<'a>(
         mega_path_vertex_instances: &preparer.mega_path_vertex_instances,
         mega_path_batches,
         render_batches,
+        render_chunks: &[],
         unsupported: &preparer.unsupported,
         circle_dirty_ranges: &preparer.circle_dirty_ranges,
         rectangle_dirty_ranges: &preparer.rectangle_dirty_ranges,

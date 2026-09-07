@@ -599,6 +599,7 @@ impl GpuRenderer {
             || !prepared.paths.is_empty()
             || !prepared.path_batches.is_empty()
             || !prepared.render_batches.is_empty()
+            || prepared.ordered_render_chunks().next().is_some()
             || !prepared.mega_path_indices.is_empty()
             || !prepared.mega_path_vertex_instances.is_empty()
             || !prepared.mega_path_batches.is_empty()
@@ -989,68 +990,70 @@ impl GpuRenderer {
             &self.line_pipeline
         };
 
-        for batch in prepared.render_batches {
-            match batch.primitive {
-                RenderPrimitive::Circle => {
-                    pass.set_pipeline(circle_pipeline);
-                    pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                    pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
-                    pass.draw(0..6, batch.instance_range.clone());
-                }
-                RenderPrimitive::Rectangle => {
-                    pass.set_pipeline(rectangle_pipeline);
-                    pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                    pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
-                    pass.draw(0..6, batch.instance_range.clone());
-                }
-                RenderPrimitive::Line => {
-                    pass.set_pipeline(line_pipeline);
-                    pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                    pass.set_vertex_buffer(1, self.line_buffer.slice(..));
-                    pass.draw(0..6, batch.instance_range.clone());
-                }
-                RenderPrimitive::MegaPath {
-                    batch: mega_batch_index,
-                } => {
-                    let mega_batch = &prepared.mega_path_batches[mega_batch_index];
-                    if mega_batch.index_range.is_empty() {
+        for chunk in prepared.ordered_render_chunks() {
+            for batch in chunk.render_batches {
+                match batch.primitive {
+                    RenderPrimitive::Circle => {
+                        pass.set_pipeline(circle_pipeline);
+                        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                        pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
+                        pass.draw(0..6, batch.instance_range.clone());
+                    }
+                    RenderPrimitive::Rectangle => {
+                        pass.set_pipeline(rectangle_pipeline);
+                        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                        pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
+                        pass.draw(0..6, batch.instance_range.clone());
+                    }
+                    RenderPrimitive::Line => {
+                        pass.set_pipeline(line_pipeline);
+                        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                        pass.set_vertex_buffer(1, self.line_buffer.slice(..));
+                        pass.draw(0..6, batch.instance_range.clone());
+                    }
+                    RenderPrimitive::MegaPath {
+                        batch: mega_batch_index,
+                    } => {
+                        let mega_batch = &chunk.mega_path_batches[mega_batch_index];
+                        if mega_batch.index_range.is_empty() {
+                            continue;
+                        }
+                        pass.set_pipeline(&self.mega_path_pipeline);
+                        pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+                        pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));
+                        pass.set_index_buffer(
+                            self.mega_path_index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        pass.draw_indexed(mega_batch.index_range.clone(), 0, 0..1);
+                        stats.draw_calls += 1;
+                        stats.instances_drawn += mega_batch.path_count;
                         continue;
                     }
-                    pass.set_pipeline(&self.mega_path_pipeline);
-                    pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
-                    pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));
-                    pass.set_index_buffer(
-                        self.mega_path_index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint32,
-                    );
-                    pass.draw_indexed(mega_batch.index_range.clone(), 0, 0..1);
-                    stats.draw_calls += 1;
-                    stats.instances_drawn += mega_batch.path_count;
-                    continue;
-                }
-                RenderPrimitive::Path {
-                    batch: path_batch_index,
-                } => {
-                    let path_batch = &prepared.path_batches[path_batch_index];
-                    if path_batch.index_range.is_empty() {
-                        continue;
+                    RenderPrimitive::Path {
+                        batch: path_batch_index,
+                    } => {
+                        let path_batch = &prepared.path_batches[path_batch_index];
+                        if path_batch.index_range.is_empty() {
+                            continue;
+                        }
+                        pass.set_pipeline(&self.path_pipeline);
+                        pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+                        pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
+                        pass.set_index_buffer(
+                            self.path_index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        pass.draw_indexed(
+                            path_batch.index_range.clone(),
+                            0,
+                            batch.instance_range.clone(),
+                        );
                     }
-                    pass.set_pipeline(&self.path_pipeline);
-                    pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
-                    pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
-                    pass.set_index_buffer(
-                        self.path_index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint32,
-                    );
-                    pass.draw_indexed(
-                        path_batch.index_range.clone(),
-                        0,
-                        batch.instance_range.clone(),
-                    );
                 }
-            }
-            stats.draw_calls += 1;
-            stats.instances_drawn += batch.instance_range.len();
+                stats.draw_calls += 1;
+                stats.instances_drawn += batch.instance_range.len();
+                }
         }
         stats
     }

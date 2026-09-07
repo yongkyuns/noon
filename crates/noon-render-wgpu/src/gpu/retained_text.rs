@@ -205,8 +205,10 @@ impl PreparedRetainedGpuFrame<'_> {
     ///
     /// Mixed frames use `render_items` because geometry and glyphs interleave.
     /// This exposes only renderer-derived batch order, never private scratch IDs.
-    pub fn geometry_render_batches(&self) -> &[OrderedRenderBatch] {
-        self.geometry.render_batches
+    pub fn geometry_render_chunks(
+        &self,
+    ) -> impl Iterator<Item = crate::PreparedRenderChunkRef<'_>> {
+        self.geometry.ordered_render_chunks()
     }
 
     /// Observe one retained prepared object without scanning unrelated draw items.
@@ -342,10 +344,12 @@ fn geometry_path_mapping_is_compacted(
     geometry: &crate::PreparedGeometryObjectObservation,
 ) -> bool {
     matches!(geometry.primitive, RenderPrimitive::Path { .. })
-        && frame
-            .render_batches
-            .iter()
-            .any(|batch| matches!(batch.primitive, RenderPrimitive::MegaPath { .. }))
+        && frame.ordered_render_chunks().any(|chunk| {
+            chunk
+                .render_batches
+                .iter()
+                .any(|batch| matches!(batch.primitive, RenderPrimitive::MegaPath { .. }))
+        })
 }
 
 fn observed_glyph_ranges(
@@ -3250,7 +3254,9 @@ mod tests {
                 .prepare_publication_visible(&device, &queue, &publication, &[], metrics)
                 .unwrap();
             assert_eq!(prepared.geometry.circles.len(), 1);
-            assert!(prepared.geometry_render_batches().is_empty());
+            assert!(prepared
+                .geometry_render_chunks()
+                .all(|chunk| chunk.render_batches.is_empty()));
         }
         assert_eq!(preparer.last_applied_publication(), Some(context));
         assert_eq!(

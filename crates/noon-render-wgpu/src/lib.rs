@@ -146,6 +146,23 @@ pub struct MegaPathBatch {
     pub path_count: usize,
 }
 
+/// A bounded painter-order partition with independently coalesced draw metadata.
+///
+/// Geometry buffers and stable object slots remain global. Partitioning only the
+/// disposable draw descriptors lets a local painter permutation rebuild the
+/// intersecting partitions without walking or shifting the rest of the scene.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PreparedRenderChunk {
+    render_batches: Vec<OrderedRenderBatch>,
+    mega_path_batches: Vec<MegaPathBatch>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedRenderChunkRef<'a> {
+    pub render_batches: &'a [OrderedRenderBatch],
+    pub mega_path_batches: &'a [MegaPathBatch],
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub batch_count: usize,
@@ -183,6 +200,10 @@ pub struct RenderStats {
     pub structural_slots_retired: usize,
     /// Full preparation rebuilds performed by this preparation call.
     pub full_rebuilds: usize,
+    /// Painter positions visited while rebuilding ordered draw metadata.
+    pub render_order_positions_visited: usize,
+    /// Fixed-size draw-metadata partitions rebuilt by this preparation call.
+    pub render_order_chunks_rebuilt: usize,
 }
 
 #[derive(Debug)]
@@ -204,8 +225,14 @@ pub struct PreparedFrame<'a> {
     /// Path instance attributes repeated per geometry vertex so the packed path
     /// pipeline works on both WebGPU and the WebGL2 fallback without SSBOs.
     pub mega_path_vertex_instances: &'a [PathInstance],
-    pub mega_path_batches: &'a [MegaPathBatch],
-    pub render_batches: &'a [OrderedRenderBatch],
+    // Flat batches are used by candidate/mixed projections and as the immutable
+    // mega-stream construction cache. Geometry-only submission consumes
+    // `render_chunks`, so a local reorder never has to rewrite this flat cache.
+    pub(crate) mega_path_batches: &'a [MegaPathBatch],
+    pub(crate) render_batches: &'a [OrderedRenderBatch],
+    /// Canonical geometry-only draw order. Empty for candidate and mixed-content
+    /// projections, which continue to use `render_batches` directly.
+    pub(crate) render_chunks: &'a [PreparedRenderChunk],
     pub unsupported: &'a [ObjectId],
     pub circle_dirty_ranges: &'a [Range<usize>],
     pub rectangle_dirty_ranges: &'a [Range<usize>],
@@ -254,6 +281,30 @@ pub enum PreparedGeometryObjectOutcome {
 }
 
 impl PreparedFrame<'_> {
+    /// Visit the canonical painter-ordered draw metadata.
+    ///
+    /// Ordinary frames use bounded chunks after a local reorder; projections and
+    /// unchanged frames expose their single flat partition through the same view.
+    pub fn ordered_render_chunks(&self) -> impl Iterator<Item = PreparedRenderChunkRef<'_>> {
+        let flat = self
+            .render_chunks
+            .is_empty()
+            .then_some(PreparedRenderChunkRef {
+                render_batches: self.render_batches,
+                mega_path_batches: self.mega_path_batches,
+            });
+        flat.into_iter()
+            .chain(
+                self.render_chunks
+                    .iter()
+                    .map(|chunk| PreparedRenderChunkRef {
+                        render_batches: &chunk.render_batches,
+                        mega_path_batches: &chunk.mega_path_batches,
+                    }),
+            )
+            .filter(|chunk| !chunk.render_batches.is_empty())
+    }
+
     /// Observe one prepared row through the existing source-index-to-instance map.
     ///
     /// The lookup is O(1). Dirty classification visits only the coalesced dirty
@@ -469,6 +520,11 @@ pub struct FramePreparer {
     mega_path_segments: Vec<Option<Range<u32>>>,
     mega_path_detached: Vec<bool>,
     render_batches: Vec<OrderedRenderBatch>,
+    render_chunks: Vec<PreparedRenderChunk>,
+    render_chunks_active: bool,
+    render_order_batch_count: usize,
+    render_order_mega_batch_count: usize,
+    render_order_mega_path_count: usize,
     // Candidate-sized submission projection. Canonical packed state and painter
     // order stay resident in the fields above when the camera changes.
     visible_raw_render_batches: Vec<OrderedRenderBatch>,
@@ -503,6 +559,8 @@ pub struct FramePreparer {
     mega_path_index_dirty_ranges: Vec<Range<usize>>,
     mega_path_index_dirty: bool,
     path_geometry_dirty: bool,
+    render_order_positions_visited: usize,
+    render_order_chunks_rebuilt: usize,
     initialized: bool,
 }
 
@@ -595,6 +653,7 @@ impl FramePreparer {
         if path_vertices_repacked > 0 || path_indices_repacked > 0 {
             self.rebuild_ordered_render_batches();
             self.rebuild_mega_render_batches();
+            self.rebuild_render_order_chunks(None);
         }
 
         let mut instances_repacked = 0;
@@ -690,9 +749,8 @@ impl FramePreparer {
             }
         }
 
-        if changes.painter_order_range().is_some() {
-            self.rebuild_ordered_render_batches();
-            self.rebuild_mega_render_batches();
+        if let Some(range) = changes.painter_order_range() {
+            self.rebuild_render_order_chunks(Some(range));
         }
 
         normalize_dirty_ranges(&mut self.circle_dirty_ranges);
@@ -1173,6 +1231,11 @@ impl FramePreparer {
         self.path_vertex_free_ranges.clear();
         self.path_index_free_ranges.clear();
         self.render_batches.clear();
+        self.render_chunks.clear();
+        self.render_chunks_active = false;
+        self.render_order_batch_count = 0;
+        self.render_order_mega_batch_count = 0;
+        self.render_order_mega_path_count = 0;
         let previous_path_batch_cache_indices = std::mem::take(&mut self.path_batch_cache_indices);
         self.unsupported.clear();
         self.slots.clear();
@@ -1315,6 +1378,7 @@ impl FramePreparer {
         }
         self.rebuild_ordered_render_batches();
         self.rebuild_mega_path_draws();
+        self.rebuild_render_order_chunks(None);
 
         if !self.circles.is_empty() {
             self.circle_dirty_ranges.push(0..self.circles.len());
@@ -1446,7 +1510,11 @@ impl FramePreparer {
         structural_slots_retired: usize,
         full_rebuilds: usize,
     ) -> PreparedFrame<'_> {
-        let batch_count = self.render_batches.len();
+        let batch_count = if !self.render_chunks_active {
+            self.render_batches.len()
+        } else {
+            self.render_order_batch_count
+        };
         let dirty_instance_count = dirty_len(&self.circle_dirty_ranges)
             + dirty_len(&self.rectangle_dirty_ranges)
             + dirty_len(&self.line_dirty_ranges);
@@ -1468,6 +1536,11 @@ impl FramePreparer {
             mega_path_vertex_instances: &self.mega_path_vertex_instances,
             mega_path_batches: &self.mega_path_batches,
             render_batches: &self.render_batches,
+            render_chunks: if self.render_chunks_active {
+                &self.render_chunks
+            } else {
+                &[]
+            },
             unsupported: &self.unsupported,
             circle_dirty_ranges: &self.circle_dirty_ranges,
             rectangle_dirty_ranges: &self.rectangle_dirty_ranges,
@@ -1492,12 +1565,19 @@ impl FramePreparer {
                 geometry_cache_misses,
                 path_vertices_repacked,
                 path_indices_repacked,
-                mega_path_count: self
-                    .mega_path_batches
-                    .iter()
-                    .map(|batch| batch.path_count)
-                    .sum(),
-                mega_path_batch_count: self.mega_path_batches.len(),
+                mega_path_count: if !self.render_chunks_active {
+                    self.mega_path_batches
+                        .iter()
+                        .map(|batch| batch.path_count)
+                        .sum()
+                } else {
+                    self.render_order_mega_path_count
+                },
+                mega_path_batch_count: if !self.render_chunks_active {
+                    self.mega_path_batches.len()
+                } else {
+                    self.render_order_mega_batch_count
+                },
                 mega_path_index_count: self.mega_path_indices.len(),
                 mega_path_indices_repacked: dirty_len(&self.mega_path_index_dirty_ranges),
                 mega_path_instance_vertices_repacked: dirty_len(
@@ -1523,6 +1603,8 @@ impl FramePreparer {
                 structural_slots_added,
                 structural_slots_retired,
                 full_rebuilds,
+                render_order_positions_visited: self.render_order_positions_visited,
+                render_order_chunks_rebuilt: self.render_order_chunks_rebuilt,
             },
             slots: &self.slots,
             complete_submission: true,
@@ -1540,6 +1622,8 @@ impl FramePreparer {
         self.mega_path_index_dirty_ranges.clear();
         self.mega_path_index_dirty = false;
         self.path_geometry_dirty = false;
+        self.render_order_positions_visited = 0;
+        self.render_order_chunks_rebuilt = 0;
     }
 
     fn slot_matches(&self, frame: &FrameState, object_index: usize) -> bool {
@@ -3641,6 +3725,63 @@ mod structural_execution_delta_tests {
             ]
         );
         assert_eq!(preparer.painter_order_indices, vec![0, 2, 1, 3]);
+    }
+
+    #[test]
+    fn adjacent_painter_swap_visits_only_its_bounded_render_chunk() {
+        const OBJECT_COUNT: usize = 10_000;
+        let frame = frame(
+            (0..OBJECT_COUNT)
+                .map(|index| {
+                    if index == 5_000 {
+                        let mut path = object(index as u64, GeometryRef::path(curved_path()));
+                        path.style.stroke = Some(Color::WHITE);
+                        path.style.stroke_width = 0.08;
+                        path
+                    } else {
+                        circle(index as u64)
+                    }
+                })
+                .collect(),
+        );
+        let mut order = (0..OBJECT_COUNT as u32).collect::<Vec<_>>();
+        let mut preparer = FramePreparer::new();
+        preparer.set_painter_order(&frame, &order);
+        let cold = preparer.prepare(&frame);
+        let circles = cold.circles.to_vec();
+        let path_vertices = cold.path_vertices.to_vec();
+        let path_indices = cold.path_indices.to_vec();
+        let mega_indices = cold.mega_path_indices.to_vec();
+
+        order.swap(5_000, 5_001);
+        preparer.set_painter_order_range(&frame, &order, 5_000..5_002);
+        let prepared =
+            preparer.prepare_incremental(&frame, &FrameChanges::painter_order(5_000..5_002));
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.instances_repacked, 0);
+        assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+        assert_eq!(
+            prepared.stats.render_order_positions_visited,
+            FramePreparer::RENDER_ORDER_CHUNK_SIZE
+        );
+        assert_eq!(prepared.circles, circles);
+        assert_eq!(prepared.path_vertices, path_vertices);
+        assert_eq!(prepared.path_indices, path_indices);
+        assert_eq!(prepared.mega_path_indices, mega_indices);
+        assert!(prepared.circle_dirty_ranges.is_empty());
+        assert!(prepared.path_vertex_dirty_ranges.is_empty());
+        assert!(prepared.path_index_dirty_ranges.is_empty());
+        assert!(prepared.mega_path_index_dirty_ranges.is_empty());
+
+        let chunk = &prepared.render_chunks[5_000 / FramePreparer::RENDER_ORDER_CHUNK_SIZE];
+        assert_eq!(chunk.render_batches.len(), 3);
+        assert_eq!(chunk.render_batches[0].primitive, RenderPrimitive::Circle);
+        assert!(matches!(
+            chunk.render_batches[1].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
+        assert_eq!(chunk.render_batches[2].primitive, RenderPrimitive::Circle);
     }
 
     #[test]
