@@ -15,13 +15,10 @@ on:
       - "web/python-compat-modules.js"
       - "web/python/_manim_animate.py"
       - "web/python/_manim_animation_options.py"
-      - "web/python/_manim_retained_animate.py"
-      - "web/python/_manim_retained_state.py"
       - "web/python/_manim_semantic_handles.py"
       - "web/python/_manim_typst.py"
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
-      - "scripts/retained-text-canonical-state-smoke.mjs"
       - "scripts/retained-text-family-identity-smoke.mjs"
       - "scripts/retained-text-family-layout-smoke.mjs"
       - "scripts/retained-text-family-fade-smoke.mjs"
@@ -83,10 +80,8 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Test retained Text animation authoring
+      - name: Test typed Text animation authoring
         run: node scripts/retained-text-animation-smoke.mjs
-      - name: Test retained Text canonical authoring state
-        run: node scripts/retained-text-canonical-state-smoke.mjs
       - name: Test retained Text family identity
         run: node scripts/retained-text-family-identity-smoke.mjs
       - name: Test retained Text family layout

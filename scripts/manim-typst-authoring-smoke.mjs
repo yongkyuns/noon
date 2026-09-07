@@ -32,7 +32,7 @@ async function waitForServer() {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`retained text authoring smoke server did not start: ${lastError}\n${serverOutput}`);
+  throw new Error(`typed text authoring smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
 // Pinned ManimCE v0.21 Typst examples plus the native Text surface that replaces
@@ -165,7 +165,7 @@ try {
   await page.goto(`${baseUrl}/web/`, { waitUntil: "load" });
   await page.evaluate(() => {
     const worker = new Worker(new URL("./python-worker.js", location.href), {
-      name: "noon-retained-text-authoring-smoke",
+      name: "noon-typed-text-authoring-smoke",
       type: "module",
     });
     let nextRequestId = 0;
@@ -178,7 +178,7 @@ try {
     });
 
     worker.addEventListener("error", (event) => {
-      const error = new Error(event.message || "retained text worker crashed");
+      const error = new Error(event.message || "typed text worker crashed");
       rejectReady(error);
       for (const { reject } of pending.values()) reject(error);
       pending.clear();
@@ -186,7 +186,7 @@ try {
     worker.addEventListener("message", (event) => {
       const message = event.data;
       if (message?.channel !== "noon.authoring" || message?.protocolVersion !== 6) {
-        const error = new Error("invalid retained text worker envelope");
+        const error = new Error("invalid typed text worker envelope");
         rejectReady(error);
         for (const { reject } of pending.values()) reject(error);
         pending.clear();
@@ -197,7 +197,7 @@ try {
         return;
       }
       if (message.type === "error") {
-        const error = new Error(String(message.message || "retained text authoring failed"));
+        const error = new Error(String(message.message || "typed text authoring failed"));
         if (message.requestId === null) {
           rejectReady(error);
           for (const { reject } of pending.values()) reject(error);
@@ -219,7 +219,7 @@ try {
       }
     });
 
-    window.noonRetainedTextSmoke = {
+    window.noonTypedTextSmoke = {
       ready: () => ready,
       run: async (source) => {
         await ready;
@@ -239,10 +239,10 @@ try {
       stop: () => worker.terminate(),
     };
   });
-  await page.evaluate(() => window.noonRetainedTextSmoke.ready());
+  await page.evaluate(() => window.noonTypedTextSmoke.ready());
 
   const helloText = await page.evaluate(
-    (source) => window.noonRetainedTextSmoke.run(source),
+    (source) => window.noonTypedTextSmoke.run(source),
     helloTextSource,
   );
   assert.equal(helloText.document.objects.length, 0, "Text must not create placeholder geometry");
@@ -254,7 +254,7 @@ try {
   });
 
   const multilineText = await page.evaluate(
-    (source) => window.noonRetainedTextSmoke.run(source),
+    (source) => window.noonTypedTextSmoke.run(source),
     multilineTextSource,
   );
   assert.equal(
@@ -271,7 +271,7 @@ try {
   });
 
   const nativeLayout = await page.evaluate(
-    (source) => window.noonRetainedTextSmoke.run(source),
+    (source) => window.noonTypedTextSmoke.run(source),
     nativeTextLayoutSource,
   );
   assert.equal(nativeLayout.document.objects.length, 1, "layout scene must retain only the Square as geometry");
@@ -291,7 +291,7 @@ try {
   assert.ok(nativeLayoutText.object.transform.scale.x > 0);
 
   const helloTypst = await page.evaluate(
-    (source) => window.noonRetainedTextSmoke.run(source),
+    (source) => window.noonTypedTextSmoke.run(source),
     helloTypstSource,
   );
   assert.equal(helloTypst.document.objects.length, 0, "Typst must not create placeholder geometry");
@@ -305,7 +305,7 @@ try {
   });
 
   const helloMathTypst = await page.evaluate(
-    (source) => window.noonRetainedTextSmoke.run(source),
+    (source) => window.noonTypedTextSmoke.run(source),
     helloMathTypstSource,
   );
   assert.equal(
@@ -323,7 +323,7 @@ try {
   });
 
   const mixed = await page.evaluate(
-    (source) => window.noonRetainedTextSmoke.run(source),
+    (source) => window.noonTypedTextSmoke.run(source),
     mixedPainterSource,
   );
   assert.equal(mixed.document.objects.length, 2, "only the circle and square belong to legacy geometry");
@@ -336,8 +336,8 @@ try {
     objectId: 1,
   });
 
-  await page.evaluate(() => window.noonRetainedTextSmoke.stop());
-  assert.deepEqual(errors, [], `browser errors while testing retained text authoring:\n${errors.join("\n")}`);
+  await page.evaluate(() => window.noonTypedTextSmoke.stop());
+  assert.deepEqual(errors, [], `browser errors while testing typed text authoring:\n${errors.join("\n")}`);
   console.log(
     "Text authoring smoke passed: native Text layout/placement and pinned Manim v0.21 Typst/MathTypst sources emit canonical source-only mixed content with zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
   );

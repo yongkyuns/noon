@@ -41,9 +41,16 @@ js_file="${out_dir}/noon_web.js"
   exit 1
 }
 
-for symbol in WasmAuthoringStore RetainedNativeTextAuthoringHandle RetainedTypstAuthoringHandle; do
+for symbol in WasmAuthoringStore; do
   if ! grep -q "$symbol" "$js_file"; then
     echo "authoring-only package is missing required export: $symbol" >&2
+    exit 1
+  fi
+done
+
+for symbol in RetainedNativeTextAuthoringHandle RetainedTypstAuthoringHandle; do
+  if grep -q "$symbol" "$js_file"; then
+    echo "authoring-only package unexpectedly exposes obsolete authoring handle: $symbol" >&2
     exit 1
   fi
 done

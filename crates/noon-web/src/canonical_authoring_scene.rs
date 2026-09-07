@@ -2621,7 +2621,13 @@ impl CanonicalAuthoringScene {
         camera_object: Option<ObjectId>,
     ) -> Result<SceneSpec, String> {
         let mut objects = Vec::with_capacity(self.identities.len());
-        for node in self.members()? {
+        let leaves = self
+            .scene
+            .store()
+            .borrow()
+            .ordered_leaf_nodes(self.scene.root())
+            .map_err(|error| error.to_string())?;
+        for node in leaves {
             if let Some(text) = self.text_adapters.get(&node) {
                 objects.push(text.clone());
                 continue;
@@ -6729,6 +6735,32 @@ mod tests {
         };
         assert_eq!(text.kind, TextSpecKind::Plain);
         assert_eq!(text.source, "A");
+    }
+
+    #[test]
+    fn canonical_export_flattens_family_roots_to_bound_semantic_leaves() {
+        let mut context = CanonicalAuthoringScene::default();
+        let left = context.scene.circle(0.5).unwrap();
+        let right = context.scene.square(0.5).unwrap();
+        let family = context.scene.family(&[&left, &right]).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                members: vec![OwnedSceneMembershipMember::Family(family)],
+                bindings: vec![(ObjectId::new(4), left), (ObjectId::new(9), right)],
+            })
+            .unwrap();
+
+        let spec = context
+            .finalize(Vec::new(), Vec::new(), Vec::new(), None)
+            .unwrap();
+        assert_eq!(
+            spec.objects
+                .iter()
+                .map(|object| object.id)
+                .collect::<Vec<_>>(),
+            vec![ObjectId::new(4), ObjectId::new(9)],
+        );
     }
 
     #[test]

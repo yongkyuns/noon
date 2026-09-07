@@ -9,10 +9,6 @@ const noon = await readFile(
   new URL("./python/examples/manim_parity_stress_grid.py", import.meta.url),
   "utf8",
 );
-const retainedAnimate = await readFile(
-  new URL("./python/_manim_retained_animate.py", import.meta.url),
-  "utf8",
-);
 const browserSmoke = await readFile(new URL("./manim-compat-smoke.html", import.meta.url), "utf8");
 const sourceOwnedStress = await readFile(
   new URL("../scripts/playground-stress-edit-smoke.mjs", import.meta.url),
@@ -43,21 +39,6 @@ assert.match(noon, /turbulence = \[\]/);
 assert.match(noon, /leaving = shapes\[::3\]/);
 assert.match(noon, /blinking_labels = labels\[::3\]/);
 assert.doesNotMatch(noon, /MANIM/i, "public stress scene copy must not expose compatibility branding");
-assert.doesNotMatch(
-  noon,
-  /(?:title|subtitle|label)\.animate[^\n]*set_color/,
-  "retained Text color animation must not be claimed before a color track exists",
-);
-assert.match(
-  retainedAnimate,
-  /position, rotation, opacity, and uniform scale animations are supported/,
-  "contract should track the retained Text animation capability boundary",
-);
-assert.match(
-  retainedAnimate,
-  /mixing retained Text animations with legacy animations in one Scene\.play /,
-  "standalone retained-vs-geometry property animation remains a separate composition boundary",
-);
 assert.doesNotMatch(
   browserSmoke,
   /manim_parity_stress_grid\.py|retained-stress-smoke/,
