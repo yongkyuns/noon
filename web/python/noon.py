@@ -1,8 +1,7 @@
 """Public Noon authoring API.
 
-The public surface favors Manim-like semantic vocabulary while ``SceneSpec`` is the
-canonical mixed-content producer contract. Legacy geometry and retained-text documents
-remain bounded compatibility projections while #367 retires the split authoring path.
+The public surface favors Manim-like semantic vocabulary. Browser authoring installs
+the shared Rust semantic scene facade used for execution and explicit export.
 """
 
 from __future__ import annotations
@@ -785,34 +784,6 @@ class Scene(_ir.Scene):
     @property
     def time(self) -> float:
         return self._cursor
-
-    def to_scene_spec(self) -> dict[str, Any]:
-        """Finalize this authored scene through Rust's canonical mixed-scene adapter.
-
-        Content adapters may still maintain legacy projections during #367 migration,
-        but callers consume one validated ``SceneSpec``. The Rust adapter remains the
-        authority for geometry/text ordering, text source lowering, retained tracks,
-        and family-animation transport.
-        """
-        try:
-            from js import noonCanonicalSceneSpecJson as canonicalize
-        except ImportError as error:
-            raise RuntimeError(
-                "canonical SceneSpec finalization requires the Noon browser Rust bridge"
-            ) from error
-
-        retained_document = getattr(self, "retained_document", None)
-        if retained_document is None:
-            raise RuntimeError(
-                "canonical SceneSpec finalization requires retained authoring compatibility"
-            )
-        legacy_json = json.dumps(
-            self.to_document(), separators=(",", ":"), allow_nan=False
-        )
-        retained_json = json.dumps(
-            retained_document(), separators=(",", ":"), allow_nan=False
-        )
-        return json.loads(str(canonicalize(legacy_json, retained_json)))
 
     def _raw_object(self, value: Mobject | _ir.Object) -> _ir.Object:
         if isinstance(value, _ir.Object):

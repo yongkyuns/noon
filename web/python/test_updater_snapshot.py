@@ -516,7 +516,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         text._object = SimpleNamespace(id=0)
         text._semantic_handle = handle
         text._semantic_handle_fresh = True
-        text._retained_handle = handle
 
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         try:

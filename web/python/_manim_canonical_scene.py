@@ -2,7 +2,7 @@
 
 Static geometry lowers to one ExecutionSession in the authoring worker. Python
 keeps identity metadata; geometry values are projected only for explicit exports
-or the legacy animation/retained-text adapter still owned for deletion by #959.
+or the remaining legacy geometry adapter owned for deletion by #959.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-import _manim_retained_state as _retained_state
 import _manim_typst as _typst
 import _manim_animation_options as _options
 import _manim_animate as _animate
@@ -3030,8 +3029,6 @@ def execution_context(scene, callbacks=None):
         )
     ):
         return None
-    if getattr(scene, "_retained_text_objects", []):
-        return None
     handles = getattr(scene, "_semantic_geometry_handles", {})
     text_handles = getattr(scene, "_semantic_text_handles", {})
     if len(handles) + len(text_handles) != len(scene._object_positions):
@@ -3273,7 +3270,7 @@ def _replace_static_snapshot(
         raise
 
 
-def _bind_retained_text(
+def _bind_text(
     self: _typst._RetainedTextMobject,
     scene: _base.Scene,
     *,
@@ -3281,29 +3278,7 @@ def _bind_retained_text(
 ) -> object:
     if self._scene is scene and self._object is not None:
         return self._object
-    # Native Text, Typst, and MathTypst own ordinary shared semantic Mobject
-    # handles. Bind them through the same scene operation as geometry. The
-    # retained source branch below remains only for explicit export consumers.
-    if getattr(self, "_semantic_handle", None) is not None:
-        obj = _bind_mobject(self, scene, key=key)
-        self._retained_object_id = int(obj.id)
-        self._retained_order = int(scene._object_positions[obj.id])
-        return obj
-    if self._scene is not None:
-        raise ValueError("retained text Mobject already belongs to another Scene")
-
-    _typst._ensure_scene_state(scene)
-    checkpoint = scene._authoring_checkpoint()
-    obj, order = scene._allocate_object(key)
-    try:
-        _context(scene).bindText(str(obj.id), str(self._retained_handle.specJson()))
-    except Exception:
-        scene._restore_authoring_checkpoint(checkpoint)
-        raise
-
-    self._bind_retained(scene, obj, order)
-    scene._retained_text_objects.append(self)
-    return obj
+    return _bind_mobject(self, scene, key=key)
 
 
 def _camera_object_id(scene: _base.Scene) -> str:
@@ -3320,22 +3295,10 @@ def _camera_object_id(scene: _base.Scene) -> str:
 def _to_scene_spec(self: _base.Scene) -> dict[str, Any]:
     """Finalize directly from the per-scene canonical Rust authoring context."""
 
-    # Reconcile direct retained mutations before freezing the source-level time-zero
-    # state. Post-timeline edits become retained tracks; pre-timeline edits rewrite
-    # only the canonical base TextSpec.
-    _retained_state._sync_all(self)
-    _retained_state._freeze_bound_sources(self)
-
     context = _context(self)
-    for source in _retained_state._bound_sources(self):
-        context.updateText(
-            str(int(source.id)),
-            _json(copy.deepcopy(_retained_state._freeze_base(source))),
-        )
-
     scene_spec_json = context.sceneSpecJson(
         _json(list(self._tracks)),
-        _json(list(getattr(self, "_retained_animation_tracks", []))),
+        _json([]),
         _json([]),
         _camera_object_id(self),
     )
@@ -3357,7 +3320,7 @@ def install() -> None:
     _ir.Scene._authoring_checkpoint = _authoring_checkpoint
     _ir.Scene._restore_authoring_checkpoint = _restore_authoring_checkpoint
     _base.Scene._replace_static_snapshot = _replace_static_snapshot
-    _typst._RetainedTextMobject._bind_to_scene = _bind_retained_text
+    _typst._RetainedTextMobject._bind_to_scene = _bind_text
     _base.Scene.to_scene_spec = _to_scene_spec
     _base.Mobject._bind_to_scene = _bind_mobject
     _base.Scene._bind_camera_frame = _bind_camera_frame

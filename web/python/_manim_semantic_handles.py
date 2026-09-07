@@ -734,11 +734,6 @@ def _clone_mobject(
         "_semantic_handle_fresh",
         "_canonical_live_target_context",
     }
-    if handle is not None and getattr(self, "_retained_handle", None) is handle:
-        # Canonical Text exposes the same opaque Rust handle through its text
-        # methods. Rebind that alias to the target; JsProxy cannot be deep-copied.
-        excluded.add("_retained_handle")
-        clone._retained_handle = clone._semantic_handle
     # A callback registry belongs to its source occurrence. The detached target
     # carries only its opaque semantic handle, never copied callback ownership.
     if target_context is not None:
@@ -1507,27 +1502,9 @@ def _get_stroke_opacity(self: _compat.VMobject) -> float:
 
 
 
-def _retained_family_layout_handles(value: object):
-    identity = getattr(value, "_semantic_family_member_handle", None)
-    retained = getattr(value, "_retained_handle", None)
-    if identity is None or retained is None:
-        return None
-    if not _has_shared_layout_queries(retained):
-        raise NotImplementedError(
-            "Typst/MathTypst family layout requires Rust-owned retained layout bounds"
-        )
-    return identity, retained
-
-
 def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
     resolver = _mutation_handle_for if mutation else _handle_for
-    handle = resolver(value)
-    if handle is not None:
-        return "mobject", handle
-    retained = _retained_family_layout_handles(value)
-    if retained is not None:
-        return "retained_native_text", retained
-    return None
+    return resolver(value)
 
 
 def _shared_family_layout_session(value: object, *, mutation: bool = False):
@@ -1537,37 +1514,27 @@ def _shared_family_layout_session(value: object, *, mutation: bool = False):
     if family_handle is None or not hasattr(family_handle, "layoutSession"):
         return None
     leaves = _compat._leaf_mobjects(value)
-    leaf_adapters = [
+    leaf_handles = [
         _family_layout_leaf_adapter(member, mutation=mutation) for member in leaves
     ]
-    if not all(adapter is not None for adapter in leaf_adapters):
+    if not all(handle is not None for handle in leaf_handles):
         return None
     session = family_handle.layoutSession()
-    for adapter in leaf_adapters:
-        assert adapter is not None
-        kind, payload = adapter
-        if kind == "mobject":
-            session.includeMobject(payload)
-        else:
-            identity, retained = payload
-            session.includeRetainedNativeText(identity, retained)
-    return session, leaves, leaf_adapters
+    for handle in leaf_handles:
+        assert handle is not None
+        session.includeMobject(handle)
+    return session, leaves, leaf_handles
 
 
 def _apply_family_translation(
     self: _compat.Group,
     translation: object,
     leaves: list[_base.Mobject],
-    leaf_adapters: list[object],
+    leaf_handles: list[object],
 ) -> _compat.Group:
-    for member, adapter in zip(leaves, leaf_adapters):
-        kind, payload = adapter
-        if kind == "mobject":
-            translation.applyMobject(payload)
-            _sync_bound_transform(member, payload)
-        else:
-            identity, retained = payload
-            translation.applyRetainedNativeText(identity, retained)
+    for member, handle in zip(leaves, leaf_handles):
+        translation.applyMobject(handle)
+        _sync_bound_transform(member, handle)
     translation.finish()
     return self
 
@@ -1615,19 +1582,10 @@ def _group_move_to(
             )
     elif _alignment_is_mobject(point_or_mobject):
         target_adapter = _family_layout_leaf_adapter(point_or_mobject)
-        if target_adapter is not None:
-            kind, payload = target_adapter
-            if kind == "mobject" and hasattr(session, "moveToMobject"):
-                translation = session.moveToMobject(
-                    payload, edge.x, edge.y, mask.x, mask.y
-                )
-            elif kind == "retained_native_text" and hasattr(
-                session, "moveToRetainedNativeText"
-            ):
-                identity, retained = payload
-                translation = session.moveToRetainedNativeText(
-                    identity, retained, edge.x, edge.y, mask.x, mask.y
-                )
+        if target_adapter is not None and hasattr(session, "moveToMobject"):
+            translation = session.moveToMobject(
+                target_adapter, edge.x, edge.y, mask.x, mask.y
+            )
     elif hasattr(session, "moveToPoint"):
         point = _base._as_vec2(point_or_mobject)
         translation = session.moveToPoint(
@@ -1697,34 +1655,17 @@ def _group_next_to(
             )
     elif _alignment_is_mobject(mobject_or_point):
         target_adapter = _family_layout_leaf_adapter(mobject_or_point)
-        if target_adapter is not None:
-            kind, payload = target_adapter
-            if kind == "mobject" and hasattr(session, "nextToMobject"):
-                translation = session.nextToMobject(
-                    payload,
-                    vector.x,
-                    vector.y,
-                    float(buff),
-                    edge.x,
-                    edge.y,
-                    mask.x,
-                    mask.y,
-                )
-            elif kind == "retained_native_text" and hasattr(
-                session, "nextToRetainedNativeText"
-            ):
-                identity, retained = payload
-                translation = session.nextToRetainedNativeText(
-                    identity,
-                    retained,
-                    vector.x,
-                    vector.y,
-                    float(buff),
-                    edge.x,
-                    edge.y,
-                    mask.x,
-                    mask.y,
-                )
+        if target_adapter is not None and hasattr(session, "nextToMobject"):
+            translation = session.nextToMobject(
+                target_adapter,
+                vector.x,
+                vector.y,
+                float(buff),
+                edge.x,
+                edge.y,
+                mask.x,
+                mask.y,
+            )
     elif hasattr(session, "nextToPoint"):
         point = _base._as_vec2(mobject_or_point)
         translation = session.nextToPoint(
@@ -1771,17 +1712,8 @@ def _group_align_to(
             translation = session.alignToFamily(target_shared[0], axis.x, axis.y)
     elif _alignment_is_mobject(mobject_or_point):
         target_adapter = _family_layout_leaf_adapter(mobject_or_point)
-        if target_adapter is not None:
-            kind, payload = target_adapter
-            if kind == "mobject" and hasattr(session, "alignToMobject"):
-                translation = session.alignToMobject(payload, axis.x, axis.y)
-            elif kind == "retained_native_text" and hasattr(
-                session, "alignToRetainedNativeText"
-            ):
-                identity, retained = payload
-                translation = session.alignToRetainedNativeText(
-                    identity, retained, axis.x, axis.y
-                )
+        if target_adapter is not None and hasattr(session, "alignToMobject"):
+            translation = session.alignToMobject(target_adapter, axis.x, axis.y)
     elif hasattr(session, "alignToPoint"):
         point = _base._as_vec2(mobject_or_point)
         translation = session.alignToPoint(point.x, point.y, axis.x, axis.y)
@@ -1844,19 +1776,14 @@ def _group_arrange(
                 return _ORIGINAL_GROUP_ARRANGE(
                     self, direction=direction, buff=buff, center=center
                 )
-            kind, payload = adapter
-            if kind == "mobject":
-                arrangement.includeMobject(payload)
-            else:
-                identity, retained = payload
-                arrangement.includeRetainedNativeText(identity, retained)
+            arrangement.includeMobject(adapter)
             prepared.append((member, [member], [adapter]))
         else:
             return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
 
-    for member, leaves, leaf_adapters in prepared:
+    for member, leaves, leaf_handles in prepared:
         translation = arrangement.nextTranslation()
-        _apply_family_translation(member, translation, leaves, leaf_adapters)
+        _apply_family_translation(member, translation, leaves, leaf_handles)
     arrangement.finish()
     return self
 
@@ -1891,21 +1818,7 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
         if handle is not None:
             bounds = _layout_bounds(member)
         else:
-            retained = _retained_family_layout_handles(member)
-            if retained is not None:
-                retained_handle = retained[1]
-                bounds = (
-                    _base.Vec2(
-                        float(retained_handle.criticalX(-1.0, 0.0)),
-                        float(retained_handle.criticalY(0.0, -1.0)),
-                    ),
-                    _base.Vec2(
-                        float(retained_handle.criticalX(1.0, 0.0)),
-                        float(retained_handle.criticalY(0.0, 1.0)),
-                    ),
-                )
-            else:
-                bounds = _base._bounds(member._current_raw())
+            bounds = _base._bounds(member._current_raw())
         if bounds is not None:
             present.append(bounds)
     if not present:
@@ -1925,11 +1838,6 @@ def _family_member_handle(value: object) -> tuple[str | None, object | None]:
     if isinstance(value, _compat.Group):
         return "family", getattr(value, "_semantic_family_handle", None)
     if isinstance(value, _base.Mobject):
-        retained_identity = getattr(value, "_semantic_family_member_handle", None)
-        if retained_identity is not None:
-            return "member", retained_identity
-        # Family identity survives scene binding even though ordinary detached-state
-        # mutations stop using this handle after binding.
         return "mobject", getattr(value, "_semantic_handle", None)
     return None, None
 
@@ -1940,8 +1848,6 @@ def _family_add_handle(family_handle: object, value: object) -> bool:
         raise RuntimeError("family member has no shared semantic identity")
     if kind == "family":
         return bool(family_handle.addFamily(handle))
-    if kind == "member":
-        return bool(family_handle.addMember(handle))
     return bool(family_handle.addMobject(handle))
 
 
@@ -1951,8 +1857,6 @@ def _family_remove_handle(family_handle: object, value: object) -> bool:
         raise RuntimeError("family member has no shared semantic identity")
     if kind == "family":
         return bool(family_handle.removeFamily(handle))
-    if kind == "member":
-        return bool(family_handle.removeMember(handle))
     return bool(family_handle.removeMobject(handle))
 
 
@@ -1993,8 +1897,6 @@ def _family_target_accept(editor: object, source: object, target: object) -> Non
         raise RuntimeError("Group target wrapper mirror diverged from shared family membership")
     if source_kind == "family":
         editor.acceptFamily(source_handle, target_handle)
-    elif source_kind == "member":
-        editor.acceptMember(source_handle, target_handle)
     elif source_kind == "mobject":
         editor.acceptMobject(source_handle, target_handle)
     else:

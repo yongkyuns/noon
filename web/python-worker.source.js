@@ -1,8 +1,5 @@
 import initNoonWeb, {
-  RetainedNativeTextAuthoringHandle,
-  RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
-  canonicalRetainedSceneSpecJson,
   manimAnnularSectorSnapshotJson,
   manimAnnulusSnapshotJson,
   manimDashedLineSnapshotJson,
@@ -152,16 +149,11 @@ async function initializePyodide() {
   self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
   self.noonCreateAuthoringFamilyMemberHandle = () =>
     authoringStore.createFamilyMember();
-  self.noonCreateRetainedNativeTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
-    new RetainedNativeTextAuthoringHandle(source, fontFamily, fontSize, lineSpacing);
-  self.noonCreateRetainedTypstHandle = (source, math, fontSize) =>
-    new RetainedTypstAuthoringHandle(source, math, fontSize);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
   self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
   self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
-  self.noonCanonicalSceneSpecJson = canonicalRetainedSceneSpecJson;
   const bindingsReadyAt = performance.now();
 
   for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
@@ -192,19 +184,10 @@ _manim_rotate.install()
 import _manim_composition
 _manim_composition.install()
 import _manim_lifecycle
-# Retained Text specializes content binding below the lifecycle-owned Scene.add path;
-# it must not replace or intercept scene membership semantics.
+# Text and Typst bind ordinary shared semantic Mobjects below the lifecycle-owned
+# Scene.add path; content binding does not replace scene membership semantics.
 import _manim_typst
 _manim_typst.install()
-# Install retained animation before later Scene.play adapters capture their
-# predecessor. This keeps retained dispatch inside the normal wrapper chain and
-# avoids Python call-expression binding races for Scene.play(ShrinkToCenter(Text(...))).
-import _manim_retained_animate
-_manim_retained_animate.install()
-# Reconcile direct retained mutations with the same canonical Rust authoring
-# state before later Scene.play adapters capture the retained scheduler.
-import _manim_retained_state
-_manim_retained_state.install()
 import _manim_growing
 _manim_growing.install()
 import _manim_draw_border_then_fill

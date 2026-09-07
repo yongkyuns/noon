@@ -32,13 +32,13 @@ async function waitForServer() {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`retained text animation smoke server did not start: ${lastError}\n${serverOutput}`);
+  throw new Error(`typed text animation smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
-const retainedAnimateSource = `
+const textAnimateSource = `
 from noon import *
 
-class RetainedAnimate(Scene):
+class TypedTextAnimate(Scene):
     def construct(self):
         label = Text("Animate", font_size=48)
 
@@ -73,10 +73,10 @@ class RetainedAnimate(Scene):
         assert abs(invalid.get_center()[1]) < 1e-5
 `;
 
-const retainedFadeSource = `
+const textFadeSource = `
 from noon import *
 
-class RetainedFade(Scene):
+class TypedTextFade(Scene):
     def construct(self):
         label = Text("Fade", font_size=48).shift(LEFT)
         self.live_execution()
@@ -106,6 +106,41 @@ class RetainedFade(Scene):
         assert abs(label.get_center()[1] - 1.0) < 1e-5
 `;
 
+const typstAnimationSource = `
+from noon import *
+
+class TypstAnimation(Scene):
+    def construct(self):
+        label = Typst(r"*Typed* Typst", font_size=56).shift(2 * LEFT)
+        equation = MathTypst(r"x^2 + y^2 = 1", font_size=52).shift(2 * RIGHT)
+
+        self.play(
+            FadeIn(label, shift=DOWN),
+            FadeIn(equation, shift=UP),
+            run_time=1.0,
+            rate_func=linear,
+        )
+        assert self.mobjects == [label, equation]
+
+        self.play(
+            label.animate.shift(RIGHT).set_opacity(0.4),
+            equation.animate.shift(LEFT).rotate(PI / 8).scale(0.75),
+            run_time=1.0,
+            rate_func=linear,
+        )
+        assert abs(label.get_center().x + 1.0) < 1e-5
+        assert abs(equation.get_center().x - 1.0) < 1e-5
+
+        self.play(
+            FadeOut(label, shift=UP),
+            FadeOut(equation, shift=DOWN),
+            run_time=1.0,
+            rate_func=linear,
+        )
+        assert self.mobjects == []
+        self.wait(1.0)
+`;
+
 let browser = null;
 try {
   await waitForServer();
@@ -127,18 +162,23 @@ try {
 
   const result = await page.evaluate(
     (sources) => window.noonManimCompat.runLiveSources(sources),
-    [retainedAnimateSource, retainedFadeSource],
+    [textAnimateSource, textFadeSource, typstAnimationSource],
   );
   assert.equal(result.sameCanvas, true, "Text rerun must retain the mounted canvas");
+  const expectedFinalCounts = [1, 1, 0];
   for (const [index, execution] of result.results.entries()) {
     assert.equal(execution.duration, 4, `Text case ${index}: authored duration`);
-    assert.equal(execution.metrics.objectCount, 1, `Text case ${index}: final membership`);
+    assert.equal(
+      execution.metrics.objectCount,
+      expectedFinalCounts[index],
+      `Text case ${index}: final membership`,
+    );
     assert.ok(execution.metrics.presentedFrames > 0, `Text case ${index}: no rendered frame`);
   }
-  assert.deepEqual(errors, [], `browser errors while testing retained Text animation:\n${errors.join("\n")}`);
+  assert.deepEqual(errors, [], `browser errors while testing typed Text animation:\n${errors.join("\n")}`);
 
   console.log(
-    "Text animation smoke passed through shared live execution: scale, rotation, opacity, relative/absolute movement, FadeIn/FadeOut, re-add, and canvas reuse.",
+    "Text/Typst/MathTypst animation smoke passed through shared live execution: scale, rotation, opacity, relative/absolute movement, FadeIn/FadeOut, re-add, and canvas reuse.",
   );
 } finally {
   await browser?.close();

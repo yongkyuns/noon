@@ -144,14 +144,12 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             # Rust target-editor boundary, with no Python snapshot round-trip.
             detached = Square(color=BLUE, fill_opacity=1)
             detached_source_handle = detached._semantic_handle
-            detached._retained_handle = detached_source_handle
             detached_before = detached._current_raw().to_ir()
             detached_source_handle.snapshot_requests = 0
             detached_builder = animate._AlignedAnimationBuilder(detached)
             detached_target = detached_builder.target
             detached_target_handle = detached_target._semantic_handle
             assert detached._raw is None
-            assert detached_target._retained_handle is detached_target_handle
             assert detached_target._raw is None
             assert detached_target_handle is not detached_source_handle
             assert detached_target_handle.calls == ["targetEditor"]

@@ -136,8 +136,6 @@ mod wasm {
     use noon_core::Bounds2D64;
     use wasm_bindgen::prelude::*;
 
-    use crate::{AuthoringSemanticIdentity, WasmRetainedNativeTextAuthoringHandle};
-
     use super::{
         manim_family_align_to_delta, manim_family_next_to_delta, render_f64, semantic_xy_f64,
         FrontendFamilyTargetEditor, ManimNextToArgs, Mobject, SemanticNodeId, SemanticStore,
@@ -158,56 +156,6 @@ mod wasm {
 
     type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
 
-    fn retained_native_member_id(
-        semantics: &SharedSemanticStore,
-        member: &WasmAuthoringFamilyMemberHandle,
-        text: &WasmRetainedNativeTextAuthoringHandle,
-        context: &str,
-    ) -> Result<SemanticNodeId, JsValue> {
-        if !Rc::ptr_eq(semantics, &member.semantics) {
-            return Err(JsValue::from_str(&format!(
-                "{context} and retained member belong to different authoring stores"
-            )));
-        }
-        let member_identity = member.authoring_identity();
-        if !text
-            .family_identity()
-            .is_some_and(|identity| identity.matches(&member_identity))
-        {
-            return Err(JsValue::from_str(&format!(
-                "{context} retained member identity does not match retained native Text handle"
-            )));
-        }
-        Ok(member.id)
-    }
-
-    fn retained_native_critical_point(
-        text: &WasmRetainedNativeTextAuthoringHandle,
-        direction: (f64, f64),
-    ) -> (f64, f64) {
-        let bounds = text.family_layout_bounds();
-        let center = (
-            (bounds.min_x + bounds.max_x) * 0.5,
-            (bounds.min_y + bounds.max_y) * 0.5,
-        );
-        (
-            if direction.0 < 0.0 {
-                bounds.min_x
-            } else if direction.0 > 0.0 {
-                bounds.max_x
-            } else {
-                center.0
-            },
-            if direction.1 < 0.0 {
-                bounds.min_y
-            } else if direction.1 > 0.0 {
-                bounds.max_y
-            } else {
-                center.1
-            },
-        )
-    }
-
     #[wasm_bindgen]
     pub struct WasmAuthoringStore {
         semantics: SharedSemanticStore,
@@ -219,12 +167,6 @@ mod wasm {
     pub struct WasmAuthoringFamilyMemberHandle {
         semantics: SharedSemanticStore,
         id: SemanticNodeId,
-    }
-
-    impl WasmAuthoringFamilyMemberHandle {
-        pub(crate) fn authoring_identity(&self) -> AuthoringSemanticIdentity {
-            AuthoringSemanticIdentity::from_shared_store(&self.semantics, self.id)
-        }
     }
 
     #[wasm_bindgen]
@@ -392,15 +334,6 @@ mod wasm {
         pub fn semantic_generation(&self) -> u32 {
             self.id.generation()
         }
-
-        #[wasm_bindgen(js_name = bindRetainedNativeText)]
-        pub fn bind_retained_native_text(
-            &self,
-            text: &mut WasmRetainedNativeTextAuthoringHandle,
-        ) -> Result<(), JsValue> {
-            let identity = self.authoring_identity();
-            text.bind_family_identity(&identity).map_err(js_error)
-        }
     }
 
     #[wasm_bindgen]
@@ -465,18 +398,6 @@ mod wasm {
             let id = self.mobject_member_id(member)?;
             self.plan
                 .accept_member_bounds(id, member.handle.layout_bounds().map_err(js_error)?)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = includeRetainedNativeText)]
-        pub fn include_retained_native_text(
-            &mut self,
-            member: &WasmAuthoringFamilyMemberHandle,
-            text: &WasmRetainedNativeTextAuthoringHandle,
-        ) -> Result<(), JsValue> {
-            let id = retained_native_member_id(&self.semantics, member, text, "family arrange")?;
-            self.plan
-                .accept_member_bounds(id, Some(text.family_layout_bounds()))
                 .map_err(js_error)
         }
 
@@ -616,16 +537,6 @@ mod wasm {
             self.include_leaf_bounds(id, member.handle.layout_bounds().map_err(js_error)?)
         }
 
-        #[wasm_bindgen(js_name = includeRetainedNativeText)]
-        pub fn include_retained_native_text(
-            &mut self,
-            member: &WasmAuthoringFamilyMemberHandle,
-            text: &WasmRetainedNativeTextAuthoringHandle,
-        ) -> Result<(), JsValue> {
-            let id = retained_native_member_id(&self.semantics, member, text, "family layout")?;
-            self.include_leaf_bounds(id, Some(text.family_layout_bounds()))
-        }
-
         #[wasm_bindgen(getter, js_name = centerX)]
         pub fn center_x(&self) -> Result<f64, JsValue> {
             self.center().map(|center| center.0)
@@ -700,34 +611,6 @@ mod wasm {
                 .handle
                 .critical_point(edge.x, edge.y)
                 .map_err(js_error)?;
-            self.translation(
-                (target_point.0 - source_x) * mask.x,
-                (target_point.1 - source_y) * mask.y,
-            )
-        }
-
-        #[wasm_bindgen(js_name = moveToRetainedNativeText)]
-        pub fn move_to_retained_native_text(
-            &self,
-            target_member: &WasmAuthoringFamilyMemberHandle,
-            target: &WasmRetainedNativeTextAuthoringHandle,
-            aligned_edge_x: f64,
-            aligned_edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            retained_native_member_id(
-                &self.semantics,
-                target_member,
-                target,
-                "family placement target",
-            )?;
-            let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y).map_err(js_error)?;
-            let mask = semantic_xy_f64(mask_x, mask_y).map_err(js_error)?;
-            let source_x = self.critical_x(edge.x, edge.y)?;
-            let source_y = self.critical_y(edge.x, edge.y)?;
-            let target_point = retained_native_critical_point(target, (edge.x, edge.y));
             self.translation(
                 (target_point.0 - source_x) * mask.x,
                 (target_point.1 - source_y) * mask.y,
@@ -830,48 +713,6 @@ mod wasm {
             self.translation(delta.0, delta.1)
         }
 
-        #[wasm_bindgen(js_name = nextToRetainedNativeText)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn next_to_retained_native_text(
-            &self,
-            target_member: &WasmAuthoringFamilyMemberHandle,
-            target: &WasmRetainedNativeTextAuthoringHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            aligned_edge_x: f64,
-            aligned_edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            retained_native_member_id(
-                &self.semantics,
-                target_member,
-                target,
-                "family placement target",
-            )?;
-            let direction = semantic_xy_f64(direction_x, direction_y).map_err(js_error)?;
-            let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y).map_err(js_error)?;
-            let source = (
-                self.critical_x(edge.x - direction.x, edge.y - direction.y)?,
-                self.critical_y(edge.x - direction.x, edge.y - direction.y)?,
-            );
-            let target_point = retained_native_critical_point(
-                target,
-                (edge.x + direction.x, edge.y + direction.y),
-            );
-            let delta = manim_family_next_to_delta(
-                source,
-                target_point,
-                (direction.x, direction.y),
-                buff,
-                (mask_x, mask_y),
-            )
-            .map_err(js_error)?;
-            self.translation(delta.0, delta.1)
-        }
-
         #[wasm_bindgen(js_name = nextToFamily)]
         #[allow(clippy::too_many_arguments)]
         pub fn next_to_family(
@@ -950,32 +791,6 @@ mod wasm {
                 .handle
                 .critical_point(axis.x, axis.y)
                 .map_err(js_error)?;
-            let delta = manim_family_align_to_delta(source, target_point, (axis.x, axis.y))
-                .map_err(js_error)?;
-            self.translation(delta.0, delta.1)
-        }
-
-        #[wasm_bindgen(js_name = alignToRetainedNativeText)]
-        pub fn align_to_retained_native_text(
-            &self,
-            target_member: &WasmAuthoringFamilyMemberHandle,
-            target: &WasmRetainedNativeTextAuthoringHandle,
-            axis_x: f64,
-            axis_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            retained_native_member_id(
-                &self.semantics,
-                target_member,
-                target,
-                "family placement target",
-            )?;
-            let axis = semantic_xy_f64(axis_x, axis_y).map_err(js_error)?;
-            let source = (
-                self.critical_x(axis.x, axis.y)?,
-                self.critical_y(axis.x, axis.y)?,
-            );
-            let target_point = retained_native_critical_point(target, (axis.x, axis.y));
             let delta = manim_family_align_to_delta(source, target_point, (axis.x, axis.y))
                 .map_err(js_error)?;
             self.translation(delta.0, delta.1)
@@ -1210,19 +1025,6 @@ mod wasm {
             let id = member.id_in_store(&self.semantics, "family translation")?;
             self.translation
                 .apply(id, &mut member.handle)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = applyRetainedNativeText)]
-        pub fn apply_retained_native_text(
-            &mut self,
-            member: &WasmAuthoringFamilyMemberHandle,
-            text: &mut WasmRetainedNativeTextAuthoringHandle,
-        ) -> Result<(), JsValue> {
-            let id =
-                retained_native_member_id(&self.semantics, member, text, "family translation")?;
-            self.translation
-                .apply_with(id, |delta| text.apply_family_translation(delta.0, delta.1))
                 .map_err(js_error)
         }
 
