@@ -130,6 +130,11 @@ pub(crate) enum SemanticCompositionRequest {
         reverse_member_order: bool,
         options: AnimationOptions,
     },
+    FamilyTextWrite {
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    },
     Rotate {
         target: SemanticNodeId,
         angle: f64,
@@ -1938,6 +1943,103 @@ impl ExecutionSession {
                     *target,
                     *reverse_member_order,
                     *options,
+                ))
+            }
+            SemanticCompositionRequest::FamilyTextWrite {
+                target,
+                reverse_member_order,
+                options,
+            } => {
+                let introducer = options.introducer.unwrap_or(!reverse_member_order);
+                let remover = options.remover.unwrap_or(*reverse_member_order);
+                let leaves = self.require_family_fade_target(
+                    store,
+                    root,
+                    *target,
+                    if introducer {
+                        SemanticFadeDirection::In
+                    } else {
+                        SemanticFadeDirection::Out
+                    },
+                )?;
+                let mut prepared = Vec::with_capacity(leaves.len());
+                let mut total_member_count = 0_u32;
+                for (leaf_index, leaf) in leaves.into_iter().enumerate() {
+                    let state = store.semantic_object_state_checked(leaf).map_err(|_| {
+                        ExecutionSessionAnimationError::InvalidComposition(
+                            "family TextWrite supports only plain Text leaves".into(),
+                        )
+                    })?;
+                    let noon_core::SemanticObjectContent::Text(handle) = state.content else {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "family TextWrite supports only plain Text leaves".into(),
+                        ));
+                    };
+                    let resource = store.text_resources().get(handle).ok_or_else(|| {
+                        ExecutionSessionAnimationError::InvalidComposition(
+                            "family TextWrite lost a Text resource".into(),
+                        )
+                    })?;
+                    if resource.kind != noon_core::TextSourceKind::Plain {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "family TextWrite supports only plain Text leaves".into(),
+                        ));
+                    }
+                    let member_count = noon_core::plain_text_animation_members(resource)
+                        .map_err(|error| {
+                            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                        })?
+                        .len();
+                    let member_count = u32::try_from(member_count).map_err(|_| {
+                        ExecutionSessionAnimationError::InvalidComposition(
+                            "family TextWrite glyph count exceeds u32".into(),
+                        )
+                    })?;
+                    total_member_count =
+                        total_member_count
+                            .checked_add(member_count)
+                            .ok_or_else(|| {
+                                ExecutionSessionAnimationError::InvalidComposition(
+                                    "family TextWrite glyph count exceeds u32".into(),
+                                )
+                            })?;
+                    prepared.push((leaf, leaf_index));
+                }
+                if total_member_count == 0 {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "family TextWrite requires at least one visible glyph".into(),
+                    ));
+                }
+                if introducer {
+                    if !admitted.insert(*target) {
+                        return Err(ExecutionSessionAnimationError::CreateTarget {
+                            target: *target,
+                            error: ExecutionSessionCreateError::DuplicateTarget,
+                        });
+                    }
+                    declaration.add_member(root, *target);
+                }
+                if remover {
+                    removals.push((root, *target));
+                }
+                let children = prepared
+                    .into_iter()
+                    .map(|(leaf, leaf_index)| {
+                        declaration.create_family_text_write_member_animation(
+                            leaf,
+                            *reverse_member_order,
+                            noon_core::SemanticTextWriteFamilyMember {
+                                family: *target,
+                                leaf_index,
+                            },
+                            *options,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                Ok(declaration.create_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    children,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
                 ))
             }
             SemanticCompositionRequest::Rotate {

@@ -243,7 +243,7 @@ impl ExecutionSession {
                     &entry.completion,
                     SemanticAnimationCompletion::Fade {
                         direction: SemanticFadeDirection::Out
-                    }
+                    } | SemanticAnimationCompletion::RevealLifecycle { remove: true }
                 ) && has_ancestor_in(store, entry.semantic_object, &family_removals);
             if matches!(
                 &entry.completion,

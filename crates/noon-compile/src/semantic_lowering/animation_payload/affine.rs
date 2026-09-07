@@ -716,10 +716,12 @@ fn validate_leaf_matches_declaration(
         SemanticAnimationIntent::TextWrite {
             target,
             reverse_member_order,
+            family_member,
         } if *target == leaf.target
             && leaf.payload
                 == SemanticScheduledAnimationPayload::TextWrite {
                     reverse_member_order: *reverse_member_order,
+                    family_member: *family_member,
                 } =>
         {
             Ok(())

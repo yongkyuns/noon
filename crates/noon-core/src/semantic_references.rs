@@ -346,12 +346,21 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             | SemanticAnimationIntent::Indicate { target, .. }
             | SemanticAnimationIntent::DrawBorderThenFill { target, .. }
             | SemanticAnimationIntent::SubsetDisplayMember { target, .. }
-            | SemanticAnimationIntent::TextWrite { target, .. }
             | SemanticAnimationIntent::Fade { target, .. }
             | SemanticAnimationIntent::AffineLifecycle { target, .. }
             | SemanticAnimationIntent::Create { target }
             | SemanticAnimationIntent::Add { target } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
+            }
+            SemanticAnimationIntent::TextWrite {
+                target,
+                family_member,
+                ..
+            } => {
+                references.push((*target, SemanticReferenceKind::AnimationTarget));
+                if let Some(member) = family_member {
+                    references.push((member.family, SemanticReferenceKind::AnimationTarget));
+                }
             }
             SemanticAnimationIntent::SetScalar { signal, .. } => {
                 references.push((*signal, SemanticReferenceKind::AnimationTarget));

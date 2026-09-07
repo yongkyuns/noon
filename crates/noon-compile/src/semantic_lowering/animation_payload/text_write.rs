@@ -36,6 +36,7 @@ pub enum TextWriteLoweringError {
     InvalidPlan(RetainedFamilyAnimationMemberPlanError),
     InvalidSpec(noon_core::FamilyAnimationError),
     InvalidTimeMap(noon_core::CompositionTimeMapError),
+    InvalidFamilyMember(noon_core::SemanticTextWriteFamilyMember),
     ConflictingObjectDrivers {
         target: ObjectId,
         first: SemanticTransactionNodeRef,
@@ -55,6 +56,11 @@ fn plan(
     store: &SemanticStore,
     semantic_target: SemanticNodeId,
     target: ObjectId,
+    family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+    family_spans: &std::collections::HashMap<
+        noon_core::SemanticTextWriteFamilyMember,
+        (SemanticNodeId, u32, u32),
+    >,
     spec: FamilyAnimationSpec,
     time_map: noon_core::CompositionTimeMap,
 ) -> Result<CompiledFamilyAnimation, TextWriteLoweringError> {
@@ -69,8 +75,27 @@ fn plan(
     let members =
         RetainedAnimationMembers::resolve(&ObjectContentRef::Text(handle), store.text_resources())
             .map_err(TextWriteLoweringError::InvalidMembers)?;
-    let plan = RetainedFamilyAnimationPlan::single_leaf(semantic_target, target, members)
-        .map_err(TextWriteLoweringError::InvalidPlan)?;
+    let (first_member, total_member_count) = match family_member {
+        Some(member) => {
+            let (leaf, first, total) = family_spans
+                .get(&member)
+                .copied()
+                .ok_or(TextWriteLoweringError::InvalidFamilyMember(member))?;
+            if leaf != semantic_target {
+                return Err(TextWriteLoweringError::InvalidFamilyMember(member));
+            }
+            (first, total)
+        }
+        None => (0, members.member_count()),
+    };
+    let plan = RetainedFamilyAnimationPlan::single_leaf_span(
+        semantic_target,
+        target,
+        members,
+        first_member,
+        total_member_count,
+    )
+    .map_err(TextWriteLoweringError::InvalidPlan)?;
     spec.validate()
         .map_err(TextWriteLoweringError::InvalidSpec)?;
     Ok(CompiledFamilyAnimation {
@@ -81,10 +106,75 @@ fn plan(
     })
 }
 
+fn resolve_family_spans(
+    store: &SemanticStore,
+    members: impl Iterator<Item = noon_core::SemanticTextWriteFamilyMember>,
+) -> Result<
+    std::collections::HashMap<noon_core::SemanticTextWriteFamilyMember, (SemanticNodeId, u32, u32)>,
+    TextWriteLoweringError,
+> {
+    let families = members
+        .map(|member| member.family)
+        .collect::<std::collections::HashSet<_>>();
+    let mut spans = std::collections::HashMap::new();
+    for family in families {
+        let leaves = store
+            .ordered_leaf_nodes(family)
+            .map_err(|_| TextWriteLoweringError::MissingSemanticTarget(family.into()))?;
+        let mut counts = Vec::with_capacity(leaves.len());
+        let mut total = 0_u32;
+        for leaf in &leaves {
+            let state = store
+                .semantic_object_state_checked(*leaf)
+                .map_err(|_| TextWriteLoweringError::MissingSemanticTarget((*leaf).into()))?;
+            let noon_core::SemanticObjectContent::Text(handle) = state.content else {
+                return Err(TextWriteLoweringError::MissingSemanticTarget(
+                    (*leaf).into(),
+                ));
+            };
+            let count = RetainedAnimationMembers::resolve(
+                &ObjectContentRef::Text(handle),
+                store.text_resources(),
+            )
+            .map_err(TextWriteLoweringError::InvalidMembers)?
+            .member_count();
+            counts.push((total, count));
+            total = total
+                .checked_add(count)
+                .ok_or(TextWriteLoweringError::InvalidFamilyMember(
+                    noon_core::SemanticTextWriteFamilyMember {
+                        family,
+                        leaf_index: counts.len() - 1,
+                    },
+                ))?;
+        }
+        for (leaf_index, (first, _)) in counts.into_iter().enumerate() {
+            spans.insert(
+                noon_core::SemanticTextWriteFamilyMember { family, leaf_index },
+                (leaves[leaf_index], first, total),
+            );
+        }
+    }
+    Ok(spans)
+}
+
 pub fn lower_semantic_text_write_animations(
     store: &SemanticStore,
     schedule: &SemanticAnimationScheduleProjection,
 ) -> Result<Vec<CompiledFamilyAnimation>, TextWriteLoweringError> {
+    let family_spans = resolve_family_spans(
+        store,
+        schedule
+            .leaves()
+            .iter()
+            .filter_map(|leaf| match leaf.payload {
+                SemanticScheduledAnimationPayload::TextWrite {
+                    family_member: Some(member),
+                    ..
+                } => Some(member),
+                _ => None,
+            }),
+    )?;
     let drivers = schedule
         .leaves()
         .iter()
@@ -109,6 +199,7 @@ pub fn lower_semantic_text_write_animations(
         .filter_map(|leaf| {
             let SemanticScheduledAnimationPayload::TextWrite {
                 reverse_member_order,
+                family_member,
             } = leaf.payload
             else {
                 return None;
@@ -129,6 +220,8 @@ pub fn lower_semantic_text_write_animations(
                         store,
                         leaf.target,
                         leaf.execution_object_id,
+                        family_member,
+                        &family_spans,
                         spec,
                         leaf.time_map.clone(),
                     )
@@ -142,6 +235,19 @@ pub fn lower_prepared_text_write_animations(
     store: &SemanticStore,
     schedule: &PreparedSemanticAnimationScheduleProjection,
 ) -> Result<Vec<CompiledFamilyAnimation>, TextWriteLoweringError> {
+    let family_spans = resolve_family_spans(
+        store,
+        schedule
+            .leaves()
+            .iter()
+            .filter_map(|leaf| match leaf.payload {
+                PreparedSemanticScheduledAnimationPayload::TextWrite {
+                    family_member: Some(member),
+                    ..
+                } => Some(member),
+                _ => None,
+            }),
+    )?;
     let drivers = schedule
         .leaves()
         .iter()
@@ -166,6 +272,7 @@ pub fn lower_prepared_text_write_animations(
         .filter_map(|leaf| {
             let PreparedSemanticScheduledAnimationPayload::TextWrite {
                 reverse_member_order,
+                family_member,
             } = leaf.payload
             else {
                 return None;
@@ -191,6 +298,8 @@ pub fn lower_prepared_text_write_animations(
                         store,
                         target,
                         leaf.execution_object_id,
+                        family_member,
+                        &family_spans,
                         spec,
                         leaf.time_map.clone(),
                     )
@@ -256,8 +365,7 @@ mod tests {
         SemanticExecutionIndex,
     };
 
-    fn plain_text(store: &mut SemanticStore) -> SemanticNodeId {
-        let source = "ABCDEFGHIJKLMN ";
+    fn plain_text_source(store: &mut SemanticStore, source: &str, attach: bool) -> SemanticNodeId {
         let face = FontFaceIdentity {
             family: Arc::from("Test"),
             face_key: Arc::from("test-face"),
@@ -314,8 +422,14 @@ mod tests {
             )
             .unwrap();
         let target = store.insert_semantic_object(SemanticObjectState::new(handle));
-        store.attach_to_scene(target).unwrap();
+        if attach {
+            store.attach_to_scene(target).unwrap();
+        }
         target
+    }
+
+    fn plain_text(store: &mut SemanticStore) -> SemanticNodeId {
+        plain_text_source(store, "ABCDEFGHIJKLMN ", true)
     }
 
     fn index(store: &SemanticStore) -> SemanticExecutionIndex {
@@ -432,5 +546,105 @@ mod tests {
         )
         .unwrap();
         assert_eq!(lowered.family_animations().len(), 2);
+    }
+
+    #[test]
+    fn family_text_write_projects_unequal_leaves_into_one_global_glyph_order() {
+        let mut store = SemanticStore::new();
+        let first = plain_text_source(&mut store, "A", false);
+        let second = plain_text_source(&mut store, "BCDE", false);
+        let family = store.insert_family();
+        store.add_semantic_family_member(family, first).unwrap();
+        store.add_semantic_family_member(family, second).unwrap();
+        store.attach_to_scene(family).unwrap();
+        let index = index(&store);
+
+        let mut transaction = SemanticMutationTransaction::new();
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(noon_core::RateFunction::Linear)
+            .lag_ratio(0.25)
+            .introducer(true);
+        let children = [first, second]
+            .into_iter()
+            .enumerate()
+            .map(|(leaf_index, target)| {
+                transaction.create_family_text_write_member_animation(
+                    target,
+                    false,
+                    noon_core::SemanticTextWriteFamilyMember { family, leaf_index },
+                    options,
+                )
+            })
+            .collect::<Vec<_>>();
+        let root = transaction.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            children,
+            AnimationOptions::new().rate_func(noon_core::RateFunction::Linear),
+        );
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let lowered = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            root,
+            0.0,
+            AnimationOptions::new(),
+            |_| Option::<EffectiveAnimationProperties>::None,
+        )
+        .unwrap();
+        assert_eq!(lowered.family_animations().len(), 2);
+        let spans = lowered
+            .family_animations()
+            .iter()
+            .map(|animation| animation.plan.member_plan().leaves()[0])
+            .collect::<Vec<_>>();
+        assert_eq!(spans[0].first_member, 0);
+        assert_eq!(spans[0].member_count, 1);
+        assert_eq!(spans[1].first_member, 1);
+        assert_eq!(spans[1].member_count, 4);
+        assert!(lowered
+            .family_animations()
+            .iter()
+            .all(|animation| { animation.plan.member_plan().total_member_count() == 5 }));
+
+        let state = noon_core::FamilyAnimationState {
+            mode: FamilyAnimationMode::DrawBorderThenFill,
+            overall_progress: 0.5,
+            lag_ratio: 0.25,
+            rate_function: noon_core::RateFunction::Linear,
+            reverse_rate_function: false,
+            reverse_member_order: false,
+        };
+        let first_progress = lowered.family_animations()[0]
+            .plan
+            .member_plan()
+            .leaf_progress(state, first)
+            .unwrap();
+        let second_progress = lowered.family_animations()[1]
+            .plan
+            .member_plan()
+            .leaf_progress(state, second)
+            .unwrap();
+        assert_eq!(first_progress.member_progress(0).unwrap(), 1.0);
+        assert_eq!(second_progress.member_progress(0).unwrap(), 0.75);
+        assert_eq!(second_progress.member_progress(3).unwrap(), 0.0);
+
+        let reversed = noon_core::FamilyAnimationState {
+            reverse_member_order: true,
+            ..state
+        };
+        let first_reversed = lowered.family_animations()[0]
+            .plan
+            .member_plan()
+            .leaf_progress(reversed, first)
+            .unwrap();
+        let second_reversed = lowered.family_animations()[1]
+            .plan
+            .member_plan()
+            .leaf_progress(reversed, second)
+            .unwrap();
+        assert_eq!(first_reversed.member_progress(0).unwrap(), 0.0);
+        assert_eq!(second_reversed.member_progress(0).unwrap(), 0.25);
+        assert_eq!(second_reversed.member_progress(3).unwrap(), 1.0);
     }
 }

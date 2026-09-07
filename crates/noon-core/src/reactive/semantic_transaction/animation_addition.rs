@@ -46,6 +46,7 @@ pub enum SemanticTransactionAnimationIntent {
     TextWrite {
         target: SemanticTransactionNodeRef,
         reverse_member_order: bool,
+        family_member: Option<crate::SemanticTextWriteFamilyMember>,
     },
     Rotate {
         target: SemanticTransactionNodeRef,
@@ -90,11 +91,18 @@ impl SemanticTransactionAnimationIntent {
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::SubsetDisplayMember { target, .. }
-            | Self::TextWrite { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
             | Self::Add { target } => Some([Some(*target), None]),
+            Self::TextWrite {
+                target,
+                family_member,
+                ..
+            } => Some([
+                Some(*target),
+                family_member.map(|member| member.family.into()),
+            ]),
             Self::SetScalar { signal, .. } => Some([Some((*signal).into()), None]),
             Self::Wait | Self::Composition { .. } => None,
         };
@@ -197,9 +205,11 @@ impl SemanticTransactionAnimation {
             SemanticAnimationIntent::TextWrite {
                 target,
                 reverse_member_order,
+                family_member,
             } => SemanticTransactionAnimationIntent::TextWrite {
                 target: (*target).into(),
                 reverse_member_order: *reverse_member_order,
+                family_member: *family_member,
             },
             SemanticAnimationIntent::Fade {
                 target,
@@ -300,9 +310,11 @@ impl SemanticTransactionAnimation {
             SemanticTransactionAnimationIntent::TextWrite {
                 target,
                 reverse_member_order,
+                family_member,
             } => SemanticAnimationIntent::TextWrite {
                 target: resolve_node_ref(*target, committed),
                 reverse_member_order: *reverse_member_order,
+                family_member: *family_member,
             },
             SemanticTransactionAnimationIntent::Fade {
                 target,
@@ -475,11 +487,15 @@ pub(super) fn preflight_transaction_animation(
                 return Err(SemanticMutationTransactionError::InvalidSubsetDisplayMember { index });
             }
         }
-        SemanticTransactionAnimationIntent::TextWrite { target, .. } => {
+        SemanticTransactionAnimationIntent::TextWrite {
+            target,
+            family_member,
+            ..
+        } => {
             catalog.ensure_animation_target(*target, index)?;
             let state =
                 catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
-            catalog.ensure_plain_text_write_target(state, index)?;
+            catalog.ensure_plain_text_write_target(state, *family_member, *target, index)?;
         }
         SemanticTransactionAnimationIntent::Fade {
             target, endpoint, ..
@@ -641,8 +657,14 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::TextWrite {
             target,
             reverse_member_order,
+            family_member,
         } => store
-            .insert_semantic_text_write_animation(*target, *reverse_member_order, options)
+            .insert_semantic_text_write_animation_with_family_member(
+                *target,
+                *reverse_member_order,
+                *family_member,
+                options,
+            )
             .expect("preflighted TextWrite insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Fade {
             target,

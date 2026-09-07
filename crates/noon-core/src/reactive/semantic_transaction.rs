@@ -800,6 +800,30 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::TextWrite {
                     target: target.into(),
                     reverse_member_order,
+                    family_member: None,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage one plain-Text leaf in a globally indexed family Write plan.
+    pub fn create_family_text_write_member_animation(
+        &mut self,
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+        family_member: crate::SemanticTextWriteFamilyMember,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::TextWrite {
+                    target: target.into(),
+                    reverse_member_order,
+                    family_member: Some(family_member),
                 },
                 options,
             ),

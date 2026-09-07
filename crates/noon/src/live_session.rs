@@ -253,6 +253,12 @@ pub enum AnimationCompositionRequest<'a> {
         reverse_member_order: bool,
         options: AnimationOptions,
     },
+    /// Write or unwrite every ordered plain Text leaf as one global glyph sequence.
+    FamilyTextWrite {
+        target: &'a MobjectFamily,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    },
     Rotate {
         target: &'a Mobject,
         angle: f64,
@@ -901,6 +907,21 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
+    /// Write or unwrite an ordered plain-Text family through one global glyph plan.
+    pub fn declare_and_activate_family_text_write(
+        &mut self,
+        target: &MobjectFamily,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::FamilyTextWrite {
+            target,
+            reverse_member_order,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
     /// Atomically hide every direct member before activating a subset display.
     pub fn prepare_family_subset_display(
         &mut self,
@@ -1267,6 +1288,18 @@ impl<'a> LiveSession<'a> {
             } => {
                 self.require_mobject(target)?;
                 Request::TextWrite {
+                    target: target.node_id(),
+                    reverse_member_order: *reverse_member_order,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilyTextWrite {
+                target,
+                reverse_member_order,
+                options,
+            } => {
+                self.require_family(target)?;
+                Request::FamilyTextWrite {
                     target: target.node_id(),
                     reverse_member_order: *reverse_member_order,
                     options: *options,
@@ -4692,5 +4725,74 @@ mod recursive_composition_tests {
             .semantic_family_members_checked(scene.root())
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn family_text_write_admits_and_unwrite_removes_one_family_root_atomically() {
+        let scene = Scene::new();
+        let left = scene.text(crate::Text::new("A")).unwrap();
+        let right = scene.text(crate::Text::new("BCDE")).unwrap();
+        let family = scene.family(&[&left, &right]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+
+        let conflicting = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+            children: vec![
+                AnimationCompositionRequest::FamilyTextWrite {
+                    target: &family,
+                    reverse_member_order: false,
+                    options: linear(1.0),
+                },
+                AnimationCompositionRequest::TextWrite {
+                    target: &left,
+                    reverse_member_order: false,
+                    options: linear(1.0),
+                },
+            ],
+        };
+        let before = session.publication_context();
+        assert!(scene
+            .live(&mut session)
+            .declare_and_activate_composition(&conflicting, AnimationOptions::new())
+            .is_err());
+        assert_eq!(session.publication_context(), before);
+        assert!(scene
+            .store()
+            .borrow()
+            .node(family.node_id())
+            .unwrap()
+            .parents()
+            .is_empty());
+
+        let mut live = scene.live(&mut session);
+        let write = live
+            .declare_and_activate_family_text_write(&family, false, linear(1.0).introducer(true))
+            .unwrap();
+        live.advance_segment_to(write, write.end_time()).unwrap();
+        live.complete_segment(write).unwrap();
+        assert!(live.contains(&left).unwrap());
+        assert!(live.contains(&right).unwrap());
+
+        let unwrite = live
+            .declare_and_activate_family_text_write(
+                &family,
+                true,
+                linear(1.0).introducer(false).remover(true),
+            )
+            .unwrap();
+        live.advance_segment_to(unwrite, unwrite.end_time())
+            .unwrap();
+        live.complete_segment(unwrite).unwrap();
+        assert!(!live.contains(&left).unwrap());
+        assert!(!live.contains(&right).unwrap());
+        let store = family.store().borrow();
+        assert!(store.node(family.node_id()).is_some());
+        assert_eq!(
+            store
+                .semantic_family_members_checked(family.node_id())
+                .unwrap(),
+            [left.node_id(), right.node_id()]
+        );
     }
 }
