@@ -305,30 +305,30 @@ fi
 # #959 namespace relocation is explicit and symbol-preserving, including grouped
 # imports. It grants no new file, alias, glob, or non-import namespace access.
 reset_to_base
-mkdir -p crates/noon-web/src crates/noon/src/legacy
-cat > crates/noon-web/src/reactive_authoring_facade.rs <<'EOF'
-use noon::{Circle, Mobject, ReactiveTimelineScene};
+mkdir -p crates/noon-web/src crates/noon-web/examples crates/noon/src/legacy
+cat > crates/noon-web/examples/manim_elbow_oracle.rs <<'EOF'
+use noon::{Elbow, IntoSnapshot, ReactiveTimelineScene};
 EOF
-git add crates/noon-web/src/reactive_authoring_facade.rs
+git add crates/noon-web/examples/manim_elbow_oracle.rs
 git commit -qm "existing unqualified import consumer"
 IMPORT_BASE="$(git rev-parse HEAD)"
-cat > crates/noon-web/src/reactive_authoring_facade.rs <<'EOF'
+cat > crates/noon-web/examples/manim_elbow_oracle.rs <<'EOF'
 use noon::legacy::{
-    Circle,
-    Mobject,
+    Elbow,
+    IntoSnapshot,
 };
 use noon::ReactiveTimelineScene;
 EOF
 bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null
-for import in 'use noon::legacy::{Circle as Hidden, Mobject};' 'use noon::legacy::*;' 'use noon::legacy::{Circle, Unknown};' 'use noon::{legacy::{Circle as Hidden, Mobject}};' 'use noon::legacy;' 'use noon::{legacy};' 'use noon::legacy as old;' 'use noon::r#legacy::Circle;' 'use noon::legacy::Circle @ unsupported;'; do
-  printf '%s\n' "$import" > crates/noon-web/src/reactive_authoring_facade.rs
+for import in 'use noon::legacy::{Elbow as Hidden, IntoSnapshot};' 'use noon::legacy::*;' 'use noon::legacy::{Elbow, Unknown};' 'use noon::{legacy::{Elbow as Hidden, IntoSnapshot}};' 'use noon::legacy;' 'use noon::{legacy};' 'use noon::legacy as old;' 'use noon::r#legacy::Elbow;' 'use noon::legacy::Elbow @ unsupported;'; do
+  printf '%s\n' "$import" > crates/noon-web/examples/manim_elbow_oracle.rs
   if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
     echo "architecture ratchet test failed: accepted unreviewed import $import" >&2
     exit 1
   fi
 done
 git reset -q --hard "$IMPORT_BASE"
-printf 'use noon::legacy::Circle;\n' > crates/noon-web/src/new_legacy_consumer.rs
+printf 'use noon::legacy::Elbow;\n' > crates/noon-web/src/new_legacy_consumer.rs
 if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
   echo "architecture ratchet test failed: accepted an untracked new legacy consumer" >&2
   exit 1

@@ -824,6 +824,44 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_line_endpoints(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<noon::ManimLineEndpoints, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .effective_line_endpoints(mobject)
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_manim_color(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<noon_core::Color, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .effective_manim_color(mobject)
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_add(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
         let semantics = self
             .semantics

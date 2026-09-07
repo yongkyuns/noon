@@ -2,6 +2,27 @@
 use super::*;
 use noon_core::Style;
 
+pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, String> {
+    let selected = style.stroke.as_ref().or(style.fill.as_ref());
+    let opacity = if style.stroke.is_some() {
+        style.stroke_opacity
+    } else {
+        style.fill_opacity
+    };
+    match selected {
+        Some(SemanticPaint::Solid(_)) => Ok(solid_color_with_opacity(selected, opacity)
+            .expect("selected solid paint produces one color")),
+        Some(SemanticPaint::Resource(_)) => {
+            Err("Manim color queries do not support resource paints".into())
+        }
+        None => Ok(Color::WHITE),
+    }
+}
+
+pub(crate) fn manim_color_from_effective(style: &Style) -> Color {
+    style.stroke.or(style.fill).unwrap_or(Color::WHITE)
+}
+
 pub(crate) trait PaintStyleEdit {
     fn has_fill(&self) -> bool;
     fn has_stroke(&self) -> bool;

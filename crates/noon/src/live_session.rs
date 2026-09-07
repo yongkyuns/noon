@@ -16,8 +16,8 @@ use crate::{
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
-    FamilyArrangePlan, FamilyTranslation, ManimBecomeOptions, Mobject, MobjectFamily,
-    MobjectFamilyMember, SceneMembershipRequest, ValueTracker,
+    FamilyArrangePlan, FamilyTranslation, ManimBecomeOptions, ManimLineEndpoints, Mobject,
+    MobjectFamily, MobjectFamilyMember, SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -816,6 +816,40 @@ impl<'a> LiveSession<'a> {
         let publication = observed.publication;
         drop(store);
         self.layout_at_transform(mobject, transform, publication)
+    }
+
+    /// Read one analytic Line's world endpoints at the current publication.
+    pub fn effective_line_endpoints(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<ManimLineEndpoints, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let store = self.store.borrow();
+        let observed = self
+            .session
+            .effective_semantic_object(&store, mobject.node_id())?;
+        if !observed.authored_content_layout_applicable() {
+            return Err(LiveSessionError::Mobject(
+                "effective Line endpoint queries currently support affine and style drivers only"
+                    .into(),
+            ));
+        }
+        let transform = observed.object.transform;
+        drop(store);
+        mobject
+            .manim_line_endpoints_at(transform)
+            .map_err(LiveSessionError::Mobject)
+    }
+
+    /// Read Manim's stroke-first color at the current publication.
+    pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
+        // Resource paints do not have a scalar Manim color representation. Check
+        // the selected authored channel before observing its lowered runtime style.
+        mobject.manim_color().map_err(LiveSessionError::Mobject)?;
+        let effective = self.effective(mobject)?;
+        Ok(crate::semantic_mobject::manim_color_from_effective(
+            &effective.style,
+        ))
     }
 
     fn layout_at_transform(
@@ -2354,6 +2388,73 @@ mod tests {
             live.effective(&circle).unwrap().transform.translation.x,
             100.0
         );
+    }
+
+    #[test]
+    fn live_line_and_color_queries_observe_active_drivers_without_changing_authored_state() {
+        let mut scene = Scene::new();
+        let mut line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+        line.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
+        line.set_stroke_opacity(0.25).unwrap();
+        let mut target = line.target_editor().unwrap();
+        target.set_translation(0.0, 2.0).unwrap();
+        target.set_stroke_color(1.0, 0.0, 0.0, 1.0).unwrap();
+        target.set_stroke_opacity(0.75).unwrap();
+        scene.add(&line).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &line,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.0).unwrap();
+
+        assert_eq!(
+            line.manim_line_endpoints().unwrap(),
+            ManimLineEndpoints {
+                start: (-1.0, 0.0),
+                end: (1.0, 0.0),
+            }
+        );
+        assert_eq!(
+            live.effective_line_endpoints(&line).unwrap(),
+            ManimLineEndpoints {
+                start: (-1.0, 1.0),
+                end: (1.0, 1.0),
+            }
+        );
+        assert_eq!(
+            line.manim_color().unwrap(),
+            Color::rgba(0.0, 0.0, 1.0, 0.25)
+        );
+        assert_eq!(
+            live.effective_manim_color(&line).unwrap(),
+            Color::rgba(0.5, 0.0, 0.5, 0.5)
+        );
+    }
+
+    #[test]
+    fn live_line_endpoints_reject_active_content_overrides() {
+        let scene = Scene::new();
+        let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        live.declare_and_activate_create(
+            &line,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+
+        assert!(live.effective_line_endpoints(&line).is_err());
+        assert_eq!(live.effective_manim_color(&line).unwrap(), Color::WHITE);
     }
 
     #[test]

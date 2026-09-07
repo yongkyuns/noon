@@ -16,11 +16,11 @@ mod bounds;
 mod layout;
 mod manim_geometry;
 mod style;
-use bounds::layout_for_content;
+use bounds::{layout_for_content, transform_layout_xy};
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-    edit_stroke_opacity,
+    edit_stroke_opacity, manim_color_from_effective,
 };
 use style::{edit_stroke_width, parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
 
@@ -40,6 +40,13 @@ pub struct ManimBecomeOptions {
     pub match_width: bool,
     pub match_center: bool,
     pub stretch: bool,
+}
+
+/// World-space endpoints of one analytic Manim Line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ManimLineEndpoints {
+    pub start: (f64, f64),
+    pub end: (f64, f64),
 }
 
 /// Inert, fully typed input for one ordinary Manim geometry object.
@@ -489,11 +496,11 @@ impl Mobject {
     }
     pub fn wire_fill(&self) -> Result<Option<(f64, f64, f64, f64)>, String> {
         let s = self.state()?.style;
-        Ok(legacy_solid_color(s.fill.as_ref(), s.fill_opacity).map(color_tuple))
+        Ok(solid_color_with_opacity(s.fill.as_ref(), s.fill_opacity).map(color_tuple))
     }
     pub fn wire_stroke(&self) -> Result<Option<(f64, f64, f64, f64)>, String> {
         let s = self.state()?.style;
-        Ok(legacy_solid_color(s.stroke.as_ref(), s.stroke_opacity).map(color_tuple))
+        Ok(solid_color_with_opacity(s.stroke.as_ref(), s.stroke_opacity).map(color_tuple))
     }
     pub fn wire_stroke_width(&self) -> Result<f64, String> {
         Ok(finite_f32("stroke width", self.state()?.style.stroke_width)? as f64)
@@ -501,6 +508,29 @@ impl Mobject {
     pub fn wire_object_opacity(&self) -> Result<f64, String> {
         Ok(self.state()?.style.object_opacity as f32 as f64)
     }
+
+    /// Return this analytic Line's authored endpoints in world space.
+    pub fn manim_line_endpoints(&self) -> Result<ManimLineEndpoints, String> {
+        let state = self.state()?;
+        line_endpoints_for_state(&state, state.transform)
+    }
+
+    /// Return Manim's stroke-first color without applying object opacity.
+    pub fn manim_color(&self) -> Result<Color, String> {
+        style::manim_color_from_semantic(&self.state()?.style)
+    }
+
+    pub(crate) fn manim_line_endpoints_at(
+        &self,
+        transform: Transform2D,
+    ) -> Result<ManimLineEndpoints, String> {
+        let state = self.state()?;
+        line_endpoints_for_state(
+            &state,
+            semantic_transform_with_effective_affine(state.transform, transform),
+        )
+    }
+
     pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, String> {
         let store = self.store.borrow();
         let state = store
@@ -520,12 +550,8 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(|error| error.to_string())?;
-        let mut semantic_transform = state.transform;
-        semantic_transform.translation.x = f64::from(transform.translation.x);
-        semantic_transform.translation.y = f64::from(transform.translation.y);
-        semantic_transform.scale.x = f64::from(transform.scale.x);
-        semantic_transform.scale.y = f64::from(transform.scale.y);
-        semantic_transform.rotation_z = f64::from(transform.rotation);
+        let semantic_transform =
+            semantic_transform_with_effective_affine(state.transform, transform);
         layout_for_content(&store, state.content, semantic_transform)
     }
 
@@ -754,6 +780,35 @@ impl Mobject {
         state.transform.rotation_z = rotation;
         self.commit_state(state)
     }
+}
+
+fn line_endpoints_for_state(
+    state: &SemanticObjectState,
+    transform: SemanticTransform2_5D,
+) -> Result<ManimLineEndpoints, String> {
+    let StoredGeometry::Line { start, end } = state
+        .content
+        .geometry()
+        .ok_or("Line endpoint queries require an analytic Line")?
+    else {
+        return Err("Line endpoint queries require an analytic Line".into());
+    };
+    Ok(ManimLineEndpoints {
+        start: transform_layout_xy(transform, f64::from(start.x), f64::from(start.y)),
+        end: transform_layout_xy(transform, f64::from(end.x), f64::from(end.y)),
+    })
+}
+
+fn semantic_transform_with_effective_affine(
+    mut authored: SemanticTransform2_5D,
+    effective: Transform2D,
+) -> SemanticTransform2_5D {
+    authored.translation.x = f64::from(effective.translation.x);
+    authored.translation.y = f64::from(effective.translation.y);
+    authored.scale.x = f64::from(effective.scale.x);
+    authored.scale.y = f64::from(effective.scale.y);
+    authored.rotation_z = f64::from(effective.rotation);
+    authored
 }
 
 pub(crate) fn stage_state_changes(
@@ -1023,7 +1078,10 @@ fn opaque_color(name: &str, red: f64, green: f64, blue: f64) -> Result<Color, St
     ))
 }
 
-pub(crate) fn legacy_solid_color(paint: Option<&SemanticPaint>, opacity: f64) -> Option<Color> {
+pub(crate) fn solid_color_with_opacity(
+    paint: Option<&SemanticPaint>,
+    opacity: f64,
+) -> Option<Color> {
     let SemanticPaint::Solid(color) = paint? else {
         return None;
     };

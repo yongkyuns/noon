@@ -71,7 +71,8 @@ class Triangle(_compat.Path):
         super().__init__(path.close(), **kwargs)
 
 
-def _world_point(mobject: _base.Mobject, point: _base.Vec2) -> _base.Vec2:
+def _legacy_world_point(mobject: _base.Mobject, point: _base.Vec2) -> _base.Vec2:
+    """Retained-only world transform fallback owned for deletion by #959."""
     raw = mobject._current_raw()
     transform = raw.transform
     sx = float(transform["scale"]["x"])
@@ -90,18 +91,38 @@ def _world_point(mobject: _base.Mobject, point: _base.Vec2) -> _base.Vec2:
 
 
 def _line_get_start(self: _compat.Line) -> _base.Vec2:
+    import _manim_semantic_handles as shared
+
+    observed = shared._manim_line_endpoints_observation(self)
+    if observed is not None:
+        return _base.Vec2(float(observed.startX), float(observed.startY))
     raw = self._current_raw()
     point = raw.geometry["line"]["start"]
-    return _world_point(self, _base.Vec2(float(point["x"]), float(point["y"])))
+    return _legacy_world_point(self, _base.Vec2(float(point["x"]), float(point["y"])))
 
 
 def _line_get_end(self: _compat.Line) -> _base.Vec2:
+    import _manim_semantic_handles as shared
+
+    observed = shared._manim_line_endpoints_observation(self)
+    if observed is not None:
+        return _base.Vec2(float(observed.endX), float(observed.endY))
     raw = self._current_raw()
     point = raw.geometry["line"]["end"]
-    return _world_point(self, _base.Vec2(float(point["x"]), float(point["y"])))
+    return _legacy_world_point(self, _base.Vec2(float(point["x"]), float(point["y"])))
 
 
 def _mobject_get_color(self: _base.Mobject) -> _base.Color:
+    import _manim_semantic_handles as shared
+
+    observed = shared._manim_color_observation(self)
+    if observed is not None:
+        return _base.Color(
+            float(observed.red),
+            float(observed.green),
+            float(observed.blue),
+            float(observed.alpha),
+        )
     style = self._current_raw().style
     for channel in ("stroke", "fill"):
         color = style.get(channel)

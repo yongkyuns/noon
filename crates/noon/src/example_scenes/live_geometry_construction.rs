@@ -1,14 +1,21 @@
 //! Typed geometry and bounds-dependent construction across shared continuation barriers.
 
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    ManimGeometryOptions, Mobject, MobjectFamilyMember, RateFunction, Scene, Vec2, VectorPath,
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
+    LiveProgram, LiveSession, ManimGeometryOptions, ManimLineEndpoints, Mobject,
+    MobjectFamilyMember, RateFunction, Scene, SemanticAnimationCompositionKind, TransformToRequest,
+    Vec2, VectorPath,
 };
 use std::rc::Rc;
+
+const LINE_START: (f64, f64) = (-1.111_538_105_676_658, -3.074_759_526_419_164_5);
+const LINE_END: (f64, f64) = (1.111_538_105_676_658, -0.925_240_473_580_835_5);
+const LINE_COLOR: Color = Color::rgba(0.2, 0.4, 0.8, 0.35);
 
 pub struct LiveGeometryConstruction {
     stage: u8,
     rectangle: Option<Mobject>,
+    line: Option<Mobject>,
 }
 
 impl LiveContinuation for LiveGeometryConstruction {
@@ -30,11 +37,24 @@ impl LiveContinuation for LiveGeometryConstruction {
                 let rectangle = live
                     .create_manim_geometry(rectangle)
                     .map_err(|e| e.to_string())?;
-                let mut line = ManimGeometryOptions::line(-1.0, -2.0, 1.0, -2.0)?;
+                let mut line = ManimGeometryOptions::line(-1.0, -0.5, 1.0, 0.5)?;
+                line.set_scale(1.5, 0.75)?;
+                line.set_rotation(std::f64::consts::PI / 6.0)?;
+                line.set_translation(0.0, -2.0)?;
+                line.set_fill_color(1.0, 1.0, 0.0, 0.7)?;
+                line.set_stroke_color(
+                    f64::from(LINE_COLOR.red),
+                    f64::from(LINE_COLOR.green),
+                    f64::from(LINE_COLOR.blue),
+                    1.0,
+                )?;
+                line.set_stroke_opacity(f64::from(LINE_COLOR.alpha))?;
                 line.set_stroke_width(0.04)?;
                 let line = live
                     .create_manim_geometry(line)
                     .map_err(|e| e.to_string())?;
+                assert_endpoints(line.manim_line_endpoints()?, LINE_START, LINE_END)?;
+                assert_color(line.manim_color()?, LINE_COLOR)?;
                 let mut late_path = ManimGeometryOptions::path(
                     VectorPath::new()
                         .move_to(Vec2::new(-0.3, -0.3))
@@ -57,19 +77,46 @@ impl LiveContinuation for LiveGeometryConstruction {
                 let target = live.target_editor(&rectangle).map_err(|e| e.to_string())?;
                 live.set_translation(&target, 2.0, 1.0)
                     .map_err(|e| e.to_string())?;
+                let line_target = live.target_editor(&line).map_err(|e| e.to_string())?;
+                live.set_translation(&line_target, 0.0, -1.0)
+                    .map_err(|e| e.to_string())?;
                 self.rectangle = Some(rectangle.clone());
+                self.line = Some(line.clone());
                 self.stage = 2;
-                live.declare_and_activate_transform_to(
-                    &rectangle,
-                    &target,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear),
+                let options = AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear);
+                live.declare_and_activate_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    &[
+                        AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                            &rectangle, &target, options,
+                        )),
+                        AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                            &line,
+                            &line_target,
+                            options,
+                        )),
+                    ],
+                    options,
+                    AnimationOptions::new(),
                 )
                 .map(ContinuationStep::Await)
                 .map_err(|e| e.to_string())
             }
             2 => {
+                let line = self.line.as_ref().ok_or("missing live line")?;
+                assert_endpoints(
+                    live.effective_line_endpoints(line)
+                        .map_err(|error| error.to_string())?,
+                    (LINE_START.0, LINE_START.1 + 1.0),
+                    (LINE_END.0, LINE_END.1 + 1.0),
+                )?;
+                assert_color(
+                    live.effective_manim_color(line)
+                        .map_err(|error| error.to_string())?,
+                    LINE_COLOR,
+                )?;
                 let mut dot = ManimGeometryOptions::dot(-4.0, -1.5, 0.25)?;
                 dot.set_color(1.0, 0.0, 0.0, 1.0)?;
                 let dot = live.create_manim_geometry(dot).map_err(|e| e.to_string())?;
@@ -105,6 +152,40 @@ impl LiveContinuation for LiveGeometryConstruction {
             _ => Err("geometry continuation resumed after completion".into()),
         }
     }
+}
+
+fn assert_endpoints(
+    actual: ManimLineEndpoints,
+    expected_start: (f64, f64),
+    expected_end: (f64, f64),
+) -> Result<(), String> {
+    for (actual, expected, label) in [
+        (actual.start.0, expected_start.0, "start x"),
+        (actual.start.1, expected_start.1, "start y"),
+        (actual.end.0, expected_end.0, "end x"),
+        (actual.end.1, expected_end.1, "end y"),
+    ] {
+        if (actual - expected).abs() > 1.0e-6 {
+            return Err(format!("unexpected Line {label}: {actual} != {expected}"));
+        }
+    }
+    Ok(())
+}
+
+fn assert_color(actual: Color, expected: Color) -> Result<(), String> {
+    for (actual, expected, label) in [
+        (actual.red, expected.red, "red"),
+        (actual.green, expected.green, "green"),
+        (actual.blue, expected.blue, "blue"),
+        (actual.alpha, expected.alpha, "alpha"),
+    ] {
+        if (actual - expected).abs() > 1.0e-6 {
+            return Err(format!(
+                "unexpected Line color {label}: {actual} != {expected}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The Python pair also asks a one-leaf family for the background's shared bounds.
@@ -147,6 +228,7 @@ pub fn program() -> Result<LiveProgram<LiveGeometryConstruction>, String> {
         .into_live_program(LiveGeometryConstruction {
             stage: 0,
             rectangle: None,
+            line: None,
         })
         .map_err(|e| e.to_string())
 }

@@ -1191,6 +1191,68 @@ mod wasm {
         }
     }
 
+    #[wasm_bindgen]
+    pub struct WasmManimLineEndpoints {
+        value: noon::ManimLineEndpoints,
+    }
+
+    impl WasmManimLineEndpoints {
+        pub(crate) fn from_endpoints(value: noon::ManimLineEndpoints) -> Self {
+            Self { value }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmManimLineEndpoints {
+        #[wasm_bindgen(getter, js_name = startX)]
+        pub fn start_x(&self) -> f64 {
+            self.value.start.0
+        }
+        #[wasm_bindgen(getter, js_name = startY)]
+        pub fn start_y(&self) -> f64 {
+            self.value.start.1
+        }
+        #[wasm_bindgen(getter, js_name = endX)]
+        pub fn end_x(&self) -> f64 {
+            self.value.end.0
+        }
+        #[wasm_bindgen(getter, js_name = endY)]
+        pub fn end_y(&self) -> f64 {
+            self.value.end.1
+        }
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmManimColor {
+        value: noon_core::Color,
+    }
+
+    impl WasmManimColor {
+        pub(crate) fn from_color(value: noon_core::Color) -> Self {
+            Self { value }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmManimColor {
+        #[wasm_bindgen(getter, js_name = red)]
+        pub fn red(&self) -> f64 {
+            f64::from(self.value.red)
+        }
+        #[wasm_bindgen(getter, js_name = green)]
+        pub fn green(&self) -> f64 {
+            f64::from(self.value.green)
+        }
+        #[wasm_bindgen(getter, js_name = blue)]
+        pub fn blue(&self) -> f64 {
+            f64::from(self.value.blue)
+        }
+        #[wasm_bindgen(getter, js_name = alpha)]
+        pub fn alpha(&self) -> f64 {
+            f64::from(self.value.alpha)
+        }
+    }
+
     /// Thin language wrapper over the same store-scoped handle used by Rust.
     #[wasm_bindgen]
     pub struct WasmAuthoringMobjectHandle {
@@ -1222,6 +1284,22 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = manimLineEndpoints)]
+        pub fn manim_line_endpoints(&self) -> Result<WasmManimLineEndpoints, JsValue> {
+            self.handle
+                .manim_line_endpoints()
+                .map(WasmManimLineEndpoints::from_endpoints)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = manimColor)]
+        pub fn manim_color(&self) -> Result<WasmManimColor, JsValue> {
+            self.handle
+                .manim_color()
+                .map(WasmManimColor::from_color)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(getter, js_name = semanticSlot)]
         pub fn semantic_slot(&self) -> u32 {
             self.handle.node_id().slot()
