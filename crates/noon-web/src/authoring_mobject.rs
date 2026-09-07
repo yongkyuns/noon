@@ -3,9 +3,7 @@ use noon::semantic_mobject::{
     authoring_render_f64 as render_f64, authoring_xy_f64 as semantic_xy_f64,
 };
 pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
-#[cfg(target_arch = "wasm32")]
-use noon::FamilyArrangePlan;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(test)]
 use noon::{semantic_family_leaf_ids, FamilyTranslation};
 use noon_core::{
     SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
@@ -134,14 +132,15 @@ fn manim_family_align_to_delta(
 mod wasm {
     use std::{cell::RefCell, rc::Rc};
 
+    use noon::{semantic_family_leaf_ids, FamilyArrangePlan, FamilyTranslation};
+    use noon_core::Bounds2D64;
     use wasm_bindgen::prelude::*;
 
     use crate::{AuthoringSemanticIdentity, WasmRetainedNativeTextAuthoringHandle};
 
     use super::{
         manim_family_align_to_delta, manim_family_next_to_delta, render_f64, semantic_xy_f64,
-        Bounds2D64, FrontendFamilyTargetEditor, ManimNextToArgs, Mobject, SemanticNodeId,
-        SemanticStore,
+        FrontendFamilyTargetEditor, ManimNextToArgs, Mobject, SemanticNodeId, SemanticStore,
     };
 
     fn js_error(error: String) -> JsValue {
