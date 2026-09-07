@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import { chromium } from "playwright";
 import pngjs from "pngjs";
-import { verifySample, verifySquareToCircle, verifyFreshRun } from "./semantic-preview-observations.mjs";
+import { verifySample, verifySquareToCircle, verifyFreshRun, verifyLateFamilyConstruction } from "./semantic-preview-observations.mjs";
 const { PNG } = pngjs;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -91,23 +91,32 @@ async function captureLateFamilyConstruction() {
     "    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not AddWaitLaggedStartMap:\n" +
     "        _cls.__module__ = 'preview_fixture_library'\ndel _cls\n";
   const page = await pageReady();
+  const frames = new Map();
+  let phase = "open";
   try {
     const loaded = await page.evaluate((code) => window.noonHostRaster.load(code, 5), source);
     assert.equal(loaded.kind, "semantic_execution");
     const frameTimes = Array.from({ length: 97 }, (_, frame) => frame / 30);
     let final;
     for (const frameIndex of [0, 30, 63, 96]) {
+      phase = `sample-${frameIndex}`;
       final = await page.evaluate(({ frameIndex, frameTimes }) =>
         window.noonHostRaster.renderThrough(frameIndex, frameTimes), { frameIndex, frameTimes });
       verifySample(final, frameIndex, activeBackend === "webgpu" ? "WebGPU" : "WebGL2");
       const bytes = await page.locator("#scene").screenshot();
       await writeFile(path.join(artifacts, `${activeBackend}-late-family-${frameIndex}.png`), bytes);
-      observations.push({ backend: activeBackend, fixture: "AddWaitLaggedStartMap", frameIndex,
-        sample: final, sourceSha256: hash(source), imageSha256: hash(bytes) });
+      const frame = { backend: activeBackend, fixture: "AddWaitLaggedStartMap", frameIndex,
+        sample: final, sourceSha256: hash(source), imageSha256: hash(bytes), foreground: foreground(bytes) };
+      frames.set(frameIndex, frame);
+      observations.push(frame);
     }
-    assert.equal(final.objectCount, 4, "both original circles and late-created squares must remain");
-    assert.ok(Math.abs(final.authoredDuration - 3.2) < 1e-9, "source must finish the second composition");
+    phase = "verify-complete-composition";
+    verifyLateFamilyConstruction(frames);
     await page.evaluate(() => window.noonHostRaster.close());
+  } catch (error) {
+    observations.push({ backend: activeBackend, fixture: "AddWaitLaggedStartMap", phase,
+      sourceSha256: hash(source), error: String(error?.stack ?? error) });
+    throw error;
   } finally {
     await page.close();
   }
@@ -161,6 +170,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(ready, `preview test server did not start: ${serverError}`);
+  const failures = [];
   for (const backend of ["webgl", "webgpu"]) {
     activeBackend = backend;
     browser = await chromium.launch({ headless: true, args: browserArgs(backend) });
@@ -171,12 +181,18 @@ try {
       // Equality is required only within one backend/environment, never across GPUs.
       verifyFreshRun(before, after);
       await captureLateFamilyConstruction();
-      console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation and identical fresh-run frames passed`);
+      console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation, identical fresh-run frames and late-family composition passed`);
+    } catch (error) {
+      // Collect independent evidence from both backends, but keep either failure fatal.
+      failures.push(new Error(`Semantic preview ${backend} failed`, { cause: error }));
+      observations.push({ backend, error: String(error?.stack ?? error) });
+      console.error(error);
     } finally {
       await browser.close();
       browser = null;
     }
   }
+  if (failures.length) throw new AggregateError(failures, "Semantic preview qualification failed");
 } finally {
   try {
     let revision = null;

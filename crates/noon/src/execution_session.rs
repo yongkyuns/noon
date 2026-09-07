@@ -2484,10 +2484,16 @@ impl ExecutionSession {
         let node = store
             .node(target)
             .expect("validated semantic object has a live node");
+        // An unmounted family retains authoring edges without admitting its leaves
+        // to execution. Only reachable parents participate in fade lifecycle checks;
+        // removing a direct root edge must preserve those detached family identities.
         match direction {
             SemanticFadeDirection::In => {
                 if node.is_scene_owned()
-                    || !node.parents().is_empty()
+                    || node
+                        .parents()
+                        .iter()
+                        .any(|parent| self.reachability.is_reachable(*parent))
                     || self.reachability.is_object_reachable(target)
                 {
                     return Err(ExecutionSessionAnimationError::FadeTarget {
@@ -2497,13 +2503,18 @@ impl ExecutionSession {
                 }
             }
             SemanticFadeDirection::Out => {
-                if node.parents().len() > 1 {
+                if node
+                    .parents()
+                    .iter()
+                    .any(|parent| *parent != root && self.reachability.is_reachable(*parent))
+                {
                     return Err(ExecutionSessionAnimationError::FadeTarget {
                         target,
                         error: ExecutionSessionFadeError::TargetIsAliased,
                     });
                 }
-                if node.parents() != [root] || !self.reachability.is_object_reachable(target) {
+                if !node.parents().contains(&root) || !self.reachability.is_object_reachable(target)
+                {
                     return Err(ExecutionSessionAnimationError::FadeTarget {
                         target,
                         error: ExecutionSessionFadeError::TargetIsNotDirectRootMember,

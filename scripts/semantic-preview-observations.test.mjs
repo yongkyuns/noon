@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { verifySample, verifySquareToCircle, verifyFreshRun } from "./semantic-preview-observations.mjs";
+import { verifySample, verifySquareToCircle, verifyFreshRun, verifyLateFamilyConstruction } from "./semantic-preview-observations.mjs";
 
 function frames() {
   return new Map([0, 30, 45, 60, 90].map((index, i) => [index, {
@@ -54,4 +54,41 @@ test("fresh-run comparison rejects leaked visual state and a changed schedule", 
   assert.throws(() => verifyFreshRun(before, after), /changed frame/);
   after.delete(45);
   assert.throws(() => verifyFreshRun(before, after), /same frame schedule/);
+});
+
+function lateFamilyFrames() {
+  return new Map([0, 30, 63, 96].map((index, i) => [index, {
+    sample: { objectCount: index === 0 ? 2 : 4, authoredDuration: index === 96 ? 3.2 : null },
+    imageSha256: String(i).repeat(64),
+    foreground: { count: index === 0 ? 0 : 1000 },
+  }]));
+}
+
+test("late family capture spans the original Succession and subsequent fade", () => {
+  verifyLateFamilyConstruction(lateFamilyFrames());
+});
+test("late family evidence cannot omit or blank a sampled phase", () => {
+  for (const index of [0, 30, 63, 96]) {
+    const value = lateFamilyFrames(); value.delete(index);
+    assert.throws(() => verifyLateFamilyConstruction(value), /missing/);
+  }
+  for (const index of [30, 63, 96]) {
+    const value = lateFamilyFrames(); value.get(index).foreground.count = 0;
+    assert.throws(() => verifyLateFamilyConstruction(value), /visible/);
+  }
+});
+test("late family evidence rejects premature visibility and frozen composition", () => {
+  const premature = lateFamilyFrames(); premature.get(0).foreground.count = 100;
+  assert.throws(() => verifyLateFamilyConstruction(premature), /initial Wait/);
+  for (const endpoint of [30, 96]) {
+    const value = lateFamilyFrames(); value.get(63).imageSha256 = value.get(endpoint).imageSha256;
+    assert.throws(() => verifyLateFamilyConstruction(value), /cannot/);
+  }
+});
+test("late family completion needs exact duration and all four objects", () => {
+  for (const replacement of [{objectCount: 2}, {objectCount: null},
+    {authoredDuration: null}, {authoredDuration: 1}, {authoredDuration: NaN}]) {
+    const value = lateFamilyFrames(); Object.assign(value.get(96).sample, replacement);
+    assert.throws(() => verifyLateFamilyConstruction(value));
+  }
 });

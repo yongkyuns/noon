@@ -44,3 +44,29 @@ export function verifyFreshRun(before, after) {
       `fresh run changed membership at frame ${index}`);
   }
 }
+
+// The original fixture finishes its initial Succession at 1 s, then fades the
+// two late-created squares over 2.2 s. This checks captured evidence, not a
+// second scheduler or scene model.
+export function verifyLateFamilyConstruction(frames) {
+  for (const index of [0, 30, 63, 96]) {
+    assert.ok(frames.has(index), `missing late-family preview frame ${index}`);
+    assert.match(frames.get(index).imageSha256, /^[0-9a-f]{64}$/,
+      "late-family frame must identify its captured PNG");
+  }
+  const initial = frames.get(0), beforeFade = frames.get(30);
+  const middle = frames.get(63), final = frames.get(96);
+  assert.equal(initial.foreground.count, 0, "initial Wait must not show future objects");
+  for (const frame of [beforeFade, middle, final]) {
+    assert.ok(frame.foreground.count > 20, "late-family scene must remain visible");
+  }
+  assert.notEqual(middle.imageSha256, beforeFade.imageSha256,
+    "late-family fade cannot remain at its initial image");
+  assert.notEqual(middle.imageSha256, final.imageSha256,
+    "late-family fade cannot jump to its final image");
+  assert.equal(final.sample.objectCount, 4,
+    "both original circles and late-created squares must remain");
+  assert.ok(Number.isFinite(final.sample.authoredDuration) &&
+    Math.abs(final.sample.authoredDuration - 3.2) < 1e-9,
+    "source must finish the second composition");
+}

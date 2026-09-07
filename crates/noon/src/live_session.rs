@@ -4943,3 +4943,6 @@ mod recursive_composition_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod late_family_fade_tests;
