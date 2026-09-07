@@ -50,8 +50,8 @@ Noon chooses only the render host. The Rust renderer/`wgpu` stack continues to c
 
 Before the production canvas is transferred, it probes disposable surfaces:
 
-1. try a transferred worker surface for WebGPU or WebGL2
-2. if that fails, try a main-thread transferred `OffscreenCanvas` for WebGPU or WebGL2
+1. try a transferred worker surface with a usable WebGPU adapter or WebGL2
+2. if that fails, try a main-thread transferred `OffscreenCanvas` with the same adapter/context checks
 3. fail if neither surface configuration is available; a later attempt may probe again
 
 Probes use DOM-connected disposable canvases, a module worker, and the same antialias-disabled WebGL2 context settings as wgpu. Probe worker construction failures also reach the main-thread check. Disposable contexts are released and canvases removed after probing. Renderer initialization errors retain browser surface-creation diagnostics.

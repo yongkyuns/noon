@@ -3,10 +3,27 @@ export const RENDER_HOST_MAIN_THREAD = "main-thread";
 
 let cachedAutomaticSelection = null;
 
-// Keep the capability probe aligned with wgpu-hal's WebGL surface creation.
-// A context created with the browser defaults does not prove that the renderer's
-// antialias-disabled context can be created in the same host.
-const WEBGL_CONTEXT_OPTIONS = Object.freeze({ antialias: false });
+// A WebGPU canvas context alone does not establish adapter availability.
+// Check the adapter before claiming the canvas, then use wgpu-hal's WebGL
+// surface settings when WebGPU is unavailable.
+async function probeGpuSurface(canvas, gpu) {
+  let context = null;
+  if (typeof gpu?.requestAdapter === "function") {
+    try {
+      const adapter = await gpu.requestAdapter({
+        powerPreference: "high-performance",
+        forceFallbackAdapter: false,
+      });
+      if (adapter !== null) context = canvas.getContext("webgpu");
+    } catch {}
+  }
+  if (context !== null) return context;
+  try {
+    return canvas.getContext("webgl2", { antialias: false });
+  } catch {
+    return null;
+  }
+}
 
 // Return a host immediately when the answer is explicit or probing is unavailable.
 // Browser capability probing remains asynchronous, which lets ExecutionWorkerClient
@@ -59,7 +76,7 @@ function canProbeBrowserRenderHosts() {
 
 async function probeRenderHost() {
   if (await probeWorkerGpuSurface()) return RENDER_HOST_WORKER;
-  if (probeMainThreadGpuSurface()) return RENDER_HOST_MAIN_THREAD;
+  if (await probeMainThreadGpuSurface()) return RENDER_HOST_MAIN_THREAD;
   throw new Error(
     "Noon could not initialize a GPU canvas surface in either a worker or the main thread",
   );
@@ -70,14 +87,11 @@ async function probeWorkerGpuSurface() {
     return false;
   }
   const source = `
-    self.onmessage = (event) => {
+    const probeGpuSurface = ${probeGpuSurface.toString()};
+    self.onmessage = async (event) => {
       try {
         const canvas = event.data.canvas;
-        let context = null;
-        try { context = canvas.getContext("webgpu"); } catch {}
-        if (context === null) {
-          try { context = canvas.getContext("webgl2", { antialias: false }); } catch {}
-        }
+        const context = await probeGpuSurface(canvas, self.navigator?.gpu);
         const ok = context !== null;
         context?.unconfigure?.();
         context?.getExtension?.("WEBGL_lose_context")?.loseContext();
@@ -126,7 +140,7 @@ async function probeWorkerGpuSurface() {
   }
 }
 
-function probeMainThreadGpuSurface() {
+async function probeMainThreadGpuSurface() {
   if (typeof HTMLCanvasElement.prototype.transferControlToOffscreen !== "function") {
     return false;
   }
@@ -138,16 +152,16 @@ function probeMainThreadGpuSurface() {
     htmlCanvas.hidden = true;
     document.body?.append(htmlCanvas);
     const surface = htmlCanvas.transferControlToOffscreen();
+    let context = null;
     try {
-      if (surface.getContext("webgpu") !== null) return true;
-    } catch {}
-    try {
-      const context = surface.getContext("webgl2", WEBGL_CONTEXT_OPTIONS);
+      context = await probeGpuSurface(surface, globalThis.navigator?.gpu);
       if (context === null) return false;
-      context.getExtension?.("WEBGL_lose_context")?.loseContext();
       return true;
     } catch {
       return false;
+    } finally {
+      context?.unconfigure?.();
+      context?.getExtension?.("WEBGL_lose_context")?.loseContext();
     }
   } catch {
     return false;
