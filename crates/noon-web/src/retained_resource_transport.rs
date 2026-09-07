@@ -1579,7 +1579,7 @@ mod tests {
         let handles = text_handles(&scene);
 
         let bundle = RetainedResourceBundle::capture(
-            handles,
+            handles.iter().copied(),
             scene.texts(),
             scene.geometries(),
             scene.fonts(),
@@ -1603,13 +1603,13 @@ mod tests {
             scene.fonts(),
         )
         .unwrap();
-        let inventory = base.inventory();
+        let mut inventory = base.inventory();
         let first_transport = TransportTextResourceHandle::from_source_handle(handles[0]);
         let second_transport = TransportTextResourceHandle::from_source_handle(handles[1]);
         let mut installed = base.install().unwrap();
         let first_local = installed.resolve_text_handle(first_transport).unwrap();
-        let addition = RetainedResourceBundle::capture_additions(
-            handles,
+        let mut addition = RetainedResourceBundle::capture_additions(
+            handles.iter().copied(),
             scene.texts(),
             scene.geometries(),
             scene.fonts(),
@@ -1618,6 +1618,7 @@ mod tests {
         .unwrap();
         assert_eq!(addition.text_count(), 1);
         assert_eq!(addition.font_count(), 0);
+        addition.retain_additions(&mut inventory);
 
         let prepared = installed.prepare_additions(addition).unwrap();
         let second_local = prepared.text_handle_remap()[&second_transport];
@@ -1633,6 +1634,19 @@ mod tests {
         );
         assert!(TextResourceLookup::get(&installed, first_local).is_some());
         assert!(TextResourceLookup::get(&installed, second_local).is_some());
+
+        let repeated = RetainedResourceBundle::capture_additions(
+            handles,
+            scene.texts(),
+            scene.geometries(),
+            scene.fonts(),
+            &inventory,
+        )
+        .unwrap();
+        assert!(
+            repeated.is_empty(),
+            "installed resources must not be resent"
+        );
     }
 
     #[test]
