@@ -859,32 +859,10 @@ impl RetainedExecutionFrameMirror {
             &seen_removed,
             &seen_slots,
         )?;
-        let segment_ranks = painter_update
-            .as_ref()
-            .map(|PreparedPainterOrder { range, segment, .. }| {
-                segment
-                    .iter()
-                    .enumerate()
-                    .map(|(offset, &index)| (index, range.start + offset))
-                    .collect::<HashMap<_, _>>()
-            })
-            .unwrap_or_default();
-        for (index, _, object, _, _) in &updates {
-            let rank = segment_ranks
-                .get(&(*index as u32))
-                .copied()
-                .or_else(|| {
-                    self.painter_ranks
-                        .get(*index)
-                        .copied()
-                        .flatten()
-                        .map(|rank| rank as usize)
-                })
-                .ok_or(RetainedExecutionTransportError::InvalidOrder(object.order))?;
-            if object.order as usize != rank {
-                return Err(RetainedExecutionTransportError::InvalidOrder(object.order));
-            }
-        }
+        // `order` establishes the dense painter order of a snapshot. Incremental
+        // publications retain stable sparse rows, so their authoritative order is
+        // the painter-order splice validated above. In particular, a row may keep
+        // stable slot 2 while becoming the sole live row at painter rank 0.
         let added_indices = updates
             .iter()
             .filter_map(|(index, added, _, _, _)| {
@@ -1410,6 +1388,61 @@ mod tests {
         assert_eq!(changes.painter_order_range(), Some(0..2));
         assert_eq!(mirror.painter_order(), &[2, 1]);
         assert_eq!(mirror.frame().unwrap().objects[2].id, ObjectId::new(13));
+    }
+
+    #[test]
+    fn stable_replacement_slot_does_not_become_incremental_painter_rank() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(23);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+
+        let mut replaced = frame.clone();
+        replaced.objects.push(FrameObjectState {
+            id: ObjectId::new(13),
+            content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        });
+        replaced.presences.push(true);
+        replaced.reveals.push(1.0);
+        replaced.morphs.push(0.0);
+        replaced.render_geometries.push(None);
+        replaced.render_transforms.push(None);
+        let structural = FrameChanges::with_structure(vec![0, 1, 2], vec![2], vec![0, 1])
+            .with_painter_order(0..2);
+        let replacement = encoder
+            .encode_incremental_with_painter_order(
+                &replaced,
+                &structural,
+                Camera2DState::default(),
+                &[2],
+            )
+            .unwrap()
+            .unwrap();
+        mirror.apply(replacement).unwrap();
+        assert_eq!(mirror.painter_order(), &[2]);
+
+        replaced.objects[2].appearance = 0.5;
+        let mut later = encoder
+            .encode_incremental(
+                &replaced,
+                &FrameChanges::objects(vec![2]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        // Incremental row order is legacy metadata. The sparse stable slot and
+        // the retained painter permutation remain separate identities.
+        later.objects[0].order = 2;
+        mirror.apply(later).unwrap();
+        assert_eq!(mirror.painter_order(), &[2]);
+        assert_eq!(mirror.frame().unwrap().objects[2].appearance, 0.5);
     }
 
     #[test]
