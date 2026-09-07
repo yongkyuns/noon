@@ -1469,7 +1469,8 @@ def _build_canonical_composition_candidate(
             target, self, getattr(target, "_semantic_handle"), None, object_id=next_object_id,
         )
         reservations.append((target, reservation))
-        next_object_id += 1
+        if not reservation.reuse_existing_identity:
+            next_object_id += 1
         return reservation
 
     def append_leaf(builder: object, animation: object, child_kwargs: dict[str, object]) -> None:
@@ -1638,7 +1639,11 @@ def _build_canonical_composition_candidate(
             scale_factor, translation, x, y = endpoint
             if direction == "in":
                 reservation = reserve(target)
-                object_id = str(reservation.object.id)
+                object_id = (
+                    ""
+                    if reservation.reuse_existing_identity
+                    else str(reservation.object.id)
+                )
             else:
                 object_id = ""
                 removals.append(target)

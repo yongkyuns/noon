@@ -30,6 +30,14 @@ class ManimDrawBorderThenFillSourceTests(unittest.TestCase):
         self.assertIn("appendDrawBorderThenFillFamily", source)
         self.assertIn("appendDrawBorderThenFillFamilyEntering", source)
 
+    def test_reused_fade_identity_is_not_encoded_as_new_admission(self) -> None:
+        source = (Path(__file__).parent / "_manim_canonical_scene.py").read_text()
+        self.assertIn("if not reservation.reuse_existing_identity:\n            next_object_id += 1", source)
+        self.assertIn(
+            'if reservation.reuse_existing_identity\n                    else str(reservation.object.id)',
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
