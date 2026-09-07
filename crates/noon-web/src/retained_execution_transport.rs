@@ -576,6 +576,15 @@ impl RetainedExecutionFrameMirror {
         );
     }
 
+    pub(crate) fn remove_installed_text_handles<'a>(
+        &mut self,
+        handles: impl IntoIterator<Item = &'a TransportTextResourceHandle>,
+    ) {
+        for handle in handles {
+            self.text_handles.remove(handle);
+        }
+    }
+
     fn resolve_content(
         &self,
         content: &TransportObjectContent,

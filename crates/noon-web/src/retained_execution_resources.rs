@@ -5,10 +5,10 @@ use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlanne
 
 use crate::{
     InstalledRetainedFamilyExecutionState, InstalledRetainedResources,
-    RetainedExecutionDeltaEnvelope, RetainedExecutionFrameMirror, RetainedExecutionTransportError,
-    RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,
-    RetainedResourceBundle, RetainedResourceTransportError, RetainedTransportApplyOutcome,
-    TransportObjectContent,
+    PreparedInstalledFamilyUpdate, RetainedExecutionDeltaEnvelope, RetainedExecutionFrameMirror,
+    RetainedExecutionTransportError, RetainedFamilyExecutionDeltaEnvelope,
+    RetainedFamilyExecutionTransportError, RetainedResourceBundle, RetainedResourceTransportError,
+    RetainedTransportApplyOutcome, TransportObjectContent,
 };
 
 /// Render-side retained execution mirror with renderer-local resource handles.
@@ -120,8 +120,16 @@ impl InstalledRetainedExecutionMirror {
         &mut self,
         delta: RetainedExecutionDeltaEnvelope,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        self.apply_retained(delta, true)
+    }
+
+    fn apply_retained(
+        &mut self,
+        delta: RetainedExecutionDeltaEnvelope,
+        validate_snapshot_resources: bool,
+    ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
         let snapshot = delta.snapshot;
-        if snapshot {
+        if snapshot && validate_snapshot_resources {
             self.validate_snapshot_resources(&delta)?;
         }
 
@@ -163,7 +171,55 @@ impl InstalledRetainedExecutionMirror {
         if delta.retained.snapshot {
             self.validate_snapshot_resources(&delta.retained)?;
         }
+        let prepared_family = self.prepare_family_update(&delta, self.resources.texts())?;
 
+        let (outcome, changes) = self.apply(delta.retained)?;
+        if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            return Ok((outcome, changes));
+        }
+        self.family.commit_prepared(prepared_family);
+        Ok((outcome, changes))
+    }
+
+    fn apply_family_with_resource_additions(
+        &mut self,
+        delta: RetainedFamilyExecutionDeltaEnvelope,
+        bundle: RetainedResourceBundle,
+    ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        let additions = self.resources.prepare_additions(bundle)?;
+        let text_handles = additions.text_handle_remap();
+        self.wire.extend_installed_text_handles(&text_handles);
+        let text_lookup = additions.text_lookup(&self.resources);
+        let prepared_family = match self.prepare_family_update(&delta, &text_lookup) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.wire.remove_installed_text_handles(text_handles.keys());
+                return Err(error);
+            }
+        };
+        let applied = self.apply_retained(delta.retained, false);
+        let (outcome, changes) = match applied {
+            Ok(applied) => applied,
+            Err(error) => {
+                self.wire.remove_installed_text_handles(text_handles.keys());
+                return Err(error);
+            }
+        };
+        if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            self.wire.remove_installed_text_handles(text_handles.keys());
+            return Ok((outcome, changes));
+        }
+
+        self.resources.commit_additions(additions);
+        self.family.commit_prepared(prepared_family);
+        Ok((outcome, changes))
+    }
+
+    fn prepare_family_update(
+        &self,
+        delta: &RetainedFamilyExecutionDeltaEnvelope,
+        texts: &(impl noon_core::TextResourceLookup + ?Sized),
+    ) -> Result<PreparedInstalledFamilyUpdate, InstalledExecutionError> {
         // Resolve only sparse changed rows. Family validation borrows unchanged rows
         // through the mirror's ObjectId index and overlays rows that the retained
         // delta will update or append. Neither resident family state nor the full
@@ -210,10 +266,10 @@ impl InstalledRetainedExecutionMirror {
             next_row
         };
         let snapshot = delta.retained.snapshot;
-        let prepared_family = self.family.prepare_with_lookup(
-            &delta,
+        Ok(self.family.prepare_with_lookup(
+            delta,
             frame_len,
-            self.resources.texts(),
+            texts,
             |object| {
                 next_indices.get(&object).copied().or_else(|| {
                     (!snapshot)
@@ -231,41 +287,7 @@ impl InstalledRetainedExecutionMirror {
                         .flatten()
                 })
             },
-        )?;
-
-        let (outcome, changes) = self.apply(delta.retained)?;
-        if outcome == RetainedTransportApplyOutcome::DroppedStale {
-            return Ok((outcome, changes));
-        }
-        self.family.commit_prepared(prepared_family);
-        Ok((outcome, changes))
-    }
-
-    fn apply_family_with_resource_additions(
-        &mut self,
-        delta: RetainedFamilyExecutionDeltaEnvelope,
-        bundle: RetainedResourceBundle,
-    ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
-        let additions = self.resources.prepare_additions(bundle)?;
-        let mut next_wire = self.wire.clone();
-        next_wire.extend_installed_text_handles(&additions.text_handle_remap());
-        let (outcome, changes) = next_wire.apply(delta.retained.clone())?;
-        if outcome == RetainedTransportApplyOutcome::DroppedStale {
-            return Ok((outcome, changes));
-        }
-        let next_resolved = next_wire
-            .frame()
-            .cloned()
-            .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        let mut next_family = self.family.clone();
-        let text_lookup = additions.text_lookup(&self.resources);
-        next_family.apply(&delta, &next_resolved, &text_lookup)?;
-
-        self.resources.commit_additions(additions);
-        self.wire = next_wire;
-        self.resolved = Some(next_resolved);
-        self.family = next_family;
-        Ok((outcome, changes))
+        )?)
     }
 
     fn validate_snapshot_resources(
