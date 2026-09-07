@@ -66,6 +66,35 @@ pub enum AffineLifecycleEndpoint {
 
 pub type AffineLifecycleDirection = SemanticAffineLifecycleDirection;
 
+/// Placement of the faded affine endpoint relative to activation-effective layout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FadeTranslation {
+    Shift(SemanticVec3),
+    Point(SemanticVec3),
+}
+
+/// Scale and placement applied to the faded copy of one canonical object.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FadeEndpoint {
+    pub scale_factor: f64,
+    pub translation: FadeTranslation,
+}
+
+impl FadeEndpoint {
+    pub const fn new(scale_factor: f64, translation: FadeTranslation) -> Self {
+        Self {
+            scale_factor,
+            translation,
+        }
+    }
+}
+
+impl Default for FadeEndpoint {
+    fn default() -> Self {
+        Self::new(1.0, FadeTranslation::Shift(SemanticVec3::ZERO))
+    }
+}
+
 /// Appearance endpoint for the shared restoring Indicate composition.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IndicateOptions {
@@ -183,6 +212,7 @@ pub enum AnimationCompositionRequest<'a> {
     Fade {
         target: &'a Mobject,
         direction: SemanticFadeDirection,
+        endpoint: FadeEndpoint,
         options: AnimationOptions,
     },
     Create {
@@ -742,10 +772,34 @@ impl<'a> LiveSession<'a> {
         direction: SemanticFadeDirection,
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_fade_with_endpoint(
+            target,
+            direction,
+            FadeEndpoint::default(),
+            options,
+        )
+    }
+
+    /// Atomically author and activate a Fade with a scaled/translated faded endpoint.
+    pub fn declare_and_activate_fade_with_endpoint(
+        &mut self,
+        target: &Mobject,
+        direction: SemanticFadeDirection,
+        endpoint: FadeEndpoint,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
         self.require_mobject(target)?;
+        let endpoint = self.resolve_fade_endpoint(target, endpoint)?;
         let mut store = self.store.borrow_mut();
         self.session
-            .declare_and_activate_fade(&mut store, self.root, target.node_id(), direction, options)
+            .declare_and_activate_fade_with_endpoint(
+                &mut store,
+                self.root,
+                target.node_id(),
+                direction,
+                endpoint,
+                options,
+            )
             .map_err(Into::into)
     }
 
@@ -1010,12 +1064,14 @@ impl<'a> LiveSession<'a> {
             AnimationCompositionRequest::Fade {
                 target,
                 direction,
+                endpoint,
                 options,
             } => {
                 self.require_mobject(target)?;
                 Request::Fade {
                     target: target.node_id(),
                     direction: *direction,
+                    endpoint: self.resolve_fade_endpoint(target, *endpoint)?,
                     options: *options,
                 }
             }
@@ -1053,6 +1109,43 @@ impl<'a> LiveSession<'a> {
                     .collect::<Result<Vec<_>, _>>()?,
                 options: *options,
             },
+        })
+    }
+
+    fn resolve_fade_endpoint(
+        &self,
+        target: &Mobject,
+        endpoint: FadeEndpoint,
+    ) -> Result<noon_core::SemanticFadeEndpoint, LiveSessionError> {
+        let needs_layout = endpoint.scale_factor != 1.0
+            || matches!(endpoint.translation, FadeTranslation::Point(_));
+        let center = if needs_layout {
+            Some(if self.contains(target)? {
+                self.effective_layout(target)?.center
+            } else {
+                target.center().map_err(LiveSessionError::Mobject)?
+            })
+        } else {
+            None
+        };
+        let scale_center = center.map_or(SemanticVec3::ZERO, |center| {
+            SemanticVec3::new(center.0, center.1, 0.0)
+        });
+        let translation = match endpoint.translation {
+            FadeTranslation::Shift(shift) => noon_core::SemanticFadeTranslation::Shift(shift),
+            FadeTranslation::Point(point) => {
+                let center = center.expect("point Fade endpoint resolves effective layout");
+                noon_core::SemanticFadeTranslation::PointOffset(SemanticVec3::new(
+                    point.x - center.0,
+                    point.y - center.1,
+                    point.z,
+                ))
+            }
+        };
+        Ok(noon_core::SemanticFadeEndpoint {
+            scale_factor: endpoint.scale_factor,
+            translation,
+            scale_center,
         })
     }
 
@@ -2876,13 +2969,26 @@ mod tests {
 
         let fade_out = {
             let mut live = scene.live(&mut session);
-            live.declare_and_activate_fade(&fading, SemanticFadeDirection::Out, options)
-                .unwrap()
+            live.declare_and_activate_fade_with_endpoint(
+                &fading,
+                SemanticFadeDirection::Out,
+                FadeEndpoint::new(
+                    0.5,
+                    FadeTranslation::Shift(SemanticVec3::new(2.0, 0.0, 0.0)),
+                ),
+                options,
+            )
+            .unwrap()
         };
         {
             let mut live = scene.live(&mut session);
             live.advance_segment_to(fade_out, 1.5).unwrap();
             assert_eq!(live.effective(&fading).unwrap().appearance, 0.5);
+            assert_eq!(
+                live.effective(&fading).unwrap().transform.translation.x,
+                1.0
+            );
+            assert_eq!(live.effective(&fading).unwrap().transform.scale.x, 0.75);
             live.advance_segment_to(fade_out, fade_out.end_time())
                 .unwrap();
             assert!(live.contains(&fading).unwrap());
@@ -2920,6 +3026,14 @@ mod tests {
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
+            )
+            .is_err());
+        assert!(live
+            .declare_and_activate_fade_with_endpoint(
+                &fading,
+                SemanticFadeDirection::In,
+                FadeEndpoint::new(f64::NAN, FadeTranslation::Shift(SemanticVec3::ZERO)),
+                AnimationOptions::new().run_time(1.0),
             )
             .is_err());
         assert!(live

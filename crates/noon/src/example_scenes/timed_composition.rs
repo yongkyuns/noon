@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
+    FadeEndpoint, LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
     SemanticAnimationCompositionKind as Kind, SemanticFadeDirection,
 };
 
@@ -75,6 +75,7 @@ impl LiveContinuation for TimedComposition {
                         .map(|target| Request::Fade {
                             target,
                             direction: SemanticFadeDirection::Out,
+                            endpoint: FadeEndpoint::default(),
                             options: AnimationOptions::new()
                                 .run_time(1.0)
                                 .rate_func(RateFunction::Linear),

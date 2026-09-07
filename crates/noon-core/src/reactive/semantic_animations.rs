@@ -20,6 +20,53 @@ pub enum SemanticFadeDirection {
     Out,
 }
 
+/// Directional translation of a faded affine endpoint relative to activation state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SemanticFadeTranslation {
+    /// FadeOut moves by this vector; FadeIn starts at its negation.
+    Shift(SemanticVec3),
+    /// Offset from the activation-effective center to an explicitly chosen point.
+    PointOffset(SemanticVec3),
+}
+
+/// Activation-relative affine endpoint paired with one canonical Fade lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticFadeEndpoint {
+    pub scale_factor: f64,
+    pub translation: SemanticFadeTranslation,
+    pub scale_center: SemanticVec3,
+}
+
+impl SemanticFadeEndpoint {
+    pub const fn identity() -> Self {
+        Self {
+            scale_factor: 1.0,
+            translation: SemanticFadeTranslation::Shift(SemanticVec3::ZERO),
+            scale_center: SemanticVec3::ZERO,
+        }
+    }
+
+    pub(crate) fn is_valid(self) -> bool {
+        let translation = match self.translation {
+            SemanticFadeTranslation::Shift(value) | SemanticFadeTranslation::PointOffset(value) => {
+                value
+            }
+        };
+        self.scale_factor.is_finite()
+            && self.scale_factor.abs() <= f32::MAX as f64
+            && translation.lower_xy_f32().is_ok()
+            && translation.z == 0.0
+            && self.scale_center.lower_xy_f32().is_ok()
+            && self.scale_center.z == 0.0
+    }
+}
+
+impl Default for SemanticFadeEndpoint {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
 /// Membership direction for one content-preserving affine lifecycle animation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SemanticAffineLifecycleDirection {
@@ -92,6 +139,7 @@ pub enum SemanticAnimationIntent {
     Fade {
         target: SemanticNodeId,
         direction: SemanticFadeDirection,
+        endpoint: SemanticFadeEndpoint,
     },
     /// Introduce or remove one leaf through activation-relative affine/style channels.
     AffineLifecycle {
@@ -217,6 +265,7 @@ pub enum SemanticAnimationError {
     SameTargetAndTargetState(SemanticNodeId),
     InvalidRotationAngle(f64),
     InvalidIndicateEndpoint,
+    InvalidFadeEndpoint,
     InvalidAffineLifecycleEndpoint,
     Signal(SemanticSignalError),
     NotScalarInputSignal(SemanticNodeId),
@@ -256,6 +305,8 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidIndicateEndpoint => formatter.write_str(
                 "Indicate scale, color, and shared scale center must be finite 2D values",
             ),
+            Self::InvalidFadeEndpoint => formatter
+                .write_str("Fade scale, translation, and scale center must be finite 2D values"),
             Self::InvalidAffineLifecycleEndpoint => formatter.write_str(
                 "affine lifecycle endpoint point and rotation offset must be finite 2D values",
             ),
@@ -425,12 +476,35 @@ impl SemanticStore {
         direction: SemanticFadeDirection,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_fade_animation_with_endpoint(
+            target,
+            direction,
+            SemanticFadeEndpoint::default(),
+            options,
+        )
+    }
+
+    /// Insert one Fade declaration with an activation-relative affine endpoint.
+    pub fn insert_semantic_fade_animation_with_endpoint(
+        &mut self,
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        endpoint: SemanticFadeEndpoint,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
+        if !endpoint.is_valid() {
+            return Err(SemanticAnimationError::InvalidFadeEndpoint);
+        }
         validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
-                SemanticAnimationIntent::Fade { target, direction },
+                SemanticAnimationIntent::Fade {
+                    target,
+                    direction,
+                    endpoint,
+                },
                 options,
             )),
         )

@@ -232,7 +232,7 @@ def _retained_animation_plan(animation: object) -> list[dict[str, Any]] | None:
         return None
 
     if isinstance(animation, (_animate.FadeIn, _animate.FadeOut)):
-        shift = _compat._as_vec2(animation._fade_shift_vector)
+        shift = _compat._as_vec2(_animate._legacy_fade_shift_vector(animation))
         scale_factor = float(animation._fade_scale_factor)
         if not math.isfinite(scale_factor):
             raise ValueError("retained text fade scale must be finite")
@@ -289,7 +289,7 @@ def _retained_family_fade_expansion(
             "mixing retained Text and legacy Mobjects in one Group/VGroup fade is not supported"
         )
 
-    shift = _compat._as_vec2(animation._fade_shift_vector)
+    shift = _compat._as_vec2(_animate._legacy_fade_shift_vector(animation))
     scale_factor = float(animation._fade_scale_factor)
     if not math.isfinite(scale_factor):
         raise ValueError("retained text family fade scale must be finite")

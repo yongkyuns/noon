@@ -1120,14 +1120,23 @@ def _play_canonical_create(
     return self
 
 
-def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> object | None:
-    """Keep endpoint motion/layout requests out of the basic lifecycle subset."""
+def _canonical_fade_endpoint(animation: object) -> tuple[float, str, float, float] | None:
+    """Return the inert endpoint values that Rust resolves at activation."""
     shift = getattr(animation, "_fade_shift_vector", None)
-    if shift is None or float(shift.x) != 0.0 or float(shift.y) != 0.0:
+    scale_factor = float(getattr(animation, "_fade_scale_factor", float("nan")))
+    if shift is None or not math.isfinite(scale_factor):
         return None
-    if float(getattr(animation, "_fade_scale_factor", float("nan"))) != 1.0:
-        return None
-    if bool(getattr(animation, "_fade_point_target", True)):
+    if bool(getattr(animation, "_fade_point_target", False)):
+        point = getattr(animation, "_fade_point", None)
+        if point is None:
+            return None
+        return scale_factor, "point", float(point.x), float(point.y)
+    return scale_factor, "shift", float(shift.x), float(shift.y)
+
+
+def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    """Resolve timing while Rust retains all fade endpoint meaning."""
+    if _canonical_fade_endpoint(animation) is None:
         return None
     args = dict(getattr(animation, "anim_args", {}))
     lifecycle = "introducer" if type(animation) is _base.FadeIn else "remover"
@@ -1212,8 +1221,11 @@ def _play_canonical_fade(
     )
     if resolved is None:
         raise NotImplementedError(
-            "canonical ordinary Fade currently supports one basic leaf appearance lifecycle"
+            "canonical ordinary Fade requires one finite typed leaf endpoint"
         )
+    endpoint = _canonical_fade_endpoint(animation)
+    assert endpoint is not None
+    scale_factor, translation, x, y = endpoint
     _start_default_synchronous_continuation(self)
     object_id, reservation = _fade_object_id(self, target, direction)
     context = _context(self)
@@ -1228,6 +1240,10 @@ def _play_canonical_fade(
             object_id,
             getattr(target, "_semantic_handle"),
             direction,
+            scale_factor,
+            translation,
+            x,
+            y,
             float(resolved.run_time),
             str(resolved.rate_func),
         )
@@ -1538,13 +1554,26 @@ def _build_canonical_composition_candidate(
             child = _canonical_fade_options(animation, child_kwargs)
             if child is None:
                 raise NotImplementedError("unsupported canonical fade options")
+            endpoint = _canonical_fade_endpoint(animation)
+            assert endpoint is not None
+            scale_factor, translation, x, y = endpoint
             if direction == "in":
                 reservation = reserve(target)
                 object_id = str(reservation.object.id)
             else:
                 object_id = ""
                 removals.append(target)
-            builder.appendFade(object_id, getattr(target, "_semantic_handle"), direction, float(child.run_time), str(child.rate_func))
+            builder.appendFade(
+                object_id,
+                getattr(target, "_semantic_handle"),
+                direction,
+                scale_factor,
+                translation,
+                x,
+                y,
+                float(child.run_time),
+                str(child.rate_func),
+            )
             return
         created = _canonical_create_animation(self, animation)
         if created is not None:

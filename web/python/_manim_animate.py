@@ -47,12 +47,13 @@ def _store_animation_args(animation: object, kwargs: dict[str, Any]) -> None:
 
 def _fade_authoring_options(
     target: object, kwargs: dict[str, Any]
-) -> tuple[dict[str, Any], _base.Vec2, float, bool]:
+) -> tuple[dict[str, Any], _base.Vec2, float, bool, _base.Vec2 | None]:
     """Separate `_Fade` endpoint options from generic Animation options.
 
-    Manim resolves ``target_position`` during `_Fade.__init__`, while an explicitly
-    supplied ``shift`` takes precedence over it. Preserve that authoring-time behavior
-    and leave generic timing/rate options for the shared Rust option resolver.
+    Manim resolves a Mobject ``target_position`` to a point during `_Fade.__init__`,
+    while an explicitly supplied ``shift`` takes precedence over it. Keep that
+    absolute point for Rust to resolve against activation-effective target layout;
+    leave generic timing/rate options for the shared Rust option resolver.
     """
 
     if not isinstance(target, (_base.Mobject, _compat.Group)):
@@ -66,6 +67,7 @@ def _fade_authoring_options(
         raise ValueError("fade scale must be finite")
 
     point_target = False
+    point = None
     if shift is not None:
         shift_vector = _base._as_vec2(shift)
     elif target_position is not None:
@@ -73,12 +75,21 @@ def _fade_authoring_options(
             point = target_position.get_center()
         else:
             point = _base._as_vec2(target_position)
-        shift_vector = point - target.get_center()
+        # Retained/group targets still enter the #959 snapshot scheduler, which
+        # must preserve Manim's construction-time relative-vector capture until
+        # that migration path is deleted. Canonical typed leaves pass the point
+        # itself to Rust and never inspect the fade target's center in Python.
+        if isinstance(target, _compat.Group) or getattr(
+            target, "_semantic_handle", None
+        ) is None:
+            shift_vector = point - target.get_center()
+        else:
+            shift_vector = _base.ORIGIN
         point_target = True
     else:
         shift_vector = _base.ORIGIN
 
-    return animation_kwargs, shift_vector, scale_factor, point_target
+    return animation_kwargs, shift_vector, scale_factor, point_target, point
 
 
 def _store_fade_options(
@@ -87,10 +98,27 @@ def _store_fade_options(
     shift_vector: _base.Vec2,
     scale_factor: float,
     point_target: bool,
+    point: _base.Vec2 | None,
 ) -> None:
     object.__setattr__(animation, "_fade_shift_vector", shift_vector)
     object.__setattr__(animation, "_fade_scale_factor", scale_factor)
     object.__setattr__(animation, "_fade_point_target", point_target)
+    object.__setattr__(animation, "_fade_point", point)
+
+
+def _legacy_fade_shift_vector(animation: object) -> _base.Vec2:
+    """Resolve the relative vector only for the #959 snapshot consumers."""
+
+    if not bool(getattr(animation, "_fade_point_target", False)):
+        return animation._fade_shift_vector
+    if isinstance(animation.target, _compat.Group) or getattr(
+        animation.target, "_semantic_handle", None
+    ) is None:
+        return animation._fade_shift_vector
+    point = getattr(animation, "_fade_point", None)
+    if point is None:
+        raise ValueError("legacy target_position fade is missing its resolved point")
+    return point - animation.target.get_center()
 
 
 class Transform(_ORIGINAL_TRANSFORM):
@@ -187,8 +215,8 @@ class Uncreate(_ORIGINAL_UNCREATE):
 
 class FadeIn(_ORIGINAL_FADE_IN):
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
-        animation_kwargs, shift_vector, scale_factor, point_target = _fade_authoring_options(
-            target, kwargs
+        animation_kwargs, shift_vector, scale_factor, point_target, point = (
+            _fade_authoring_options(target, kwargs)
         )
         super().__init__(target, key)
         _store_animation_args(self, animation_kwargs)
@@ -197,13 +225,14 @@ class FadeIn(_ORIGINAL_FADE_IN):
             shift_vector=shift_vector,
             scale_factor=scale_factor,
             point_target=point_target,
+            point=point,
         )
 
 
 class FadeOut(_ORIGINAL_FADE_OUT):
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
-        animation_kwargs, shift_vector, scale_factor, point_target = _fade_authoring_options(
-            target, kwargs
+        animation_kwargs, shift_vector, scale_factor, point_target, point = (
+            _fade_authoring_options(target, kwargs)
         )
         super().__init__(target, key)
         _store_animation_args(self, animation_kwargs)
@@ -212,6 +241,7 @@ class FadeOut(_ORIGINAL_FADE_OUT):
             shift_vector=shift_vector,
             scale_factor=scale_factor,
             point_target=point_target,
+            point=point,
         )
 
 
@@ -504,12 +534,17 @@ def _fade_endpoint_snapshots(
     *,
     start_time: float,
 ) -> dict[int, dict[str, Any]]:
-    """Build Manim's faded copy endpoint for each leaf at play start."""
+    """Build the #959 legacy retained/group fade endpoint at play start.
+
+    Canonical ordinary leaves pass their typed endpoint to Rust and never enter
+    this migration scheduler. Delete this snapshot path with the remaining #959
+    retained/group compatibility consumer.
+    """
 
     if not isinstance(animation, (FadeIn, FadeOut)):
         return {}
 
-    shift_vector = animation._fade_shift_vector
+    shift_vector = _legacy_fade_shift_vector(animation)
     scale_factor = animation._fade_scale_factor
     if shift_vector == _base.ORIGIN and math.isclose(scale_factor, 1.0, abs_tol=1e-15):
         return {}
@@ -551,7 +586,7 @@ def _schedule_fade_endpoint_transform(
     easing: str,
     key: str | None,
 ) -> None:
-    """Lower Fade shift/scale to the ordinary deterministic Transform channel."""
+    """Schedule only the #959 legacy retained/group fade transform channel."""
 
     if member._object is None:
         raise ValueError("fade target must be bound before endpoint scheduling")

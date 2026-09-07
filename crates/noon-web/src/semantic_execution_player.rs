@@ -851,13 +851,14 @@ impl SemanticExecutionPlayer {
         Ok(end_time)
     }
 
-    /// Atomically declare and activate one shared basic fade, retaining its
+    /// Atomically declare and activate one shared affine fade, retaining its
     /// ordinary continuation segment in this one session-owned player.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_declare_and_activate_fade(
         &mut self,
         target: &noon::Mobject,
         direction: noon_core::SemanticFadeDirection,
+        endpoint: noon::FadeEndpoint,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
         self.require_completed_live_segment()?;
@@ -871,7 +872,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         )
-        .declare_and_activate_fade(target, direction, options)
+        .declare_and_activate_fade_with_endpoint(target, direction, endpoint, options)
         .map_err(|error| error.to_string())?;
         let end_time = segment.end_time();
         self.clock = self
