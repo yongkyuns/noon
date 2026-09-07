@@ -228,7 +228,7 @@ try {
 
   diagnostics.snapshots.baseline = await waitForPreloadedRuntime(page);
   assert.equal(diagnostics.snapshots.baseline.exampleId, "manim-parity-stress-grid");
-  assert.equal(diagnostics.snapshots.baseline.executionMode, "retained");
+  assert.equal(diagnostics.snapshots.baseline.executionMode, "semantic");
   assert.match(diagnostics.snapshots.baseline.patchText, /Scene rebuilt atomically/);
 
   const source = await page.evaluate(
@@ -264,7 +264,7 @@ try {
       page,
       previousObjectCount,
     );
-    assert.equal(diagnostics.snapshots[`rows${rows}Rerun`].executionMode, "retained");
+    assert.equal(diagnostics.snapshots[`rows${rows}Rerun`].executionMode, "semantic");
     assert.match(
       diagnostics.snapshots[`rows${rows}Rerun`].patchText,
       /Scene rebuilt atomically/,

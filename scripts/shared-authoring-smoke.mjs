@@ -299,14 +299,14 @@ function textPixelStats(buffer) {
 }
 
 // Share source attachment across visual proofs; authored timing stays in Rust.
-async function startSampledSource(page, source, canvasId) {
+async function startSampledSource(page, source, canvasId, width = 640, height = 360) {
   console.log(`Checking sampled source ${canvasId}`);
-  await page.evaluate(async ({ source, canvasId }) => {
+  await page.evaluate(async ({ source, canvasId, width, height }) => {
     const harness = window.sharedAuthoringSmoke;
     const canvas = document.createElement("canvas");
     canvas.id = canvasId;
-    canvas.width = 640;
-    canvas.height = 360;
+    canvas.width = width;
+    canvas.height = height;
     document.body.append(canvas);
     let resolveAttached;
     let rejectAttached;
@@ -336,7 +336,7 @@ async function startSampledSource(page, source, canvasId) {
     harness.sampledProof = { execution, authored };
     await attached;
     await execution.sampleToAuthoredTime(0);
-  }, { source, canvasId });
+  }, { source, canvasId, width, height });
 }
 
 async function stopSampledSource(page) {
@@ -1328,7 +1328,8 @@ try {
   const drawBorderThenFillSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_draw_border_then_fill.py"), "utf8",
   );
-  await startSampledSource(page, drawBorderThenFillSource, "scene-shared-draw-border-then-fill");
+  // Match the direct proof's resolution so the thin outline covers a full pixel.
+  await startSampledSource(page, drawBorderThenFillSource, "scene-shared-draw-border-then-fill", 960, 540);
   try {
     const canvas = page.locator("#scene-shared-draw-border-then-fill");
     await page.evaluate(() => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.5));
@@ -1336,7 +1337,7 @@ try {
     const outline = renderedWorldPixel(outlineFrame, -1, 0.4);
     const unfilled = renderedWorldPixel(outlineFrame, -1, 0);
     assert.ok(Math.abs(outline.red - 247) < 15 && Math.abs(outline.green - 217) < 15 && Math.abs(outline.blue - 111) < 15,
-      "shared DrawBorderThenFill must reveal the yellow outline in phase one");
+      `shared DrawBorderThenFill must reveal the yellow outline in phase one: ${JSON.stringify(outline)}`);
     assert.ok(Math.max(unfilled.red, unfilled.green, unfilled.blue) < 40,
       "shared DrawBorderThenFill must keep fill transparent in phase one");
     for (const [time, x] of [[1.5, -1], [2, -1], [2.5, 1], [3, 1]]) {
