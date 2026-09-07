@@ -1,0 +1,124 @@
+name: Qualify 1202 detached-family lifecycle
+on:
+  push:
+    branches: [codex/noon-1202-trace]
+    paths: [.github/workflows/noon-1202-fade-qualification.yml]
+permissions:
+  contents: write
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: source
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - name: Read pinned diagnostic patch
+        uses: actions/checkout@v7
+        with:
+          ref: ff470cc68c308793ae9d9d4bd4ae4beaf47e6ec0
+          path: control
+          persist-credentials: false
+      - name: Check out pinned product source
+        uses: actions/checkout@v7
+        with:
+          ref: f3ff356c27cf09867564f4d00a530fb400fdff32
+          path: source
+      - name: Apply reviewed patch and correct direct-membership test observation
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/noon-1202-evidence"
+          python3 - <<'PY'
+          import base64, hashlib, os, pathlib, re, subprocess, zlib
+          control = pathlib.Path('../control/.github/workflows/noon-1202-fade-repair.yml').read_text()
+          encoded = re.search(r"encoded = '''([^']+)'''", control).group(1)
+          patch = zlib.decompress(base64.b64decode(encoded.replace('/a3fzn', '/a3zn')))
+          assert hashlib.sha256(patch).hexdigest() == '04cd769273c4d5013548d0f4d616c9fe2dbbefcffa58bcead62b6b19b8337402'
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'noon-1202-evidence/reviewed.patch'
+          path.write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', str(path)], check=True)
+          subprocess.run(['git', 'apply', str(path)], check=True)
+          path = pathlib.Path('crates/noon/src/live_session/late_family_fade_tests.rs')
+          source = path.read_text()
+          source = source.replace('if direct_root_edge { scene.add(&leaf).unwrap(); }', '''if direct_root_edge {
+                      // Scene.add deliberately restructures existing family paths. Build a
+                      // valid aliased DAG explicitly to test the fade rejection boundary.
+                      let mut transaction = SemanticMutationTransaction::new();
+                      transaction.add_member(scene.root(), leaf.node_id());
+                      transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+                  }''')
+          start = source.index('fn late_family_mounted_or_aliased_leaf_fades_still_fail_atomically()')
+          end = source.index('\n#[test]', start)
+          test = source[start:end].replace('assert!(live.contains(&leaf).unwrap());', 'assert_eq!(live.contains(&leaf).unwrap(), direct_root_edge);\n            assert!(live.effective(&leaf).is_ok());')
+          path.write_text(source[:start] + test + source[end:])
+          PY
+      - name: Set up Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format source and prove regression fails before repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cp crates/noon/src/execution_session.rs "$RUNNER_TEMP/noon-fixed-execution.rs"
+          trap 'cp "$RUNNER_TEMP/noon-fixed-execution.rs" crates/noon/src/execution_session.rs' EXIT
+          git checkout -- crates/noon/src/execution_session.rs
+          status=0
+          cargo test -p noon --lib late_family_after_succession -- --nocapture > "$RUNNER_TEMP/noon-1202-evidence/baseline-red.log" 2>&1 || status=$?
+          tail -n 70 "$RUNNER_TEMP/noon-1202-evidence/baseline-red.log"
+          test "$status" -ne 0
+          grep -F 'late_family_after_succession_enters_lagged_fade_without_premature_membership ... FAILED' "$RUNNER_TEMP/noon-1202-evidence/baseline-red.log"
+          grep -F 'TargetIsNotDetached' "$RUNNER_TEMP/noon-1202-evidence/baseline-red.log"
+      - name: Validate repaired shared publication and lifecycle regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --lib late_family_fade_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/noon-1202-evidence/repaired-native.log"
+          cargo test -p noon --lib > "$RUNNER_TEMP/noon-1202-evidence/noon-unit.log" 2>&1
+          tail -n 15 "$RUNNER_TEMP/noon-1202-evidence/noon-unit.log"
+      - name: Verify browser evidence contracts
+        run: |
+          node --check scripts/semantic-preview-smoke.mjs
+          node --test scripts/semantic-preview-observations.test.mjs web/semantic-preview-session.test.mjs > "$RUNNER_TEMP/noon-1202-evidence/preview-contracts.log"
+          tail -n 12 "$RUNNER_TEMP/noon-1202-evidence/preview-contracts.log"
+          git diff --check
+      - name: Publish source-only candidate for review, not master or PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = f3ff356c27cf09867564f4d00a530fb400fdff32
+          git add crates/noon/src/execution_session.rs crates/noon/src/live_session.rs crates/noon/src/live_session/late_family_fade_tests.rs scripts/semantic-preview-observations.mjs scripts/semantic-preview-observations.test.mjs scripts/semantic-preview-smoke.mjs
+          test "$(git diff --cached --name-only | wc -l)" -eq 6
+          git diff --exit-code
+          git config user.name 'Noon development agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix detached-family fades after live composition (#1202)'
+          git push --force-with-lease=refs/heads/codex/noon-1202-fade-qualified: origin HEAD:refs/heads/codex/noon-1202-fade-qualified
+          git rev-parse HEAD > "$RUNNER_TEMP/noon-1202-evidence/REVISION"
+          git diff f3ff356c27cf09867564f4d00a530fb400fdff32 HEAD > "$RUNNER_TEMP/noon-1202-evidence/final.patch"
+          git archive --format=tar.gz HEAD -o "$RUNNER_TEMP/noon-1202-evidence/source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: noon-1202-fade-qualification
+          path: ${{ runner.temp }}/noon-1202-evidence
+          if-no-files-found: error
+          retention-days: 7
