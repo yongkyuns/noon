@@ -6,7 +6,7 @@
 //! SVG payload, or frontend-owned glyph state is introduced at the authoring boundary.
 
 mod semantic;
-pub(crate) use semantic::native_text_state;
+pub(crate) use semantic::{math_typst_state, native_text_state, typst_state};
 
 use std::sync::Arc;
 

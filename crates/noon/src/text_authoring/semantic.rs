@@ -24,6 +24,20 @@ pub(crate) fn native_text_state(
     )
 }
 
+pub(crate) fn typst_state(
+    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    text: Typst,
+) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
+    typst_spec_state(store, text.0, TypstMode::Markup)
+}
+
+pub(crate) fn math_typst_state(
+    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    text: MathTypst,
+) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
+    typst_spec_state(store, text.0, TypstMode::Math)
+}
+
 impl crate::Scene {
     /// Create an ordinary detached native text Mobject in this scene's shared store.
     pub fn text(&self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
@@ -57,7 +71,8 @@ impl crate::Mobject {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: Typst,
     ) -> Result<crate::Mobject, TextAuthoringError> {
-        Self::from_typst_spec(store, text.0, TypstMode::Markup)
+        let state = typst_state(&store, text)?;
+        crate::Mobject::new(store, state).map_err(TextAuthoringError::Semantic)
     }
 
     /// Compile MathTypst into the shared retained text resource and return its ordinary semantic handle.
@@ -65,44 +80,30 @@ impl crate::Mobject {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: MathTypst,
     ) -> Result<crate::Mobject, TextAuthoringError> {
-        Self::from_typst_spec(store, text.0, TypstMode::Math)
-    }
-
-    fn from_typst_spec(
-        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-        text: super::TypstSpec,
-        mode: TypstMode,
-    ) -> Result<crate::Mobject, TextAuthoringError> {
-        if !text.font_size.is_finite() || text.font_size <= 0.0 {
-            return Err(TextAuthoringError::InvalidFontSize(text.font_size));
-        }
-        text.presentation.validate()?;
-        let artifact = compile_typst_resource(text.source.as_ref(), mode)?;
-        Self::from_text_artifact(
-            store,
-            text.authored_transform(),
-            text.presentation.color,
-            text.presentation.opacity,
-            artifact.resource,
-            artifact.fonts,
-            artifact.geometry,
-        )
-    }
-
-    fn from_text_artifact(
-        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-        transform: noon_core::Transform2D,
-        color: noon_core::Color,
-        opacity: f32,
-        resource: noon_core::TextResource,
-        fonts: noon_core::FontResourceArena,
-        geometries: GeometryResourceArena,
-    ) -> Result<crate::Mobject, TextAuthoringError> {
-        let state = text_artifact_state(
-            &store, transform, color, opacity, resource, fonts, geometries,
-        )?;
+        let state = math_typst_state(&store, text)?;
         crate::Mobject::new(store, state).map_err(TextAuthoringError::Semantic)
     }
+}
+
+fn typst_spec_state(
+    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    text: super::TypstSpec,
+    mode: TypstMode,
+) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
+    if !text.font_size.is_finite() || text.font_size <= 0.0 {
+        return Err(TextAuthoringError::InvalidFontSize(text.font_size));
+    }
+    text.presentation.validate()?;
+    let artifact = compile_typst_resource(text.source.as_ref(), mode)?;
+    text_artifact_state(
+        store,
+        text.authored_transform(),
+        text.presentation.color,
+        text.presentation.opacity,
+        artifact.resource,
+        artifact.fonts,
+        artifact.geometry,
+    )
 }
 
 fn text_artifact_state(
@@ -359,6 +360,86 @@ mod tests {
         assert_eq!(scene.store().borrow().text_resources().stats(), resources);
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn live_typst_created_after_an_empty_wait_reuses_the_same_session() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let (label, equation) = {
+            let mut live = scene.live(&mut session);
+            let wait = live.wait_segment(1.0).unwrap();
+            live.advance_segment_to(wait, wait.end_time()).unwrap();
+            live.complete_segment(wait).unwrap();
+            (
+                live.create_typst(super::Typst::new("#text[Late]")).unwrap(),
+                live.create_math_typst(super::MathTypst::new("x^2"))
+                    .unwrap(),
+            )
+        };
+        let label_resource = label.state().unwrap().content.text().unwrap();
+        let equation_resource = equation.state().unwrap().content.text().unwrap();
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+        assert!(session.text_resources().get(label_resource).is_none());
+        assert!(session.text_resources().get(equation_resource).is_none());
+        assert_eq!(
+            scene.store().borrow().scene_revision(),
+            session.publication_context().scene_revision()
+        );
+
+        {
+            let mut live = scene.live(&mut session);
+            live.add(&label).unwrap();
+            live.add(&equation).unwrap();
+        }
+        assert_eq!(session.frame().objects.len(), 2);
+        assert_eq!(
+            session.text_resources().get(label_resource).unwrap().kind,
+            noon_core::TextSourceKind::Typst
+        );
+        assert_eq!(
+            session
+                .text_resources()
+                .get(equation_resource)
+                .unwrap()
+                .kind,
+            noon_core::TextSourceKind::MathTypst
+        );
+    }
+
+    #[test]
+    fn invalid_live_typst_changes_neither_resources_nor_publication() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let revision = scene.store().borrow().scene_revision();
+        let resources = scene.store().borrow().text_resources().stats();
+        let publication = session.publication_context();
+
+        {
+            let mut live = scene.live(&mut session);
+            assert!(live
+                .create_typst(super::Typst::new("invalid").with_font_size(0.0))
+                .is_err());
+            assert!(live
+                .create_math_typst(
+                    super::MathTypst::new("invalid").color(noon_core::Color::rgba(
+                        f32::NAN,
+                        1.0,
+                        1.0,
+                        1.0
+                    ),)
+                )
+                .is_err());
+        }
+
+        assert_eq!(scene.store().borrow().scene_revision(), revision);
+        assert_eq!(scene.store().borrow().text_resources().stats(), resources);
+        assert_eq!(session.publication_context(), publication);
+        assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }
 
