@@ -7,6 +7,7 @@ const READY_PARITY = new Set(["candidate", "parity-qualified"]);
 const THUMBNAIL_FALLBACK_MARKER = "noonThumbnailFallbackInstalled";
 const DEFAULT_GALLERY_MANIFEST = "./python/examples/manim_tutorial_manifest.json";
 const STRESS_GALLERY_MANIFEST = "./python/examples/manim_stress_manifest.json";
+const COMPATIBILITY_GALLERY_MANIFEST = "./python/examples/manim_compatibility_manifest.json";
 
 if (typeof document !== "undefined") {
   installGalleryThumbnailFallback(document);
@@ -109,18 +110,30 @@ export async function loadGalleryManifest(
     return normalizeGalleryManifest(manifest);
   }
 
-  const stressManifest = await fetchGalleryManifest(STRESS_GALLERY_MANIFEST, fetchImpl);
+  const [stressManifest, compatibilityManifest] = await Promise.all([
+    fetchGalleryManifest(STRESS_GALLERY_MANIFEST, fetchImpl),
+    fetchGalleryManifest(COMPATIBILITY_GALLERY_MANIFEST, fetchImpl),
+  ]);
   const referenceVersion = manifest.reference?.version ?? null;
-  const stressVersion = stressManifest.reference?.version ?? null;
-  if (stressVersion !== referenceVersion) {
-    throw new Error(
-      `Manim stress manifest version ${stressVersion ?? "unknown"} does not match gallery version ${referenceVersion ?? "unknown"}`,
-    );
+  for (const [label, supplementalManifest] of [
+    ["stress", stressManifest],
+    ["compatibility", compatibilityManifest],
+  ]) {
+    const supplementalVersion = supplementalManifest.reference?.version ?? null;
+    if (supplementalVersion !== referenceVersion) {
+      throw new Error(
+        `Manim ${label} manifest version ${supplementalVersion ?? "unknown"} does not match gallery version ${referenceVersion ?? "unknown"}`,
+      );
+    }
   }
 
   return normalizeGalleryManifest({
     ...manifest,
-    entries: [...manifest.entries, ...stressManifest.entries],
+    entries: [
+      ...manifest.entries,
+      ...stressManifest.entries,
+      ...compatibilityManifest.entries,
+    ],
   });
 }
 

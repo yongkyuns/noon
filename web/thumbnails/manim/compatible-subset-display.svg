@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Subset Display demo</title>
+  <desc id="desc">Two rows of colored circles demonstrating increasing subsets and one-by-one display.</desc>
+  <rect width="640" height="360" fill="#10141d"/>
+  <circle cx="210" cy="125" r="38" fill="#fc6255"/>
+  <circle cx="320" cy="125" r="38" fill="#83c167"/>
+  <circle cx="430" cy="125" r="38" fill="#58c4dd"/>
+  <circle cx="210" cy="235" r="38" fill="#ff862f" opacity="0.2"/>
+  <circle cx="320" cy="235" r="38" fill="#d147bd"/>
+  <circle cx="430" cy="235" r="38" fill="#f7d96f" opacity="0.2"/>
+</svg>

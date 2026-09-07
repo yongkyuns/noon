@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Family Write demo</title>
+  <desc id="desc">An orange square and pink circle being written with a highlighted border.</desc>
+  <rect width="640" height="360" fill="#10141d"/>
+  <rect x="165" y="120" width="120" height="120" rx="8" fill="#ff862f" stroke="#58c4dd" stroke-width="10"/>
+  <circle cx="430" cy="180" r="62" fill="#d147bd" stroke="#f7d96f" stroke-width="8" stroke-dasharray="120 270" transform="rotate(-80 430 180)"/>
+  <path d="M330 110c55 16 86 43 104 83" fill="none" stroke="#f7d96f" stroke-width="7" stroke-linecap="round" opacity="0.7"/>
+</svg>
