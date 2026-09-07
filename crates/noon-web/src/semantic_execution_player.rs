@@ -438,6 +438,41 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .create_typst(text)
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_create_math_typst(
+        &mut self,
+        text: noon::MathTypst,
+    ) -> Result<noon::Mobject, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .create_math_typst(text)
+        .map_err(|error| error.to_string())
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
@@ -3160,6 +3195,20 @@ mod tests {
 
     #[test]
     fn text_created_after_empty_wait_publishes_resources_once_on_admission() {
+        assert_late_text_resource_admission(|player| {
+            player.live_create_text(noon::Text::new("LATE"))
+        });
+        assert_late_text_resource_admission(|player| {
+            player.live_create_typst(noon::Typst::new("LATE"))
+        });
+        assert_late_text_resource_admission(|player| {
+            player.live_create_math_typst(noon::MathTypst::new("x^2"))
+        });
+    }
+
+    fn assert_late_text_resource_admission(
+        create: impl FnOnce(&mut SemanticExecutionPlayer) -> Result<noon::Mobject, String>,
+    ) {
         let scene = noon::Scene::new();
         let mut player = SemanticExecutionPlayer::from_live_session(
             scene.execution_session().unwrap(),
@@ -3186,7 +3235,7 @@ mod tests {
             assert!(wait_delta.resource_additions.is_none());
             mirror.apply_family(wait_delta).unwrap();
         }
-        let label = player.live_create_text(noon::Text::new("LATE")).unwrap();
+        let label = create(&mut player).unwrap();
         assert!(!player.live_contains(&label).unwrap());
         if let Some(detached_delta) = player.delta(false).unwrap() {
             assert!(detached_delta.retained.objects.is_empty());
@@ -3212,7 +3261,7 @@ mod tests {
         assert_eq!(admitted.retained.objects.len(), 1);
         let additions = admitted.resource_additions.as_ref().unwrap();
         assert_eq!(additions.text_count(), 1);
-        assert!(additions.font_count() > 0);
+        assert!(additions.font_count() + additions.geometry_count() > 0);
         mirror.apply_family(admitted).unwrap();
         let installed = mirror.frame().unwrap().objects[0].text().unwrap();
         assert!(mirror.resources().texts().get(installed).is_some());

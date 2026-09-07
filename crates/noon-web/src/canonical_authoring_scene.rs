@@ -2273,6 +2273,28 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, String> {
+        match self.live_execution_ownership() {
+            "active" | "returned" => self.active_live_player()?.live_create_typst(text),
+            "none" => Err("live Typst construction requires an active canonical session".into()),
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_create_math_typst(&mut self, text: noon::MathTypst) -> Result<noon::Mobject, String> {
+        match self.live_execution_ownership() {
+            "active" | "returned" => self.active_live_player()?.live_create_math_typst(text),
+            "none" => {
+                Err("live MathTypst construction requires an active canonical session".into())
+            }
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn live_add_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
@@ -5705,6 +5727,49 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Compile and publish one detached Typst or MathTypst object through
+        /// the current retained session.
+        #[wasm_bindgen(js_name = liveCreateManimTypst)]
+        pub fn live_create_manim_typst(
+            &mut self,
+            source: &str,
+            math: bool,
+            font_size: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: f64,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            let font_size = crate::authoring_mobject::text_authoring_f32("font size", font_size)
+                .map_err(js_error)?;
+            let color = Color::rgba(
+                legacy_f32("text red", red)?,
+                legacy_f32("text green", green)?,
+                legacy_f32("text blue", blue)?,
+                legacy_f32("text alpha", alpha)?,
+            );
+            let opacity = legacy_f32("text opacity", opacity)?;
+            let result = if math {
+                self.inner.live_create_math_typst(
+                    noon::MathTypst::new(source)
+                        .with_font_size(font_size)
+                        .color(color)
+                        .set_opacity(opacity),
+                )
+            } else {
+                self.inner.live_create_typst(
+                    noon::Typst::new(source)
+                        .with_font_size(font_size)
+                        .color(color)
+                        .set_opacity(opacity),
+                )
+            };
+            result
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = livePlayAnimation)]
         pub fn live_play_animation(
             &mut self,
@@ -8679,6 +8744,23 @@ mod tests {
             .unwrap()
             .live_contains(&label)
             .unwrap());
+        let typst = context
+            .live_create_typst(noon::Typst::new("#circle(radius: 1em)"))
+            .unwrap();
+        let math = context
+            .live_create_math_typst(noon::MathTypst::new("x^2"))
+            .unwrap();
+        assert_ne!(typst.node_id(), math.node_id());
+        assert!(!context
+            .active_live_player()
+            .unwrap()
+            .live_contains(&typst)
+            .unwrap());
+        assert!(!context
+            .active_live_player()
+            .unwrap()
+            .live_contains(&math)
+            .unwrap());
 
         let end = context
             .begin_ordinary_fade(
@@ -8701,6 +8783,14 @@ mod tests {
         let leased = context.take_execution_player(end, 18).unwrap();
         assert!(context
             .live_create_text(noon::Text::new("Rejected"))
+            .unwrap_err()
+            .contains("running in the semantic engine"));
+        assert!(context
+            .live_create_typst(noon::Typst::new("Rejected"))
+            .unwrap_err()
+            .contains("running in the semantic engine"));
+        assert!(context
+            .live_create_math_typst(noon::MathTypst::new("Rejected"))
             .unwrap_err()
             .contains("running in the semantic engine"));
         context.return_execution_player(leased).unwrap();

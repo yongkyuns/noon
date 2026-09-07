@@ -55,10 +55,6 @@ def _new_typst_handle(source: str, math_mode: bool, font_size: float):
     if not isinstance(source, str) or source == "":
         raise ValueError("Typst source must be a non-empty string")
     font_size = _validated_font_size(font_size)
-    if _live_text_context() is not None:
-        raise NotImplementedError(
-            "Typst construction after live execution starts is not yet supported"
-        )
     if _create_authoring_typst_handle is None:
         raise RuntimeError("Typst requires Noon's shared Rust authoring runtime")
     return _create_authoring_typst_handle(source, bool(math_mode), font_size)
@@ -230,29 +226,6 @@ class _RetainedTextMobject(_base.Mobject):
         _base.Mobject.set_object_opacity(self, value)
         return self
 
-    def _copy_constructor(self) -> _RetainedTextMobject:
-        raise NotImplementedError
-
-    def copy(self) -> _RetainedTextMobject:
-        if _in_canonical_callback_phase(self):
-            raise NotImplementedError(
-                "canonical callback Text copy is unsupported; use property operations"
-            )
-        clone = self._copy_constructor()
-        source = self._semantic_handle
-        clone._semantic_handle.moveTo(
-            float(source.wireTranslationX), float(source.wireTranslationY)
-        )
-        clone._semantic_handle.setScale(float(source.wireScaleX), float(source.wireScaleY))
-        clone._semantic_handle.setRotation(float(source.wireRotation))
-        clone._semantic_handle.setColor(
-            float(source.wireFillRed),
-            float(source.wireFillGreen),
-            float(source.wireFillBlue),
-            float(source.wireFillAlpha),
-        )
-        clone._semantic_handle.setObjectOpacity(float(source.wireObjectOpacity))
-        return clone
 
 
 class _RetainedTypstMobject(_RetainedTextMobject):
@@ -266,15 +239,27 @@ class _RetainedTypstMobject(_RetainedTextMobject):
         color: _base.Color = _base.WHITE,
         **kwargs: Any,
     ) -> None:
-        opacity = float(kwargs.pop("opacity", 1.0))
+        opacity = _validated_opacity(kwargs.pop("opacity", 1.0))
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported Typst option(s): {unsupported}")
-        handle = _new_typst_handle(source, self._math_mode, font_size)
-        self._initialize_text(str(source), float(font_size), handle, color, opacity)
-
-    def _copy_constructor(self) -> _RetainedTypstMobject:
-        return type(self)(self._source, font_size=self._font_size, color=_base.WHITE)
+        if not isinstance(source, str) or source == "":
+            raise ValueError("Typst source must be a non-empty string")
+        font_size = _validated_font_size(font_size)
+        color = _as_color(color)
+        live_context = _live_text_context()
+        if live_context is None:
+            handle = _new_typst_handle(source, self._math_mode, font_size)
+        else:
+            handle = live_context.liveCreateManimTypst(
+                source, bool(self._math_mode), font_size, float(color.red),
+                float(color.green), float(color.blue), float(color.alpha), opacity,
+            )
+            self._canonical_live_target_context = live_context
+        self._initialize_text(
+            source, font_size, handle, color, opacity,
+            presentation_applied=live_context is not None,
+        )
 
 
 class Typst(_RetainedTypstMobject):
@@ -392,16 +377,6 @@ class Text(_RetainedTextMobject):
             float(handle.criticalX(float(axis.x), float(axis.y))),
             float(handle.criticalY(float(axis.x), float(axis.y))),
         )
-
-    def _copy_constructor(self) -> Text:
-        return type(self)(
-            self._source,
-            font=self._font,
-            font_size=self._font_size,
-            line_spacing=self._line_spacing,
-            color=_base.WHITE,
-        )
-
 
 def install() -> None:
     """Install shared semantic Text and Typst wrappers."""

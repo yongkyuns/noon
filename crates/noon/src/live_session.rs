@@ -665,6 +665,23 @@ impl<'a> LiveSession<'a> {
         self.create_detached_mobject(state)
     }
 
+    /// Compile and publish one detached Typst object through this live session.
+    pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
+        let state = crate::text_authoring::typst_state(self.store, text)
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        self.create_detached_mobject(state)
+    }
+
+    /// Compile and publish one detached MathTypst object through this live session.
+    pub fn create_math_typst(
+        &mut self,
+        text: crate::MathTypst,
+    ) -> Result<Mobject, LiveSessionError> {
+        let state = crate::text_authoring::math_typst_state(self.store, text)
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        self.create_detached_mobject(state)
+    }
+
     fn create_detached_mobject(
         &mut self,
         state: SemanticObjectState,

@@ -280,6 +280,18 @@ function textBrightnessByRegion(buffer) {
   return result;
 }
 
+function textBrightnessByBands(buffer) {
+  const png = PNG.sync.read(buffer);
+  const bands = [0, 0, 0];
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const brightness = Math.max(png.data[offset], png.data[offset + 1], png.data[offset + 2]);
+    if (brightness < 24) continue;
+    const y = Math.floor(offset / 4 / png.width);
+    bands[Math.min(2, Math.floor(3 * y / png.height))] += brightness;
+  }
+  return bands;
+}
+
 function textPixelStats(buffer) {
   const png = PNG.sync.read(buffer);
   let count = 0;
@@ -1481,23 +1493,22 @@ try {
           await window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime);
         }, time);
       }
-      const brightness = textBrightnessByRegion(await canvas.screenshot());
+      const bands = textBrightnessByBands(await canvas.screenshot());
       const metrics = await page.evaluate(async () =>
         (await window.sharedAuthoringSmoke.sampledProof.execution.metrics()).metrics);
-      samples.push({
-        time,
-        brightness: brightness.left + brightness.right,
-        objects: metrics.objectCount,
-      });
+      samples.push({ time, bands, brightness: bands.reduce((sum, value) => sum + value, 0),
+        objects: metrics.objectCount });
     }
     assert.deepEqual(samples.slice(0, 2).map(({ brightness, objects }) => [brightness, objects]),
       [[0, 0], [0, 0]], "initial wait must remain an empty shared execution");
     assert.equal(samples[2].brightness, 0);
-    assert.equal(samples[2].objects, 1);
-    assert.ok(samples[3].brightness > 0 && samples[3].objects === 1);
-    assert.ok(samples[4].brightness > samples[3].brightness && samples[4].objects === 1);
+    assert.equal(samples[2].objects, 3);
+    assert.ok(samples[3].bands.every((value) => value > 0) && samples[3].objects === 3,
+      `late Text, Typst, and MathTypst must all render during FadeIn: ${JSON.stringify(samples)}`);
+    assert.ok(samples[4].bands.every((value) => value > 0)
+        && samples[4].brightness > samples[3].brightness && samples[4].objects === 3);
     assert.ok(samples[5].brightness > 0 && samples[5].brightness < samples[4].brightness
-        && samples[5].objects === 1);
+        && samples[5].objects === 3);
     assert.equal(samples[6].brightness, 0);
     assert.equal(samples[6].objects, 0);
     const result = await page.evaluate(async () => {

@@ -1195,6 +1195,23 @@ async function textBrightnessByRow(canvas) {
   return result;
 }
 
+async function textBrightnessByBands(canvas) {
+  const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
+  const reader = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = reader.getContext("2d", { willReadFrequently: true });
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const bands = [0, 0, 0];
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    const brightness = Math.max(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+    if (brightness < 24) continue;
+    const y = Math.floor(offset / 4 / canvas.width);
+    bands[Math.min(2, Math.floor(3 * y / canvas.height))] += brightness;
+  }
+  return bands;
+}
+
 async function textBrightnessByRegion(canvas) {
   const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
   const reader = new OffscreenCanvas(canvas.width, canvas.height);
@@ -1262,16 +1279,18 @@ async function directAutomaticWaitTextProof(expectedBackend) {
     for (const time of [0, 250, 500, 1000, 1500, 1750, 2000]) {
       renderer.advanceDirectRealtime(time);
       await settleDirectPublication(renderer, time);
-      const rows = await textBrightnessByRow(canvas);
-      samples.push({ time, brightness: rows.upper + rows.lower, objects: renderer.objectCount() });
+      const bands = await textBrightnessByBands(canvas);
+      samples.push({ time, bands, brightness: bands.reduce((sum, value) => sum + value, 0),
+        objects: renderer.objectCount() });
     }
     if (samples[0].brightness !== 0 || samples[0].objects !== 0
         || samples[1].brightness !== 0 || samples[1].objects !== 0
-        || samples[2].brightness !== 0 || samples[2].objects !== 1
-        || samples[3].brightness <= 0 || samples[3].objects !== 1
-        || samples[4].brightness <= samples[3].brightness || samples[4].objects !== 1
+        || samples[2].brightness !== 0 || samples[2].objects !== 3
+        || samples[3].bands.some((value) => value <= 0) || samples[3].objects !== 3
+        || samples[4].bands.some((value) => value <= 0)
+        || samples[4].brightness <= samples[3].brightness || samples[4].objects !== 3
         || samples[5].brightness <= 0 || samples[5].brightness >= samples[4].brightness
-        || samples[5].objects !== 1
+        || samples[5].objects !== 3
         || samples[6].brightness !== 0 || samples[6].objects !== 0) {
       throw new Error(`direct automatic-wait Text phases were incorrect: ${JSON.stringify(samples)}`);
     }
