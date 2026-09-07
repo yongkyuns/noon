@@ -73,7 +73,9 @@ pub fn program() -> Result<LiveProgram<DrawBorderThenFill>, String> {
         f64::from(Color::PINK.blue),
         1.0,
     )?;
-    circle.set_stroke_opacity(0.0)?;
+    // A zero-width visible stroke proves the outline override appears, then
+    // returns to a no-stroke final style during the fill phase.
+    circle.set_stroke_width(0.0)?;
     let family = scene.family(&[&square, &circle])?;
     scene
         .into_live_program(DrawBorderThenFill { family, stage: 0 })

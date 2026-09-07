@@ -6146,6 +6146,85 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_draw_border_then_fill_leaf_and_family_publish_atomically() {
+        let mut context = CanonicalAuthoringScene::default();
+        let leaf = context.scene.circle(0.3).unwrap();
+        let left = context.scene.square(0.5).unwrap();
+        let right = context.scene.circle(0.25).unwrap();
+        let family = context.scene.family(&[&left, &right]).unwrap();
+        let outline = noon::DrawBorderThenFillOptions::new(0.04, Some(noon_core::YELLOW))
+            .with_phase_rate_function(RateFunction::Linear);
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear)
+            .introducer(true);
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+
+        // Missing one detached family identity is rejected before a player,
+        // semantic admission, or facade binding can be published.
+        let invalid = [OrdinaryCompositionChild::FamilyDrawBorderThenFill {
+            target: family.clone(),
+            entering: vec![(ObjectId::new(1), left.clone())],
+            outline,
+            options,
+        }];
+        let revision = context.scene.store().borrow().scene_revision();
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &invalid,
+                composition,
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert!(context.live_player.is_none());
+        assert!(context.bindings.is_empty());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let valid = [
+            OrdinaryCompositionChild::DrawBorderThenFill {
+                entering_id: Some(ObjectId::new(0)),
+                target: leaf.clone(),
+                outline,
+                options,
+            },
+            OrdinaryCompositionChild::FamilyDrawBorderThenFill {
+                target: family,
+                entering: vec![
+                    (ObjectId::new(1), left.clone()),
+                    (ObjectId::new(2), right.clone()),
+                ],
+                outline,
+                options: options.lag_ratio(0.5),
+            },
+        ];
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &valid,
+                    composition,
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            2.0
+        );
+        for target in [&leaf, &left, &right] {
+            assert!(context.live_contains_mobject(target).unwrap());
+        }
+        assert_eq!(context.bindings.len(), 3);
+        let publication: crate::RetainedExecutionDeltaEnvelope = serde_json::from_str(
+            &context
+                .active_live_player()
+                .unwrap()
+                .initial_delta_json()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(publication.objects.len(), 3);
+    }
+
+    #[test]
     fn ordinary_composition_converts_nested_typed_children_before_atomic_admission() {
         let mut context = CanonicalAuthoringScene::default();
         let bound = context.scene.circle(0.4).unwrap();
