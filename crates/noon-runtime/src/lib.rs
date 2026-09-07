@@ -1068,9 +1068,7 @@ impl SceneInstance {
                 if compiled_stats.object_slots_reactivated == 1 {
                     let time = self.frame.time;
                     reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
-                    self.frame.family_animations[object_index] = None;
-                    self.frame.family_animation_plan_indices[object_index] = None;
-                    self.active_family_animation_indices.remove(&object_index);
+                    self.clear_family_animation_runtime_state(object_index);
                     self.mark_added(object_index);
                 } else {
                     debug_assert_eq!(object_index, self.frame.objects.len());
@@ -1093,9 +1091,7 @@ impl SceneInstance {
                 self.frame.presences[object_index] = false;
                 self.frame.render_geometries[object_index] = None;
                 self.frame.render_transforms[object_index] = None;
-                self.frame.family_animations[object_index] = None;
-                self.frame.family_animation_plan_indices[object_index] = None;
-                self.active_family_animation_indices.remove(&object_index);
+                self.clear_family_animation_runtime_state(object_index);
                 self.mark_removed(object_index);
             }
             ExecutionPatch::ReorderObject { .. } => {}
@@ -1451,6 +1447,18 @@ impl SceneInstance {
             changed = self.update_family_animation(animation_index, time) || changed;
         }
         changed
+    }
+
+    fn clear_family_animation_runtime_state(&mut self, object_index: usize) {
+        self.frame.family_animations[object_index] = None;
+        self.frame.family_animation_plan_indices[object_index] = None;
+        self.active_family_animation_indices.remove(&object_index);
+        let animations = self.compiled.family_animations();
+        self.pending_family_endpoint_expirations.retain(|index| {
+            animations
+                .get(*index)
+                .is_some_and(|animation| animation.object_index as usize != object_index)
+        });
     }
 
     fn update_family_animation(&mut self, animation_index: usize, time: f64) -> bool {
@@ -2646,6 +2654,20 @@ mod tests {
             1.0
         );
         assert!(family_state_at(forward, forward_end + 1e-9).is_none());
+
+        instance.take_frame_changes();
+        instance.seek(5.0).unwrap();
+        instance.take_frame_changes();
+        assert_eq!(instance.pending_family_endpoint_expirations.len(), 1);
+        instance
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(object.id))
+            .unwrap();
+        assert!(instance.pending_family_endpoint_expirations.is_empty());
+        assert_eq!(instance.take_frame_changes().removed_indices(), &[0]);
+        instance.advance_to(5.0 + 1e-9).unwrap();
+        assert!(instance.take_frame_changes().is_empty());
+        assert!(instance.active_family_animation_indices().is_empty());
+        assert!(instance.frame().family_animations[0].is_none());
     }
 
     #[test]
