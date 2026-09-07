@@ -375,6 +375,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Scale
                             | Property::Fill
                             | Property::Stroke
+                            | Property::StrokeWidth
                             | Property::Opacity
                             | Property::Appearance
                             | Property::Reveal

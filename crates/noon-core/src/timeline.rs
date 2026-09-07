@@ -91,6 +91,7 @@ pub enum Property {
     Scale,
     Fill,
     Stroke,
+    StrokeWidth,
     Opacity,
     Appearance,
     Reveal,
@@ -113,9 +114,12 @@ impl Property {
             Self::Transform => ValueKind::Object,
             Self::Fill | Self::Stroke => ValueKind::Color,
             Self::Position | Self::Scale => ValueKind::Vec2,
-            Self::Rotation | Self::Opacity | Self::Appearance | Self::Reveal | Self::Morph => {
-                ValueKind::Scalar
-            }
+            Self::Rotation
+            | Self::StrokeWidth
+            | Self::Opacity
+            | Self::Appearance
+            | Self::Reveal
+            | Self::Morph => ValueKind::Scalar,
         }
     }
 
@@ -195,6 +199,14 @@ impl TrackValues {
             Self::Scalar { from, to } if !from.is_finite() || !to.is_finite() => {
                 Err(TimelineError::InvalidScalarValues {
                     property,
+                    from: *from,
+                    to: *to,
+                })
+            }
+            Self::Scalar { from, to }
+                if property == Property::StrokeWidth && (*from < 0.0 || *to < 0.0) =>
+            {
+                Err(TimelineError::InvalidStrokeWidthValues {
                     from: *from,
                     to: *to,
                 })
@@ -344,6 +356,10 @@ pub enum TimelineError {
         from: f32,
         to: f32,
     },
+    InvalidStrokeWidthValues {
+        from: f32,
+        to: f32,
+    },
     InvalidVec2Values {
         property: Property,
         from: Vec2,
@@ -388,6 +404,10 @@ impl std::fmt::Display for TimelineError {
             Self::InvalidScalarValues { property, from, to } => write!(
                 formatter,
                 "non-finite scalar values for {property:?}: from={from}, to={to}"
+            ),
+            Self::InvalidStrokeWidthValues { from, to } => write!(
+                formatter,
+                "stroke width values must be non-negative: from={from}, to={to}"
             ),
             Self::InvalidVec2Values { property, from, to } => write!(
                 formatter,
@@ -905,6 +925,57 @@ mod tests {
         assert_eq!(
             scene.tracks()[0].values,
             TrackValues::Scalar { from: 0.0, to: 1.0 }
+        );
+    }
+
+    #[test]
+    fn stroke_width_is_a_non_negative_scalar_timeline_property() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let track = scene
+            .add_track(
+                object,
+                Property::StrokeWidth,
+                TrackValues::Scalar { from: 1.0, to: 3.0 },
+                timing(),
+            )
+            .expect("valid stroke-width track");
+        assert_eq!(track, TrackId::new(0));
+        assert_eq!(scene.tracks()[0].property, Property::StrokeWidth);
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Scalar { from: 1.0, to: 3.0 }
+        );
+
+        let error = scene
+            .add_track(
+                object,
+                Property::StrokeWidth,
+                TrackValues::Scalar {
+                    from: 3.0,
+                    to: -1.0,
+                },
+                timing(),
+            )
+            .expect_err("negative stroke width must fail before insertion");
+        assert_eq!(
+            error,
+            TimelineError::InvalidStrokeWidthValues {
+                from: 3.0,
+                to: -1.0,
+            }
+        );
+        assert_eq!(scene.tracks().len(), 1);
+        assert_eq!(
+            scene
+                .add_track(
+                    object,
+                    Property::StrokeWidth,
+                    TrackValues::Scalar { from: 3.0, to: 4.0 },
+                    timing(),
+                )
+                .expect("rejection must not consume a track id"),
+            TrackId::new(1)
         );
     }
 

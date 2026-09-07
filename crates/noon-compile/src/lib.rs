@@ -75,6 +75,7 @@ pub struct DynamicProperties {
     pub scale: bool,
     pub fill: bool,
     pub stroke: bool,
+    pub stroke_width: bool,
     pub opacity: bool,
     pub appearance: bool,
     pub reveal: bool,
@@ -91,6 +92,7 @@ impl DynamicProperties {
             Property::Scale => self.scale = true,
             Property::Fill => self.fill = true,
             Property::Stroke => self.stroke = true,
+            Property::StrokeWidth => self.stroke_width = true,
             Property::Opacity => self.opacity = true,
             Property::Appearance => self.appearance = true,
             Property::Reveal => self.reveal = true,
@@ -106,6 +108,7 @@ impl DynamicProperties {
             || self.scale
             || self.fill
             || self.stroke
+            || self.stroke_width
             || self.opacity
             || self.appearance
             || self.reveal
@@ -663,6 +666,7 @@ impl CompiledScene {
                         | Property::Scale
                         | Property::Fill
                         | Property::Stroke
+                        | Property::StrokeWidth
                         | Property::Opacity
                         | Property::Appearance
                         | Property::Reveal
@@ -1222,6 +1226,7 @@ impl CompiledScene {
                             | Property::Scale
                             | Property::Fill
                             | Property::Stroke
+                            | Property::StrokeWidth
                             | Property::Opacity
                             | Property::Appearance
                             | Property::Reveal
@@ -1546,10 +1551,11 @@ const fn property_rank(property: Property) -> u8 {
         Property::Scale => 4,
         Property::Fill => 5,
         Property::Stroke => 6,
-        Property::Opacity => 7,
-        Property::Appearance => 8,
-        Property::Reveal => 9,
-        Property::Morph => 10,
+        Property::StrokeWidth => 7,
+        Property::Opacity => 8,
+        Property::Appearance => 9,
+        Property::Reveal => 10,
+        Property::Morph => 11,
     }
 }
 
@@ -1777,6 +1783,7 @@ mod tests {
                 scale: false,
                 fill: false,
                 stroke: false,
+                stroke_width: false,
                 opacity: true,
                 appearance: false,
                 reveal: false,
@@ -1803,6 +1810,28 @@ mod tests {
             compiled.objects()[0].dynamic,
             DynamicProperties {
                 scale: true,
+                ..DynamicProperties::default()
+            }
+        );
+    }
+
+    #[test]
+    fn stroke_width_tracks_mark_only_stroke_width_dynamic() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .add_track(
+                object,
+                Property::StrokeWidth,
+                TrackValues::Scalar { from: 1.0, to: 2.0 },
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .expect("valid stroke-width track");
+        let compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        assert_eq!(
+            compiled.objects()[0].dynamic,
+            DynamicProperties {
+                stroke_width: true,
                 ..DynamicProperties::default()
             }
         );
@@ -1947,6 +1976,7 @@ mod tests {
                 scale: false,
                 fill: false,
                 stroke: false,
+                stroke_width: false,
                 opacity: false,
                 appearance: false,
                 reveal: true,

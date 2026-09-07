@@ -1136,6 +1136,7 @@ impl SceneInstance {
                         Property::Transform,
                         Property::Fill,
                         Property::Stroke,
+                        Property::StrokeWidth,
                         Property::Opacity,
                     ],
                 );
@@ -1363,7 +1364,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 11] = [
+const PROPERTY_ORDER: [Property; 12] = [
     Property::Presence,
     Property::Transform,
     Property::Position,
@@ -1371,6 +1372,7 @@ const PROPERTY_ORDER: [Property; 11] = [
     Property::Scale,
     Property::Fill,
     Property::Stroke,
+    Property::StrokeWidth,
     Property::Opacity,
     Property::Appearance,
     Property::Reveal,
@@ -1636,6 +1638,7 @@ fn apply_group_to_row(
             Property::Scale => Some(EvaluatedValue::Vec2(base_transform.scale)),
             Property::Fill => Some(EvaluatedValue::Color(base_style.fill)),
             Property::Stroke => Some(EvaluatedValue::Color(base_style.stroke)),
+            Property::StrokeWidth => Some(EvaluatedValue::Scalar(base_style.stroke_width)),
             Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
             Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
@@ -1744,6 +1747,11 @@ fn apply_evaluated_value(
         (Property::Stroke, EvaluatedValue::Color(value)) => {
             let changed = row.style.stroke != value;
             row.style.stroke = value;
+            changed
+        }
+        (Property::StrokeWidth, EvaluatedValue::Scalar(value)) => {
+            let changed = row.style.stroke_width != value;
+            row.style.stroke_width = value;
             changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
@@ -2949,6 +2957,47 @@ mod tests {
                 ..Color::BLUE
             })
         );
+    }
+
+    #[test]
+    fn stroke_width_track_updates_only_its_style_row_and_spatial_bounds() {
+        let mut definition = SceneDefinition::new();
+        let mut target = noon_core::ObjectSnapshot::new(GeometryRef::rectangle(2.0, 2.0));
+        target.style.stroke = Some(Color::WHITE);
+        target.style.stroke_width = 0.0;
+        let target = definition.add_snapshot(target);
+        let untouched = definition.add(GeometryRef::circle(1.0));
+        definition
+            .add_track(
+                target,
+                Property::StrokeWidth,
+                TrackValues::Scalar { from: 0.0, to: 2.0 },
+                TrackTiming::new(0.0, 2.0, Easing::Linear),
+            )
+            .expect("valid stroke-width track");
+        let compiled = CompiledScene::compile(&definition).expect("scene must compile");
+        let mut instance = SceneInstance::new(compiled);
+        instance.take_frame_changes();
+        instance.take_spatial_changes();
+
+        instance.advance_to(1.0).expect("valid time");
+
+        assert_eq!(instance.frame().objects[0].style.stroke_width, 1.0);
+        assert_eq!(instance.frame().objects[1].id, untouched);
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(instance.take_spatial_changes().object_indices(), &[0]);
+
+        instance.advance_to(1.0).expect("same time remains valid");
+        assert!(instance.take_frame_changes().is_empty());
+
+        instance.seek(2.0).expect("endpoint seek remains valid");
+        assert_eq!(instance.frame().objects[0].style.stroke_width, 2.0);
+        instance.take_frame_changes();
+        instance.take_spatial_changes();
+        instance.seek(0.5).expect("historical seek remains valid");
+        assert_eq!(instance.frame().objects[0].style.stroke_width, 0.5);
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(instance.take_spatial_changes().object_indices(), &[0]);
     }
 
     #[test]

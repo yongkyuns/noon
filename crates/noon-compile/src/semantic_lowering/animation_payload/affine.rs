@@ -1619,12 +1619,13 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Scale => 2,
         Property::Fill => 3,
         Property::Stroke => 4,
-        Property::Opacity => 5,
-        Property::Appearance => 6,
-        Property::Reveal => 7,
-        Property::Transform => 8,
-        Property::Morph => 9,
-        Property::Presence => 10,
+        Property::StrokeWidth => 5,
+        Property::Opacity => 6,
+        Property::Appearance => 7,
+        Property::Reveal => 8,
+        Property::Transform => 9,
+        Property::Morph => 10,
+        Property::Presence => 11,
     };
     (object.get(), slot)
 }
@@ -1668,6 +1669,16 @@ mod tests {
             style: Style::default(),
             appearance: 1.0,
         }
+    }
+
+    #[test]
+    fn stroke_width_has_a_distinct_composition_driver_key() {
+        let object = ObjectId::new(7);
+        let width = driver_key(object, Property::StrokeWidth);
+
+        assert_ne!(width, driver_key(object, Property::Stroke));
+        assert_ne!(width, driver_key(object, Property::Opacity));
+        assert_ne!(width, driver_key(ObjectId::new(8), Property::StrokeWidth));
     }
 
     fn visible_object(store: &mut SemanticStore) -> SemanticNodeId {
