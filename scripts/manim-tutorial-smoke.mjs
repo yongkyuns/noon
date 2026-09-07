@@ -19,6 +19,7 @@ const manifestPath = path.join(
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const ready = manifest.entries.filter((entry) => entry.status === "ready");
 assert.ok(ready.length >= 1, "expected exact-source Manim examples");
+const qualificationModes = new Set(["explicit-export", "shared-live"]);
 
 const parityManifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
 const parityManifest = JSON.parse(await readFile(parityManifestPath, "utf8"));
@@ -68,6 +69,17 @@ for (const entry of ready) {
   );
   assert.ok(entry.thumbnail, `${entry.id}: runnable examples require a static thumbnail`);
   assert.ok(entry.upstream_source, `${entry.id}: runnable examples require canonical upstream source`);
+  const qualificationMode = entry.qualification_mode ?? "explicit-export";
+  assert.ok(
+    qualificationModes.has(qualificationMode),
+    `${entry.id}: unknown qualification mode ${qualificationMode}`,
+  );
+  if (qualificationMode === "shared-live") {
+    assert.ok(
+      Number.isInteger(entry.expected_object_count) && entry.expected_object_count > 0,
+      `${entry.id}: shared-live qualification requires a positive expected_object_count`,
+    );
+  }
 
   const publicPath = path.join(repoRoot, "web", entry.path);
   const upstreamPath = path.join(repoRoot, entry.upstream_source);
@@ -205,6 +217,27 @@ try {
   for (const entry of ready) {
     const source = readySources.get(entry.id);
     assert.ok(source, `${entry.id}: exact source was not loaded`);
+    if (entry.qualification_mode === "shared-live") {
+      // Migrated animations execute through the shared semantic continuation;
+      // an export document is no longer their canonical behavior proof.
+      const result = await page.evaluate(
+        (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+        source,
+      );
+      const expected = expectedDuration(entry);
+      assert.ok(
+        Math.abs(result.duration - expected) <= 1e-9,
+        `${entry.id}: expected duration ${expected}, got ${result.duration}`,
+      );
+      assert.ok(result.metrics.presentedFrames > 0, `${entry.id}: shared execution did not render`);
+      assert.equal(
+        result.metrics.objectCount,
+        entry.expected_object_count,
+        `${entry.id}: shared execution published the wrong object count`,
+      );
+      console.log(`[PASS] ${entry.id}`);
+      continue;
+    }
     const result = await page.evaluate(
       (pythonSource) => window.noonManimCompat.run(pythonSource),
       source,

@@ -168,6 +168,8 @@
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "parity-qualified",
       "parity_fixture": "draw-border-then-fill-styled-square",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 1,
       "thumbnail": "thumbnails/manim/draw-border-then-fill-styled-square.webp",
       "thumbnail_alt": "Orange square midway through Manim's DrawBorderThenFill transition",
       "thumbnail_time": 1.47,
