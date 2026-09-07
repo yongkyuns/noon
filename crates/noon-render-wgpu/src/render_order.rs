@@ -341,7 +341,7 @@ impl FramePreparer {
     /// compatible boundary batches without touching immutable geometry or mega-path
     /// streams.
     pub(crate) fn rebuild_render_order_chunks(&mut self, range: Option<Range<usize>>) {
-        if self.individual_path_draws || !self.render_order_keys.is_empty() {
+        if !self.render_order_keys.is_empty() {
             self.render_chunks.clear();
             self.render_chunks_active = false;
             self.render_order_batch_count = 0;

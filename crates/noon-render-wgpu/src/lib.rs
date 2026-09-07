@@ -3623,6 +3623,39 @@ mod tests {
     }
 
     #[test]
+    fn individual_path_order_can_transition_from_one_draw_to_empty() {
+        let mut path = object(
+            1,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-1.0, 0.0))
+                    .line_to(Vec2::new(1.0, 0.0)),
+            ),
+        );
+        path.style.fill = None;
+        path.style.stroke = Some(Color::WHITE);
+        path.style.stroke_width = 0.02;
+        let frame = frame(vec![path]);
+        let mut preparer = FramePreparer::for_individual_path_draws();
+        preparer.set_painter_order(&frame, &[0]);
+        let visible = preparer.prepare(&frame);
+        assert_eq!(visible.ordered_render_batches().count(), 1);
+        let vertices = visible.path_vertices.to_vec();
+        let indices = visible.path_indices.to_vec();
+
+        preparer.set_painter_order_range(&frame, &[], 0..1);
+        let empty = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..1));
+
+        assert_eq!(empty.ordered_render_batches().count(), 0);
+        assert_eq!(empty.stats.batch_count, 0);
+        assert_eq!(empty.stats.instances_repacked, 0);
+        assert_eq!(empty.path_vertices, vertices);
+        assert_eq!(empty.path_indices, indices);
+        assert!(empty.path_vertex_dirty_ranges.is_empty());
+        assert!(empty.path_index_dirty_ranges.is_empty());
+    }
+
+    #[test]
     fn mega_paths_never_coalesce_across_an_analytic_painter_boundary() {
         let mut first = object(
             1,
