@@ -731,6 +731,7 @@ pub struct SceneInstance {
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
     active_family_animation_indices: BTreeSet<usize>,
+    pending_family_endpoint_expirations: BTreeSet<usize>,
 }
 
 impl Clone for SceneInstance {
@@ -750,6 +751,7 @@ impl Clone for SceneInstance {
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
             active_family_animation_indices: self.active_family_animation_indices.clone(),
+            pending_family_endpoint_expirations: self.pending_family_endpoint_expirations.clone(),
         }
     }
 }
@@ -781,6 +783,7 @@ impl SceneInstance {
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
             active_family_animation_indices: BTreeSet::new(),
+            pending_family_endpoint_expirations: BTreeSet::new(),
         };
         instance.seek_unchecked(0.0);
         instance
@@ -1354,6 +1357,7 @@ impl SceneInstance {
         self.frame = base_frame(&self.compiled, time);
         self.effective_driver_rows.clear();
         self.active_family_animation_indices.clear();
+        self.pending_family_endpoint_expirations.clear();
         self.mark_all_changed();
         let mut stats = EvaluationStats::default();
 
@@ -1374,11 +1378,7 @@ impl SceneInstance {
         }
         self.timeline_scheduler.seek(time);
         for animation_index in 0..self.compiled.family_animations().len() {
-            if let Some(state) =
-                family_state_at(&self.compiled.family_animations()[animation_index], time)
-            {
-                self.set_family_animation(animation_index, state);
-            }
+            self.update_family_animation(animation_index, time);
         }
 
         self.reapply_reactive();
@@ -1436,10 +1436,16 @@ impl SceneInstance {
     }
 
     fn update_requested_family_animations(&mut self, time: f64) -> bool {
-        let requested = self
-            .timeline_scheduler
-            .requested_family_animations()
-            .to_vec();
+        // End events leave one exact endpoint publication active for lifecycle
+        // reconciliation. Revisit only those crossed endpoint channels on the next
+        // tick so they expire without scanning historical family animations.
+        let mut requested = std::mem::take(&mut self.pending_family_endpoint_expirations);
+        requested.extend(
+            self.timeline_scheduler
+                .requested_family_animations()
+                .iter()
+                .copied(),
+        );
         let mut changed = false;
         for animation_index in requested {
             changed = self.update_family_animation(animation_index, time) || changed;
@@ -1451,8 +1457,15 @@ impl SceneInstance {
         let animation = self.compiled.family_animations()[animation_index].clone();
         let object_index = animation.object_index as usize;
         if let Some(state) = family_state_at(&animation, time) {
+            let (_, end_time) = family_animation_interval(&animation);
+            if time == end_time {
+                self.pending_family_endpoint_expirations
+                    .insert(animation_index);
+            }
             return self.set_family_animation(animation_index, state);
         }
+        self.pending_family_endpoint_expirations
+            .remove(&animation_index);
         if self.frame.family_animation_plan_indices[object_index] != Some(animation.plan_index) {
             return false;
         }
@@ -2614,9 +2627,15 @@ mod tests {
         assert_eq!(endpoint.overall_progress, 1.0);
         assert!(endpoint.reverse_member_order);
         assert_eq!(instance.frame().family_animation_plan_indices[0], Some(1));
+        assert_eq!(instance.pending_family_endpoint_expirations.len(), 1);
         instance.advance_to(5.0 + 1e-9).unwrap();
         assert!(instance.active_family_animation_indices().is_empty());
         assert!(instance.frame().family_animations[0].is_none());
+        assert!(instance.pending_family_endpoint_expirations.is_empty());
+        assert!(instance
+            .timeline_scheduler
+            .requested_family_animations()
+            .is_empty());
 
         let forward = &instance.compiled.family_animations()[0];
         let (_, forward_end) = family_animation_interval(forward);
