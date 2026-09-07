@@ -15,10 +15,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import os, urllib.request, re
+          import os, urllib.request, urllib.error, urllib.parse, re
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
           url = 'https://api.github.com/repos/yongkyuns/noon/actions/jobs/101871029582/logs'
           req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
-          with urllib.request.urlopen(req, timeout=30) as response:
+          try:
+              response = urllib.request.build_opener(NoRedirect).open(req, timeout=30)
+          except urllib.error.HTTPError as error:
+              if error.code != 302:
+                  raise
+              location = error.headers['Location']
+              if urllib.parse.urlsplit(location).scheme != 'https':
+                  raise ValueError('expected HTTPS signed download')
+              response = urllib.request.urlopen(location, timeout=30)
+          with response:
               text = response.read(20_000_000).decode('utf-8', 'replace')
           lines = text.splitlines()
           selected = set()
