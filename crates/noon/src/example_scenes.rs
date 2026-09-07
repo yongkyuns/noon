@@ -7,6 +7,7 @@ pub mod exact_property_tracks;
 pub mod family_transform_indicate;
 pub mod live_geometry_construction;
 pub mod mixed_scalar_composition;
+pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;

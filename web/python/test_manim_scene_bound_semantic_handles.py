@@ -45,10 +45,6 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                     self.snapshot_requests += 1
                     return json.dumps(self.snapshot, separators=(",", ":"))
 
-                def replaceSnapshotJson(self, snapshot_json):
-                    self.calls.append("replaceSnapshotJson")
-                    self.snapshot = json.loads(snapshot_json)
-
                 def cloneHandle(self):
                     self.calls.append("cloneHandle")
                     clone = FakeHandle(json.dumps(self.snapshot))
@@ -61,8 +57,9 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                     target.calls.append("targetEditor")
                     return target
 
-                def becomeHandle(self, other):
-                    self.calls.append("becomeHandle")
+                def becomeHandle(self, other, match_height, match_width, match_center, stretch):
+                    flags = (match_height, match_width, match_center, stretch)
+                    self.calls.append("becomeHandle" if not any(flags) else ("becomeHandle", *flags))
                     self.snapshot = copy.deepcopy(other.snapshot)
 
                 @property
@@ -242,7 +239,7 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             handles.install()
             import _manim_animate as animate
 
-            from noon import BLUE, GREEN, RIGHT, Scene, Square
+            from noon import BLUE, GREEN, RIGHT, Circle, Scene, Square
 
             square = Square(color=BLUE, fill_opacity=0.8)
             handle = square._semantic_handle
@@ -270,6 +267,15 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 def __init__(self):
                     self.transferred = False
                     self.queries = []
+                    self.live_calls = []
+
+                def liveExecutionOwnership(self):
+                    return "transferred" if self.transferred else "returned"
+
+                def liveBecomeMobject(self, source, target, *flags):
+                    if self.transferred:
+                        raise RuntimeError("live execution session is running in the semantic engine")
+                    self.live_calls.append(("become", source, target, *flags))
 
                 def queryMobjectLayout(self, queried):
                     self.queries.append(queried)
@@ -309,11 +315,18 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 assert "running in the semantic engine" in str(error)
             else:
                 raise AssertionError("transferred live layout read returned stale authored state")
+            transferred_replacement = Circle()
+            try:
+                square.become(transferred_replacement)
+            except RuntimeError as error:
+                assert "running in the semantic engine" in str(error)
+            else:
+                raise AssertionError("transferred live become bypassed player ownership")
+            assert context.live_calls == []
             # A returned player remains the shared mutation authority between
             # continuation awaits. Neither the source nor a new target may edit
             # its handle behind the runtime's publication revision.
             context.transferred = False
-            context.liveExecutionOwnership = lambda: "returned"
             live_calls = []
             context.liveShift = lambda target, x, y: live_calls.append((target, x, y))
             context.liveTargetEditor = lambda target: FakeHandle(json.dumps(target.snapshot))
@@ -323,7 +336,70 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             assert live_calls == [(handle, 1.0, 0.0), (target._semantic_handle, 1.0, 0.0)]
             assert target._canonical_live_target_context is context
             assert handle.centerX == 1.0, "returned edits must not bypass the live session"
+            replacement = Circle()
+            square.become(replacement, match_height=True, match_center=True)
+            assert context.live_calls[-1] == (
+                "become", handle, replacement._semantic_handle, True, False, True, False
+            )
+            assert handle.snapshot["geometry"] != replacement._semantic_handle.snapshot["geometry"], (
+                "returned become must not mutate behind the live session"
+            )
+
+            # A handle created before live bootstrap can remain detached and have
+            # no wrapper-local context. A bound operand still proves the owning
+            # live session, so become must publish there instead of mutating the
+            # detached handle behind the player.
+            prebootstrap = Circle()
+            prebootstrap_handle = prebootstrap._semantic_handle
+            prebootstrap_handle.calls.clear()
+            prebootstrap.become(square)
+            assert context.live_calls[-1] == (
+                "become", prebootstrap_handle, handle, False, False, False, False
+            )
+            assert prebootstrap_handle.calls == []
+
+            # The current live authoring scope also protects two old detached
+            # operands which do not carry an operand-local context.
+            detached_before_wait = Circle()
+            detached_peer = Square()
+            detached_before_handle = detached_before_wait._semantic_handle
+            detached_before_handle.calls.clear()
+            original_live_constructor_context = handles._live_constructor_context
+            handles._live_constructor_context = lambda kind="primitive": context
+            try:
+                detached_before_wait.become(detached_peer)
+            finally:
+                handles._live_constructor_context = original_live_constructor_context
+            assert context.live_calls[-1] == (
+                "become", detached_before_handle, detached_peer._semantic_handle,
+                False, False, False, False,
+            )
+            assert detached_before_handle.calls == []
             del scene._canonical_authoring_context
+
+            detached_source = Square()
+            detached_target = Square().scale(2.0)
+            detached_source.become(detached_target, match_width=True, stretch=True)
+            assert detached_source._semantic_handle.calls[-1] == (
+                "becomeHandle", False, True, False, True
+            )
+            before_raw_replacement = detached_source._semantic_handle.snapshot
+            try:
+                detached_source._apply(detached_target._current_raw())
+            except NotImplementedError as error:
+                assert "raw replacement" in str(error)
+            else:
+                raise AssertionError("typed raw replacement reached the retired snapshot writer")
+            assert detached_source._semantic_handle.snapshot is before_raw_replacement
+
+            half_typed = Square()
+            half_typed._semantic_handle_fresh = False
+            try:
+                detached_source.become(half_typed)
+            except NotImplementedError as error:
+                assert "both Mobjects" in str(error)
+            else:
+                raise AssertionError("half-typed become fell back through raw geometry")
 
             square.set_fill(GREEN, opacity=0.25)
             assert handle.snapshot_requests == 0

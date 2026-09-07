@@ -49,6 +49,69 @@ fn no_op_edits_do_not_publish_and_invalid_compound_edits_roll_back() {
 }
 
 #[test]
+fn become_matches_dimensions_in_manim_order_and_reuses_target_content() {
+    let scene = Scene::new();
+    let mut source = scene.rectangle(4.0, 2.0).unwrap();
+    source.set_translation(3.0, -2.0).unwrap();
+    let target_path = VectorPath::new()
+        .move_to(Vec2::new(-0.5, -1.5))
+        .line_to(Vec2::new(0.5, -1.5))
+        .line_to(Vec2::new(0.5, 1.5))
+        .line_to(Vec2::new(-0.5, 1.5));
+    let target = scene.path(target_path, SemanticStyle::default()).unwrap();
+    let target_state = target.state().unwrap();
+    let target_content = target_state.content;
+    let source_id = source.node_id();
+    let resources = scene.store().borrow().geometry_resources().len();
+
+    source
+        .become_handle(
+            &target,
+            ManimBecomeOptions {
+                match_height: true,
+                match_width: true,
+                match_center: true,
+                stretch: false,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(source.node_id(), source_id);
+    assert_eq!(source.state().unwrap().content, target_content);
+    assert_eq!(target.state().unwrap(), target_state);
+    assert_eq!(source.center().unwrap(), (3.0, -2.0));
+    assert!((source.width().unwrap() - 4.0).abs() < 1e-9);
+    // Height matching occurs first; subsequent uniform width matching scales it again.
+    assert!((source.height().unwrap() - 12.0).abs() < 1e-9);
+    assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
+}
+
+#[test]
+fn become_stretch_is_atomic_for_zero_dimension_targets() {
+    let scene = Scene::new();
+    let mut source = scene.rectangle(3.0, 2.0).unwrap();
+    let target = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+    let before = source.state().unwrap();
+    let revision = scene.store().borrow().scene_revision();
+    let resources = scene.store().borrow().geometry_resources().len();
+
+    assert!(source
+        .become_handle(
+            &target,
+            ManimBecomeOptions {
+                stretch: true,
+                ..ManimBecomeOptions::default()
+            },
+        )
+        .is_err());
+    assert_eq!(source.state().unwrap(), before);
+    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
+}
+
+#[test]
 fn foreign_operands_and_stale_handles_fail_without_mutation_or_query_panics() {
     let scene = Scene::new();
     let other_scene = Scene::new();
@@ -56,7 +119,9 @@ fn foreign_operands_and_stale_handles_fail_without_mutation_or_query_panics() {
     let foreign = other_scene.circle(1.0).unwrap();
     assert_eq!(circle.node_id(), foreign.node_id());
     let before = circle.state().unwrap();
-    assert!(circle.become_handle(&foreign).is_err());
+    assert!(circle
+        .become_handle(&foreign, ManimBecomeOptions::default())
+        .is_err());
     assert!(circle.next_to_handle(&foreign, 1.0, 0.0, 0.25).is_err());
     assert_eq!(circle.state().unwrap(), before);
     scene

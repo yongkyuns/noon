@@ -2286,6 +2286,31 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn live_become_mobject(
+        &mut self,
+        target: &noon::Mobject,
+        other: &noon::Mobject,
+        options: noon::ManimBecomeOptions,
+    ) -> Result<(), String> {
+        for object in [target, other] {
+            if !std::rc::Rc::ptr_eq(self.scene.store(), object.store()) {
+                return Err(
+                    "become objects and canonical context belong to different authoring stores"
+                        .into(),
+                );
+            }
+        }
+        match self.live_execution_ownership() {
+            "active" | "returned" => self
+                .active_live_player()?
+                .live_become_mobject(target, other, options),
+            "none" => Err("live become requires an active canonical session".into()),
+            "transferred" => Err("live execution session is running in the semantic engine".into()),
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_manim_geometry(
         &mut self,
         options: noon::ManimGeometryOptions,
@@ -5567,6 +5592,31 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Replace one object's content and presentation through the shared semantic owner.
+        #[wasm_bindgen(js_name = liveBecomeMobject)]
+        pub fn live_become_mobject(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            other: &crate::WasmAuthoringMobjectHandle,
+            match_height: bool,
+            match_width: bool,
+            match_center: bool,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .live_become_mobject(
+                    target.semantic_mobject(),
+                    other.semantic_mobject(),
+                    noon::ManimBecomeOptions {
+                        match_height,
+                        match_width,
+                        match_center,
+                        stretch,
+                    },
+                )
+                .map_err(js_error)
+        }
+
         /// Publish a fully configured geometry through the current live session.
         #[wasm_bindgen(js_name = liveCreateManimGeometry)]
         pub fn live_create_manim_geometry(
@@ -6824,6 +6874,50 @@ mod tests {
             target.state().unwrap().transform.translation,
             SemanticVec3::new(2.0, -1.0, 0.0)
         );
+    }
+
+    #[test]
+    fn live_become_preserves_ownership_across_handoff_and_return() {
+        let mut context = CanonicalAuthoringScene::default();
+        let source = context.scene.circle(0.5).unwrap();
+        let mut target = context.scene.rectangle(2.0, 1.0).unwrap();
+        target.set_translation(3.0, -1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &source).unwrap();
+        context.live_player(1.0).unwrap();
+        let id = source.node_id();
+        let target_before = target.state().unwrap();
+        context
+            .live_become_mobject(
+                &source,
+                &target,
+                noon::ManimBecomeOptions {
+                    match_height: true,
+                    match_center: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(source.node_id(), id);
+        assert_eq!(source.center().unwrap(), (0.0, 0.0));
+        assert_eq!(source.width().unwrap(), 2.0);
+        assert_eq!(target.state().unwrap(), target_before);
+
+        let handed_off = context.take_execution_player(1.0, 41).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        let before = source.state().unwrap();
+        assert!(context
+            .live_become_mobject(&source, &target, Default::default())
+            .unwrap_err()
+            .contains("semantic engine"));
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(source.state().unwrap(), before);
+        context.return_execution_player(handed_off).unwrap();
+        context
+            .live_become_mobject(&source, &target, Default::default())
+            .unwrap();
+        assert_eq!(source.center().unwrap(), (3.0, -1.0));
+        assert_eq!(context.live_execution_ownership(), "returned");
+        context.live_target_editor(&source).unwrap();
     }
 
     #[test]

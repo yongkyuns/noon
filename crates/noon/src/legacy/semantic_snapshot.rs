@@ -1,36 +1,10 @@
-//! Explicit legacy value export/replacement; deletion owned by #959.
-use crate::semantic_mobject::{import_geometry, legacy_solid_color, Mobject};
+//! Explicit legacy value export; deletion owned by #959.
+use crate::semantic_mobject::{legacy_solid_color, Mobject};
 use noon_core::{
     GeometryRef, GeometryResource, ObjectSnapshot, SemanticStore, SemanticStyle,
     SemanticTransform2_5D, StoredGeometry, Style, Transform2D,
 };
 
-pub fn replace_mobject_snapshot(
-    object: &mut Mobject,
-    snapshot: ObjectSnapshot,
-) -> Result<(), String> {
-    validate_snapshot(&snapshot)?;
-    let mut state = object.state()?;
-    let same_geometry = geometry_matches(
-        &object.store().borrow(),
-        state.content.geometry().ok_or("geometry required")?,
-        &snapshot.geometry,
-    )?;
-    if same_geometry
-        && snapshot.transform == export_transform(state.transform)?
-        && snapshot.style == export_style(&state.style)
-    {
-        return Ok(());
-    }
-    if !same_geometry {
-        state.content =
-            import_geometry(&mut object.store().borrow_mut(), snapshot.geometry)?.into();
-    }
-    state.transform =
-        crate::compact_value_authoring::semantic_transform_from_compact(snapshot.transform)?;
-    state.style = crate::compact_value_authoring::semantic_style_from_compact(snapshot.style)?;
-    object.commit_state(state)
-}
 pub fn export_mobject_snapshot(object: &Mobject) -> Result<ObjectSnapshot, String> {
     let state = object.state()?;
     Ok(ObjectSnapshot {
@@ -72,47 +46,6 @@ fn export_geometry(store: &SemanticStore, geometry: StoredGeometry) -> Result<Ge
     })
 }
 
-fn geometry_matches(
-    store: &SemanticStore,
-    current: StoredGeometry,
-    incoming: &GeometryRef,
-) -> Result<bool, String> {
-    Ok(match (current, incoming) {
-        (StoredGeometry::Circle { radius: a }, GeometryRef::Circle { radius: b }) => a == *b,
-        (StoredGeometry::Rectangle { size: a }, GeometryRef::Rectangle { size: b }) => a == *b,
-        (StoredGeometry::Line { start: a, end: b }, GeometryRef::Line { start: c, end: d }) => {
-            a == *c && b == *d
-        }
-        (StoredGeometry::Resource(handle), GeometryRef::VectorPath(path)) => match store
-            .geometry_resources()
-            .get(handle)
-            .ok_or("unknown or stale geometry resource")?
-        {
-            GeometryResource::VectorPath(existing) => existing.as_ref() == path,
-        },
-        _ => false,
-    })
-}
-
-fn validate_snapshot(snapshot: &ObjectSnapshot) -> Result<(), String> {
-    let t = snapshot.transform;
-    if !snapshot.geometry.is_finite()
-        || crate::compact_value_authoring::semantic_style_from_compact(snapshot.style).is_err()
-        || ![
-            t.translation.x,
-            t.translation.y,
-            t.scale.x,
-            t.scale.y,
-            t.rotation,
-        ]
-        .into_iter()
-        .all(f32::is_finite)
-    {
-        return Err("snapshot geometry, transform and style must be finite".into());
-    }
-    Ok(())
-}
-
 fn export_transform(transform: SemanticTransform2_5D) -> Result<Transform2D, String> {
     Ok(Transform2D {
         translation: transform
@@ -128,7 +61,6 @@ fn export_transform(transform: SemanticTransform2_5D) -> Result<Transform2D, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::{Vec2, VectorPath};
     #[test]
     fn stale_handle_export_is_rejected() {
         let scene = crate::Scene::new();
@@ -139,28 +71,5 @@ mod tests {
             .remove_node(object.node_id())
             .unwrap();
         assert!(export_mobject_snapshot(&object).is_err());
-    }
-
-    #[test]
-    fn repeated_identical_path_replacement_preserves_resource_and_revision() {
-        let scene = crate::Scene::new();
-        let path = VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(Vec2::new(2.0, 1.0));
-        let mut object = scene.path(path, SemanticStyle::default()).unwrap();
-        object.shift(0.10000000001, 0.0).unwrap();
-        object.set_fill_opacity(0.10000000001).unwrap();
-        let semantic_before = object.state().unwrap();
-        let snapshot = export_mobject_snapshot(&object).unwrap();
-        let content = object.state().unwrap().content;
-        let before = scene.store().borrow().scene_revision();
-        let resources = scene.store().borrow().geometry_resources().len();
-        for _ in 0..8 {
-            replace_mobject_snapshot(&mut object, snapshot.clone()).unwrap();
-        }
-        assert_eq!(object.state().unwrap(), semantic_before);
-        assert_eq!(object.state().unwrap().content, content);
-        assert_eq!(scene.store().borrow().scene_revision(), before);
-        assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
     }
 }

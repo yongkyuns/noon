@@ -228,11 +228,11 @@ def main() -> int:
         if current and not any(error.startswith(path + ':') for error in errors):
             permissions.add((path, 'noon::legacy'))
 
-    # Existing bridge call sites may only name the three explicit value codecs.
+    # Existing bridge call sites may only name the explicit value exporter.
     for path in config['adapter_call_sites']:
         source = sources.get(path, '')
         calls = re.findall(r'noon::legacy::([A-Za-z_][A-Za-z0-9_]*)', normalized_namespaces(re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)))
-        if any(name not in {'export_mobject_snapshot', 'replace_mobject_snapshot'} for name in calls):
+        if any(name not in {'export_mobject_snapshot'} for name in calls):
             errors.append(f'{path}: new legacy adapter API')
     permitted_namespaces = set(config['rewritten_imports']) | set(config['adapter_call_sites'])
     for path, source in sources.items():

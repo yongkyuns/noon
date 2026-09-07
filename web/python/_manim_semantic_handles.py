@@ -210,10 +210,6 @@ _GROUP_COPY_DELEGATE = None
 _GROUP_TARGET_COPY = ContextVar("noon_group_target_copy", default=False)
 
 
-def _snapshot_json(raw: _ir.Mobject) -> str:
-    return json.dumps(raw.to_ir(), separators=(",", ":"), allow_nan=False)
-
-
 def _raw_from_json(value: str) -> _ir.Mobject:
     snapshot = json.loads(value)
     return _ir.Mobject(
@@ -740,12 +736,10 @@ def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
     handle = (_handle_for(self) if not getattr(self._scene, "_legacy_geometry_materialized", False)
               else _detached_handle_for(self))
     if handle is not None:
-        if _live_mutation_context(self) is not None:
-            raise NotImplementedError(
-                "raw Mobject replacement is unsupported while canonical live execution is active"
-            )
-        handle.replaceSnapshotJson(_snapshot_json(raw))
-        return self
+        del raw
+        raise NotImplementedError(
+            "typed Mobjects do not support raw replacement; use a shared semantic operation"
+        )
     result = _ORIGINAL_APPLY(self, raw)
     if _is_bound(self):
         # Arbitrary raw/geometry replacement bypasses the typed shared mutation API.
@@ -981,7 +975,7 @@ def commit_transform_target(source: object, target: object) -> None:
     if target_handle is None:
         invalidate_semantic_handle(source)
         return
-    source_handle.becomeHandle(target_handle)
+    source_handle.becomeHandle(target_handle, False, False, False, False)
     source._semantic_handle_fresh = True
 
 
@@ -1211,17 +1205,47 @@ def _become(
     match_center: bool = False,
     stretch: bool = False,
 ) -> _base.Mobject:
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError("canonical live affine targets do not support become")
-    handle = _detached_handle_for(self)
-    other_handle = _detached_handle_for(mobject)
-    if (
-        handle is not None
-        and other_handle is not None
-        and not (match_height or match_width or match_depth or match_center or stretch)
-    ):
-        handle.becomeHandle(other_handle)
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("state target must be a Mobject")
+    if match_depth:
+        raise NotImplementedError("depth matching requires the shared 2.5D family model")
+
+    handle = _handle_for(self)
+    other_handle = _handle_for(mobject)
+    if handle is not None and other_handle is not None:
+        flags = (
+            bool(match_height),
+            bool(match_width),
+            bool(match_center),
+            bool(stretch),
+        )
+        context = _live_mutation_context(self)
+        if context is None:
+            context = _live_mutation_context(mobject)
+        if context is None:
+            # A handle authored before live bootstrap may still be detached and
+            # therefore carry no wrapper-local context. Once a continuation is
+            # active, its store must only be mutated through that live session;
+            # Rust validates that both operands belong to the session's store.
+            context = _live_constructor_context("become")
+        if context is not None:
+            context.liveBecomeMobject(handle, other_handle, *flags)
+        else:
+            handle.becomeHandle(other_handle, *flags)
         return self
+
+    has_typed_operand = any(
+        getattr(value, "_semantic_handle", None) is not None
+        for value in (self, mobject)
+    )
+    legacy_materialized = any(
+        bool(getattr(getattr(value, "_scene", None), "_legacy_geometry_materialized", False))
+        for value in (self, mobject)
+    )
+    if has_typed_operand and not legacy_materialized:
+        raise NotImplementedError(
+            "become requires valid shared semantic handles for both Mobjects"
+        )
     return _ORIGINAL_BECOME(
         self,
         mobject,

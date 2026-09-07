@@ -58,8 +58,6 @@ class ManimRotateSemanticsTests(unittest.TestCase):
           self.snapshot = json.loads(snapshot_json)
       def snapshotJson(self):
           return json.dumps(self.snapshot, separators=(\",\", \":\"))
-      def replaceSnapshotJson(self, snapshot_json):
-          self.snapshot = json.loads(snapshot_json)
       def cloneHandle(self):
           return FakeHandle(self.snapshotJson())
       @property

@@ -1226,6 +1226,47 @@ try {
     await stopSampledSource(page);
   }
 
+  const becomeSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_become_semantics.py"), "utf8",
+  );
+  await startSampledSource(page, becomeSource, "scene-shared-become-semantics", 960, 540);
+  try {
+    const canvas = page.locator("#scene-shared-become-semantics");
+    const initialScreenshot = await canvas.screenshot();
+    const initialFitted = renderedWorldPixel(initialScreenshot, -2, 0);
+    const initialStretched = renderedWorldPixel(initialScreenshot, 2, 0);
+    assert.ok(initialFitted.blue > initialFitted.red + 30
+        && initialStretched.blue > initialStretched.red + 30,
+      "paired become sources must begin with their authored blue style");
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.5));
+    const replacedScreenshot = await canvas.screenshot();
+    const fittedCenter = renderedWorldPixel(replacedScreenshot, -2, 0);
+    const fittedTall = renderedWorldPixel(replacedScreenshot, -2, 2);
+    const stretchedCenter = renderedWorldPixel(replacedScreenshot, 2, 0);
+    const stretchedWide = renderedWorldPixel(replacedScreenshot, 3.2, 0);
+    assert.ok(fittedCenter.red > fittedCenter.blue + 30
+        && fittedCenter.green > fittedCenter.blue + 30
+        && fittedTall.red > fittedTall.blue + 30
+        && fittedTall.green > fittedTall.blue + 30,
+      "height-then-width become did not publish the tall yellow target at the source center");
+    assert.ok(stretchedCenter.red > stretchedCenter.green + 30
+        && stretchedCenter.blue > stretchedCenter.green + 30
+        && stretchedWide.red > stretchedWide.green + 30
+        && stretchedWide.blue > stretchedWide.green + 30,
+      "stretch become did not publish the wide magenta target at the source center");
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(0.75), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 0.75);
+    assert.equal(result.metrics.objectCount, 2,
+      "detached become operands must not enter shared root membership");
+  } finally {
+    await stopSampledSource(page);
+  }
+
   // The literal Manim Text remover starts detached. Shared Rust must admit it,
   // shrink about its visual center, and remove it at the source barrier.
   const shrinkSource = await readFile(
