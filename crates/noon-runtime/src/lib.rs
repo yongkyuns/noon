@@ -3013,8 +3013,10 @@ mod tests {
         instance.take_spatial_changes();
         instance.seek(0.5).expect("historical seek remains valid");
         assert_eq!(instance.frame().objects[0].style.stroke_width, 0.5);
-        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
-        assert_eq!(instance.take_spatial_changes().object_indices(), &[0]);
+        // Historical seek may invalidate the full frame; both forms must cover
+        // the changed width. Normal forward updates above remain strictly local.
+        assert!(instance.take_frame_changes().contains_object(0));
+        assert!(instance.take_spatial_changes().contains_object(0));
     }
 
     #[test]
