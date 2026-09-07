@@ -300,6 +300,7 @@ function textPixelStats(buffer) {
 
 // Share source attachment across visual proofs; authored timing stays in Rust.
 async function startSampledSource(page, source, canvasId) {
+  console.log(`Checking sampled source ${canvasId}`);
   await page.evaluate(async ({ source, canvasId }) => {
     const harness = window.sharedAuthoringSmoke;
     const canvas = document.createElement("canvas");
@@ -307,9 +308,16 @@ async function startSampledSource(page, source, canvasId) {
     canvas.width = 640;
     canvas.height = 360;
     document.body.append(canvas);
-    const execution = new harness.AuthoringExecutionClient(canvas);
     let resolveAttached;
     let rejectAttached;
+    const execution = new harness.AuthoringExecutionClient(canvas, {
+      onError(error, owner) {
+        const failure = new Error(`${canvasId} ${owner}: ${error}`);
+        console.error(failure.message);
+        rejectAttached(failure);
+        execution.terminate();
+      },
+    });
     const attached = new Promise((resolve, reject) => {
       resolveAttached = resolve;
       rejectAttached = reject;
@@ -348,9 +356,13 @@ try {
   browser = await chromium.launch({ channel: "chromium", headless: true, args: browserArgs });
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
   const browserErrors = [];
-  page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error}`));
+  const recordBrowserError = (error) => {
+    browserErrors.push(error);
+    console.error(error);
+  };
+  page.on("pageerror", (error) => recordBrowserError(`pageerror: ${error}`));
   page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
+    if (message.type() === "error") recordBrowserError(`console: ${message.text()}`);
   });
   await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
 
