@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import _manim_compat as compat
 import _manim_typst as typst
 import _manim_updaters as updaters
+from _test_manim_membership import install_test_membership
 
 
 def _object(index: int) -> dict:
@@ -104,6 +105,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
         compat.install()
+        install_test_membership(compat)
         import _manim_semantic_handles as semantic_handles
 
         if not updaters._INSTALLED:
