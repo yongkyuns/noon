@@ -5,6 +5,7 @@ on:
     paths:
       - "web/semantic-preview-session*"
       - "web/manim-raster-host.js"
+      - "scripts/semantic-preview-smoke.mjs"
       - ".github/workflows/manim-raster-differential.yml"
   push:
     branches:
@@ -83,6 +84,16 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+      - name: Verify semantic preview frames, cancellation, and fresh-run recovery
+        run: timeout --signal=TERM 180s node scripts/semantic-preview-smoke.mjs
+      - name: Upload semantic preview evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: semantic-preview-evidence
+          path: browser-smoke-artifacts/semantic-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Render and compare retained Typst fixtures
         env:
           NOON_MANIM_TYPST_RASTER_BACKENDS: webgpu,webgl
