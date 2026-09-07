@@ -265,6 +265,21 @@ function renderedWorldPixel(buffer, worldX, worldY) {
   };
 }
 
+function textBrightnessByRegion(buffer) {
+  const png = PNG.sync.read(buffer);
+  const splitX = png.width / 2 - 1.5 * png.height / 8;
+  const result = { left: 0, right: 0 };
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const brightness = Math.max(png.data[offset], png.data[offset + 1], png.data[offset + 2]);
+    const pixel = offset / 4;
+    const x = pixel % png.width;
+    const y = Math.floor(pixel / png.width);
+    if (brightness < 24 || y >= png.height / 2) continue;
+    result[x < splitX ? "left" : "right"] += brightness;
+  }
+  return result;
+}
+
 function textPixelStats(buffer) {
   const png = PNG.sync.read(buffer);
   let count = 0;
@@ -1402,6 +1417,44 @@ try {
     assert.ok(samples[1] > 0 && samples[2] > samples[1] && samples[3] > samples[1]
         && samples[4] > 0 && samples[4] < samples[3] && samples[5] === 0,
       `Text Write must reveal glyph outline/fill phases: ${JSON.stringify(samples)}`);
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.25), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3.25);
+    assert.equal(result.metrics.objectCount, 1);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const textFamilyWriteSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_text_family_write.py"), "utf8",
+  );
+  await startSampledSource(
+    page, textFamilyWriteSource, "scene-shared-text-family-write", 960, 540,
+  );
+  try {
+    const canvas = page.locator("#scene-shared-text-family-write");
+    const samples = [];
+    for (const time of [0, 0.25, 1, 2, 2.5, 3]) {
+      if (time !== 0) {
+        await page.evaluate(async (sampleTime) => {
+          await window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime);
+        }, time);
+      }
+      samples.push({ time, ...textBrightnessByRegion(await canvas.screenshot()) });
+    }
+    assert.equal(samples[0].left, 0);
+    assert.equal(samples[0].right, 0);
+    assert.ok(samples[1].left > 0 && samples[1].right === 0,
+      `family Write must begin with the first Text leaf: ${JSON.stringify(samples)}`);
+    assert.ok(samples[2].left > 0 && samples[2].right > 0);
+    assert.ok(samples[3].left > 0 && samples[3].right > samples[2].right);
+    assert.ok(samples[4].left > 0 && samples[4].right > 0
+        && samples[4].right < samples[3].right,
+      `family Unwrite must erase the four-glyph leaf before the one-glyph leaf: ${JSON.stringify(samples)}`);
+    assert.ok(samples[5].left === 0 && samples[5].right === 0);
     const result = await page.evaluate(async () => {
       const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
       const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.25), authored]);

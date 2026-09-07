@@ -80,7 +80,7 @@ jobs:
           key: ${{ runner.os }}-playwright-chromium-1.62.1
       - name: Install Playwright Chromium
         run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
       - name: Test authoring error recovery
         env:

@@ -71,6 +71,31 @@ pub struct FamilyAnimationMemberPlan {
 }
 
 impl FamilyAnimationMemberPlan {
+    /// Keep one leaf's range in a larger globally ordered animation sequence.
+    /// This immutable execution projection stores no descriptors for other leaves.
+    pub fn single_leaf_span(
+        target: SemanticNodeId,
+        span: FamilyAnimationLeafSpan,
+        total_member_count: u32,
+    ) -> Result<Self, FamilyAnimationMemberPlanError> {
+        let end = span
+            .first_member
+            .checked_add(span.member_count)
+            .ok_or(FamilyAnimationMemberPlanError::MemberCountOverflow)?;
+        if end > total_member_count {
+            return Err(FamilyAnimationMemberPlanError::InvalidMemberSpan {
+                first_member: span.first_member,
+                member_count: span.member_count,
+                total_member_count,
+            });
+        }
+        Ok(Self {
+            target,
+            leaves: vec![span],
+            total_member_count,
+        })
+    }
+
     pub const fn target(&self) -> SemanticNodeId {
         self.target
     }
@@ -147,6 +172,11 @@ impl From<FamilyAnimationError> for FamilyAnimationMemberEvaluationError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FamilyAnimationMemberPlanError {
+    InvalidMemberSpan {
+        first_member: u32,
+        member_count: u32,
+        total_member_count: u32,
+    },
     Semantic(SemanticStoreError),
     DuplicateSemanticLeaf(SemanticNodeId),
     UnexpectedLeaf {
@@ -168,6 +198,14 @@ pub enum FamilyAnimationMemberPlanError {
 impl std::fmt::Display for FamilyAnimationMemberPlanError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidMemberSpan {
+                first_member,
+                member_count,
+                total_member_count,
+            } => write!(
+                formatter,
+                "family member span {first_member}+{member_count} exceeds global count {total_member_count}"
+            ),
             Self::Semantic(error) => error.fmt(formatter),
             Self::DuplicateSemanticLeaf(leaf) => write!(
                 formatter,
@@ -378,6 +416,52 @@ mod tests {
         assert_eq!(plan.leaves()[0].global_member_index(2), None);
         assert_eq!(plan.leaves()[1].global_member_index(0), Some(2));
         assert_eq!(plan.span_for_leaf(text), Some(plan.leaves()[0]));
+    }
+
+    #[test]
+    fn single_leaf_span_preserves_global_progress_without_other_leaf_storage() {
+        let (plan, _, _, _) = mixed_plan();
+        for &span in plan.leaves() {
+            let projected = FamilyAnimationMemberPlan::single_leaf_span(
+                plan.target(),
+                span,
+                plan.total_member_count(),
+            )
+            .unwrap();
+            assert_eq!(projected.leaves(), &[span]);
+            for reverse_member_order in [false, true] {
+                for reverse_rate_function in [false, true] {
+                    for overall_progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                        let state = FamilyAnimationState {
+                            overall_progress,
+                            reverse_rate_function,
+                            ..animation_state(reverse_member_order)
+                        };
+                        let full = plan.leaf_progress(state, span.semantic_leaf).unwrap();
+                        let local = projected.leaf_progress(state, span.semantic_leaf).unwrap();
+                        for member in 0..span.member_count {
+                            assert_eq!(local.member_progress(member), full.member_progress(member));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn single_leaf_span_rejects_range_overflow_and_global_bounds() {
+        let (plan, _, _, _) = mixed_plan();
+        let mut span = plan.leaves()[0];
+        span.first_member = u32::MAX;
+        assert_eq!(
+            FamilyAnimationMemberPlan::single_leaf_span(plan.target(), span, u32::MAX),
+            Err(FamilyAnimationMemberPlanError::MemberCountOverflow)
+        );
+        span.first_member = 2;
+        assert!(matches!(
+            FamilyAnimationMemberPlan::single_leaf_span(plan.target(), span, 3),
+            Err(FamilyAnimationMemberPlanError::InvalidMemberSpan { .. })
+        ));
     }
 
     #[test]

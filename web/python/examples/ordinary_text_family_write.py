@@ -1,0 +1,38 @@
+"""Global glyph Write/Unwrite timing across one plain-Text family."""
+
+from noon import DOWN, LEFT, RIGHT, UP, Scene, Square, Text, Unwrite, VGroup, Write, linear
+
+
+class OrdinaryTextFamilyWrite(Scene):
+    def construct(self):
+        left = Text("I").shift(3 * LEFT + 0.75 * UP)
+        right = Text("LONG").shift(0.75 * UP)
+        family = VGroup(left, right)
+        moving = Square(0.6).shift(1.25 * DOWN)
+        self.add(moving)
+
+        try:
+            self.play(
+                Write(family, run_time=0.25, lag_ratio=0.25),
+                left.animate.shift(UP),
+            )
+            raise AssertionError("overlapping family Write must fail")
+        except ValueError:
+            pass
+        assert self.mobjects == [moving]
+        assert abs(left.get_center().y - 0.75) < 1e-6
+
+        self.play(
+            Write(family, run_time=2.0, lag_ratio=0.25, rate_func=linear),
+            moving.animate.shift(2 * RIGHT),
+            run_time=2.0,
+            rate_func=linear,
+        )
+        assert self.mobjects == [moving, family]
+        assert abs(moving.get_center().x - 2.0) < 1e-6
+
+        self.play(
+            Unwrite(family, run_time=1.0, lag_ratio=0.25, rate_func=linear),
+        )
+        assert self.mobjects == [moving]
+        self.wait(0.25)

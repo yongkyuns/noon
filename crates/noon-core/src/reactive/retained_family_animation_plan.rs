@@ -49,10 +49,27 @@ impl RetainedFamilyAnimationPlan {
         object: ObjectId,
         members: RetainedAnimationMembers,
     ) -> Result<Self, RetainedFamilyAnimationMemberPlanError> {
-        let mut inner = FamilyAnimationMemberPlanBuilder::begin_ordered(target, vec![target])?;
-        inner.accept_leaf(target, object, members.member_count())?;
-        let member_plan = inner.finish()?;
-        let span = member_plan.leaves()[0];
+        let count = members.member_count();
+        Self::single_leaf_span(target, object, members, 0, count)
+    }
+
+    /// Retain only this object's descriptors while evaluating progress in a global
+    /// family sequence. Storage and renderer lookup remain local to this leaf.
+    pub fn single_leaf_span(
+        target: SemanticNodeId,
+        object: ObjectId,
+        members: RetainedAnimationMembers,
+        first_member: u32,
+        total_member_count: u32,
+    ) -> Result<Self, RetainedFamilyAnimationMemberPlanError> {
+        let span = FamilyAnimationLeafSpan {
+            semantic_leaf: target,
+            object,
+            first_member,
+            member_count: members.member_count(),
+        };
+        let member_plan =
+            FamilyAnimationMemberPlan::single_leaf_span(target, span, total_member_count)?;
         Ok(Self {
             member_plan,
             leaves: vec![RetainedFamilyAnimationLeafPlan { span, members }],

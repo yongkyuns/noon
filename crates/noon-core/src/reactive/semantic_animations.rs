@@ -29,6 +29,27 @@ pub enum SemanticSubsetDisplayMode {
     OneByOneCeil,
 }
 
+/// Authoritative family position used to derive a leaf's global Write span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SemanticTextWriteFamilyMember {
+    pub family: SemanticNodeId,
+    pub leaf_index: usize,
+}
+
+/// Manim Write's shared total duration default for a derived glyph cardinality.
+pub const fn text_write_default_duration(member_count: u32) -> f64 {
+    if member_count < 15 {
+        1.0
+    } else {
+        2.0
+    }
+}
+
+/// Manim Write's shared lag default for one globally ordered glyph sequence.
+pub fn text_write_default_lag_ratio(member_count: u32) -> f64 {
+    (4.0 / f64::from(member_count.max(1))).min(0.2)
+}
+
 /// Directional translation of a faded affine endpoint relative to activation state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticFadeTranslation {
@@ -158,6 +179,7 @@ pub enum SemanticAnimationIntent {
     TextWrite {
         target: SemanticNodeId,
         reverse_member_order: bool,
+        family_member: Option<SemanticTextWriteFamilyMember>,
     },
     /// Rotate one centered 2D object along an angular path. This remains distinct
     /// from TransformTo point correspondence even when both share affine endpoints.
@@ -593,6 +615,21 @@ impl SemanticStore {
         reverse_member_order: bool,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_text_write_animation_with_family_member(
+            target,
+            reverse_member_order,
+            None,
+            options,
+        )
+    }
+
+    pub(crate) fn insert_semantic_text_write_animation_with_family_member(
+        &mut self,
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+        family_member: Option<SemanticTextWriteFamilyMember>,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         let state = self.semantic_object_state_checked(target)?;
         let crate::SemanticObjectContent::Text(handle) = &state.content else {
@@ -605,12 +642,23 @@ impl SemanticStore {
         if resource.kind != crate::TextSourceKind::Plain {
             return Err(SemanticAnimationError::InvalidTextWriteTarget);
         }
+        if let Some(member) = family_member {
+            if !matches!(
+                self.node(member.family).map(|node| node.kind()),
+                Some(crate::SemanticNodeKind::Family)
+            ) || !crate::semantic_scene_root_contains(self, member.family, target)
+                .map_err(|_| SemanticAnimationError::InvalidTextWriteTarget)?
+            {
+                return Err(SemanticAnimationError::InvalidTextWriteTarget);
+            }
+        }
         validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::TextWrite {
                     target,
                     reverse_member_order,
+                    family_member,
                 },
                 options,
             )),
@@ -1176,5 +1224,16 @@ mod tests {
             .insert_semantic_parallel_animation(&[first, second, third], AnimationOptions::new())
             .unwrap();
         assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn text_write_defaults_follow_global_glyph_thresholds() {
+        assert_eq!(text_write_default_duration(0), 1.0);
+        assert_eq!(text_write_default_duration(14), 1.0);
+        assert_eq!(text_write_default_duration(15), 2.0);
+        assert_eq!(text_write_default_duration(200), 2.0);
+        assert_eq!(text_write_default_lag_ratio(0), 0.2);
+        assert_eq!(text_write_default_lag_ratio(5), 0.2);
+        assert_eq!(text_write_default_lag_ratio(40), 0.1);
     }
 }

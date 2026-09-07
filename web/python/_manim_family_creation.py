@@ -123,28 +123,33 @@ def _family_candidate(animation: object):
         return None
 
     if _is_write_animation(animation):
-        # A single plain Text is an ordinary typed semantic Mobject. The final
-        # canonical Scene.play wrapper routes Write/Unwrite through shared TextWrite;
-        # do not fabricate a one-member family or serialized family request.
+        # Plain Text family Write/Unwrite is a shared live composition operation.
+        # This legacy family codec retains only vector and Typst exclusions while
+        # the final canonical Scene.play wrapper owns the supported route.
         if isinstance(target, _typst.Text) and not isinstance(target, _compat.Group):
             return None
         native_text = [_native_text(member) for member in leaves]
-        if not any(native_text):
-            if animation.reverse or animation.remover or animation.reverse_rate_function:
+        if any(native_text):
+            if not all(native_text):
                 raise NotImplementedError(
-                    "reverse ordinary vector Write/Unwrite remains a retained compatibility case (#959)"
+                    "Write cannot mix plain Text with vector or Typst leaves"
                 )
-            # Forward ordinary vector Write is classified by the final canonical
-            # Scene.play layer as shared family DrawBorderThenFill.
             return None
-        if not all(native_text):
+        if any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
             raise NotImplementedError(
-                "Write cannot mix retained Text and ordinary vector leaves"
+                "family Write/Unwrite supports plain Text; Typst and MathTypst remain #959"
             )
-    elif not any(_native_text(member) for member in leaves):
+        if animation.reverse or animation.remover or animation.reverse_rate_function:
+            raise NotImplementedError(
+                "reverse ordinary vector Write/Unwrite remains a retained compatibility case (#959)"
+            )
+        # Forward ordinary vector Write is classified by the final canonical
+        # Scene.play layer as shared family DrawBorderThenFill.
+        return None
+    if not any(_native_text(member) for member in leaves):
         return None
 
-    label = "Write/Unwrite" if _is_write_animation(animation) else "Create/Uncreate"
+    label = "Create/Uncreate"
     for member in leaves:
         if isinstance(member, _typst._RetainedTextMobject) and not _native_text(member):
             raise NotImplementedError(
@@ -165,11 +170,7 @@ def _family_candidate(animation: object):
         synthetic = True
 
     family_handle = getattr(family, "_semantic_family_handle", None)
-    method = (
-        "familyWriteAnimationRequest"
-        if _is_write_animation(animation)
-        else "familyAnimationRequest"
-    )
+    method = "familyAnimationRequest"
     if family_handle is None or not hasattr(family_handle, method):
         raise RuntimeError(f"family {label} requires the shared Rust authoring family handle")
     return target, family, leaves, synthetic
@@ -485,80 +486,6 @@ def _append_reveal_request(
     requests.append(json.loads(str(session.finishJson())))
 
 
-def _write_request_inputs(
-    animation: Write,
-    *,
-    play_run_time: float | None,
-    play_easing: str | None,
-    play_rate_func: object | None,
-    play_lag_ratio: float | None,
-) -> tuple[float | None, float | None, str, bool, bool]:
-    args = _options.builder_args(animation)
-
-    path_arc = float(args.get("path_arc", 0.0))
-    if not math.isfinite(path_arc):
-        raise ValueError("family Write path_arc must be finite")
-    if not math.isclose(path_arc, 0.0, abs_tol=1e-15):
-        raise NotImplementedError("family Write/Unwrite does not support path_arc")
-
-    run_time_value = play_run_time if play_run_time is not None else args.get("run_time")
-    run_time_override = None if run_time_value is None else float(run_time_value)
-    lag_value = play_lag_ratio if play_lag_ratio is not None else args.get("lag_ratio")
-    lag_override = None if lag_value is None else float(lag_value)
-
-    if play_easing is not None:
-        rate_id = str(play_easing)
-    elif play_rate_func is not None:
-        rate_id = _compat._easing_from_rate_func(play_rate_func)
-    else:
-        rate_id = _compat._easing_from_rate_func(
-            args.get("rate_func", _rate_functions.linear)
-        )
-
-    reverse_rate = bool(
-        args.get("reverse_rate_function", animation.reverse_rate_function)
-    )
-    reverse_members = bool(animation.reverse)
-    return run_time_override, lag_override, str(rate_id), reverse_rate, reverse_members
-
-
-def _append_write_request(
-    scene: _compat.Scene,
-    animation: Write,
-    family: _compat.Group,
-    leaves: list[_base.Mobject],
-    *,
-    start_time: float,
-    duration_override: float | None,
-    lag_ratio_override: float | None,
-    rate_function: str,
-    reverse_rate_function: bool,
-    reverse_member_order: bool,
-) -> tuple[float, float]:
-    requests = _request_list(scene)
-    session = family._semantic_family_handle.familyWriteAnimationRequest(
-        float(start_time),
-        duration_override,
-        lag_ratio_override,
-        str(rate_function),
-        bool(reverse_rate_function),
-        bool(reverse_member_order),
-    )
-    _bind_request_leaves(session, leaves)
-    result = json.loads(str(session.finishJson()))
-    request = result.get("request")
-    if not isinstance(request, dict):
-        raise RuntimeError("Rust family Write authoring returned no canonical request")
-    run_time = float(result.get("run_time"))
-    lag_ratio = float(result.get("lag_ratio"))
-    if not math.isfinite(run_time) or run_time <= 0.0:
-        raise RuntimeError("Rust family Write authoring returned invalid run_time")
-    if not math.isfinite(lag_ratio) or lag_ratio < 0.0:
-        raise RuntimeError("Rust family Write authoring returned invalid lag_ratio")
-    requests.append(request)
-    return run_time, lag_ratio
-
-
 def _family_scene_play(
     self: _compat.Scene,
     *animations: Any,
@@ -741,57 +668,29 @@ def _family_scene_play(
                 start_time=base_start,
             )
 
-            if _is_write_animation(animation):
-                assert isinstance(animation, Write)
-                (
-                    duration_override,
-                    lag_override,
-                    rate_id,
-                    reverse_rate,
-                    reverse_members,
-                ) = _write_request_inputs(
-                    animation,
-                    play_run_time=play_run_time,
-                    play_easing=easing,
-                    play_rate_func=rate_func,
-                    play_lag_ratio=play_lag_ratio,
+            resolved = _options.resolve(
+                builder_args=_options.builder_args(animation),
+                default_lag_ratio=1.0,
+                play_run_time=play_run_time,
+                play_easing=easing,
+                play_rate_func=rate_func,
+                play_lag_ratio=play_lag_ratio,
+            )
+            if not math.isclose(resolved.path_arc, 0.0, abs_tol=1e-15):
+                raise NotImplementedError(
+                    "family Create/Uncreate does not support path_arc"
                 )
-                actual_run_time, _actual_lag = _append_write_request(
-                    self,
-                    animation,
-                    family,
-                    leaves,
-                    start_time=base_start,
-                    duration_override=duration_override,
-                    lag_ratio_override=lag_override,
-                    rate_function=rate_id,
-                    reverse_rate_function=reverse_rate,
-                    reverse_member_order=reverse_members,
-                )
-            else:
-                resolved = _options.resolve(
-                    builder_args=_options.builder_args(animation),
-                    default_lag_ratio=1.0,
-                    play_run_time=play_run_time,
-                    play_easing=easing,
-                    play_rate_func=rate_func,
-                    play_lag_ratio=play_lag_ratio,
-                )
-                if not math.isclose(resolved.path_arc, 0.0, abs_tol=1e-15):
-                    raise NotImplementedError(
-                        "family Create/Uncreate does not support path_arc"
-                    )
-                actual_run_time = resolved.run_time
-                _append_reveal_request(
-                    self,
-                    animation,
-                    family,
-                    leaves,
-                    start_time=base_start,
-                    duration=resolved.run_time,
-                    lag_ratio=resolved.lag_ratio,
-                    rate_function=resolved.rate_func,
-                )
+            actual_run_time = resolved.run_time
+            _append_reveal_request(
+                self,
+                animation,
+                family,
+                leaves,
+                start_time=base_start,
+                duration=resolved.run_time,
+                lag_ratio=resolved.lag_ratio,
+                rate_function=resolved.rate_func,
+            )
 
             completed.append(
                 (animation, target, lifecycle_plans, base_start + actual_run_time)

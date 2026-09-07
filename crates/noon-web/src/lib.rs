@@ -18,7 +18,6 @@ mod execution_transport;
 mod execution_wake;
 mod family_animation_authoring;
 mod family_bounds;
-mod family_write_authoring;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 mod gpu_diagnostics;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
@@ -79,8 +78,6 @@ pub use execution_wake::*;
 #[cfg(target_arch = "wasm32")]
 pub use family_animation_authoring::*;
 pub use family_bounds::*;
-#[cfg(target_arch = "wasm32")]
-pub use family_write_authoring::*;
 pub use legacy::{PlayerError, ReconcileOutcome};
 pub use lifecycle::*;
 pub use manim_dashed_line_bridge::*;

@@ -87,6 +87,8 @@ impl<'a> TransactionNodeCatalog<'a> {
     pub(super) fn ensure_plain_text_write_target(
         &self,
         state: &crate::SemanticObjectState,
+        family_member: Option<crate::SemanticTextWriteFamilyMember>,
+        target: super::SemanticTransactionNodeRef,
         index: usize,
     ) -> Result<(), SemanticMutationTransactionError> {
         let crate::SemanticObjectContent::Text(handle) = &state.content else {
@@ -97,6 +99,19 @@ impl<'a> TransactionNodeCatalog<'a> {
         };
         if resource.kind != crate::TextSourceKind::Plain {
             return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+        }
+        if let Some(member) = family_member {
+            let Some(target) = target.existing() else {
+                return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+            };
+            if !matches!(
+                self.store.node(member.family).map(|node| node.kind()),
+                Some(crate::SemanticNodeKind::Family)
+            ) || !crate::semantic_scene_root_contains(self.store, member.family, target)
+                .map_err(|_| SemanticMutationTransactionError::InvalidTextWriteTarget { index })?
+            {
+                return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
+            }
         }
         Ok(())
     }

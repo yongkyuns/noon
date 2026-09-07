@@ -84,6 +84,7 @@ pub enum SemanticScheduledAnimationPayload {
     },
     TextWrite {
         reverse_member_order: bool,
+        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     },
     Rotate {
         angle: f64,
@@ -194,6 +195,7 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     },
     TextWrite {
         reverse_member_order: bool,
+        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     },
     Rotate {
         angle: f64,
@@ -465,7 +467,11 @@ pub fn lower_semantic_animation_schedule(
     start_time: f64,
     play_options: AnimationOptions,
 ) -> Result<SemanticAnimationScheduleProjection, SemanticAnimationScheduleError> {
-    let lookup = PublishedAnimationLookup { store, index };
+    let lookup = PublishedAnimationLookup {
+        store,
+        index,
+        family_text_counts: std::cell::RefCell::new(std::collections::HashMap::new()),
+    };
     let projection = lower_animation_schedule(&lookup, root, start_time, play_options)
         .map_err(published_schedule_error)?;
 
@@ -528,7 +534,11 @@ pub fn lower_prepared_semantic_animation_schedule(
     play_options: AnimationOptions,
 ) -> Result<PreparedSemanticAnimationScheduleProjection, PreparedSemanticAnimationScheduleError> {
     let root = root.into();
-    let lookup = PreparedAnimationLookup { prepared, index };
+    let lookup = PreparedAnimationLookup {
+        prepared,
+        index,
+        family_text_counts: std::cell::RefCell::new(std::collections::HashMap::new()),
+    };
     let projection = lower_animation_schedule(&lookup, root, start_time, play_options)
         .map_err(prepared_schedule_error)?;
     let mut leaves = Vec::new();
@@ -615,8 +625,10 @@ fn published_payload(
         }
         ScheduledAnimationPayload::TextWrite {
             reverse_member_order,
+            family_member,
         } => SemanticScheduledAnimationPayload::TextWrite {
             reverse_member_order,
+            family_member,
         },
         ScheduledAnimationPayload::Fade {
             direction,
@@ -674,8 +686,10 @@ fn prepared_payload(
         }
         ScheduledAnimationPayload::TextWrite {
             reverse_member_order,
+            family_member,
         } => PreparedSemanticScheduledAnimationPayload::TextWrite {
             reverse_member_order,
+            family_member,
         },
         ScheduledAnimationPayload::Fade {
             direction,
@@ -730,6 +744,7 @@ enum AnimationDeclarationIntent<R> {
     TextWrite {
         target: R,
         reverse_member_order: bool,
+        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     },
     Rotate {
         target: R,
@@ -777,12 +792,51 @@ trait AnimationScheduleLookup {
         None
     }
 
-    fn text_write_member_count(&self, target: Self::Reference) -> Option<u32>;
+    fn text_write_member_count(
+        &self,
+        target: Self::Reference,
+        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+    ) -> Option<u32>;
+}
+
+fn cached_family_text_member_count(
+    store: &SemanticStore,
+    family: SemanticNodeId,
+    cache: &std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
+) -> Option<u32> {
+    if let Some(count) = cache.borrow().get(&family) {
+        return *count;
+    }
+    let count = (|| {
+        let leaves = store.ordered_leaf_nodes(family).ok()?;
+        let mut total = 0_u32;
+        for leaf in leaves {
+            let state = store.semantic_object_state_checked(leaf).ok()?;
+            let noon_core::SemanticObjectContent::Text(handle) = state.content else {
+                return None;
+            };
+            let resource = store.text_resources().get(handle)?;
+            if resource.kind != noon_core::TextSourceKind::Plain {
+                return None;
+            }
+            let count = u32::try_from(
+                noon_core::plain_text_animation_members(resource)
+                    .ok()?
+                    .len(),
+            )
+            .ok()?;
+            total = total.checked_add(count)?;
+        }
+        Some(total)
+    })();
+    cache.borrow_mut().insert(family, count);
+    count
 }
 
 struct PublishedAnimationLookup<'a> {
     store: &'a SemanticStore,
     index: &'a SemanticExecutionIndex,
+    family_text_counts: std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
 }
 
 impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
@@ -863,6 +917,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
             SemanticAnimationIntent::TextWrite {
                 target,
                 reverse_member_order,
+                family_member,
             } => {
                 self.store
                     .semantic_object_state_checked(*target)
@@ -870,6 +925,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::TextWrite {
                     target: *target,
                     reverse_member_order: *reverse_member_order,
+                    family_member: *family_member,
                 }
             }
             SemanticAnimationIntent::Rotate { target, angle } => {
@@ -945,7 +1001,18 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
         self.index.execution_object_id(target)
     }
 
-    fn text_write_member_count(&self, target: Self::Reference) -> Option<u32> {
+    fn text_write_member_count(
+        &self,
+        target: Self::Reference,
+        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+    ) -> Option<u32> {
+        if let Some(member) = family_member {
+            return cached_family_text_member_count(
+                self.store,
+                member.family,
+                &self.family_text_counts,
+            );
+        }
         let state = self.store.semantic_object_state_checked(target).ok()?;
         let noon_core::SemanticObjectContent::Text(handle) = state.content else {
             return None;
@@ -963,6 +1030,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
 struct PreparedAnimationLookup<'a, 'store> {
     prepared: &'a PreparedSemanticMutationTransaction<'store>,
     index: &'a SemanticExecutionIndex,
+    family_text_counts: std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
 }
 
 impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
@@ -1038,9 +1106,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticAnimationIntent::TextWrite {
                         target,
                         reverse_member_order,
+                        family_member,
                     } => AnimationDeclarationIntent::TextWrite {
                         target: (*target).into(),
                         reverse_member_order: *reverse_member_order,
+                        family_member: *family_member,
                     },
                     SemanticAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
@@ -1141,9 +1211,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticTransactionAnimationIntent::TextWrite {
                         target,
                         reverse_member_order,
+                        family_member,
                     } => AnimationDeclarationIntent::TextWrite {
                         target: *target,
                         reverse_member_order: *reverse_member_order,
+                        family_member: *family_member,
                     },
                     SemanticTransactionAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
@@ -1250,7 +1322,18 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
         target.existing().map(super::semantic_execution_object_id)
     }
 
-    fn text_write_member_count(&self, target: Self::Reference) -> Option<u32> {
+    fn text_write_member_count(
+        &self,
+        target: Self::Reference,
+        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
+    ) -> Option<u32> {
+        if let Some(member) = family_member {
+            return cached_family_text_member_count(
+                self.prepared.store(),
+                member.family,
+                &self.family_text_counts,
+            );
+        }
         let state = self.prepared.object_state(target).ok()?;
         let noon_core::SemanticObjectContent::Text(handle) = state.content else {
             return None;
@@ -1316,6 +1399,7 @@ enum ScheduledAnimationPayload<R> {
     },
     TextWrite {
         reverse_member_order: bool,
+        family_member: Option<noon_core::SemanticTextWriteFamilyMember>,
     },
     Rotate {
         angle: f64,
@@ -1588,16 +1672,17 @@ where
         AnimationDeclarationIntent::TextWrite {
             target,
             reverse_member_order,
+            family_member,
         } => {
             let execution_object_id = lookup
                 .execution_object_id(target)
                 .or_else(|| lookup.entering_execution_object_id(target))
                 .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
             let member_count = lookup
-                .text_write_member_count(target)
+                .text_write_member_count(target, family_member)
                 .ok_or(AnimationSchedulePlanError::InvalidTextWriteTarget { animation, target })?;
-            let default_duration = if member_count < 15 { 1.0 } else { 2.0 };
-            let default_lag_ratio = (4.0 / f64::from(member_count.max(1))).min(0.2);
+            let default_duration = noon_core::text_write_default_duration(member_count);
+            let default_lag_ratio = noon_core::text_write_default_lag_ratio(member_count);
             let reverse_rate_function = play_options
                 .reverse_rate_function
                 .or(state.options.reverse_rate_function)
@@ -1637,6 +1722,7 @@ where
                     execution_object_id,
                     payload: ScheduledAnimationPayload::TextWrite {
                         reverse_member_order,
+                        family_member,
                     },
                     options,
                 },

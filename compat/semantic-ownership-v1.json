@@ -241,11 +241,11 @@
     },
     {
       "id": "animation.text-write",
-      "surface": "Single plain Text Write and Unwrite, including mixed ordinary compositions",
+      "surface": "Plain Text and Group/VGroup Text Write/Unwrite, including mixed ordinary compositions",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_text_write"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_text_write_animation"}],
-      "reason": "Python passes a typed Text handle and explicit options. Rust derives glyph membership and defaults, validates composition conflicts and admission atomically, and publishes immutable glyph plans and sparse runtime state to the common renderer."
+      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_text_write/declare_and_activate_family_text_write"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_text_write_animation/_canonical_text_family_write_animation"}],
+      "reason": "Python passes typed Text/family handles and explicit options. Rust derives global glyph order and count-dependent defaults, validates composition conflicts and membership atomically, and publishes compact per-leaf global spans with immutable glyph plans to the common renderer."
     },
     {
       "id": "animation.subset-display",

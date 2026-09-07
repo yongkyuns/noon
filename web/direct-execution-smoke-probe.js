@@ -26,6 +26,7 @@ const {
   createDirectOrdinaryMembershipSmokeRenderer,
   createDirectOrdinaryTextWriteSmokeRenderer,
   createDirectTextFamilyFadeSmokeRenderer,
+  createDirectTextFamilyWriteSmokeRenderer,
   createDirectMovingCameraCenterSmokeRenderer,
   createDirectOrdinarySquareAndCircleCreateSmokeRenderer,
   createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer,
@@ -1192,6 +1193,26 @@ async function textBrightnessByRow(canvas) {
   return result;
 }
 
+async function textBrightnessByRegion(canvas) {
+  const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
+  const reader = new OffscreenCanvas(canvas.width, canvas.height);
+  const context = reader.getContext("2d", { willReadFrequently: true });
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const splitX = canvas.width / 2 - 1.5 * canvas.height / 8;
+  const result = { left: 0, right: 0 };
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    const brightness = Math.max(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+    const pixel = offset / 4;
+    const x = pixel % canvas.width;
+    const y = Math.floor(pixel / canvas.width);
+    if (brightness < 24 || y >= canvas.height / 2) continue;
+    result[x < splitX ? "left" : "right"] += brightness;
+  }
+  return result;
+}
+
 async function directTextFamilyFadeProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectTextFamilyFadeSmokeRenderer(canvas);
@@ -1218,6 +1239,44 @@ async function directTextFamilyFadeProof(expectedBackend) {
     if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 1
         || renderer.time() !== 3.25 || wake.cadence !== "idle") {
       throw new Error("direct Text family Fade did not complete with only Write present");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directTextFamilyWriteProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectTextFamilyWriteSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    renderer.directWakeDirectiveJson(0);
+    for (const time of [0, 250, 1000, 2000, 2500, 3000]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      samples.push({ time, ...(await textBrightnessByRegion(canvas)) });
+    }
+    if (samples[0].left !== 0 || samples[0].right !== 0
+        || samples[1].left <= 0 || samples[1].right !== 0
+        || samples[2].left <= 0 || samples[2].right <= 0
+        || samples[3].left <= 0 || samples[3].right <= samples[2].right
+        || samples[4].left <= 0 || samples[4].right <= 0
+        || samples[4].right >= samples[3].right
+        || samples[5].left !== 0 || samples[5].right !== 0) {
+      throw new Error(`direct Text family Write did not preserve global glyph order: ${JSON.stringify(samples)}`);
+    }
+    renderer.advanceDirectRealtime(3250);
+    await settleDirectPublication(renderer, 3250);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(3250));
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 1
+        || renderer.time() !== 3.25 || wake.cadence !== "idle") {
+      throw new Error("direct Text family Write did not finish with only its disjoint sibling");
     }
     return samples;
   } finally {
@@ -1924,6 +1983,7 @@ async function start() {
   metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);
   metrics.ordinaryTextWrite = await directOrdinaryTextWriteProof(expectedBackend);
   metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);
+  metrics.textFamilyWrite = await directTextFamilyWriteProof(expectedBackend);
   metrics.movingCameraCenter = await directMovingCameraCenterProof(expectedBackend);
   metrics.succession = await directSuccessionProof(expectedBackend);
   metrics.uncreate = await directUncreateProof(expectedBackend);
