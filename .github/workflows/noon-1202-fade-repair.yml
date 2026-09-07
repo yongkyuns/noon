@@ -1,0 +1,99 @@
+name: Qualify 1202 detached-family fade repair
+on:
+  push:
+    branches: [codex/noon-1202-trace]
+    paths: [.github/workflows/noon-1202-fade-repair.yml]
+permissions:
+  contents: write
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: f3ff356c27cf09867564f4d00a530fb400fdff32
+      - name: Apply reviewed source-only patch
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/noon-1202-evidence"
+          python3 - <<'PY'
+          import base64, hashlib, os, pathlib, subprocess, zlib
+          encoded = '''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'''
+          patch = zlib.decompress(base64.b64decode(encoded.replace('/a3fzn', '/a3zn')))
+          assert hashlib.sha256(patch).hexdigest() == '04cd769273c4d5013548d0f4d616c9fe2dbbefcffa58bcead62b6b19b8337402'
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'noon-1202-evidence/reviewed.patch'
+          path.write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', str(path)], check=True)
+          subprocess.run(['git', 'apply', str(path)], check=True)
+          PY
+      - name: Set up Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format source and prove regression fails before repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cp crates/noon/src/execution_session.rs "$RUNNER_TEMP/noon-fixed-execution.rs"
+          trap 'cp "$RUNNER_TEMP/noon-fixed-execution.rs" crates/noon/src/execution_session.rs' EXIT
+          git checkout -- crates/noon/src/execution_session.rs
+          status=0
+          cargo test -p noon --lib late_family_after_succession -- --nocapture > "$RUNNER_TEMP/noon-1202-evidence/baseline-red.log" 2>&1 || status=$?
+          tail -n 70 "$RUNNER_TEMP/noon-1202-evidence/baseline-red.log"
+          test "$status" -ne 0
+          grep -F 'late_family_after_succession_enters_lagged_fade_without_premature_membership ... FAILED' "$RUNNER_TEMP/noon-1202-evidence/baseline-red.log"
+          grep -F 'TargetIsNotDetached' "$RUNNER_TEMP/noon-1202-evidence/baseline-red.log"
+      - name: Validate repaired shared publication and lifecycle regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon --lib late_family_fade_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/noon-1202-evidence/repaired-native.log"
+          cargo test -p noon --lib > "$RUNNER_TEMP/noon-1202-evidence/noon-unit.log" 2>&1
+          tail -n 15 "$RUNNER_TEMP/noon-1202-evidence/noon-unit.log"
+      - name: Verify browser evidence contracts
+        run: |
+          node --check scripts/semantic-preview-smoke.mjs
+          node --test scripts/semantic-preview-observations.test.mjs web/semantic-preview-session.test.mjs > "$RUNNER_TEMP/noon-1202-evidence/preview-contracts.log"
+          tail -n 12 "$RUNNER_TEMP/noon-1202-evidence/preview-contracts.log"
+          git diff --check
+      - name: Publish source-only candidate for review, not master or PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = f3ff356c27cf09867564f4d00a530fb400fdff32
+          git add crates/noon/src/execution_session.rs crates/noon/src/live_session.rs crates/noon/src/live_session/late_family_fade_tests.rs scripts/semantic-preview-observations.mjs scripts/semantic-preview-observations.test.mjs scripts/semantic-preview-smoke.mjs
+          test "$(git diff --cached --name-only | wc -l)" -eq 6
+          git diff --exit-code
+          git config user.name 'Noon development agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix detached-family fades after live composition (#1202)'
+          git push --force-with-lease=refs/heads/codex/noon-1202-fade-candidate: origin HEAD:refs/heads/codex/noon-1202-fade-candidate
+          git rev-parse HEAD > "$RUNNER_TEMP/noon-1202-evidence/REVISION"
+          git diff f3ff356c27cf09867564f4d00a530fb400fdff32 HEAD > "$RUNNER_TEMP/noon-1202-evidence/final.patch"
+          git archive --format=tar.gz HEAD -o "$RUNNER_TEMP/noon-1202-evidence/source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: noon-1202-fade-repair
+          path: ${{ runner.temp }}/noon-1202-evidence
+          if-no-files-found: error
+          retention-days: 7
