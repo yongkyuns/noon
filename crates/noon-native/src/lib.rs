@@ -532,7 +532,7 @@ impl NativeApp {
         let metrics = gpu.text_metrics(camera)?;
         let prepared = gpu
             .preparer
-            .prepare_publication_visible(
+            .prepare_planned_publication_visible(
                 &gpu.device,
                 &gpu.queue,
                 &publication,

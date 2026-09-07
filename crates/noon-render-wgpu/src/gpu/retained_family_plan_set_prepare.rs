@@ -47,6 +47,56 @@ impl From<RetainedFamilyDrawBorderPrepareError> for RetainedFamilyPlanSetPrepare
 }
 
 impl RetainedFramePreparer {
+    /// Prepare the ordinary runtime publication with its typed, execution-derived
+    /// family plans. Direct native and direct WASM callers keep the plan/frame
+    /// boundary in-process; only the genuine worker bridge serializes this view.
+    pub fn prepare_planned_publication_visible<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        publication: &RendererPublication<'_>,
+        visible_object_indices: &[usize],
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        let received = publication.context();
+        if let Some(applied) = self.last_applied_publication {
+            if publication_is_stale(received, applied) {
+                return Err(RetainedPrepareError::StalePublication { received, applied }.into());
+            }
+        }
+        validate_visible_object_indices(publication.frame(), visible_object_indices)?;
+
+        let frame = publication.planned_family_frame();
+        if publication.family_animation_plans().is_empty()
+            || frame.family_animations.iter().all(Option::is_none)
+        {
+            return self
+                .prepare_publication_visible(
+                    device,
+                    queue,
+                    publication,
+                    visible_object_indices,
+                    metrics,
+                )
+                .map_err(Into::into);
+        }
+
+        let prepared = self.prepare_family_plan_set_with_changes_inner(
+            device,
+            queue,
+            &frame,
+            publication.family_animation_plans(),
+            publication.changes(),
+            publication.text_resources(),
+            publication.font_resources(),
+            publication.geometry_resources(),
+            metrics,
+            Some(visible_object_indices),
+        )?;
+        *prepared.applied_publication = Some(received);
+        Ok(prepared)
+    }
+
     /// Prepare a frame with any number of immutable family plans in one renderer pass.
     ///
     /// Runtime plan identity is selected per object, so disjoint active requests may
@@ -66,6 +116,25 @@ impl RetainedFramePreparer {
         fonts: &(impl FontResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        self.prepare_family_plan_set_with_changes_inner(
+            device, queue, frame, plans, changes, texts, fonts, geometries, metrics, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_family_plan_set_with_changes_inner<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+        visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
         self.prepare_canonical_mixed_baseline(
             device,
@@ -92,6 +161,20 @@ impl RetainedFramePreparer {
             &self.snapshot_text_items,
             &geometry,
         );
+        rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
+        if let Some(indices) = visible_object_indices {
+            if let Some(projected) = project_mixed_visibility_cached(
+                frame.retained,
+                indices,
+                &self.render_items,
+                &self.render_item_ranges,
+                &mut self.visible_projection_ready,
+                &mut self.visible_projection_candidates,
+                &mut self.visible_render_items,
+            ) {
+                self.visibility_stats.record(indices.len(), projected);
+            }
+        }
         self.incremental_stats.mixed_order_rebuilds = self
             .incremental_stats
             .mixed_order_rebuilds
@@ -133,7 +216,11 @@ impl RetainedFramePreparer {
             geometry,
             text_generation: self.text_generation,
             text,
-            render_items: &self.render_items,
+            render_items: if visible_object_indices.is_some() {
+                &self.visible_render_items
+            } else {
+                &self.render_items
+            },
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,

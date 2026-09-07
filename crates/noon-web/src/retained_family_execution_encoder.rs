@@ -15,6 +15,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct RetainedFamilyExecutionDeltaEncoder {
     retained: RetainedExecutionDeltaEncoder,
+    published_plan_count: usize,
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
@@ -24,11 +25,13 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::with_render_geometries(session, geometries),
+            published_plan_count: 0,
         }
     }
     pub const fn new(session: u32) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
+            published_plan_count: 0,
         }
     }
 
@@ -39,9 +42,9 @@ impl RetainedFamilyExecutionDeltaEncoder {
         camera: Camera2DState,
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
         let retained = self.retained.encode_snapshot(frame.retained, camera)?;
-        Ok(RetainedFamilyExecutionDeltaEnvelope::snapshot(
-            retained, frame, plans,
-        )?)
+        let envelope = RetainedFamilyExecutionDeltaEnvelope::snapshot(retained, frame, plans)?;
+        self.published_plan_count = plans.len();
+        Ok(envelope)
     }
 
     pub fn encode_planned_snapshot(
@@ -51,9 +54,33 @@ impl RetainedFamilyExecutionDeltaEncoder {
         camera: Camera2DState,
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
         let retained = self.retained.encode_snapshot(frame.retained, camera)?;
-        Ok(RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(
-            retained, frame, plans,
-        )?)
+        let envelope =
+            RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?;
+        self.published_plan_count = plans.len();
+        Ok(envelope)
+    }
+
+    /// Encode an authoritative snapshot for the execution rows that still own a
+    /// live slot. The family sidecar uses the same exact row selection as the base
+    /// retained envelope, so retired rows cannot reappear through plan state.
+    pub fn encode_planned_snapshot_indices(
+        &mut self,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        camera: Camera2DState,
+        indices: impl IntoIterator<Item = usize>,
+    ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
+        let indices = indices.into_iter().collect::<Vec<_>>();
+        let retained = self.retained.encode_snapshot_indices(
+            frame.retained,
+            camera,
+            indices.iter().copied(),
+        )?;
+        let envelope = RetainedFamilyExecutionDeltaEnvelope::planned_snapshot_indices(
+            retained, frame, plans, indices,
+        )?;
+        self.published_plan_count = plans.len();
+        Ok(envelope)
     }
 
     /// Encode one sparse family-aware retained update.
@@ -69,6 +96,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         camera: Camera2DState,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
+        let added_plans = self.unpublished_plans(plans)?;
         let Some(retained) = self
             .retained
             .encode_incremental(frame.retained, changes, camera)?
@@ -76,11 +104,20 @@ impl RetainedFamilyExecutionDeltaEncoder {
             return Ok(None);
         };
 
-        let envelope = if retained.snapshot {
+        let snapshot = retained.snapshot;
+        let envelope = if snapshot {
             RetainedFamilyExecutionDeltaEnvelope::snapshot(retained, frame, plans)?
         } else {
-            RetainedFamilyExecutionDeltaEnvelope::incremental(retained, frame, changes)?
+            let mut envelope =
+                RetainedFamilyExecutionDeltaEnvelope::incremental(retained, frame, changes)?;
+            envelope.family_plans = added_plans
+                .iter()
+                .map(crate::RetainedFamilyPlanTransport::from_plan)
+                .collect();
+            envelope.validate()?;
+            envelope
         };
+        self.published_plan_count = plans.len();
         Ok(Some(envelope))
     }
 
@@ -92,6 +129,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         camera: Camera2DState,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
+        let added_plans = self.unpublished_plans(plans)?;
         let Some(retained) = self
             .retained
             .encode_incremental(frame.retained, changes, camera)?
@@ -99,12 +137,31 @@ impl RetainedFamilyExecutionDeltaEncoder {
             return Ok(None);
         };
 
-        let envelope = if retained.snapshot {
+        let snapshot = retained.snapshot;
+        let envelope = if snapshot {
             RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?
         } else {
-            RetainedFamilyExecutionDeltaEnvelope::planned_incremental(retained, frame, changes)?
+            RetainedFamilyExecutionDeltaEnvelope::planned_incremental_with_plans(
+                retained,
+                frame,
+                changes,
+                added_plans,
+            )?
         };
+        self.published_plan_count = plans.len();
         Ok(Some(envelope))
+    }
+
+    fn unpublished_plans<'a>(
+        &self,
+        plans: &'a [RetainedFamilyAnimationPlan],
+    ) -> Result<&'a [RetainedFamilyAnimationPlan], RetainedFamilyExecutionTransportError> {
+        plans.get(self.published_plan_count..).ok_or(
+            RetainedFamilyExecutionTransportError::PlanSetShrank {
+                published: self.published_plan_count,
+                available: plans.len(),
+            },
+        )
     }
 }
 
@@ -276,6 +333,46 @@ mod tests {
             .unwrap();
         assert_eq!(incremental.family_states.len(), 1);
         assert_eq!(incremental.family_states[0].family_plan_index, Some(0));
+    }
+
+    #[test]
+    fn planned_encoder_publishes_only_the_new_plan_suffix() {
+        let (plan, frame, states) = fixture();
+        let initial_indices = [Some(0), Some(0)];
+        let initial = RetainedPlannedFamilyFrame {
+            retained: &frame,
+            family_animations: &states,
+            family_plan_indices: &initial_indices,
+        };
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(20);
+        encoder
+            .encode_planned_snapshot(
+                &initial,
+                std::slice::from_ref(&plan),
+                Camera2DState::default(),
+            )
+            .unwrap();
+
+        let plans = [plan.clone(), plan];
+        let appended_indices = [Some(1), Some(0)];
+        let appended = RetainedPlannedFamilyFrame {
+            retained: &frame,
+            family_animations: &states,
+            family_plan_indices: &appended_indices,
+        };
+        let delta = encoder
+            .encode_planned_incremental(
+                &appended,
+                &plans,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!delta.retained.snapshot);
+        assert_eq!(delta.family_plans.len(), 1);
+        assert_eq!(delta.family_states.len(), 1);
+        assert_eq!(delta.family_states[0].family_plan_index, Some(1));
     }
 
     #[test]
