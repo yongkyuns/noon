@@ -47,7 +47,8 @@ impl FamilyTranslation {
         })
     }
 
-    fn apply_with<F>(&mut self, source_member: SemanticNodeId, apply: F) -> Result<(), String>
+    /// Apply one ordered leaf edit through a typed caller operation.
+    pub fn apply_with<F>(&mut self, source_member: SemanticNodeId, apply: F) -> Result<(), String>
     where
         F: FnOnce((f64, f64)) -> Result<(), String>,
     {
