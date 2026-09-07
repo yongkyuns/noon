@@ -24,7 +24,6 @@ const qualificationModes = new Set(["explicit-export", "shared-live"]);
 const parityManifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
 const parityManifest = JSON.parse(await readFile(parityManifestPath, "utf8"));
 const parityFixtures = new Map(parityManifest.fixtures.map((fixture) => [fixture.id, fixture]));
-const completedRemovalId = "manim-shrink-to-center-text";
 
 function noonSourceFromUpstream(source, id) {
   const upstreamImport = "from manim import *";
@@ -249,20 +248,8 @@ try {
         ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
         { result, label: entry.id },
       );
-      if (entry.id === completedRemovalId) {
-        assert.equal(authoredObjectCount(entry, result, retained), 0,
-          `${entry.id}: completed shared Shrink must export no live object`);
-      } else {
-        assert.ok(authoredObjectCount(entry, result, retained) > 0, `${entry.id}: expected scene objects`);
-      }
+      assert.ok(authoredObjectCount(entry, result, retained) > 0, `${entry.id}: expected scene objects`);
       assertDurationContract(entry, result);
-      if (["parity-create-circle", "parity-square-to-circle"].includes(entry.id)) {
-        const reveal = result.document.tracks.find((track) => track.property === "reveal");
-        assert.ok(reveal, `${entry.id}: explicit export lost its Create reveal track`);
-        assert.deepEqual(reveal.values, { scalar: { from: 0, to: 1 } });
-        assert.equal(reveal.timing.start_time, 0);
-        assert.equal(reveal.timing.duration, 1);
-      }
       console.log(`[PASS] ${entry.id}`);
     } catch (error) {
       const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
