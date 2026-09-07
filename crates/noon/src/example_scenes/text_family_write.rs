@@ -45,15 +45,14 @@ impl LiveContinuation for TextFamilyWrite {
                     AnimationOptions::new(),
                 );
                 if rejected.is_ok()
-                    || self
+                    || !self
                         .family
                         .store()
                         .borrow()
                         .node(self.family.node_id())
                         .unwrap()
                         .parents()
-                        .len()
-                        != 0
+                        .is_empty()
                 {
                     return Err("overlapping family Write admitted a partial family root".into());
                 }
