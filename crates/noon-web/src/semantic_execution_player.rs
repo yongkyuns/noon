@@ -2218,6 +2218,10 @@ mod tests {
         assert_eq!(initial.objects[1].slot.generation, 0);
         mirror.apply(initial).unwrap();
         player.live_remove(&toggled).unwrap();
+        let retired = player.delta(false).unwrap().unwrap();
+        assert!(retired.snapshot);
+        assert_eq!(retired.objects.len(), 1);
+        mirror.apply(retired).unwrap();
         player.live_add(&toggled).unwrap();
         assert!(player.session.execution_slot_for_frame_index(1).is_some());
         let snapshot = player.delta(false).unwrap().unwrap();
