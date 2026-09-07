@@ -206,6 +206,15 @@ def _register_membership_wrappers(scene: _base.Scene, value: object) -> None:
             _register_membership_wrappers(scene, member)
 
 
+def _membership_wrapper_leaves(candidate: object):
+    """Visit affected Python identities; Rust alone decides scene membership."""
+    if isinstance(candidate, _compat.Group):
+        for child in candidate.submobjects:
+            yield from _membership_wrapper_leaves(child)
+    elif isinstance(candidate, _base.Mobject):
+        yield candidate
+
+
 def _membership_leaf_bindings(
     scene: _base.Scene,
     batch: object,
@@ -217,16 +226,7 @@ def _membership_leaf_bindings(
 ) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
     # This walk reserves Python wrapper IDs only. The family handle below remains
     # the sole membership/order input; Rust resolves authoritative family leaves.
-    def wrapper_leaves(candidate: object) -> list[_base.Mobject]:
-        if isinstance(candidate, _compat.Group):
-            return [
-                leaf
-                for child in candidate.submobjects
-                for leaf in wrapper_leaves(child)
-            ]
-        return [candidate] if isinstance(candidate, _base.Mobject) else []
-
-    leaves = wrapper_leaves(value)
+    leaves = list(_membership_wrapper_leaves(value))
     if not leaves:
         raise ValueError("Scene membership target must contain at least one Mobject")
     reservations = []
@@ -311,13 +311,31 @@ def _append_membership_value(
     return next_object_id, reservations
 
 
-def _sync_membership_wrapper_attachments(scene: _base.Scene) -> None:
+def _sync_membership_wrapper_attachments(
+    scene: _base.Scene, kind: str, values: tuple[object, ...]
+) -> None:
+    if kind == "add":
+        return
     context = _context(scene)
-    live_leaf_keys = {str(value) for value in context.rootMembershipLeafKeys()}
-    for semantic_key, wrapper in _membership_registry(scene).items():
-        if isinstance(wrapper, _compat.Group):
+    # Clear affects every root; other operations only reconsider their old targets.
+    candidates = (
+        _membership_registry(scene).values()
+        if kind == "clear"
+        else (
+            leaf
+            for value in (values[:1] if kind == "replace" else values)
+            for leaf in _membership_wrapper_leaves(value)
+        )
+    )
+    seen = set()
+    for wrapper in candidates:
+        if isinstance(wrapper, _compat.Group) or wrapper._scene is not scene:
             continue
-        if semantic_key not in live_leaf_keys and wrapper._scene is scene:
+        semantic_key = _semantic_wrapper_key(wrapper)
+        if semantic_key in seen:
+            continue
+        seen.add(semantic_key)
+        if kind == "clear" or not bool(context.containsMobject(wrapper._semantic_handle)):
             wrapper._scene = None
 
 
@@ -365,7 +383,7 @@ def _canonical_edit_membership(
         _commit_typed_binding(member, scene, reservation, handle)
     for value in values:
         _register_membership_wrappers(scene, value)
-    _sync_membership_wrapper_attachments(scene)
+    _sync_membership_wrapper_attachments(scene, kind, values)
 
 
 def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object:
