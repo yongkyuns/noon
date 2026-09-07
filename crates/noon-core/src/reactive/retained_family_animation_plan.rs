@@ -1,9 +1,12 @@
+#[cfg(test)]
+use crate::TextResourceArena;
+
 use crate::{
     FamilyAnimationLeafProgress, FamilyAnimationLeafSpan, FamilyAnimationMemberEvaluationError,
     FamilyAnimationMemberPlan, FamilyAnimationMemberPlanBuilder, FamilyAnimationRequest,
     FamilyAnimationRequestError, FamilyAnimationState, ObjectId, RetainedAnimationMember,
     RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError, RetainedObjectDefinition,
-    SemanticNodeId, SemanticStore, TextResourceArena, TextResourceLookup,
+    SemanticNodeId, SemanticStore, TextResourceLookup,
 };
 
 /// Prepared retained-content binding for one semantic family leaf.
