@@ -545,6 +545,12 @@ pub struct RetainedExecutionFrameMirror {
     painter_ranks: Vec<Option<u32>>,
 }
 
+struct PreparedPainterOrder {
+    range: std::ops::Range<usize>,
+    old_end: usize,
+    segment: Vec<u32>,
+}
+
 impl RetainedExecutionFrameMirror {
     pub(crate) fn with_installed_resources(
         session: Option<u32>,
@@ -817,7 +823,7 @@ impl RetainedExecutionFrameMirror {
         )?;
         let segment_ranks = painter_update
             .as_ref()
-            .map(|(range, _, segment)| {
+            .map(|PreparedPainterOrder { range, segment, .. }| {
                 segment
                     .iter()
                     .enumerate()
@@ -879,20 +885,26 @@ impl RetainedExecutionFrameMirror {
             }
             changed.push(index);
         }
-        let painter_range = painter_update.map(|(range, old_end, segment)| {
-            for &index in &self.painter_order[range.start..old_end] {
-                self.painter_ranks[index as usize] = None;
-            }
-            if self.painter_ranks.len() < frame.objects.len() {
-                self.painter_ranks.resize(frame.objects.len(), None);
-            }
-            let next_end = range.start + segment.len();
-            self.painter_order.splice(range.start..old_end, segment);
-            for (rank, &index) in self.painter_order[range.start..next_end].iter().enumerate() {
-                self.painter_ranks[index as usize] = Some((range.start + rank) as u32);
-            }
-            range
-        });
+        let painter_range = painter_update.map(
+            |PreparedPainterOrder {
+                 range,
+                 old_end,
+                 segment,
+             }| {
+                for &index in &self.painter_order[range.start..old_end] {
+                    self.painter_ranks[index as usize] = None;
+                }
+                if self.painter_ranks.len() < frame.objects.len() {
+                    self.painter_ranks.resize(frame.objects.len(), None);
+                }
+                let next_end = range.start + segment.len();
+                self.painter_order.splice(range.start..old_end, segment);
+                for (rank, &index) in self.painter_order[range.start..next_end].iter().enumerate() {
+                    self.painter_ranks[index as usize] = Some((range.start + rank) as u32);
+                }
+                range
+            },
+        );
         let mut changes = FrameChanges::with_structure(changed, added_indices, removed_indices);
         if let Some(range) = painter_range {
             changes = changes.with_painter_order(range);
@@ -906,8 +918,7 @@ impl RetainedExecutionFrameMirror {
         slot_indices: &HashMap<TransportSlotId, usize>,
         removed: &HashSet<TransportSlotId>,
         updated: &HashSet<TransportSlotId>,
-    ) -> Result<Option<(std::ops::Range<usize>, usize, Vec<u32>)>, RetainedExecutionTransportError>
-    {
+    ) -> Result<Option<PreparedPainterOrder>, RetainedExecutionTransportError> {
         if delta.is_none() {
             if !removed.is_empty() || slot_indices.len() != self.slot_indices.len() {
                 return Err(RetainedExecutionTransportError::StructuralChangeRequiresSnapshot);
@@ -969,7 +980,11 @@ impl RetainedExecutionFrameMirror {
         {
             return Err(RetainedExecutionTransportError::InvalidOrder(delta.end));
         }
-        Ok(Some((start..end, old_end, segment)))
+        Ok(Some(PreparedPainterOrder {
+            range: start..end,
+            old_end,
+            segment,
+        }))
     }
 }
 

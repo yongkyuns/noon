@@ -26,6 +26,7 @@ enum OwnedSceneMembershipMember {
     Family(noon::MobjectFamily),
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SceneMembershipBatchKind {
     Add,
@@ -2302,6 +2303,7 @@ impl CanonicalAuthoringScene {
         Ok(())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     fn root_membership_keys(&self) -> Result<Vec<String>, String> {
         self.scene
             .store()
