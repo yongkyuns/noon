@@ -9,6 +9,7 @@ const {
   createDirectOrdinaryAffineContinuationSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
   createDirectOrdinaryCallbackSparseReadsSmokeRenderer,
+  createDirectLinePassingFlashSmokeRenderer,
   createDirectOrdinaryBecomeSemanticsSmokeRenderer,
   createDirectOrdinaryCompositionContinuationSmokeRenderer,
   createDirectOrdinaryValueTrackerContinuationSmokeRenderer,
@@ -128,6 +129,41 @@ async function directLiveGeometryConstructionProof(expectedBackend) {
         dot.red <= dot.green + 30 || annulus.red <= annulus.blue + 30 ||
         annulus.green <= annulus.blue + 30 || Math.min(underline.red, underline.green, underline.blue) <= 150) {
       throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directLinePassingFlashProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectLinePassingFlashSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    const initial = renderer.objectCount();
+    renderer.advanceDirectRealtime(250);
+    await settleDirectPublication(renderer, 250);
+    renderer.advanceDirectRealtime(1250);
+    await settleDirectPublication(renderer, 1250);
+    const middle = await sampleRenderedColor(canvas, 0.5, -0.5);
+    const outside = await sampleRenderedColor(canvas, -1.124, -1.4375);
+    renderer.advanceDirectRealtime(2250);
+    await settleDirectPublication(renderer, 2250);
+    const restored = await sampleRenderedColor(canvas, -1.124, -1.4375);
+    renderer.advanceDirectRealtime(2500);
+    const wake = await settleDirectPublication(renderer, 2500);
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
+    const metrics = { backend: renderer.rendererBackend(), initial, middle, outside, restored,
+      objects: renderer.objectCount(), time: renderer.time(), cadence: wake.cadence };
+    if (metrics.backend !== expectedBackend || initial !== 0 || metrics.objects !== 1
+        || metrics.time !== 2.5 || metrics.cadence !== "idle"
+        || !cyan(middle) || cyan(outside) || !cyan(restored)) {
+      throw new Error(`direct Line flash did not restore its reusable geometry: ${JSON.stringify(metrics)}`);
     }
     return metrics;
   } finally {
@@ -2230,6 +2266,7 @@ async function start() {
   metrics.exactPropertyTracks = await directExactPropertyTracksProof(expectedBackend);
   metrics.specializedGeometry = await directSpecializedGeometryProof(expectedBackend);
   metrics.liveGeometryConstruction = await directLiveGeometryConstructionProof(expectedBackend);
+  metrics.linePassingFlash = await directLinePassingFlashProof(expectedBackend);
   metrics.ordinaryBecomeSemantics = await directOrdinaryBecomeSemanticsProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);
   metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);

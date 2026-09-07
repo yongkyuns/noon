@@ -29,6 +29,7 @@ pub struct EffectiveAnimationProperties {
     pub transform: Transform2D,
     pub style: Style,
     pub appearance: f32,
+    pub reveal: f32,
 }
 
 /// Exact authored reconciliation performed when one execution channel is released.
@@ -134,6 +135,10 @@ pub enum SemanticAffineAnimationTrackError {
         target: SemanticNodeId,
     },
     InvalidEffectiveStyle {
+        animation: SemanticNodeId,
+        target: SemanticNodeId,
+    },
+    InvalidEffectiveReveal {
         animation: SemanticNodeId,
         target: SemanticNodeId,
     },
@@ -260,6 +265,14 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
             Self::InvalidEffectiveStyle { animation, target } => write!(
                 formatter,
                 "semantic animation {}:{} received a non-finite effective style for target {}:{}",
+                animation.slot(),
+                animation.generation(),
+                target.slot(),
+                target.generation()
+            ),
+            Self::InvalidEffectiveReveal { animation, target } => write!(
+                formatter,
+                "semantic animation {}:{} requires fully revealed effective state for target {}:{}",
                 animation.slot(),
                 animation.generation(),
                 target.slot(),
@@ -541,6 +554,48 @@ where
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
             continue;
         }
+        if let SemanticScheduledAnimationPayload::PassingFlash { time_width } = leaf.payload {
+            let source = object_state(store, leaf, leaf.target)?;
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+                captured
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or(
+                    SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+                captures.insert(leaf.execution_object_id, captured);
+                captured
+            };
+            let phases = lower_passing_flash_phases(source, from, time_width)
+                .map_err(|issue| existing_payload_error(leaf, leaf.target, issue))?;
+            for phase in phases {
+                if phase.reserve_driver {
+                    push_published_channel(leaf, phase.channel, &mut driven, &mut tracks)?;
+                } else {
+                    tracks.push(SemanticAffineAnimationTrack {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                        property: phase.channel.property,
+                        completion: phase.channel.completion,
+                        values: phase.channel.values,
+                        timing: leaf.timing,
+                        time_map: leaf.time_map.clone(),
+                    });
+                }
+                let track = tracks.last_mut().expect("pushed PassingFlash phase");
+                track.timing.easing = RateFunction::Linear;
+                track.time_map.push(CompositionTimeMapStep::new(
+                    phase.start,
+                    phase.duration,
+                    leaf.options.rate_func,
+                ));
+            }
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::SubsetDisplayMember { index, count, mode } =
             leaf.payload
         {
@@ -609,6 +664,9 @@ where
         let (target_state, interpolation) = match leaf.payload {
             SemanticScheduledAnimationPayload::SubsetDisplayMember { .. } => {
                 unreachable!("subset display payload was lowered above")
+            }
+            SemanticScheduledAnimationPayload::PassingFlash { .. } => {
+                unreachable!("PassingFlash payload was lowered above")
             }
             SemanticScheduledAnimationPayload::TransformTo {
                 target_state,
@@ -743,6 +801,15 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
+        SemanticAnimationIntent::PassingFlash { target, time_width }
+            if *target == leaf.target
+                && leaf.payload
+                    == SemanticScheduledAnimationPayload::PassingFlash {
+                        time_width: *time_width,
+                    } =>
+        {
+            Ok(())
+        }
         SemanticAnimationIntent::Fade {
             target,
             direction,
@@ -863,9 +930,18 @@ pub(super) struct LoweredSubsetDisplayPhase {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(super) struct LoweredPassingFlashPhase {
+    pub channel: LoweredAffineChannel,
+    pub start: f64,
+    pub duration: f64,
+    pub reserve_driver: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum AffinePayloadIssue {
     InvalidEffectiveTransform,
     InvalidEffectiveStyle,
+    InvalidEffectiveReveal,
     UnsupportedContentChange,
     UnsupportedPointCorrespondence,
     UnsupportedStyleChange,
@@ -1317,6 +1393,96 @@ pub(super) fn lower_fade_channels(
         &mut channels,
     )?;
     Ok(channels)
+}
+
+pub(super) fn lower_passing_flash_phases(
+    source: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+    time_width: f64,
+) -> Result<Vec<LoweredPassingFlashPhase>, AffinePayloadIssue> {
+    if !transform_is_finite(from.transform) {
+        return Err(AffinePayloadIssue::InvalidEffectiveTransform);
+    }
+    if !from.reveal.is_finite() || from.reveal != 1.0 {
+        return Err(AffinePayloadIssue::InvalidEffectiveReveal);
+    }
+    let Some(StoredGeometry::Line { start, end }) = source.content.geometry() else {
+        return Err(AffinePayloadIssue::UnsupportedContentChange);
+    };
+    debug_assert!(time_width.is_finite() && time_width > 0.0);
+    let peak = time_width.min(1.0) as f32;
+    let first_end = time_width.min(1.0) / (1.0 + time_width);
+    let last_start = time_width.max(1.0) / (1.0 + time_width);
+    let lower_start = time_width / (1.0 + time_width);
+    let direction = Transform2D {
+        translation: noon_core::Vec2::ZERO,
+        ..from.transform
+    }
+    .transform_point(end - start);
+    let endpoint = from.transform.translation + direction;
+    if !endpoint.x.is_finite() || !endpoint.y.is_finite() {
+        return Err(AffinePayloadIssue::TargetValueOutOfRange(
+            SemanticAffineAnimationField::Translation,
+        ));
+    }
+
+    let mut phases = Vec::with_capacity(4);
+    phases.push(LoweredPassingFlashPhase {
+        channel: LoweredAffineChannel {
+            property: Property::Reveal,
+            conflict_property: SemanticObjectProperty::Presence,
+            completion: SemanticAnimationCompletion::Release,
+            values: TrackValues::Scalar {
+                from: 0.0,
+                to: peak,
+            },
+        },
+        start: 0.0,
+        duration: first_end,
+        reserve_driver: true,
+    });
+    phases.push(LoweredPassingFlashPhase {
+        channel: LoweredAffineChannel {
+            property: Property::Reveal,
+            conflict_property: SemanticObjectProperty::Presence,
+            completion: SemanticAnimationCompletion::RevealLifecycle { remove: true },
+            values: TrackValues::Scalar {
+                from: peak,
+                to: 0.0,
+            },
+        },
+        start: last_start,
+        duration: 1.0 - last_start,
+        reserve_driver: false,
+    });
+    phases.push(LoweredPassingFlashPhase {
+        channel: LoweredAffineChannel {
+            property: Property::Position,
+            conflict_property: SemanticObjectProperty::Translation,
+            completion: SemanticAnimationCompletion::Release,
+            values: TrackValues::Vec2 {
+                from: from.transform.translation,
+                to: endpoint,
+            },
+        },
+        start: lower_start,
+        duration: 1.0 - lower_start,
+        reserve_driver: true,
+    });
+    if from.appearance != 1.0 {
+        phases.push(LoweredPassingFlashPhase {
+            channel: LoweredAffineChannel {
+                property: Property::Appearance,
+                conflict_property: SemanticObjectProperty::Presence,
+                completion: SemanticAnimationCompletion::Release,
+                values: TrackValues::Scalar { from: 1.0, to: 1.0 },
+            },
+            start: 0.0,
+            duration: 1.0,
+            reserve_driver: true,
+        });
+    }
+    Ok(phases)
 }
 
 pub(super) fn lower_draw_border_then_fill_channels(
@@ -1824,6 +1990,12 @@ fn existing_payload_error(
                 target: leaf.target,
             }
         }
+        AffinePayloadIssue::InvalidEffectiveReveal => {
+            SemanticAffineAnimationTrackError::InvalidEffectiveReveal {
+                animation: leaf.animation,
+                target: leaf.target,
+            }
+        }
         AffinePayloadIssue::UnsupportedContentChange => {
             SemanticAffineAnimationTrackError::UnsupportedContentChange {
                 animation: leaf.animation,
@@ -2052,6 +2224,7 @@ mod tests {
             transform,
             style: Style::default(),
             appearance: 1.0,
+            reveal: 1.0,
         }
     }
 
@@ -2089,6 +2262,134 @@ mod tests {
     }
 
     #[test]
+    fn passing_flash_uses_one_shared_line_window_and_transformed_direction() {
+        let source = SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::new(-1.0, -0.5),
+            end: Vec2::new(1.0, 0.5),
+        });
+        let from = EffectiveAnimationProperties {
+            transform: Transform2D {
+                translation: Vec2::new(10.0, -20.0),
+                rotation: std::f32::consts::FRAC_PI_2,
+                scale: Vec2::new(2.0, 3.0),
+            },
+            style: Style::default(),
+            appearance: 1.0,
+            reveal: 1.0,
+        };
+        let phases = lower_passing_flash_phases(&source, from, 0.25).unwrap();
+        assert_eq!(phases.len(), 3);
+        assert_eq!((phases[0].start, phases[0].duration), (0.0, 0.2));
+        assert_eq!(
+            phases[0].channel.values,
+            TrackValues::Scalar {
+                from: 0.0,
+                to: 0.25
+            }
+        );
+        assert_eq!(phases[1].start, 0.8);
+        assert!((phases[1].duration - 0.2).abs() < f64::EPSILON);
+        assert_eq!(
+            phases[1].channel.values,
+            TrackValues::Scalar {
+                from: 0.25,
+                to: 0.0
+            }
+        );
+        assert_eq!((phases[2].start, phases[2].duration), (0.2, 0.8));
+        assert_eq!(
+            phases[2].channel.values,
+            TrackValues::Vec2 {
+                from: from.transform.translation,
+                to: from.transform.translation + Vec2::new(-3.0, 4.0),
+            }
+        );
+    }
+
+    #[test]
+    fn passing_flash_rejects_partial_effective_reveal() {
+        let source = SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(1.0, 0.0),
+        });
+        let mut from = effective(Transform2D::IDENTITY);
+        from.reveal = 0.5;
+        assert_eq!(
+            lower_passing_flash_phases(&source, from, 0.1),
+            Err(AffinePayloadIssue::InvalidEffectiveReveal)
+        );
+    }
+
+    #[test]
+    fn passing_flash_applies_leaf_rate_before_phase_clamping_inside_composition() {
+        let mut store = SemanticStore::new();
+        let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(1.0, 0.0),
+        }));
+        store.attach_to_scene(target).unwrap();
+        let flash = store
+            .insert_semantic_passing_flash_animation(
+                target,
+                0.25,
+                AnimationOptions::new().rate_func(RateFunction::RushInto),
+            )
+            .unwrap();
+        let root = store
+            .insert_semantic_parallel_animation(
+                &[flash],
+                AnimationOptions::new().rate_func(RateFunction::EaseInOutCubic),
+            )
+            .unwrap();
+        let index = index(&store);
+        let projection =
+            lower_semantic_affine_animation_tracks(&store, &schedule(&store, &index, root), |_| {
+                Some(effective(Transform2D::IDENTITY))
+            })
+            .unwrap();
+        let reveal_in = &projection.tracks()[0];
+        assert_eq!(reveal_in.timing.easing, RateFunction::Linear);
+        assert!(reveal_in.time_map.steps.len() >= 2);
+        assert_eq!(
+            reveal_in.time_map.steps.last().unwrap(),
+            &CompositionTimeMapStep::new(0.0, 0.2, RateFunction::RushInto)
+        );
+    }
+
+    #[test]
+    fn overlapping_passing_flashes_reject_the_second_reveal_driver() {
+        let mut store = SemanticStore::new();
+        let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(1.0, 0.0),
+        }));
+        store.attach_to_scene(target).unwrap();
+        let first = store
+            .insert_semantic_passing_flash_animation(target, 0.1, AnimationOptions::new())
+            .unwrap();
+        let second = store
+            .insert_semantic_passing_flash_animation(target, 0.2, AnimationOptions::new())
+            .unwrap();
+        let root = store
+            .insert_semantic_parallel_animation(&[first, second], AnimationOptions::new())
+            .unwrap();
+        let index = index(&store);
+        let projection =
+            lower_semantic_affine_animation_tracks(&store, &schedule(&store, &index, root), |_| {
+                Some(effective(Transform2D::IDENTITY))
+            });
+        assert_eq!(
+            projection,
+            Err(SemanticAffineAnimationTrackError::MultipleDrivers {
+                first_animation: first,
+                next_animation: second,
+                target,
+                property: SemanticObjectProperty::Presence,
+            })
+        );
+    }
+
+    #[test]
     fn indicate_scales_translation_about_shared_center_and_restores() {
         let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
         source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
@@ -2103,6 +2404,7 @@ mod tests {
                 ..Style::default()
             },
             appearance: 1.0,
+            reveal: 1.0,
         };
         let channels = lower_indicate_channels(
             &source,
@@ -2289,6 +2591,7 @@ mod tests {
                     transform: Transform2D::default(),
                     style: current,
                     appearance: 1.0,
+                    reveal: 1.0,
                 })
             },
         )
@@ -2481,6 +2784,7 @@ mod tests {
                 ..Style::default()
             },
             appearance: 1.0,
+            reveal: 1.0,
         };
 
         let predeclared = lower_semantic_affine_animation_tracks(

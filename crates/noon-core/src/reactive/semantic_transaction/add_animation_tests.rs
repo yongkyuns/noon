@@ -119,6 +119,43 @@ fn invalid_affine_fade_endpoint_rolls_back_before_identity_allocation() {
 }
 
 #[test]
+fn prepared_passing_flash_validates_line_and_width_atomically() {
+    let mut store = SemanticStore::new();
+    let line = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Line {
+        start: crate::Vec2::new(-1.0, 0.0),
+        end: crate::Vec2::new(1.0, 0.0),
+    }));
+    let before_len = store.len();
+    let mut valid = SemanticMutationTransaction::new();
+    let local =
+        valid.create_passing_flash_animation(line, 0.25, AnimationOptions::new().run_time(2.0));
+    let result = valid.apply(&mut store).unwrap();
+    assert_eq!(
+        store
+            .semantic_animation_state(result.resolve(local).unwrap())
+            .unwrap()
+            .intent(),
+        &SemanticAnimationIntent::PassingFlash {
+            target: line,
+            time_width: 0.25,
+        }
+    );
+    assert_eq!(store.len(), before_len + 1);
+
+    let revision = store.scene_revision();
+    let len = store.len();
+    let mut invalid = SemanticMutationTransaction::new();
+    invalid.create_passing_flash_animation(line, 0.0, AnimationOptions::new());
+    assert!(matches!(
+        invalid.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidPassingFlash { index: 0 })
+    ));
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.len(), len);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+}
+
+#[test]
 fn prepared_draw_border_then_fill_preserves_shared_outline_semantics() {
     let mut store = SemanticStore::new();
     let target = object(&mut store, 1.0);

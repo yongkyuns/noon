@@ -764,6 +764,27 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage one exact-Line passing-flash declaration.
+    pub fn create_passing_flash_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        time_width: f64,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::PassingFlash {
+                    target: target.into(),
+                    time_width,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage one activation-relative two-phase vector outline/fill declaration.
     pub fn create_draw_border_then_fill_animation(
         &mut self,
@@ -2223,6 +2244,9 @@ pub enum SemanticMutationTransactionError {
     InvalidDrawBorderThenFillOutline {
         index: usize,
     },
+    InvalidPassingFlash {
+        index: usize,
+    },
     InvalidSubsetDisplayMember {
         index: usize,
     },
@@ -2612,6 +2636,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidDrawBorderThenFillOutline { index } => write!(
                 formatter,
                 "semantic mutation {index} has an invalid DrawBorderThenFill outline"
+            ),
+            Self::InvalidPassingFlash { index } => write!(
+                formatter,
+                "semantic mutation {index} has an invalid PassingFlash target or width"
             ),
             Self::InvalidSubsetDisplayMember { index } => write!(
                 formatter,

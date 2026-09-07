@@ -303,6 +303,11 @@ pub enum AnimationCompositionRequest<'a> {
         reverse: bool,
         options: AnimationOptions,
     },
+    PassingFlash {
+        target: &'a Mobject,
+        time_width: f64,
+        options: AnimationOptions,
+    },
     Rotate {
         target: &'a Mobject,
         angle: f64,
@@ -1107,6 +1112,23 @@ impl<'a> LiveSession<'a> {
         )
     }
 
+    /// Flash one exact analytic Line through fixed transient membership.
+    pub fn declare_and_activate_passing_flash(
+        &mut self,
+        target: &Mobject,
+        time_width: f64,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::PassingFlash {
+                target,
+                time_width,
+                options,
+            },
+            AnimationOptions::new(),
+        )
+    }
+
     /// Atomically hide every direct member before activating a subset display.
     pub fn prepare_family_subset_display(
         &mut self,
@@ -1511,6 +1533,18 @@ impl<'a> LiveSession<'a> {
                 Request::FamilyReveal {
                     target: target.node_id(),
                     reverse: *reverse,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::PassingFlash {
+                target,
+                time_width,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::PassingFlash {
+                    target: target.node_id(),
+                    time_width: *time_width,
                     options: *options,
                 }
             }

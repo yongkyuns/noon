@@ -1226,6 +1226,36 @@ try {
     await stopSampledSource(page);
   }
 
+  const passingFlashSource = await readFile(
+    path.join(repoRoot, "web/python/examples/line_passing_flash.py"), "utf8",
+  );
+  await startSampledSource(page, passingFlashSource, "scene-shared-line-passing-flash", 960, 540);
+  try {
+    const initial = await page.evaluate(async () =>
+      (await window.sharedAuthoringSmoke.sampledProof.execution.metrics()).metrics);
+    assert.equal(initial.objectCount, 0);
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(1.25));
+    const canvas = page.locator("#scene-shared-line-passing-flash");
+    const screenshot = await canvas.screenshot();
+    const middle = renderedWorldPixel(screenshot, 0.5, -0.5);
+    const outside = renderedWorldPixel(screenshot, -1.124, -1.4375);
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
+    assert.ok(cyan(middle) && !cyan(outside),
+      "shared Line flash must render only its moving window at the midpoint");
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(2.5), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 2.5);
+    assert.equal(result.metrics.objectCount, 1);
+    const restored = renderedWorldPixel(await canvas.screenshot(), -1.124, -1.4375);
+    assert.ok(cyan(restored), "re-added flash Line must restore its full original geometry");
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const becomeSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_become_semantics.py"), "utf8",
   );

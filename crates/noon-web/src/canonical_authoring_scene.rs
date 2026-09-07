@@ -64,6 +64,12 @@ enum OrdinaryCompositionChild {
         outline: noon::DrawBorderThenFillOptions,
         options: noon_core::AnimationOptions,
     },
+    PassingFlash {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        time_width: f64,
+        options: noon_core::AnimationOptions,
+    },
     FamilyDrawBorderThenFill {
         target: noon::MobjectFamily,
         entering: Vec<(ObjectId, noon::Mobject)>,
@@ -1454,6 +1460,16 @@ impl CanonicalAuthoringScene {
                     outline: *outline,
                     options: *options,
                 },
+                OrdinaryCompositionChild::PassingFlash {
+                    target,
+                    time_width,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::PassingFlash {
+                    target,
+                    time_width: *time_width,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FamilyDrawBorderThenFill {
                     target,
                     outline,
@@ -1657,6 +1673,11 @@ impl CanonicalAuthoringScene {
                     }
                 }
                 OrdinaryCompositionChild::DrawBorderThenFill {
+                    entering_id,
+                    target,
+                    ..
+                }
+                | OrdinaryCompositionChild::PassingFlash {
                     entering_id,
                     target,
                     ..
@@ -2072,6 +2093,12 @@ impl CanonicalAuthoringScene {
                     target, options, ..
                 } => (None, target, *options),
                 OrdinaryCompositionChild::DrawBorderThenFill {
+                    entering_id,
+                    target,
+                    options,
+                    ..
+                }
+                | OrdinaryCompositionChild::PassingFlash {
                     entering_id,
                     target,
                     options,
@@ -3721,6 +3748,31 @@ mod wasm {
                     indication: noon::IndicateOptions::new(scale_factor, color),
                     options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
                 });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendPassingFlash)]
+        pub fn append_passing_flash(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            time_width: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<(), JsValue> {
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("PassingFlash object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::PassingFlash {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                time_width,
+                options: Self::optional_options(child_run_time, rate_function)?
+                    .introducer(true)
+                    .remover(true),
+            });
             Ok(())
         }
 
@@ -7374,6 +7426,57 @@ mod tests {
                 .translation,
             Vec2::new(2.0, -1.0),
         );
+    }
+
+    #[test]
+    fn passing_flash_publishes_wrapper_binding_only_after_atomic_admission() {
+        let mut context = CanonicalAuthoringScene::default();
+        let line = context.scene.line((-2.0, 0.0), (2.0, 0.0)).unwrap();
+        let id = ObjectId::new(0);
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear)
+            .introducer(true)
+            .remover(true);
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let revision = context.scene.store().borrow().scene_revision();
+        let invalid = OrdinaryCompositionChild::PassingFlash {
+            entering_id: Some(id),
+            target: line.clone(),
+            time_width: 0.0,
+            options,
+        };
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &[invalid],
+                composition,
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert!(context.bindings.is_empty());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+
+        let valid = OrdinaryCompositionChild::PassingFlash {
+            entering_id: Some(id),
+            target: line.clone(),
+            time_width: 0.25,
+            options,
+        };
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &[valid],
+                    composition,
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            2.0
+        );
+        assert!(!context.live_contains_mobject(&line).unwrap());
+        assert_eq!(context.bindings.get(&id), Some(&line.node_id()));
+        assert_eq!(context.identities.get(&line.node_id()), Some(&id));
     }
 
     #[test]
