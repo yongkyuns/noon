@@ -113,6 +113,7 @@ impl FramePreparer {
             .all(|&object_index| (object_index as usize) < frame.objects.len()));
         self.painter_order_indices.clear();
         self.painter_order_indices.extend_from_slice(order);
+        self.painter_order_installed = true;
     }
 
     /// Update only the changed portion of the runtime-derived painter permutation.
@@ -122,6 +123,7 @@ impl FramePreparer {
         order: &[u32],
         range: Range<usize>,
     ) {
+        self.painter_order_installed = true;
         debug_assert!(range.start <= order.len());
         debug_assert!(order[range.start..range.end.min(order.len())]
             .iter()
@@ -317,7 +319,7 @@ impl FramePreparer {
             return;
         }
 
-        if !self.painter_order_indices.is_empty() {
+        if self.painter_order_installed {
             for &object_index in &self.painter_order_indices {
                 if let Some(slot) = self.slots.get(object_index as usize).copied() {
                     push_slot_batches(&mut self.render_batches, slot);
@@ -334,10 +336,10 @@ impl FramePreparer {
 
     /// Rebuild fixed-size painter partitions intersecting `range`.
     ///
-    /// Stored batches stop at partition boundaries, bounding a reordered scene to
-    /// at most one extra draw break per partition while keeping an adjacent reorder
-    /// proportional to its affected partition. Immutable geometry and mega-path
-    /// streams remain shared globally.
+    /// Stored batches stop at partition boundaries so an adjacent reorder remains
+    /// proportional to its affected partition. The draw iterator lazily rejoins
+    /// compatible boundary batches without touching immutable geometry or mega-path
+    /// streams.
     pub(crate) fn rebuild_render_order_chunks(&mut self, range: Option<Range<usize>>) {
         if self.individual_path_draws || !self.render_order_keys.is_empty() {
             self.render_chunks.clear();
@@ -350,10 +352,10 @@ impl FramePreparer {
             self.render_order_mega_boundary_merge_count = 0;
             return;
         }
-        let position_count = if self.painter_order_indices.is_empty() {
-            self.slots.len()
-        } else {
+        let position_count = if self.painter_order_installed {
             self.painter_order_indices.len()
+        } else {
+            self.slots.len()
         };
         let chunk_count = position_count.div_ceil(Self::RENDER_ORDER_CHUNK_SIZE);
         let rebuild_all = range.is_none();
@@ -582,6 +584,7 @@ fn projected_frame<'a>(
         mega_path_batches,
         render_batches,
         render_chunks: &[],
+        render_chunks_active: false,
         unsupported: &preparer.unsupported,
         circle_dirty_ranges: &preparer.circle_dirty_ranges,
         rectangle_dirty_ranges: &preparer.rectangle_dirty_ranges,

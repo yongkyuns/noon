@@ -239,6 +239,7 @@ pub struct PreparedFrame<'a> {
     /// Canonical geometry-only draw order. Empty for candidate and mixed-content
     /// projections, which continue to use `render_batches` directly.
     pub(crate) render_chunks: &'a [PreparedRenderChunk],
+    render_chunks_active: bool,
     pub unsupported: &'a [ObjectId],
     pub circle_dirty_ranges: &'a [Range<usize>],
     pub rectangle_dirty_ranges: &'a [Range<usize>],
@@ -292,13 +293,10 @@ impl PreparedFrame<'_> {
     /// Ordinary frames use bounded chunks after a local reorder; projections and
     /// unchanged frames expose their single flat partition through the same view.
     pub fn ordered_render_chunks(&self) -> impl Iterator<Item = PreparedRenderChunkRef<'_>> {
-        let flat = self
-            .render_chunks
-            .is_empty()
-            .then_some(PreparedRenderChunkRef {
-                render_batches: self.render_batches,
-                mega_path_batches: self.mega_path_batches,
-            });
+        let flat = (!self.render_chunks_active).then_some(PreparedRenderChunkRef {
+            render_batches: self.render_batches,
+            mega_path_batches: self.mega_path_batches,
+        });
         flat.into_iter()
             .chain(
                 self.render_chunks
@@ -563,6 +561,9 @@ pub struct FramePreparer {
     render_order_keys: Vec<RenderOrderKey>,
     // Stable execution-row indices in the runtime's derived semantic painter order.
     painter_order_indices: Vec<u32>,
+    // Distinguishes the runtime's explicit empty scene order from the legacy dense
+    // default used before any painter permutation has been installed.
+    painter_order_installed: bool,
     path_batch_cache_indices: Vec<usize>,
     path_mesh_cache: Vec<CachedPathMesh>,
     path_mesh_lookup: HashMap<PathMeshKey, Vec<usize>>,
@@ -1571,6 +1572,7 @@ impl FramePreparer {
             } else {
                 &[]
             },
+            render_chunks_active: self.render_chunks_active,
             unsupported: &self.unsupported,
             circle_dirty_ranges: &self.circle_dirty_ranges,
             rectangle_dirty_ranges: &self.rectangle_dirty_ranges,
@@ -3780,6 +3782,42 @@ mod structural_execution_delta_tests {
             ]
         );
         assert_eq!(preparer.painter_order_indices, vec![0, 2, 1, 3]);
+    }
+
+    #[test]
+    fn explicit_empty_painter_order_does_not_scan_tombstone_history() {
+        const OBJECT_COUNT: usize = 10_000;
+        let frame = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
+            time: 0.0,
+            objects: (0..OBJECT_COUNT).map(|id| circle(id as u64)).collect(),
+            presences: vec![true; OBJECT_COUNT],
+            reveals: vec![1.0; OBJECT_COUNT],
+            morphs: vec![0.0; OBJECT_COUNT],
+            render_geometries: vec![None; OBJECT_COUNT],
+            render_transforms: vec![None; OBJECT_COUNT],
+        };
+        let mut preparer = FramePreparer::new();
+        let last = u32::try_from(OBJECT_COUNT - 1).expect("test object count fits u32");
+        preparer.set_painter_order(&frame, &[last]);
+        let only_last = preparer.prepare(&frame);
+        assert_eq!(only_last.ordered_render_batches().count(), 1);
+        let circles = only_last.circles.to_vec();
+
+        preparer.set_painter_order_range(&frame, &[], 0..1);
+        let empty = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..1));
+
+        assert_eq!(empty.ordered_render_batches().count(), 0);
+        assert_eq!(empty.stats.batch_count, 0);
+        assert_eq!(empty.stats.render_order_positions_visited, 0);
+        assert_eq!(empty.stats.render_order_chunks_rebuilt, 0);
+        assert_eq!(empty.stats.instances_repacked, 0);
+        assert_eq!(empty.circles, circles);
+        assert!(empty.circle_dirty_ranges.is_empty());
+        assert!(empty.path_vertex_dirty_ranges.is_empty());
+        assert!(empty.path_index_dirty_ranges.is_empty());
+        assert!(empty.mega_path_index_dirty_ranges.is_empty());
     }
 
     #[test]
