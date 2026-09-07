@@ -4,6 +4,8 @@ use noon_core::{
 };
 use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
+use std::collections::HashMap;
+
 use crate::{
     RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
     RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,
@@ -19,8 +21,17 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct RetainedFamilyExecutionDeltaEncoder {
     retained: RetainedExecutionDeltaEncoder,
-    plan_index_remap: Vec<Option<u32>>,
+    plan_index_remap: HashMap<usize, u32>,
+    published_plan_count: usize,
+    observed_plan_count: usize,
     resources: RetainedResourceInventory,
+}
+
+#[derive(Debug)]
+struct StagedPlanMappings {
+    mappings: HashMap<usize, u32>,
+    added_plan_indices: Vec<usize>,
+    next_published_plan_count: usize,
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
@@ -30,14 +41,18 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::with_render_geometries(session, geometries),
-            plan_index_remap: Vec::new(),
+            plan_index_remap: HashMap::new(),
+            published_plan_count: 0,
+            observed_plan_count: 0,
             resources: RetainedResourceInventory::default(),
         }
     }
     pub fn new(session: u32) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
-            plan_index_remap: Vec::new(),
+            plan_index_remap: HashMap::new(),
+            published_plan_count: 0,
+            observed_plan_count: 0,
             resources: RetainedResourceInventory::default(),
         }
     }
@@ -45,7 +60,9 @@ impl RetainedFamilyExecutionDeltaEncoder {
     pub(crate) fn new_with_resources(session: u32, resources: &RetainedResourceBundle) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
-            plan_index_remap: Vec::new(),
+            plan_index_remap: HashMap::new(),
+            published_plan_count: 0,
+            observed_plan_count: 0,
             resources: resources.inventory(),
         }
     }
@@ -90,7 +107,11 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
         let retained = self.retained.encode_snapshot(frame.retained, camera)?;
         let envelope = RetainedFamilyExecutionDeltaEnvelope::snapshot(retained, frame, plans)?;
-        self.plan_index_remap = (0..plans.len()).map(|index| Some(index as u32)).collect();
+        self.plan_index_remap = (0..plans.len())
+            .map(|index| (index, index as u32))
+            .collect();
+        self.published_plan_count = plans.len();
+        self.observed_plan_count = plans.len();
         Ok(envelope)
     }
 
@@ -167,31 +188,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
         self.validate_plan_count(plans)?;
-        let mut next_remap = self.plan_index_remap.clone();
-        next_remap.resize(plans.len(), None);
-        let mut added_plan_indices = Vec::new();
-        for &object_index in changes.object_indices() {
-            if frame.family_animation(object_index).is_none() {
-                continue;
-            }
-            let object = &frame.retained.objects[object_index];
-            let core_index = frame.family_plan_index(object_index).ok_or(
-                RetainedFamilyExecutionTransportError::MissingPlanIndex(object.id),
-            )? as usize;
-            let next_wire_index = next_remap.iter().flatten().count() as u32;
-            let Some(mapping) = next_remap.get_mut(core_index) else {
-                return Err(RetainedFamilyExecutionTransportError::InvalidPlanIndex {
-                    object: object.id,
-                    plan_index: core_index as u32,
-                    plan_count: plans.len(),
-                }
-                .into());
-            };
-            if mapping.is_none() {
-                *mapping = Some(next_wire_index);
-                added_plan_indices.push(core_index);
-            }
-        }
+        let staged = self.stage_plan_mappings(frame, plans, changes.object_indices())?;
         let Some(retained) = self
             .retained
             .encode_incremental(frame.retained, changes, camera)?
@@ -205,7 +202,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?;
             return self.compact_planned_snapshot(envelope, plans).map(Some);
         } else {
-            let added_plans = added_plan_indices
+            let added_plans = staged
+                .added_plan_indices
                 .iter()
                 .map(|&index| plans[index].clone())
                 .collect::<Vec<_>>();
@@ -216,8 +214,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 &added_plans,
             )?
         };
-        remap_family_state_indices(&mut envelope, &next_remap)?;
-        self.plan_index_remap = next_remap;
+        remap_family_state_indices(&mut envelope, &self.plan_index_remap, &staged.mappings)?;
+        self.commit_plan_mappings(staged, plans.len());
         Ok(Some(envelope))
     }
 
@@ -235,31 +233,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
     {
         self.validate_plan_count(plans)?;
         let family_changes = FrameChanges::objects(changes.object_indices().to_vec());
-        let mut next_remap = self.plan_index_remap.clone();
-        next_remap.resize(plans.len(), None);
-        let mut added_plan_indices = Vec::new();
-        for &object_index in family_changes.object_indices() {
-            if frame.family_animation(object_index).is_none() {
-                continue;
-            }
-            let object = &frame.retained.objects[object_index];
-            let core_index = frame.family_plan_index(object_index).ok_or(
-                RetainedFamilyExecutionTransportError::MissingPlanIndex(object.id),
-            )? as usize;
-            let next_wire_index = next_remap.iter().flatten().count() as u32;
-            let Some(mapping) = next_remap.get_mut(core_index) else {
-                return Err(RetainedFamilyExecutionTransportError::InvalidPlanIndex {
-                    object: object.id,
-                    plan_index: core_index as u32,
-                    plan_count: plans.len(),
-                }
-                .into());
-            };
-            if mapping.is_none() {
-                *mapping = Some(next_wire_index);
-                added_plan_indices.push(core_index);
-            }
-        }
+        let staged = self.stage_plan_mappings(frame, plans, family_changes.object_indices())?;
         let Some(retained) = self.retained.encode_incremental_with_painter_order(
             frame.retained,
             changes,
@@ -269,7 +243,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
         else {
             return Ok(None);
         };
-        let added_plans = added_plan_indices
+        let added_plans = staged
+            .added_plan_indices
             .iter()
             .map(|&index| plans[index].clone())
             .collect::<Vec<_>>();
@@ -279,18 +254,63 @@ impl RetainedFamilyExecutionDeltaEncoder {
             &family_changes,
             &added_plans,
         )?;
-        remap_family_state_indices(&mut envelope, &next_remap)?;
-        self.plan_index_remap = next_remap;
+        remap_family_state_indices(&mut envelope, &self.plan_index_remap, &staged.mappings)?;
+        self.commit_plan_mappings(staged, plans.len());
         Ok(Some(envelope))
+    }
+
+    fn stage_plan_mappings(
+        &self,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        object_indices: &[usize],
+    ) -> Result<StagedPlanMappings, RetainedFamilyExecutionTransportError> {
+        let mut mappings = HashMap::new();
+        let mut added_plan_indices = Vec::new();
+        let mut next_published_plan_count = self.published_plan_count;
+        for &object_index in object_indices {
+            if frame.family_animation(object_index).is_none() {
+                continue;
+            }
+            let object = &frame.retained.objects[object_index];
+            let core_index = frame.family_plan_index(object_index).ok_or(
+                RetainedFamilyExecutionTransportError::MissingPlanIndex(object.id),
+            )? as usize;
+            if core_index >= plans.len() {
+                return Err(RetainedFamilyExecutionTransportError::InvalidPlanIndex {
+                    object: object.id,
+                    plan_index: core_index as u32,
+                    plan_count: plans.len(),
+                });
+            }
+            if self.plan_index_remap.contains_key(&core_index) || mappings.contains_key(&core_index)
+            {
+                continue;
+            }
+            mappings.insert(core_index, next_published_plan_count as u32);
+            added_plan_indices.push(core_index);
+            next_published_plan_count += 1;
+        }
+        Ok(StagedPlanMappings {
+            mappings,
+            added_plan_indices,
+            next_published_plan_count,
+        })
+    }
+
+    fn commit_plan_mappings(&mut self, staged: StagedPlanMappings, observed_plan_count: usize) {
+        self.plan_index_remap.extend(staged.mappings);
+        self.published_plan_count = staged.next_published_plan_count;
+        self.observed_plan_count = observed_plan_count;
     }
 
     fn validate_plan_count(
         &self,
         plans: &[RetainedFamilyAnimationPlan],
     ) -> Result<(), RetainedFamilyExecutionTransportError> {
-        if plans.len() < self.plan_index_remap.len() {
+        if plans.len() < self.observed_plan_count {
             return Err(RetainedFamilyExecutionTransportError::PlanSetShrank {
-                published: self.plan_index_remap.len(),
+                published: self.observed_plan_count,
                 available: plans.len(),
             });
         }
@@ -302,7 +322,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         mut envelope: RetainedFamilyExecutionDeltaEnvelope,
         plans: &[RetainedFamilyAnimationPlan],
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
-        let mut remap = vec![None; plans.len()];
+        let mut remap = HashMap::new();
         for entry in &envelope.family_states {
             if entry.state.family_animation.is_none() {
                 continue;
@@ -310,48 +330,55 @@ impl RetainedFamilyExecutionDeltaEncoder {
             let core_index = entry.family_plan_index.ok_or(
                 RetainedFamilyExecutionTransportError::MissingPlanIndex(entry.object),
             )? as usize;
-            let next = remap.iter().flatten().count() as u32;
-            let mapping = remap.get_mut(core_index).ok_or(
-                RetainedFamilyExecutionTransportError::InvalidPlanIndex {
+            if core_index >= plans.len() {
+                return Err(RetainedFamilyExecutionTransportError::InvalidPlanIndex {
                     object: entry.object,
                     plan_index: core_index as u32,
                     plan_count: plans.len(),
-                },
-            )?;
-            mapping.get_or_insert(next);
+                }
+                .into());
+            }
+            let next = remap.len() as u32;
+            remap.entry(core_index).or_insert(next);
         }
         envelope.family_plans = remap
             .iter()
-            .enumerate()
-            .filter_map(|(index, wire)| {
-                wire.map(|wire| {
-                    (
-                        wire,
-                        crate::RetainedFamilyPlanTransport::from_plan(&plans[index]),
-                    )
-                })
+            .map(|(&index, &wire)| {
+                (
+                    wire,
+                    crate::RetainedFamilyPlanTransport::from_plan(&plans[index]),
+                )
             })
             .collect::<std::collections::BTreeMap<_, _>>()
             .into_values()
             .collect();
-        remap_family_state_indices(&mut envelope, &remap)?;
+        remap_family_state_indices(&mut envelope, &remap, &HashMap::new())?;
         envelope.validate()?;
         self.plan_index_remap = remap;
+        self.published_plan_count = self.plan_index_remap.len();
+        self.observed_plan_count = plans.len();
         Ok(envelope)
     }
 }
 
 fn remap_family_state_indices(
     envelope: &mut RetainedFamilyExecutionDeltaEnvelope,
-    remap: &[Option<u32>],
+    remap: &HashMap<usize, u32>,
+    staged: &HashMap<usize, u32>,
 ) -> Result<(), RetainedFamilyExecutionTransportError> {
     for entry in &mut envelope.family_states {
         let Some(core_index) = entry.family_plan_index else {
             continue;
         };
-        entry.family_plan_index = Some(remap.get(core_index as usize).copied().flatten().ok_or(
-            RetainedFamilyExecutionTransportError::MissingPlanIndex(entry.object),
-        )?);
+        entry.family_plan_index = Some(
+            remap
+                .get(&(core_index as usize))
+                .or_else(|| staged.get(&(core_index as usize)))
+                .copied()
+                .ok_or(RetainedFamilyExecutionTransportError::MissingPlanIndex(
+                    entry.object,
+                ))?,
+        );
     }
     Ok(())
 }
@@ -620,6 +647,61 @@ mod tests {
             .family_states
             .iter()
             .all(|state| state.family_plan_index == Some(0)));
+    }
+
+    #[test]
+    fn incremental_plan_mapping_stays_sparse_across_unpublished_history() {
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(25);
+        let empty = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
+            time: 0.0,
+            objects: Vec::new(),
+            presences: Vec::new(),
+            reveals: Vec::new(),
+            morphs: Vec::new(),
+            render_geometries: Vec::new(),
+            render_transforms: Vec::new(),
+        };
+        encoder
+            .encode_planned_snapshot(
+                &RetainedPlannedFamilyFrame {
+                    retained: &empty,
+                    family_animations: &[],
+                    family_plan_indices: &[],
+                },
+                &[],
+                Camera2DState::default(),
+            )
+            .unwrap();
+
+        let (plan, frame, states) = fixture();
+        let plans = vec![plan; 1_024];
+        let plan_indices = [Some(1_023), Some(1_023)];
+        let delta = encoder
+            .encode_planned_incremental_with_painter_order(
+                &RetainedPlannedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                    family_plan_indices: &plan_indices,
+                },
+                &plans,
+                &FrameChanges::with_structure(vec![0, 1], vec![0, 1], Vec::new())
+                    .with_painter_order(0..2),
+                Camera2DState::default(),
+                &[0, 1],
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(delta.family_plans.len(), 1);
+        assert!(delta
+            .family_states
+            .iter()
+            .all(|state| state.family_plan_index == Some(0)));
+        assert_eq!(encoder.plan_index_remap.len(), 1);
+        assert_eq!(encoder.published_plan_count, 1);
+        assert_eq!(encoder.observed_plan_count, plans.len());
     }
 
     #[test]
