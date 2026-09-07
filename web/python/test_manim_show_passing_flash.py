@@ -184,6 +184,17 @@ class ManimShowPassingFlashTests(unittest.TestCase):
 
             import _manim_compat
             _manim_compat.install()
+            def fixture_membership(scene, kind, values=(), *, key=None):
+                assert kind == "add"
+                for value in values:
+                    for member in _manim_compat._leaf_mobjects(value):
+                        if member._scene is None:
+                            member._bind_to_scene(scene, key=key)
+                    scene._register_top_level(value)
+            _manim_compat._STANDARD_MEMBERSHIP_EDIT = fixture_membership
+            _manim_compat._STANDARD_MEMBERSHIP_VIEW = lambda scene: [
+                value for value in scene._compat_top_level if scene._is_present(value)
+            ]
             import _manim_rate_functions
             _manim_rate_functions.install()
             import _manim_phase_b  # noqa: F401
