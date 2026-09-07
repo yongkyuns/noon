@@ -3265,6 +3265,68 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn composed_fade_out_completion_detaches_and_reenters_the_same_handle() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let fading = scene.circle(1.0).unwrap();
+        scene.add(&anchor).unwrap();
+        scene.add(&fading).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let options = linear(0.2);
+
+        let fade_out = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children: vec![
+                AnimationCompositionRequest::Fade {
+                    target: &fading,
+                    direction: SemanticFadeDirection::Out,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+                AnimationCompositionRequest::Wait { duration: 0.1 },
+            ],
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+        };
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_composition(&fade_out, AnimationOptions::new())
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+
+        assert!(!live.contains(&fading).unwrap());
+        assert!(fading
+            .store()
+            .borrow()
+            .node(fading.node_id())
+            .unwrap()
+            .parents()
+            .is_empty());
+        assert!(live.session.execution_object_id(fading.node_id()).is_none());
+
+        let fade_in = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children: vec![AnimationCompositionRequest::Fade {
+                target: &fading,
+                direction: SemanticFadeDirection::In,
+                endpoint: FadeEndpoint::default(),
+                options,
+            }],
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+        };
+        let reentry = live
+            .declare_and_activate_composition(&fade_in, AnimationOptions::new())
+            .unwrap();
+        assert!(live.contains(&fading).unwrap());
+        assert!(live.session.execution_object_id(fading.node_id()).is_some());
+        live.advance_segment_to(reentry, reentry.end_time())
+            .unwrap();
+        live.complete_segment(reentry).unwrap();
+    }
+
+    #[test]
     fn mixed_scalar_object_composition_publishes_and_completes_once() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();

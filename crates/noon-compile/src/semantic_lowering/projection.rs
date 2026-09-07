@@ -44,11 +44,14 @@ impl SemanticExecutionIndex {
         self.object_ids.get(&semantic_id).copied()
     }
 
-    /// Install identities for objects newly admitted by incremental reachability.
+    /// Keep execution identities aligned with incremental reachability.
     pub fn apply_reachability_update(
         &mut self,
         update: &super::SemanticExecutionReachabilityUpdate,
     ) {
+        for node in update.exited_objects() {
+            self.object_ids.remove(node);
+        }
         for node in update.entered_objects() {
             self.ensure_object(*node);
         }
