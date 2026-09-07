@@ -896,6 +896,16 @@ impl RetainedExecutionFrameMirror {
             }
             changed.push(index);
         }
+        // Removed rows remain allocated so their stable transport slots can be
+        // reused safely, but they must stop contributing retained render state.
+        // Removed objects are intentionally omitted from an incremental row
+        // payload, so apply the authoritative absence here and discard any
+        // transient render override left by the preceding frame.
+        for &index in &removed_indices {
+            frame.presences[index] = false;
+            frame.render_geometries[index] = None;
+            frame.render_transforms[index] = None;
+        }
         let painter_range = painter_update.map(
             |PreparedPainterOrder {
                  range,
@@ -1388,6 +1398,41 @@ mod tests {
         assert_eq!(changes.painter_order_range(), Some(0..2));
         assert_eq!(mirror.painter_order(), &[2, 1]);
         assert_eq!(mirror.frame().unwrap().objects[2].id, ObjectId::new(13));
+    }
+
+    #[test]
+    fn removed_text_slot_is_absent_after_sparse_painter_update() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(29);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+
+        let mut removed = frame.clone();
+        removed.time = 1.0;
+        removed.presences[1] = false;
+        let changes =
+            FrameChanges::with_structure(vec![1], Vec::new(), vec![1]).with_painter_order(1..2);
+        let delta = encoder
+            .encode_incremental_with_painter_order(
+                &removed,
+                &changes,
+                Camera2DState::default(),
+                &[0],
+            )
+            .unwrap()
+            .unwrap();
+
+        assert!(delta.objects.is_empty());
+        let (_, applied) = mirror.apply(delta).unwrap();
+        assert_eq!(applied.removed_indices(), &[1]);
+        assert_eq!(mirror.painter_order(), &[0]);
+        let installed = mirror.frame().unwrap();
+        assert!(!installed.presences[1]);
+        assert!(installed.render_geometries[1].is_none());
+        assert!(installed.render_transforms[1].is_none());
     }
 
     #[test]
