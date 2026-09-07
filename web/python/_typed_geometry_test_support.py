@@ -161,3 +161,18 @@ def install_module_bridge(module, create_from_snapshot_json) -> None:
     module._create_geometry_handle = (
         lambda options: create_from_snapshot_json(json.dumps(options.snapshot))
     )
+
+
+def _options_from_result(result) -> FakeGeometryOptions:
+    value = FakeGeometryOptions(result.snapshot["geometry"])
+    value.snapshot = copy.deepcopy(result.snapshot)
+    return value
+
+
+def install_option_factory(fake_js, name, factory) -> None:
+    """Adapt an existing geometry-producing fake to the inert options boundary."""
+    setattr(
+        fake_js.noonAuthoringGeometryOptions,
+        name,
+        staticmethod(lambda *args: _options_from_result(factory(*args))),
+    )

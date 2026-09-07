@@ -268,153 +268,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = createManimDot)]
-        pub fn create_manim_dot(
-            &self,
-            point_x: f64,
-            point_y: f64,
-            radius: f64,
-        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            Mobject::manim_dot(Rc::clone(&self.semantics), point_x, point_y, radius)
-                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = createManimTriangle)]
-        pub fn create_manim_triangle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            Mobject::manim_triangle(Rc::clone(&self.semantics))
-                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = createManimElbow)]
-        pub fn create_manim_elbow(
-            &self,
-            width: f64,
-            angle: f64,
-        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            Mobject::manim_elbow(Rc::clone(&self.semantics), width, angle)
-                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = createManimRoundedRectangle)]
-        pub fn create_manim_rounded_rectangle(
-            &self,
-            width: f64,
-            height: f64,
-            radius: f64,
-        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            Mobject::manim_rounded_rectangle(Rc::clone(&self.semantics), width, height, radius)
-                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = createManimAnnularSector)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn create_manim_annular_sector(
-            &self,
-            inner_radius: f64,
-            outer_radius: f64,
-            angle: f64,
-            start_angle: f64,
-            num_components: u32,
-            center_x: f64,
-            center_y: f64,
-        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            Mobject::manim_annular_sector(
-                Rc::clone(&self.semantics),
-                inner_radius,
-                outer_radius,
-                angle,
-                start_angle,
-                num_components,
-                center_x,
-                center_y,
-            )
-            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-            .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = createManimSector)]
-        pub fn create_manim_sector(
-            &self,
-            radius: f64,
-            angle: f64,
-            start_angle: f64,
-            num_components: u32,
-            center_x: f64,
-            center_y: f64,
-        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            Mobject::manim_sector(
-                Rc::clone(&self.semantics),
-                radius,
-                angle,
-                start_angle,
-                num_components,
-                center_x,
-                center_y,
-            )
-            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-            .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = createManimAnnulus)]
-        pub fn create_manim_annulus(
-            &self,
-            inner_radius: f64,
-            outer_radius: f64,
-            num_components: u32,
-            center_x: f64,
-            center_y: f64,
-        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            Mobject::manim_annulus(
-                Rc::clone(&self.semantics),
-                inner_radius,
-                outer_radius,
-                num_components,
-                center_x,
-                center_y,
-            )
-            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-            .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = createManimDashedLine)]
-        pub fn create_manim_dashed_line(
-            &self,
-            start_x: f64,
-            start_y: f64,
-            end_x: f64,
-            end_y: f64,
-            dash_length: f64,
-            dashed_ratio: f64,
-        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            Mobject::manim_dashed_line(
-                Rc::clone(&self.semantics),
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-                dash_length,
-                dashed_ratio,
-            )
-            .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-            .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = createManimUnderline)]
-        pub fn create_manim_underline(
-            &self,
-            target: &WasmAuthoringMobjectHandle,
-            buff: f64,
-        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            target.id_in_store(&self.semantics, "Underline target")?;
-            Mobject::manim_underline(&target.handle, buff)
-                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
-        }
-
         /// Shape native text into the same semantic store as geometry handles.
         #[wasm_bindgen(js_name = createManimText)]
         pub fn create_manim_text(
@@ -1907,8 +1760,9 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
+    use noon::ManimGeometryOptions;
     use noon_core::{
-        Color, GeometryRef, ObjectSnapshot, StrokeCap, StrokeJoin, StrokeWidthMode, Transform2D,
+        Color, GeometryRef, SemanticPaint, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
         Vec2, VectorPath,
     };
 
@@ -1926,21 +1780,14 @@ mod tests {
         assert_eq!(aligned, (0.0, 8.0));
     }
 
-    fn snapshot(geometry: GeometryRef) -> ObjectSnapshot {
-        ObjectSnapshot {
-            geometry,
-            transform: Transform2D::default(),
-            style: noon_core::Style::default(),
-        }
-    }
-
     #[test]
     fn handle_mutations_keep_state_in_shared_rust_semantics() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let mut handle = noon::legacy::import_mobject_snapshot(
+        let mut handle = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::circle(1.0)),
+            GeometryRef::circle(1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         handle.shift(2.0, -1.0).unwrap();
@@ -1948,22 +1795,18 @@ mod tests {
         assert_eq!(handle.center().unwrap(), (2.0, -1.0));
         assert_eq!(handle.width().unwrap(), 3.0);
         assert_eq!(handle.height().unwrap(), 1.0);
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&handle)
-                .unwrap()
-                .transform
-                .translation,
-            Vec2::new(2.0, -1.0)
-        );
+        let translation = handle.state().unwrap().transform.translation;
+        assert_eq!((translation.x, translation.y), (2.0, -1.0));
     }
 
     #[test]
     fn authoring_transform_keeps_f64_precision_until_render_lowering() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let mut handle = noon::legacy::import_mobject_snapshot(
+        let mut handle = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::rectangle(2.0, 1.0)),
+            GeometryRef::rectangle(2.0, 1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         handle.shift(0.7, 0.3).unwrap();
@@ -1993,9 +1836,10 @@ mod tests {
     fn pivoted_rotation_preserves_offset_line_center() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let mut handle = noon::legacy::import_mobject_snapshot(
+        let mut handle = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 0.0))),
+            GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 0.0)),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         handle.shift(2.0, 0.0).unwrap();
@@ -2023,9 +1867,10 @@ mod tests {
         let path = VectorPath::new()
             .move_to(Vec2::new(-1.0, 0.0))
             .quadratic_to(Vec2::new(0.0, 2.0), Vec2::new(1.0, 0.0));
-        let handle = noon::legacy::import_mobject_snapshot(
+        let handle = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::path(path)),
+            GeometryRef::path(path),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         let bounds = handle.layout_bounds().unwrap().unwrap();
@@ -2040,9 +1885,10 @@ mod tests {
     fn transformed_layout_bounds_match_manim_world_extrema() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let mut ellipse = noon::legacy::import_mobject_snapshot(
+        let mut ellipse = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::circle(1.0)),
+            GeometryRef::circle(1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         ellipse.scale(2.0, 1.0).unwrap();
@@ -2050,9 +1896,10 @@ mod tests {
         assert!((ellipse.width().unwrap() - 10.0_f64.sqrt()).abs() < 1e-12);
         assert!((ellipse.height().unwrap() - 10.0_f64.sqrt()).abs() < 1e-12);
 
-        let mut diagonal = noon::legacy::import_mobject_snapshot(
+        let mut diagonal = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 1.0))),
+            GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         diagonal.rotate(std::f64::consts::FRAC_PI_4).unwrap();
@@ -2062,9 +1909,10 @@ mod tests {
         let path = VectorPath::new()
             .move_to(Vec2::new(-1.0, 0.0))
             .quadratic_to(Vec2::new(0.0, 2.0), Vec2::new(1.0, 0.0));
-        let mut curve = noon::legacy::import_mobject_snapshot(
+        let mut curve = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::path(path)),
+            GeometryRef::path(path),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         curve.rotate(std::f64::consts::FRAC_PI_4).unwrap();
@@ -2078,72 +1926,43 @@ mod tests {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
         let circle = Mobject::manim_circle(std::rc::Rc::clone(&authoring_store), 1.5).unwrap();
+        let circle_state = circle.state().unwrap();
         assert_eq!(
-            noon::legacy::export_mobject_snapshot(&circle)
-                .unwrap()
-                .geometry,
-            GeometryRef::circle(1.5)
+            circle_state.content.geometry(),
+            Some(StoredGeometry::Circle { radius: 1.5 })
         );
-        let fill = noon::legacy::export_mobject_snapshot(&circle)
-            .unwrap()
-            .style
-            .fill
-            .unwrap();
-        let stroke = noon::legacy::export_mobject_snapshot(&circle)
-            .unwrap()
-            .style
-            .stroke
-            .unwrap();
+        let Some(SemanticPaint::Solid(fill)) = circle_state.style.fill else {
+            panic!("Manim circle must retain a solid fill");
+        };
+        let Some(SemanticPaint::Solid(stroke)) = circle_state.style.stroke else {
+            panic!("Manim circle must retain a solid stroke");
+        };
         assert_eq!(fill.red, Color::RED.red);
-        assert_eq!(fill.alpha, 0.0);
+        assert_eq!(circle_state.style.fill_opacity, 0.0);
         assert_eq!(stroke.red, Color::RED.red);
-        assert_eq!(stroke.alpha, 1.0);
+        assert_eq!(circle_state.style.stroke_opacity, 1.0);
+        assert_eq!(circle_state.style.stroke_width, 0.04);
         assert_eq!(
-            noon::legacy::export_mobject_snapshot(&circle)
-                .unwrap()
-                .style
-                .stroke_width,
-            0.04
-        );
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&circle)
-                .unwrap()
-                .style
-                .stroke_width_mode,
+            circle_state.style.stroke_width_mode,
             StrokeWidthMode::ScreenSpace
         );
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&circle)
-                .unwrap()
-                .style
-                .stroke_join,
-            StrokeJoin::Miter
-        );
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&circle)
-                .unwrap()
-                .style
-                .stroke_cap,
-            StrokeCap::Butt
-        );
+        assert_eq!(circle_state.style.stroke_join, StrokeJoin::Miter);
+        assert_eq!(circle_state.style.stroke_cap, StrokeCap::Butt);
 
         let line = Mobject::manim_line(std::rc::Rc::clone(&authoring_store), -2.0, 1.0, 3.0, -1.0)
             .unwrap();
+        let line_state = line.state().unwrap();
         assert_eq!(
-            noon::legacy::export_mobject_snapshot(&line)
-                .unwrap()
-                .geometry,
-            GeometryRef::line(Vec2::new(-2.0, 1.0), Vec2::new(3.0, -1.0))
+            line_state.content.geometry(),
+            Some(StoredGeometry::Line {
+                start: Vec2::new(-2.0, 1.0),
+                end: Vec2::new(3.0, -1.0),
+            })
         );
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&line)
-                .unwrap()
-                .style
-                .stroke
-                .unwrap()
-                .red,
-            Color::WHITE.red
-        );
+        let Some(SemanticPaint::Solid(line_stroke)) = line_state.style.stroke else {
+            panic!("Manim line must retain a solid stroke");
+        };
+        assert_eq!(line_stroke.red, Color::WHITE.red);
 
         let mut square = Mobject::manim_square(std::rc::Rc::clone(&authoring_store), 2.0).unwrap();
         square.set_translation(2.0, 3.0).unwrap();
@@ -2156,48 +1975,30 @@ mod tests {
         assert_eq!(square.wire_translation().unwrap(), (2.0, 3.0));
         assert_eq!(square.wire_scale().unwrap(), (2.0, 0.5));
         assert!((square.wire_rotation().unwrap() - 0.4_f32 as f64).abs() < 1e-7);
+        let square_style = square.state().unwrap().style;
         assert_eq!(
-            noon::legacy::export_mobject_snapshot(&square)
-                .unwrap()
-                .style
-                .stroke_width_mode,
+            square_style.stroke_width_mode,
             StrokeWidthMode::ScaleWithObject
         );
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&square)
-                .unwrap()
-                .style
-                .stroke_join,
-            StrokeJoin::Bevel
-        );
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&square)
-                .unwrap()
-                .style
-                .stroke_cap,
-            StrokeCap::Square
-        );
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&square)
-                .unwrap()
-                .style
-                .opacity,
-            0.8
-        );
+        assert_eq!(square_style.stroke_join, StrokeJoin::Bevel);
+        assert_eq!(square_style.stroke_cap, StrokeCap::Square);
+        assert_eq!(square_style.object_opacity, 0.8);
     }
 
     #[test]
     fn layout_operations_are_shared_and_deterministic() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let left = noon::legacy::import_mobject_snapshot(
+        let left = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::circle(0.5)),
+            GeometryRef::circle(0.5),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
-        let mut right = noon::legacy::import_mobject_snapshot(
+        let mut right = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::rectangle(1.0, 1.0)),
+            GeometryRef::rectangle(1.0, 1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         right.next_to_handle(&left, 1.0, 0.0, 0.25).unwrap();
@@ -2216,14 +2017,16 @@ mod tests {
     fn manim_leaf_placement_preserves_raw_direction_edges_and_masks() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let reference = noon::legacy::import_mobject_snapshot(
+        let reference = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::rectangle(2.0, 2.0)),
+            GeometryRef::rectangle(2.0, 2.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
-        let mut diagonal = noon::legacy::import_mobject_snapshot(
+        let mut diagonal = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::rectangle(2.0, 2.0)),
+            GeometryRef::rectangle(2.0, 2.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         diagonal
@@ -2240,9 +2043,10 @@ mod tests {
         assert!((diagonal.center().unwrap().0 - 2.25).abs() < 1e-12);
         assert!((diagonal.center().unwrap().1 - 2.25).abs() < 1e-12);
 
-        let mut moved = noon::legacy::import_mobject_snapshot(
+        let mut moved = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::rectangle(1.0, 1.0)),
+            GeometryRef::rectangle(1.0, 1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         moved.shift(0.0, -2.0).unwrap();
@@ -2252,9 +2056,10 @@ mod tests {
         assert!((moved.center().unwrap().0 + 0.5).abs() < 1e-12);
         assert!((moved.center().unwrap().1 + 2.0).abs() < 1e-12);
 
-        let mut aligned = noon::legacy::import_mobject_snapshot(
+        let mut aligned = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::rectangle(1.0, 1.0)),
+            GeometryRef::rectangle(1.0, 1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         aligned.shift(0.0, -1.0).unwrap();
@@ -2267,12 +2072,11 @@ mod tests {
     fn shared_style_mutations_preserve_independent_channels() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let mut value = snapshot(GeometryRef::circle(1.0));
-        value.style.fill = Some(Color::rgba(1.0, 0.0, 0.0, 0.4));
-        value.style.stroke = Some(Color::rgba(0.0, 0.0, 1.0, 0.7));
+        let mut options = ManimGeometryOptions::circle(1.0).unwrap();
+        options.set_fill(1.0, 0.0, 0.0, 0.4).unwrap();
+        options.set_stroke(0.0, 0.0, 1.0, 0.7).unwrap();
         let mut handle =
-            noon::legacy::import_mobject_snapshot(std::rc::Rc::clone(&authoring_store), value)
-                .unwrap();
+            Mobject::from_manim_geometry(std::rc::Rc::clone(&authoring_store), options).unwrap();
 
         handle.set_fill_color(0.0, 1.0, 0.0, 1.0).unwrap();
         assert!((handle.fill_opacity().unwrap() - 0.4).abs() < 1e-6);
@@ -2281,26 +2085,9 @@ mod tests {
         handle.set_stroke_opacity(0.6).unwrap();
         assert_eq!(handle.fill_opacity().unwrap(), 0.25);
         assert_eq!(handle.stroke_opacity().unwrap(), 0.6);
-        assert!(
-            (noon::legacy::export_mobject_snapshot(&handle)
-                .unwrap()
-                .style
-                .stroke_width
-                - 3.5)
-                .abs()
-                < 1e-6
-        );
-        assert!(
-            (noon::legacy::export_mobject_snapshot(&handle)
-                .unwrap()
-                .style
-                .stroke
-                .unwrap()
-                .alpha
-                - 0.6)
-                .abs()
-                < 1e-6
-        );
+        let style = handle.state().unwrap().style;
+        assert!((style.stroke_width - 3.5).abs() < 1e-6);
+        assert_eq!(style.stroke_opacity, 0.6);
 
         handle.set_opacity(0.2).unwrap();
         assert_eq!(handle.fill_opacity().unwrap(), 0.2);
@@ -2313,9 +2100,10 @@ mod tests {
     fn target_editor_alias_supports_moving_around_without_snapshot_round_trips() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let base = noon::legacy::import_mobject_snapshot(
+        let base = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::circle(1.0)),
+            GeometryRef::circle(1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         let mut target = base.target_editor().unwrap();
@@ -2330,24 +2118,22 @@ mod tests {
         assert_eq!(target.state().unwrap().transform.scale.x, 0.3);
         assert_eq!(target.state().unwrap().transform.rotation_z, 0.4);
         assert_eq!(target.fill_opacity().unwrap(), 0.5);
-        let fill = noon::legacy::export_mobject_snapshot(&target)
-            .unwrap()
-            .style
-            .fill
-            .unwrap();
+        let Some(SemanticPaint::Solid(fill)) = target.state().unwrap().style.fill else {
+            panic!("target must retain a solid fill");
+        };
         assert_eq!(fill.red, 1.0);
         assert_eq!(fill.green, 0.525);
         assert_eq!(fill.blue, 0.184);
-        assert_eq!(fill.alpha, 0.5);
     }
 
     #[test]
     fn target_editor_clone_alias_is_independent_and_set_fill_is_transactional() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let base = noon::legacy::import_mobject_snapshot(
+        let base = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::circle(1.0)),
+            GeometryRef::circle(1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         let mut target = base.target_editor().unwrap();
@@ -2358,11 +2144,9 @@ mod tests {
         assert_eq!(base.center().unwrap(), (0.0, 0.0));
         assert_eq!(sibling.center().unwrap(), (0.0, 0.0));
         assert_eq!(sibling.fill_opacity().unwrap(), 1.0);
-        let sibling_fill = noon::legacy::export_mobject_snapshot(&sibling)
-            .unwrap()
-            .style
-            .fill
-            .unwrap();
+        let Some(SemanticPaint::Solid(sibling_fill)) = sibling.state().unwrap().style.fill else {
+            panic!("sibling must retain a solid fill");
+        };
         assert_eq!(sibling_fill.red, 1.0);
         assert_eq!(sibling_fill.green, 1.0);
 
@@ -2506,28 +2290,37 @@ mod tests {
     fn become_and_replace_keep_state_inside_shared_handle() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let mut source = noon::legacy::import_mobject_snapshot(
+        let mut source = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::circle(0.5)),
+            GeometryRef::circle(0.5),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         source.shift(-2.0, 0.5).unwrap();
-        let mut target = noon::legacy::import_mobject_snapshot(
+        let mut target = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::rectangle(2.0, 1.0)),
+            GeometryRef::rectangle(2.0, 1.0),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         target.shift(1.0, -0.25).unwrap();
 
         source.become_handle(&target).unwrap();
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&source).unwrap(),
-            noon::legacy::export_mobject_snapshot(&target).unwrap()
+        let source_state = source.state().unwrap();
+        let target_state = target.state().unwrap();
+        assert_eq!(source_state.content, target_state.content);
+        assert_eq!(source_state.transform, target_state.transform);
+        assert_eq!(source_state.style, target_state.style);
+        assert_ne!(
+            source_state.presentation(),
+            target_state.presentation(),
+            "become must preserve each object's insertion order"
         );
 
-        let mut replacement = noon::legacy::import_mobject_snapshot(
+        let mut replacement = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::circle(0.25)),
+            GeometryRef::circle(0.25),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         replacement.replace_handle(&target, 0, false).unwrap();
@@ -2536,9 +2329,10 @@ mod tests {
         assert!((replacement.center().unwrap().0 - 1.0).abs() < 1e-6);
         assert!((replacement.center().unwrap().1 + 0.25).abs() < 1e-6);
 
-        let mut stretched = noon::legacy::import_mobject_snapshot(
+        let mut stretched = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::circle(0.25)),
+            GeometryRef::circle(0.25),
+            noon_core::SemanticStyle::default(),
         )
         .unwrap();
         stretched.replace_handle(&target, 0, true).unwrap();
@@ -2550,12 +2344,11 @@ mod tests {
     fn wire_projection_matches_lowered_snapshot_after_shared_edits() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let mut value = snapshot(GeometryRef::rectangle(2.0, 1.0));
-        value.style.fill = Some(Color::rgba(0.2, 0.3, 0.4, 0.5));
-        value.style.stroke = Some(Color::rgba(0.6, 0.7, 0.8, 0.9));
+        let mut options = ManimGeometryOptions::rectangle(2.0, 1.0).unwrap();
+        options.set_fill(0.2, 0.3, 0.4, 0.5).unwrap();
+        options.set_stroke(0.6, 0.7, 0.8, 0.9).unwrap();
         let mut handle =
-            noon::legacy::import_mobject_snapshot(std::rc::Rc::clone(&authoring_store), value)
-                .unwrap();
+            Mobject::from_manim_geometry(std::rc::Rc::clone(&authoring_store), options).unwrap();
 
         handle.shift(0.7, -0.3).unwrap();
         handle.scale(1.1, 0.9).unwrap();
@@ -2584,27 +2377,5 @@ mod tests {
         );
         assert_eq!(handle.wire_fill().unwrap().unwrap().3, 0.25_f32 as f64);
         assert_eq!(handle.wire_stroke_width().unwrap(), 3.5_f32 as f64);
-    }
-
-    #[test]
-    fn json_round_trip_preserves_wire_snapshot() {
-        let authoring_store =
-            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let handle = noon::legacy::import_mobject_snapshot(
-            std::rc::Rc::clone(&authoring_store),
-            snapshot(GeometryRef::rectangle(2.0, 3.0)),
-        )
-        .unwrap();
-        let json = serde_json::to_string(&noon::legacy::export_mobject_snapshot(&handle).unwrap())
-            .unwrap();
-        let restored = noon::legacy::import_mobject_snapshot(
-            std::rc::Rc::clone(&authoring_store),
-            serde_json::from_str(&json).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            noon::legacy::export_mobject_snapshot(&restored).unwrap(),
-            noon::legacy::export_mobject_snapshot(&handle).unwrap()
-        );
     }
 }

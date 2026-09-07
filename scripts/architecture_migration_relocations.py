@@ -232,7 +232,7 @@ def main() -> int:
     for path in config['adapter_call_sites']:
         source = sources.get(path, '')
         calls = re.findall(r'noon::legacy::([A-Za-z_][A-Za-z0-9_]*)', normalized_namespaces(re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)))
-        if any(name not in {'import_mobject_snapshot', 'export_mobject_snapshot', 'replace_mobject_snapshot'} for name in calls):
+        if any(name not in {'export_mobject_snapshot', 'replace_mobject_snapshot'} for name in calls):
             errors.append(f'{path}: new legacy adapter API')
     permitted_namespaces = set(config['rewritten_imports']) | set(config['adapter_call_sites'])
     for path, source in sources.items():

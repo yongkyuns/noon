@@ -11,12 +11,15 @@ test("Python authoring worker keeps request validation helper", () => {
   assert.match(source, /if\s*\(!isRecord\(request\)\s*\|\|\s*request\.channel\s*!==\s*AUTHORING_CHANNEL\)/);
 });
 
-test("Python authoring worker routes specialized geometry to typed store constructors", () => {
+test("Python authoring worker routes specialized geometry through common typed admission", () => {
+  assert.match(source, /noonAuthoringGeometryOptions = WasmManimGeometryOptions/);
+  assert.match(source, /noonCreateAuthoringGeometryHandle = \(options\) =>\s*\n?\s*authoringStore\.createManimGeometry\(options\)/);
   for (const shape of [
     "Dot", "Triangle", "Elbow", "RoundedRectangle", "AnnularSector",
     "Sector", "Annulus", "DashedLine", "Underline",
   ]) {
-    assert.match(source, new RegExp(`authoringStore\\.createManim${shape}\\(`));
+    assert.doesNotMatch(source, new RegExp(`noonCreateAuthoring${shape}Handle`));
+    assert.doesNotMatch(source, new RegExp(`authoringStore\\.createManim${shape}\\(`));
     assert.doesNotMatch(source, new RegExp(`manim${shape}SnapshotJson`));
   }
 });

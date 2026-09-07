@@ -24,6 +24,18 @@ fn mobject_bounds(handle: &WasmAuthoringMobjectHandle) -> Result<Bounds2D64, JsV
 
 #[wasm_bindgen]
 impl WasmAuthoringMobjectHandle {
+    #[wasm_bindgen(js_name = beginUnderline)]
+    pub fn begin_underline(&self, buff: f64) -> Result<WasmManimGeometryOptions, JsValue> {
+        let bounds = self
+            .semantic_mobject()
+            .layout_bounds()
+            .map_err(js_error)?
+            .ok_or_else(|| js_error("Underline target has no layout bounds".into()))?;
+        ManimGeometryOptions::underline(bounds, buff)
+            .map(WasmManimGeometryOptions::from_options)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = beginSurroundingRectangle)]
     pub fn begin_surrounding_rectangle(
         &self,

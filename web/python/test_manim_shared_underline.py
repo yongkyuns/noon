@@ -88,6 +88,9 @@ class ManimSharedUnderlineTests(unittest.TestCase):
                     self.wireStrokeGreen = float(green)
                     self.wireStrokeBlue = float(blue)
 
+                def beginUnderline(self, buff):
+                    return _geometry_test._options_from_result(underline_handle(self, buff))
+
             def rectangle_handle(width, height):
                 return FakeHandle({
                     "geometry": {"rectangle": {"size": {"x": float(width), "y": float(height)}}},
@@ -126,7 +129,6 @@ class ManimSharedUnderlineTests(unittest.TestCase):
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, generic_handle)
-            fake_js.noonCreateAuthoringUnderlineHandle = underline_handle
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -171,6 +173,40 @@ class ManimSharedUnderlineTests(unittest.TestCase):
             assert underline.style["stroke"]["red"] == BLUE.red
             assert underline.style["stroke"]["green"] == BLUE.green
             assert underline.style["stroke"]["blue"] == BLUE.blue
+
+            # Once a live session exists, candidate bounds and publication both
+            # stay on that session. All style is present before publication.
+            from types import SimpleNamespace
+
+            class LiveContext:
+                def liveExecutionOwnership(self): return "returned"
+                def beginUnderline(self, target, buff):
+                    calls.append(("live-begin", target, float(buff)))
+                    return target.beginUnderline(buff)
+                def liveCreateManimGeometry(self, candidate):
+                    calls.append((
+                        "live-create",
+                        candidate.snapshot["style"]["stroke_width"],
+                        candidate.snapshot["style"]["stroke"]["blue"],
+                    ))
+                    return generic_handle(json.dumps(candidate.snapshot))
+
+            context = LiveContext()
+            reactive = SimpleNamespace(
+                _current_authoring_scene=lambda: SimpleNamespace(
+                    _canonical_authoring_context=context
+                )
+            )
+            sys.modules["_manim_reactive"] = reactive
+            try:
+                live_underline = Underline(
+                    target, buff=0.5, color=BLUE, stroke_width=3.0
+                )
+            finally:
+                del sys.modules["_manim_reactive"]
+            assert live_underline._canonical_live_target_context is context
+            assert calls[-3][0] == "live-begin"
+            assert calls[-1] == ("live-create", 0.03, BLUE.blue)
 
             before = len(calls)
             target._semantic_handle_fresh = False

@@ -113,24 +113,6 @@ async function initializePyodide() {
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);
-  self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
-    authoringStore.createManimDot(pointX, pointY, radius);
-  self.noonCreateAuthoringTriangleHandle = () =>
-    authoringStore.createManimTriangle();
-  self.noonCreateAuthoringElbowHandle = (...args) =>
-    authoringStore.createManimElbow(...args);
-  self.noonCreateAuthoringRoundedRectangleHandle = (...args) =>
-    authoringStore.createManimRoundedRectangle(...args);
-  self.noonCreateAuthoringAnnularSectorHandle = (...args) =>
-    authoringStore.createManimAnnularSector(...args);
-  self.noonCreateAuthoringSectorHandle = (...args) =>
-    authoringStore.createManimSector(...args);
-  self.noonCreateAuthoringAnnulusHandle = (...args) =>
-    authoringStore.createManimAnnulus(...args);
-  self.noonCreateAuthoringDashedLineHandle = (...args) =>
-    authoringStore.createManimDashedLine(...args);
-  self.noonCreateAuthoringUnderlineHandle = (targetHandle, buff) =>
-    authoringStore.createManimUnderline(targetHandle, buff);
   self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
     authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>

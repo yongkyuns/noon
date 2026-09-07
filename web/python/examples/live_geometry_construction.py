@@ -1,7 +1,7 @@
 """Pair of the native/direct-WASM typed live geometry construction example."""
 from noon import (
-    BackgroundRectangle, Color, Group, Line, Path, Rectangle, Scene,
-    SurroundingRectangle, VectorPath, linear,
+    Annulus, BackgroundRectangle, Color, Dot, Group, Line, Path, Rectangle, Scene,
+    SurroundingRectangle, Underline, VectorPath, linear,
 )
 
 class LiveGeometryConstruction(Scene):
@@ -26,3 +26,8 @@ class LiveGeometryConstruction(Scene):
         )
         self.add(rectangle, line, late_path)
         await self.play(rectangle.animate.shift((0.0, 1.0, 0.0)), run_time=1.0, rate_func=linear)
+        dot = Dot((-4.0, -1.5, 0.0), radius=0.25, color=Color(1.0, 0.0, 0.0))
+        annulus = Annulus(inner_radius=0.25, outer_radius=0.5, arc_center=(4.0, -1.5, 0.0),
+                          color=Color(1.0, 1.0, 0.0))
+        underline = Underline(rectangle, buff=0.15, stroke_width=8.0)
+        self.add(dot, annulus, underline)

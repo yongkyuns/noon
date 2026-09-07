@@ -116,11 +116,16 @@ async function directLiveGeometryConstructionProof(expectedBackend) {
     renderer.advanceDirectRealtime(2000);
     const final = await settleDirectPublication(renderer, 2000);
     const rectangle = await sampleRenderedColor(canvas, 2, 1);
+    const dot = await sampleRenderedColor(canvas, -4, -1.5);
+    const annulus = await sampleRenderedColor(canvas, 4.375, -1.5);
+    const underline = await sampleRenderedColor(canvas, 2, 0.45);
     const metrics = { backend: renderer.rendererBackend(), before, after: renderer.objectCount(),
-      time: renderer.time(), cadence: final.cadence, path, rectangle };
-    if (metrics.backend !== expectedBackend || before !== 3 || metrics.after !== 6 ||
+      time: renderer.time(), cadence: final.cadence, path, rectangle, dot, annulus, underline };
+    if (metrics.backend !== expectedBackend || before !== 3 || metrics.after !== 9 ||
         metrics.time !== 2 || metrics.cadence !== "idle" ||
-        path.blue <= path.red + 30 || rectangle.green <= rectangle.red + 30) {
+        path.blue <= path.red + 30 || rectangle.green <= rectangle.red + 30 ||
+        dot.red <= dot.green + 30 || annulus.red <= annulus.blue + 30 ||
+        annulus.green <= annulus.blue + 30 || Math.min(underline.red, underline.green, underline.blue) <= 150) {
       throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
     }
     return metrics;

@@ -1,4 +1,4 @@
-//! Typed path and matcher construction before and after a shared continuation barrier.
+//! Typed geometry and bounds-dependent construction across shared continuation barriers.
 
 use crate::{
     AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 pub struct LiveGeometryConstruction {
     stage: u8,
+    rectangle: Option<Mobject>,
 }
 
 impl LiveContinuation for LiveGeometryConstruction {
@@ -56,6 +57,7 @@ impl LiveContinuation for LiveGeometryConstruction {
                 let target = live.target_editor(&rectangle).map_err(|e| e.to_string())?;
                 live.set_translation(&target, 2.0, 1.0)
                     .map_err(|e| e.to_string())?;
+                self.rectangle = Some(rectangle.clone());
                 self.stage = 2;
                 live.declare_and_activate_transform_to(
                     &rectangle,
@@ -68,6 +70,35 @@ impl LiveContinuation for LiveGeometryConstruction {
                 .map_err(|e| e.to_string())
             }
             2 => {
+                let mut dot = ManimGeometryOptions::dot(-4.0, -1.5, 0.25)?;
+                dot.set_color(1.0, 0.0, 0.0, 1.0)?;
+                let dot = live.create_manim_geometry(dot).map_err(|e| e.to_string())?;
+                let mut annulus = ManimGeometryOptions::annulus(0.25, 0.5, 9, 4.0, -1.5)?;
+                annulus.set_color(1.0, 1.0, 0.0, 1.0)?;
+                let annulus = live
+                    .create_manim_geometry(annulus)
+                    .map_err(|e| e.to_string())?;
+                let layout = live
+                    .effective_layout(self.rectangle.as_ref().ok_or("missing live rectangle")?)
+                    .map_err(|e| e.to_string())?;
+                let bounds = noon_core::Bounds2D64 {
+                    min_x: layout.center.0 - layout.width * 0.5,
+                    max_x: layout.center.0 + layout.width * 0.5,
+                    min_y: layout.center.1 - layout.height * 0.5,
+                    max_y: layout.center.1 + layout.height * 0.5,
+                };
+                let mut underline = ManimGeometryOptions::underline(bounds, 0.15)?;
+                // Rust widths use scene units; Python's Manim width 8 maps to 0.08.
+                underline.set_stroke_width(0.08)?;
+                let underline = live
+                    .create_manim_geometry(underline)
+                    .map_err(|e| e.to_string())?;
+                live.add_many(&[
+                    MobjectFamilyMember::Mobject(&dot),
+                    MobjectFamilyMember::Mobject(&annulus),
+                    MobjectFamilyMember::Mobject(&underline),
+                ])
+                .map_err(|e| e.to_string())?;
                 self.stage = 3;
                 Ok(ContinuationStep::Finished)
             }
@@ -113,7 +144,10 @@ pub fn program() -> Result<LiveProgram<LiveGeometryConstruction>, String> {
         MobjectFamilyMember::Mobject(&outline),
     ])?;
     scene
-        .into_live_program(LiveGeometryConstruction { stage: 0 })
+        .into_live_program(LiveGeometryConstruction {
+            stage: 0,
+            rectangle: None,
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -145,6 +179,12 @@ mod tests {
         let publication = program.take_renderer_publication().context();
         program.admit_publication(publication).unwrap();
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+        assert_eq!(program.session().frame().objects.len(), 9);
+        let underline = &program.session().frame().objects[8];
+        assert!(
+            (underline.transform.translation.y - 0.45).abs() < 1e-6,
+            "Underline must observe the effective target after animation"
+        );
         let rectangle = &program.session().frame().objects[3];
         assert_eq!(rectangle.transform.translation, Vec2::new(2.0, 1.0));
     }
