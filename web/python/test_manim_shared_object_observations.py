@@ -74,6 +74,18 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                 authored_color.alpha,
             ) == (0.1, 0.2, 0.3, 0.4)
 
+            class DetachedLiveContext:
+                def liveExecutionOwnership(self): return "returned"
+                def queryMobjectLineEndpoints(self, handle):
+                    raise AssertionError("detached identity was queried through execution")
+                def queryMobjectColor(self, handle):
+                    raise AssertionError("detached identity was queried through execution")
+
+            line._canonical_live_target_context = DetachedLiveContext()
+            assert line.get_start() == (1.25, -2.5)
+            assert line.get_end() == (4.5, 3.75)
+            assert line.get_color().alpha == 0.4
+
             import _manim_indication
             flash = _manim_indication.ShowPassingFlash(line)
             assert flash.mobject is line
@@ -97,7 +109,11 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                     return SimpleNamespace(red=0.8, green=0.7, blue=0.6, alpha=0.5)
 
             context = EffectiveContext()
-            line._scene = SimpleNamespace(_canonical_authoring_context=context)
+            line._scene = SimpleNamespace(
+                _canonical_authoring_context=context,
+                _tracks=[],
+            )
+            line._object = SimpleNamespace(id="line")
             assert line.get_start() == (10.0, 20.0)
             assert line.get_end() == (30.0, 40.0)
             effective_color = line.get_color()

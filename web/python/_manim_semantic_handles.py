@@ -304,9 +304,17 @@ def _typed_manim_observation(
         return None
     if not bool(getattr(value, "_semantic_handle_fresh", False)):
         raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
-    context = _live_mutation_context(value)
-    if context is not None:
-        return getattr(context, context_method)(semantic_handle)
+    if _is_bound(value):
+        # Match layout observation routing: only the scene that bound this identity
+        # can supply its effective execution state. A live-constructor context on a
+        # detached wrapper owns mutations, but has no bound execution identity yet.
+        context = getattr(value._scene, "_canonical_authoring_context", None)
+        query = getattr(context, context_method, None)
+        if query is None:
+            raise NotImplementedError(
+                "typed Mobject observation is unavailable in this authoring phase"
+            )
+        return query(semantic_handle)
     handle = _handle_for(value)
     if handle is None:
         raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
