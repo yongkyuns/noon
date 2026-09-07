@@ -14,6 +14,28 @@
 
       const client = new PythonAuthoringClient();
       const runForExport = (source) => client.run(source, {}, { exportDocument: true });
+      async function runLive(source) {
+        const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+        const canvas = document.createElement("canvas");
+        canvas.width = 640;
+        canvas.height = 360;
+        document.body.append(canvas);
+        const execution = new AuthoringExecutionClient(canvas);
+        try {
+          const result = await client.run(source, {}, {
+            async onSemanticContinuation(registration) {
+              await execution.startSemanticExecution(registration.semanticExecution, {
+                authoringClient: client,
+                transportMode: "transferable",
+              });
+            },
+          });
+          return { duration: result.duration, metrics: (await execution.metrics()).metrics };
+        } finally {
+          execution.terminate();
+          canvas.remove();
+        }
+      }
       const wasmReady = init();
       const familyCreateSource = `
 from noon import *
@@ -316,6 +338,7 @@ class RetainedSequentialFamilySmoke(Scene):
         },
         retainedTextView,
         run: runForExport,
+        runLive,
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };
     </script>

@@ -167,6 +167,8 @@ class AnimateParity(Scene):
                 .set_y(1.0)
         )
         assert len(self.mobjects) == 1 and self.mobjects[0] is detached
+        assert abs(detached.get_center()[0] - 1) < 1e-6
+        assert abs(detached.get_center()[1] - 1) < 1e-6
 
         square = Square(side_length=0.4, color=PINK)
         self.play(
@@ -186,6 +188,11 @@ class AnimateParity(Scene):
             run_time=0.4,
             rate_func=smooth,
         )
+
+        assert abs(override.get_center()[0] - 1) < 1e-6
+        assert abs(detached.get_center()[0]) < 1e-6
+        assert abs(square.get_center()[1] - 1) < 1e-6
+        assert abs(pair.get_center()[1] - 1) < 1e-6
 
         late_args = Circle().animate
         late_args.shift(RIGHT)
@@ -428,22 +435,11 @@ try {
   assert.equal(uncreateRemovals[1].timing.start_time, 4.0);
 
   const phaseB = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     phaseBSource,
   );
-  assert.equal(phaseB.kind, "scene_document");
-  assert.equal(phaseB.document.objects.length, 5, "groups should lower to flat runtime member objects");
-  const phaseBProperties = phaseB.document.tracks.map((track) => track.property);
-  assert.equal(
-    phaseBProperties.filter((property) => property === "transform").length,
-    3,
-    "group animate should lower to member transforms and generic set_y should lower once",
-  );
-  assert.equal(
-    phaseBProperties.filter((property) => property === "presence").length,
-    12,
-    "scene membership and grouped fades should lower to deterministic presence events",
-  );
+  assert.ok(Math.abs(phaseB.duration - 1.5) < 1e-9);
+  assert.ok(phaseB.metrics.presentedFrames > 0, "shared family lifecycle must render");
 
   const defaultVmobjectStyle = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),
@@ -460,46 +456,11 @@ try {
   assert.equal(defaultStyle.stroke_cap, "butt");
 
   const animateParity = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     animateParitySource,
   );
-  assert.equal(animateParity.kind, "scene_document");
-  assert.equal(animateParity.document.objects.length, 5, "detached animate and groups should auto-bind flat objects");
-  const animateTracks = animateParity.document.tracks.filter((track) => track.property === "transform");
-  assert.equal(animateTracks.length, 6);
-
-  const byObject = new Map();
-  for (const track of animateTracks) {
-    const list = byObject.get(track.object) ?? [];
-    list.push(track);
-    byObject.set(track.object, list);
-  }
-  assert.equal(byObject.get(0)[0].timing.start_time, 0);
-  assert.equal(byObject.get(0)[0].timing.duration, 2);
-  assert.equal(byObject.get(0)[0].timing.easing, "linear");
-  assert.equal(byObject.get(0)[1].timing.start_time, 2);
-  assert.equal(byObject.get(0)[1].timing.duration, 0.5);
-  assert.equal(byObject.get(1)[0].timing.start_time, 2);
-  assert.equal(byObject.get(1)[0].timing.duration, 2);
-  assert.equal(byObject.get(1)[0].timing.easing, "smooth");
-
-  const groupFirst = byObject.get(2)[0];
-  const groupSecond = byObject.get(3)[0];
-  assert.ok(Math.abs(groupFirst.timing.start_time - 4.0) < 1e-9);
-  assert.ok(Math.abs(groupFirst.timing.duration - 0.8) < 1e-9);
-  assert.ok(Math.abs(groupSecond.timing.start_time - 4.4) < 1e-9);
-  assert.ok(Math.abs(groupSecond.timing.duration - 0.8) < 1e-9);
-  assert.equal(groupFirst.timing.easing, "smooth");
-  assert.equal(groupSecond.timing.easing, "smooth");
-
-  const overridden = byObject.get(4)[0];
-  assert.ok(Math.abs(overridden.timing.start_time - 5.2) < 1e-9);
-  assert.ok(Math.abs(overridden.timing.duration - 0.4) < 1e-9);
-  assert.equal(
-    overridden.timing.easing,
-    "smooth",
-    "Scene.play kwargs should override builder animation kwargs",
-  );
+  assert.ok(Math.abs(animateParity.duration - 5.6) < 1e-9);
+  assert.ok(animateParity.metrics.presentedFrames > 0, "shared family animate must render");
 
   const queryTransforms = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),

@@ -1323,7 +1323,7 @@ try {
     const outlineFrame = await canvas.screenshot();
     const outline = renderedWorldPixel(outlineFrame, -1, 0.4);
     const unfilled = renderedWorldPixel(outlineFrame, -1, 0);
-    assert.ok(outline.red > 120 && outline.green > 120 && outline.blue < 100,
+    assert.ok(Math.abs(outline.red - 247) < 15 && Math.abs(outline.green - 217) < 15 && Math.abs(outline.blue - 111) < 15,
       "shared DrawBorderThenFill must reveal the yellow outline in phase one");
     assert.ok(Math.max(unfilled.red, unfilled.green, unfilled.blue) < 40,
       "shared DrawBorderThenFill must keep fill transparent in phase one");

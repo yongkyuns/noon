@@ -1098,7 +1098,7 @@ async function directDrawBorderThenFillProof(expectedBackend) {
     await settleDirectPublication(renderer, 500);
     const outline = await sampleRenderedColor(canvas, -1, 0.4);
     const unfilled = await sampleRenderedColor(canvas, -1, 0);
-    if (outline.red < 120 || outline.green < 120 || outline.blue > 100
+    if (Math.abs(outline.red - 247) >= 15 || Math.abs(outline.green - 217) >= 15 || Math.abs(outline.blue - 111) >= 15
         || Math.max(unfilled.red, unfilled.green, unfilled.blue) > 40) {
       throw new Error(`direct DrawBorderThenFill must reveal a yellow outline before fill: ${JSON.stringify({ outline, unfilled })}`);
     }
