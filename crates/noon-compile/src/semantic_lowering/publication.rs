@@ -481,8 +481,8 @@ fn lower_prepared_entry(
         return Err(SemanticPublicationLoweringError::UnsupportedReactiveMembership { object });
     }
     let (content, text_bounds) = match state.content {
-        SemanticObjectContent::Geometry(geometry) => (
-            lower_semantic_geometry_value(geometry, Some(prepared.store()))
+        SemanticObjectContent::Geometry(content) => (
+            lower_semantic_geometry_value(content.geometry(), Some(prepared.store()))
                 .map_err(|error| SemanticPublicationLoweringError::PreparedGeometry {
                     object,
                     error,

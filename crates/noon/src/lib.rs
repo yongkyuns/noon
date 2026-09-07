@@ -54,7 +54,7 @@ pub use noon_runtime::{
     RendererPublication, RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
 };
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use semantic_mobject::{ManimGeometryOptions, Mobject};
+pub use semantic_mobject::{ManimBecomeOptions, ManimGeometryOptions, Mobject};
 mod scene;
 mod scene_membership;
 pub use scene::Scene;

@@ -119,10 +119,7 @@ fn grouped_overlay_matches_commit_for_every_property_and_content_style() {
         .set_property(second, SemanticObjectProperty::StrokeOpacity, 0.3_f64)
         .set_property(second, SemanticObjectProperty::StrokeWidth, 2.5_f64)
         .set_property(second, SemanticObjectProperty::ObjectOpacity, 0.4_f64)
-        .replace_content(
-            first,
-            SemanticObjectContent::Geometry(StoredGeometry::Circle { radius: 3.0 }),
-        );
+        .replace_content(first, StoredGeometry::Circle { radius: 3.0 });
     let prepared = transaction.prepare(&mut store).unwrap();
     let updates: Vec<_> = prepared.object_updates().collect();
     assert_eq!(

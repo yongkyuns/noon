@@ -7,7 +7,7 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 use crate::{
-    semantic_mobject::authoring_render_f64,
+    semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
@@ -16,8 +16,8 @@ use crate::{
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
-    FamilyArrangePlan, FamilyTranslation, Mobject, MobjectFamily, MobjectFamilyMember,
-    SceneMembershipRequest, ValueTracker,
+    FamilyArrangePlan, FamilyTranslation, ManimBecomeOptions, Mobject, MobjectFamily,
+    MobjectFamilyMember, SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -152,9 +152,9 @@ impl Default for IndicateOptions {
 }
 
 /// Reconstruct the supported authored target style directly from one effective
-/// runtime row. Runtime colors already contain the evaluated paint opacity, so
-/// the detached target stores them as solid paints with unit paint opacity and
-/// preserves the row's object opacity separately. Resource paints are not
+/// runtime row. Preserve exact authored values when their lowered values match.
+/// Changed runtime colors already contain evaluated paint opacity, so capture
+/// those as solid paints with unit paint opacity. Resource paints are not
 /// represented by `Style` and must remain explicitly unavailable here.
 pub(crate) fn target_style_from_effective(
     authored: &SemanticStyle,
@@ -171,11 +171,25 @@ pub(crate) fn target_style_from_effective(
             "target editor cannot capture a runtime style backed by a paint resource".into(),
         ));
     }
+    let (fill, fill_opacity) =
+        if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
+            (authored.fill.clone(), authored.fill_opacity)
+        } else {
+            (effective.fill.map(noon_core::SemanticPaint::Solid), 1.0)
+        };
+    let (stroke, stroke_opacity) =
+        if lowered_solid_color(authored.stroke.as_ref(), authored.stroke_opacity)
+            == effective.stroke
+        {
+            (authored.stroke.clone(), authored.stroke_opacity)
+        } else {
+            (effective.stroke.map(noon_core::SemanticPaint::Solid), 1.0)
+        };
     Ok(SemanticStyle {
-        fill: effective.fill.map(noon_core::SemanticPaint::Solid),
-        fill_opacity: 1.0,
-        stroke: effective.stroke.map(noon_core::SemanticPaint::Solid),
-        stroke_opacity: 1.0,
+        fill,
+        fill_opacity,
+        stroke,
+        stroke_opacity,
         // Retain authored precision when runtime lowering did not change width.
         // An f32 round trip must not invent a structural style change.
         stroke_width: if authored.stroke_width as f32 == effective.stroke_width {
@@ -186,8 +200,28 @@ pub(crate) fn target_style_from_effective(
         stroke_width_mode: effective.stroke_width_mode,
         stroke_join: effective.stroke_join,
         stroke_cap: effective.stroke_cap,
-        object_opacity: f64::from(effective.opacity),
+        object_opacity: if authored.object_opacity as f32 == effective.opacity {
+            authored.object_opacity
+        } else {
+            f64::from(effective.opacity)
+        },
     })
+}
+
+fn lowered_solid_color(paint: Option<&noon_core::SemanticPaint>, opacity: f64) -> Option<Color> {
+    let noon_core::SemanticPaint::Solid(color) = paint? else {
+        return None;
+    };
+    Some(Color {
+        alpha: (f64::from(color.alpha) * f64::from(opacity as f32)) as f32,
+        ..*color
+    })
+}
+
+fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
+    if *authored as f32 != effective {
+        *authored = f64::from(effective);
+    }
 }
 
 /// One borrowed TransformTo leaf in an atomic live composition request.
@@ -571,16 +605,49 @@ impl<'a> LiveSession<'a> {
             ));
         }
 
-        // A target for a reachable source starts from the coherent effective row,
-        // rather than the authored base that an active driver or callback may have
-        // superseded. A detached source has no runtime row, so its authoritative
-        // authored state is already the exact capture. Immutable content remains
-        // authored. This subset intentionally rejects render-content and appearance
-        // overrides because SemanticObjectState has no exact representation for them.
+        let state = self.capture_mobject_state(source)?;
+
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        let result = self.apply(transaction)?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one prepared target copy has one exact semantic impact")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+    }
+
+    /// Replace one object's presentation with another object's effective state while
+    /// retaining the target identity and scene membership.
+    pub fn become_mobject(
+        &mut self,
+        target: &Mobject,
+        other: &Mobject,
+        options: ManimBecomeOptions,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(target)?;
+        self.require_mobject(other)?;
+        let authored = target.state().map_err(LiveSessionError::Mobject)?;
+        let source = self.capture_mobject_state(target)?;
+        let candidate = self.capture_mobject_state(other)?;
+        let next = prepare_become_state(&self.store.borrow(), &source, candidate, options)
+            .map_err(LiveSessionError::Mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        stage_state_changes(&mut transaction, target.node_id(), &authored, &next);
+        self.apply(transaction)
+    }
+
+    fn capture_mobject_state(
+        &self,
+        source: &Mobject,
+    ) -> Result<SemanticObjectState, LiveSessionError> {
+        // A reachable object starts from the coherent effective row rather than
+        // an authored base superseded by a driver. A detached object has no row,
+        // so its authored state is the exact capture. Immutable content remains
+        // authored because effective render-content overrides are rejected.
         let mut state = source.state().map_err(LiveSessionError::Mobject)?;
         if !state.signal_bindings().is_empty() {
             return Err(LiveSessionError::Mobject(
-                "target editor cannot capture a reactive binding into a detached target".into(),
+                "cannot capture a reactive binding into object state".into(),
             ));
         }
         if self.session.semantic_object_is_reachable(source.node_id()) {
@@ -590,30 +657,38 @@ impl<'a> LiveSession<'a> {
                 .effective_semantic_object(&store, source.node_id())?;
             if !observed.authored_content_layout_applicable() {
                 return Err(LiveSessionError::Mobject(
-                    "target editor requires effective authored content without reveal or morph overrides"
+                    "object state capture requires effective authored content without reveal or morph overrides"
                         .into(),
                 ));
             }
             if observed.object.appearance != 1.0 {
                 return Err(LiveSessionError::Mobject(
-                    "target editor cannot represent a non-unit effective appearance".into(),
+                    "object state capture cannot represent a non-unit effective appearance".into(),
                 ));
             }
-            state.transform.translation.x = f64::from(observed.object.transform.translation.x);
-            state.transform.translation.y = f64::from(observed.object.transform.translation.y);
-            state.transform.scale.x = f64::from(observed.object.transform.scale.x);
-            state.transform.scale.y = f64::from(observed.object.transform.scale.y);
-            state.transform.rotation_z = f64::from(observed.object.transform.rotation);
+            preserve_or_capture_f32(
+                &mut state.transform.translation.x,
+                observed.object.transform.translation.x,
+            );
+            preserve_or_capture_f32(
+                &mut state.transform.translation.y,
+                observed.object.transform.translation.y,
+            );
+            preserve_or_capture_f32(
+                &mut state.transform.scale.x,
+                observed.object.transform.scale.x,
+            );
+            preserve_or_capture_f32(
+                &mut state.transform.scale.y,
+                observed.object.transform.scale.y,
+            );
+            preserve_or_capture_f32(
+                &mut state.transform.rotation_z,
+                observed.object.transform.rotation,
+            );
             state.style = target_style_from_effective(&state.style, observed.object.style)?;
         }
-
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
-        let result = self.apply(transaction)?;
-        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one prepared target copy has one exact semantic impact")
-        };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+        Ok(state)
     }
 
     /// Publish one detached ordered family through this session's semantic owner.
@@ -2435,6 +2510,30 @@ mod tests {
             live.effective(&circle).unwrap().transform.translation.x,
             2.0
         );
+    }
+
+    #[test]
+    fn live_self_become_preserves_precise_authored_state_without_publication() {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.5).unwrap();
+        source
+            .set_translation(0.123_456_789_012, -0.234_567_890_123)
+            .unwrap();
+        source.set_fill_opacity(0.345_678_901_234).unwrap();
+        source.set_object_opacity(0.456_789_012_345).unwrap();
+        scene.add(&source).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before_state = source.state().unwrap();
+        let before_publication = session.publication_context();
+        let mut live = scene.live(&mut session);
+
+        live.become_mobject(&source, &source, crate::ManimBecomeOptions::default())
+            .unwrap();
+
+        assert_eq!(source.state().unwrap(), before_state);
+        assert_eq!(live.session.publication_context(), before_publication);
+        assert!(live.session.take_frame_changes().is_empty());
     }
 
     #[test]

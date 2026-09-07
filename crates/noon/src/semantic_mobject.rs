@@ -4,11 +4,12 @@
 //! durable edits use the canonical transaction vocabulary; snapshots are explicit
 //! migration/export adapters owned for deletion by #958/#959.
 use noon_core::{
-    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
-    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
-    SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
-    Transform2D, Vec2, VectorPath,
+    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticGeometryContent,
+    SemanticGeometryLayout, SemanticMutationImpact, SemanticMutationTransaction,
+    SemanticNodeCreation, SemanticNodeId, SemanticObjectContent, SemanticObjectProperty,
+    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
+    SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Transform2D, Vec2,
+    VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -31,6 +32,16 @@ pub struct ManimNextToArgs {
     pub mask: (f64, f64),
 }
 
+/// Dimension matching applies height then width; stretch overrides both.
+/// Center matching runs last, after the target dimensions have been resolved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ManimBecomeOptions {
+    pub match_height: bool,
+    pub match_width: bool,
+    pub match_center: bool,
+    pub stretch: bool,
+}
+
 /// Inert, fully typed input for one ordinary Manim geometry object.
 ///
 /// This owns no semantic identity, store, execution state, or clock. A live
@@ -39,6 +50,7 @@ pub struct ManimNextToArgs {
 #[derive(Clone, Debug)]
 pub struct ManimGeometryOptions {
     geometry: GeometryRef,
+    layout: SemanticGeometryLayout,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
 }
@@ -49,6 +61,18 @@ impl ManimGeometryOptions {
             GeometryRef::circle(positive_f32("radius", radius)?),
             manim_style(Color::RED),
         ))
+    }
+
+    pub fn ellipse(width: f64, height: f64) -> Result<Self, String> {
+        let width = authoring_render_f64("width", width)?;
+        let height = authoring_render_f64("height", height)?;
+        if width <= 0.0 || height <= 0.0 {
+            return Err("Ellipse width and height must be positive".into());
+        }
+        let mut options = Self::new(GeometryRef::circle(1.0), manim_style(Color::RED));
+        options.layout = SemanticGeometryLayout::ManimEllipseControlHull;
+        options.set_scale(width * 0.5, height * 0.5)?;
+        Ok(options)
     }
 
     pub fn square(side: f64) -> Result<Self, String> {
@@ -119,6 +143,7 @@ impl ManimGeometryOptions {
     fn new(geometry: GeometryRef, style: SemanticStyle) -> Self {
         Self {
             geometry,
+            layout: SemanticGeometryLayout::GeometryBounds,
             transform: SemanticTransform2_5D::default(),
             style,
         }
@@ -166,6 +191,18 @@ impl ManimGeometryOptions {
         let value = authoring_xy_f64(x, y)?;
         self.transform.scale.x = value.x;
         self.transform.scale.y = value.y;
+        Ok(())
+    }
+
+    pub fn scale_by(&mut self, x: f64, y: f64) -> Result<(), String> {
+        let value = authoring_xy_f64(x, y)?;
+        let next_x = self.transform.scale.x * value.x;
+        let next_y = self.transform.scale.y * value.y;
+        SemanticVec3::new(next_x, next_y, self.transform.scale.z)
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+        self.transform.scale.x = next_x;
+        self.transform.scale.y = next_y;
         Ok(())
     }
 
@@ -269,7 +306,10 @@ impl ManimGeometryOptions {
         {
             return Err("geometry, transform, and style must be finite".into());
         }
-        let mut state = SemanticObjectState::new(import_geometry(store, self.geometry)?);
+        let geometry = import_geometry(store, self.geometry)?;
+        let content = SemanticGeometryContent::with_layout(geometry, self.layout)
+            .map_err(|error| error.to_owned())?;
+        let mut state = SemanticObjectState::new(content);
         state.transform = self.transform;
         state.style = self.style;
         Ok(state)
@@ -351,33 +391,7 @@ impl Mobject {
         validate_content(&self.store.borrow(), state.content)?;
         let previous = self.state()?;
         let mut transaction = SemanticMutationTransaction::new();
-        if previous.content != state.content {
-            transaction.replace_content(self.id, state.content);
-        }
-        if previous.transform.translation != state.transform.translation {
-            transaction.set_property(
-                self.id,
-                SemanticObjectProperty::Translation,
-                state.transform.translation,
-            );
-        }
-        if previous.transform.scale != state.transform.scale {
-            transaction.set_property(
-                self.id,
-                SemanticObjectProperty::Scale,
-                state.transform.scale,
-            );
-        }
-        if previous.transform.rotation_z != state.transform.rotation_z {
-            transaction.set_property(
-                self.id,
-                SemanticObjectProperty::RotationZ,
-                state.transform.rotation_z,
-            );
-        }
-        if previous.style != state.style {
-            transaction.replace_style(self.id, state.style);
-        }
+        stage_state_changes(&mut transaction, self.id, &previous, &state);
         transaction
             .apply(&mut self.store.borrow_mut())
             .map(|_| ())
@@ -416,6 +430,7 @@ impl Mobject {
             store,
             ManimGeometryOptions {
                 geometry,
+                layout: SemanticGeometryLayout::GeometryBounds,
                 transform,
                 style,
             },
@@ -423,6 +438,13 @@ impl Mobject {
     }
     pub fn manim_circle(store: Rc<RefCell<SemanticStore>>, radius: f64) -> Result<Self, String> {
         Self::from_manim_geometry(store, ManimGeometryOptions::circle(radius)?)
+    }
+    pub fn manim_ellipse(
+        store: Rc<RefCell<SemanticStore>>,
+        width: f64,
+        height: f64,
+    ) -> Result<Self, String> {
+        Self::from_manim_geometry(store, ManimGeometryOptions::ellipse(width, height)?)
     }
     pub fn manim_square(store: Rc<RefCell<SemanticStore>>, side: f64) -> Result<Self, String> {
         Self::from_manim_geometry(store, ManimGeometryOptions::square(side)?)
@@ -522,9 +544,16 @@ impl Mobject {
         Ok(self.layout_bounds()?.map_or(0.0, Bounds2D64::height))
     }
 
-    pub fn become_handle(&mut self, other: &Self) -> Result<(), String> {
+    pub fn become_handle(
+        &mut self,
+        other: &Self,
+        options: ManimBecomeOptions,
+    ) -> Result<(), String> {
         self.require_same_store(other)?;
-        self.commit_state(other.state()?)
+        let source = self.state()?;
+        let target = other.state()?;
+        let state = prepare_become_state(&self.store.borrow(), &source, target, options)?;
+        self.commit_state(state)
     }
 
     /// Match this analytic Line's immutable local endpoints to another analytic
@@ -581,24 +610,7 @@ impl Mobject {
     }
     fn scale_about_center(&mut self, x: f64, y: f64, center: (f64, f64)) -> Result<(), String> {
         let mut state = self.state()?;
-        state.transform.scale.x *= authoring_render_f64("scale.x", x)?;
-        state.transform.scale.y *= authoring_render_f64("scale.y", y)?;
-        state
-            .transform
-            .scale
-            .lower_xy_f32()
-            .map_err(|e| e.to_string())?;
-        let bounds = layout_for_content(&self.store.borrow(), state.content, state.transform)?;
-        let scaled_center = bounds
-            .map(|b| ((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
-            .unwrap_or((state.transform.translation.x, state.transform.translation.y));
-        state.transform.translation.x += center.0 - scaled_center.0;
-        state.transform.translation.y += center.1 - scaled_center.1;
-        state
-            .transform
-            .translation
-            .lower_xy_f32()
-            .map_err(|e| e.to_string())?;
+        scale_state_about_center(&self.store.borrow(), &mut state, x, y, center)?;
         self.commit_state(state)
     }
     pub fn replace_handle(
@@ -742,6 +754,150 @@ impl Mobject {
         state.transform.rotation_z = rotation;
         self.commit_state(state)
     }
+}
+
+pub(crate) fn stage_state_changes(
+    transaction: &mut SemanticMutationTransaction,
+    target: SemanticNodeId,
+    previous: &SemanticObjectState,
+    next: &SemanticObjectState,
+) {
+    if previous.content != next.content {
+        transaction.replace_content(target, next.content);
+    }
+    if previous.transform.translation != next.transform.translation {
+        transaction.set_property(
+            target,
+            SemanticObjectProperty::Translation,
+            next.transform.translation,
+        );
+    }
+    if previous.transform.scale != next.transform.scale {
+        transaction.set_property(target, SemanticObjectProperty::Scale, next.transform.scale);
+    }
+    if previous.transform.rotation_z != next.transform.rotation_z {
+        transaction.set_property(
+            target,
+            SemanticObjectProperty::RotationZ,
+            next.transform.rotation_z,
+        );
+    }
+    if previous.style != next.style {
+        transaction.replace_style(target, next.style.clone());
+    }
+}
+
+pub(crate) fn prepare_become_state(
+    store: &SemanticStore,
+    source: &SemanticObjectState,
+    mut target: SemanticObjectState,
+    options: ManimBecomeOptions,
+) -> Result<SemanticObjectState, String> {
+    validate_content(store, source.content)?;
+    validate_content(store, target.content)?;
+
+    if options.stretch {
+        let source_width = state_dimension(store, source, true)?;
+        let source_height = state_dimension(store, source, false)?;
+        let target_width = state_dimension(store, &target, true)?;
+        let target_height = state_dimension(store, &target, false)?;
+        if target_width == 0.0 || target_height == 0.0 {
+            return Err("cannot stretch a zero-width or zero-height target".into());
+        }
+        let center = state_center(store, &target)?;
+        scale_state_about_center(
+            store,
+            &mut target,
+            source_width / target_width,
+            source_height / target_height,
+            center,
+        )?;
+    } else {
+        if options.match_height {
+            let source_height = state_dimension(store, source, false)?;
+            let target_height = state_dimension(store, &target, false)?;
+            if target_height == 0.0 {
+                return Err("cannot match height from a zero-height target".into());
+            }
+            let center = state_center(store, &target)?;
+            let factor = source_height / target_height;
+            scale_state_about_center(store, &mut target, factor, factor, center)?;
+        }
+        if options.match_width {
+            let source_width = state_dimension(store, source, true)?;
+            let target_width = state_dimension(store, &target, true)?;
+            if target_width == 0.0 {
+                return Err("cannot match width from a zero-width target".into());
+            }
+            let center = state_center(store, &target)?;
+            let factor = source_width / target_width;
+            scale_state_about_center(store, &mut target, factor, factor, center)?;
+        }
+    }
+    if options.match_center {
+        let source_center = state_center(store, source)?;
+        let target_center = state_center(store, &target)?;
+        target.transform.translation.x += source_center.0 - target_center.0;
+        target.transform.translation.y += source_center.1 - target_center.1;
+        target
+            .transform
+            .translation
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(target)
+}
+
+fn state_dimension(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+    horizontal: bool,
+) -> Result<f64, String> {
+    Ok(
+        layout_for_content(store, state.content, state.transform)?.map_or(0.0, |bounds| {
+            if horizontal {
+                bounds.width()
+            } else {
+                bounds.height()
+            }
+        }),
+    )
+}
+
+fn state_center(store: &SemanticStore, state: &SemanticObjectState) -> Result<(f64, f64), String> {
+    Ok(layout_for_content(store, state.content, state.transform)?
+        .map(|bounds| {
+            (
+                (bounds.min_x + bounds.max_x) * 0.5,
+                (bounds.min_y + bounds.max_y) * 0.5,
+            )
+        })
+        .unwrap_or((state.transform.translation.x, state.transform.translation.y)))
+}
+
+fn scale_state_about_center(
+    store: &SemanticStore,
+    state: &mut SemanticObjectState,
+    x: f64,
+    y: f64,
+    center: (f64, f64),
+) -> Result<(), String> {
+    state.transform.scale.x *= authoring_render_f64("scale.x", x)?;
+    state.transform.scale.y *= authoring_render_f64("scale.y", y)?;
+    state
+        .transform
+        .scale
+        .lower_xy_f32()
+        .map_err(|error| error.to_string())?;
+    let scaled_center = state_center(store, state)?;
+    state.transform.translation.x += center.0 - scaled_center.0;
+    state.transform.translation.y += center.1 - scaled_center.1;
+    state
+        .transform
+        .translation
+        .lower_xy_f32()
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 pub(crate) fn rotate_affine_about_point(
@@ -955,11 +1111,13 @@ mod tests;
 
 fn validate_content(store: &SemanticStore, content: SemanticObjectContent) -> Result<(), String> {
     match content {
-        SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => {
-            store
-                .geometry_resources()
-                .get(handle)
-                .ok_or("unknown or stale geometry resource")?;
+        SemanticObjectContent::Geometry(content) => {
+            if let StoredGeometry::Resource(handle) = content.geometry() {
+                store
+                    .geometry_resources()
+                    .get(handle)
+                    .ok_or("unknown or stale geometry resource")?;
+            }
         }
         SemanticObjectContent::Text(handle) => {
             store
@@ -967,7 +1125,6 @@ fn validate_content(store: &SemanticStore, content: SemanticObjectContent) -> Re
                 .get(handle)
                 .ok_or("unknown or stale text resource")?;
         }
-        SemanticObjectContent::Geometry(_) => {}
     }
     Ok(())
 }

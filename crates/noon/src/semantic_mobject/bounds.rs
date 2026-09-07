@@ -8,14 +8,50 @@ fn include_layout_point(bounds: &mut Option<Bounds2D64>, point: (f64, f64)) {
     }
 }
 fn transform_layout_point(transform: SemanticTransform2_5D, point: Vec2) -> (f64, f64) {
-    let x = f64::from(point.x) * transform.scale.x;
-    let y = f64::from(point.y) * transform.scale.y;
+    transform_layout_xy(transform, f64::from(point.x), f64::from(point.y))
+}
+fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f64) -> (f64, f64) {
+    let x = x * transform.scale.x;
+    let y = y * transform.scale.y;
     let sine = transform.rotation_z.sin();
     let cosine = transform.rotation_z.cos();
     (
         x * cosine - y * sine + transform.translation.x,
         x * sine + y * cosine + transform.translation.y,
     )
+}
+
+fn manim_ellipse_control_hull_bounds(
+    radius: f32,
+    transform: SemanticTransform2_5D,
+) -> Option<Bounds2D64> {
+    let radius = f64::from(radius);
+    let factor = (4.0 / 3.0) * (std::f64::consts::PI / 16.0).tan();
+    let mut bounds = None;
+    for index in 0..8 {
+        let start_angle = f64::from(index) * std::f64::consts::PI / 4.0;
+        let end_angle = f64::from(index + 1) * std::f64::consts::PI / 4.0;
+        let (start_sine, start_cosine) = start_angle.sin_cos();
+        let (end_sine, end_cosine) = end_angle.sin_cos();
+        for (x, y) in [
+            (start_cosine, start_sine),
+            (
+                start_cosine - factor * start_sine,
+                start_sine + factor * start_cosine,
+            ),
+            (
+                end_cosine + factor * end_sine,
+                end_sine - factor * end_cosine,
+            ),
+            (end_cosine, end_sine),
+        ] {
+            include_layout_point(
+                &mut bounds,
+                transform_layout_xy(transform, radius * x, radius * y),
+            );
+        }
+    }
+    bounds
 }
 fn quadratic_layout_point(p0: (f64, f64), p1: (f64, f64), p2: (f64, f64), t: f64) -> (f64, f64) {
     let u = 1.0 - t;
@@ -233,7 +269,13 @@ pub(super) fn layout_for_content(
             return Ok(bounds);
         }
     };
-    Ok(match geometry {
+    if geometry.layout() == SemanticGeometryLayout::ManimEllipseControlHull {
+        let StoredGeometry::Circle { radius } = geometry.geometry() else {
+            unreachable!("checked Manim Ellipse layout always owns Circle geometry")
+        };
+        return Ok(manim_ellipse_control_hull_bounds(radius, transform));
+    }
+    Ok(match geometry.geometry() {
         StoredGeometry::Circle { radius } => {
             geometry_layout_bounds(&GeometryRef::circle(radius), transform)
         }

@@ -8,7 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod semantic_snapshot;
-pub use semantic_snapshot::{export_mobject_snapshot, replace_mobject_snapshot};
+pub use semantic_snapshot::export_mobject_snapshot;
 
 use std::collections::BTreeMap;
 

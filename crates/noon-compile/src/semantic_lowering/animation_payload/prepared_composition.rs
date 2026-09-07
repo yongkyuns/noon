@@ -1183,11 +1183,9 @@ mod tests {
         assert!(matches!(
             track.completion,
             SemanticAnimationCompletion::ContentMorph {
-                content: noon_core::SemanticObjectContent::Geometry(
-                    StoredGeometry::Rectangle { .. }
-                ),
+                content,
                 ..
-            }
+            } if matches!(content.geometry(), Some(StoredGeometry::Rectangle { .. }))
         ));
     }
 

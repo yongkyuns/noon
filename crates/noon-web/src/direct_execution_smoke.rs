@@ -217,6 +217,15 @@ pub async fn create_direct_live_geometry_construction_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Shared flagged-become semantics through the direct Rust/WASM host.
+#[wasm_bindgen(js_name = createDirectOrdinaryBecomeSemanticsSmokeRenderer)]
+pub async fn create_direct_ordinary_become_semantics_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_become_semantics::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct Rust/WASM execution of the paired live primitive construction program.
 #[wasm_bindgen(js_name = createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer)]
 pub async fn create_direct_ordinary_live_primitive_construction_smoke_renderer(

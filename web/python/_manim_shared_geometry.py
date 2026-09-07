@@ -16,6 +16,7 @@ import _manim_geometry as _geometry
 import _manim_semantic_handles as _shared
 
 _ORIGINAL_DOT_INIT = _geometry.Dot.__init__
+_ORIGINAL_ELLIPSE_INIT = _geometry.Ellipse.__init__
 _ORIGINAL_TRIANGLE_INIT = _geometry.Triangle.__init__
 _INSTALLED = False
 
@@ -174,6 +175,30 @@ def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
     _shared._apply_shared_constructor_options(candidate, options)
     _apply_candidate_color(candidate, color)
     _shared._attach_geometry_options(self, candidate, "Triangle")
+
+
+def _ellipse_init(
+    self: _geometry.Ellipse,
+    width: float = 2.0,
+    height: float = 1.0,
+    **kwargs: Any,
+) -> None:
+    if _shared._create_geometry_handle is None:
+        _ORIGINAL_ELLIPSE_INIT(self, width=width, height=height, **kwargs)
+        return
+
+    width_value = _shared._ir._positive_number("width", width)
+    height_value = _shared._ir._positive_number("height", height)
+    options = dict(kwargs)
+    color = options.pop("color", None)
+    scale = options.pop("scale", None)
+    candidate = _shared._geometry_options.ellipse(width_value, height_value)
+    _shared._apply_shared_constructor_options(candidate, options)
+    if scale is not None:
+        scale_value = _shared._ir._vec2("scale", scale)
+        candidate.scaleBy(scale_value["x"], scale_value["y"])
+    _apply_candidate_color(candidate, color)
+    _shared._attach_geometry_options(self, candidate, "Ellipse")
 
 
 class Elbow(_compat.VMobject):
@@ -539,6 +564,7 @@ def install() -> None:
     _base.Mobject.rotate_about_origin = _rotate_about_origin
     if _shared._create_geometry_handle is not None:
         _geometry.Dot.__init__ = _dot_init
+        _geometry.Ellipse.__init__ = _ellipse_init
         _geometry.Triangle.__init__ = _triangle_init
 
     public = {

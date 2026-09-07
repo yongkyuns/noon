@@ -9,6 +9,7 @@ const {
   createDirectOrdinaryAffineContinuationSmokeRenderer,
   createDirectOrdinaryAffinePlaySmokeRenderer,
   createDirectOrdinaryCallbackSparseReadsSmokeRenderer,
+  createDirectOrdinaryBecomeSemanticsSmokeRenderer,
   createDirectOrdinaryCompositionContinuationSmokeRenderer,
   createDirectOrdinaryValueTrackerContinuationSmokeRenderer,
   createDirectOrdinaryCompositionPlaySmokeRenderer,
@@ -127,6 +128,60 @@ async function directLiveGeometryConstructionProof(expectedBackend) {
         dot.red <= dot.green + 30 || annulus.red <= annulus.blue + 30 ||
         annulus.green <= annulus.blue + 30 || Math.min(underline.red, underline.green, underline.blue) <= 150) {
       throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directOrdinaryBecomeSemanticsProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectOrdinaryBecomeSemanticsSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    const initial = {
+      fitted: await sampleRenderedColor(canvas, -2, 0),
+      stretched: await sampleRenderedColor(canvas, 2, 0),
+      ellipse: await sampleRenderedColor(canvas, 0, -2.5),
+      objects: renderer.objectCount(),
+    };
+    renderer.advanceDirectRealtime(500);
+    await settleDirectPublication(renderer, 500);
+    const replaced = {
+      fittedCenter: await sampleRenderedColor(canvas, -2, 0),
+      fittedTall: await sampleRenderedColor(canvas, -2, 2),
+      stretchedCenter: await sampleRenderedColor(canvas, 2, 0),
+      stretchedWide: await sampleRenderedColor(canvas, 3.2, 0),
+      ellipseCenter: await sampleRenderedColor(canvas, 0, -2.5),
+      ellipseMajorAxis: await sampleRenderedColor(canvas, 1.3, -1.75),
+      objects: renderer.objectCount(),
+    };
+    renderer.advanceDirectRealtime(750);
+    await settleDirectPublication(renderer, 750);
+    const wake = JSON.parse(renderer.directWakeDirectiveJson(750));
+    const metrics = {
+      backend: renderer.rendererBackend(),
+      time: renderer.time(),
+      cadence: wake.cadence,
+      initial,
+      replaced,
+    };
+    const blue = (pixel) => pixel.blue > pixel.red + 30 && pixel.blue > pixel.green + 30;
+    const yellow = (pixel) => pixel.red > pixel.blue + 30 && pixel.green > pixel.blue + 30;
+    const magenta = (pixel) => pixel.red > pixel.green + 30 && pixel.blue > pixel.green + 30;
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
+    if (metrics.backend !== expectedBackend || metrics.time !== 0.75 || metrics.cadence !== "idle"
+        || initial.objects !== 3 || replaced.objects !== 3
+        || !blue(initial.fitted) || !blue(initial.stretched) || !blue(initial.ellipse)
+        || !yellow(replaced.fittedCenter) || !yellow(replaced.fittedTall)
+        || !magenta(replaced.stretchedCenter) || !magenta(replaced.stretchedWide)
+        || !cyan(replaced.ellipseCenter) || !cyan(replaced.ellipseMajorAxis)) {
+      throw new Error(`direct flagged become semantics were incorrect: ${JSON.stringify(metrics)}`);
     }
     return metrics;
   } finally {
@@ -2175,6 +2230,7 @@ async function start() {
   metrics.exactPropertyTracks = await directExactPropertyTracksProof(expectedBackend);
   metrics.specializedGeometry = await directSpecializedGeometryProof(expectedBackend);
   metrics.liveGeometryConstruction = await directLiveGeometryConstructionProof(expectedBackend);
+  metrics.ordinaryBecomeSemantics = await directOrdinaryBecomeSemanticsProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);
   metrics.textFamilyFade = await directTextFamilyFadeProof(expectedBackend);
   metrics.textFamilyWrite = await directTextFamilyWriteProof(expectedBackend);

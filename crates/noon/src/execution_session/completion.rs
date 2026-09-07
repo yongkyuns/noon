@@ -582,8 +582,12 @@ mod tests {
             Some(noon_core::GeometryRef::VectorPath(path)) if path.morph_target().is_some()
         ));
         assert!(matches!(
-            store.semantic_object_state_checked(object).unwrap().content,
-            noon_core::SemanticObjectContent::Geometry(StoredGeometry::Circle { .. })
+            store
+                .semantic_object_state_checked(object)
+                .unwrap()
+                .content
+                .geometry(),
+            Some(StoredGeometry::Circle { .. })
         ));
 
         session.advance_segment_to(segment, 2.0).unwrap();

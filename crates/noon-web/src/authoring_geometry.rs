@@ -26,6 +26,11 @@ impl WasmManimGeometryOptions {
         self.options.set_scale(x, y).map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = scaleBy)]
+    pub fn scale_by(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+        self.options.scale_by(x, y).map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = setRotation)]
     pub fn set_rotation(&mut self, angle: f64) -> Result<(), JsValue> {
         self.options.set_rotation(angle).map_err(js_error)
@@ -152,6 +157,12 @@ impl WasmManimGeometryOptions {
 impl WasmManimGeometryOptions {
     pub fn circle(radius: f64) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::circle(radius)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    pub fn ellipse(width: f64, height: f64) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::ellipse(width, height)
             .map(Self::from_options)
             .map_err(js_error)
     }

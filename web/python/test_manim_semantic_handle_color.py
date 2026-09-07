@@ -33,9 +33,6 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
                 def snapshotJson(self):
                     return json.dumps(self.snapshot, separators=(",", ":"))
 
-                def replaceSnapshotJson(self, snapshot_json):
-                    self.snapshot = json.loads(snapshot_json)
-
                 def setFillOpacity(self, opacity):
                     if self.snapshot["style"]["fill"] is None:
                         self.snapshot["style"]["fill"] = {

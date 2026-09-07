@@ -404,6 +404,28 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_become_mobject(
+        &mut self,
+        target: &noon::Mobject,
+        other: &noon::Mobject,
+        options: noon::ManimBecomeOptions,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .become_mobject(target, other, options)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_manim_geometry(
         &mut self,
         options: noon::ManimGeometryOptions,

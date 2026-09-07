@@ -1377,13 +1377,6 @@ mod wasm {
             Ok(self.handle.wire_object_opacity().map_err(js_error)?)
         }
 
-        #[wasm_bindgen(js_name = replaceSnapshotJson)]
-        pub fn replace_snapshot_json(&mut self, snapshot_json: &str) -> Result<(), JsValue> {
-            let snapshot = serde_json::from_str(snapshot_json)
-                .map_err(|error| js_error(format!("invalid mobject snapshot: {error}")))?;
-            noon::legacy::replace_mobject_snapshot(&mut self.handle, snapshot).map_err(js_error)
-        }
-
         #[wasm_bindgen(getter, js_name = centerX)]
         pub fn center_x(&self) -> Result<f64, JsValue> {
             Ok(self.handle.center().map_err(js_error)?.0)
@@ -1673,8 +1666,27 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = becomeHandle)]
-        pub fn become_handle(&mut self, other: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
-            self.handle.become_handle(&other.handle).map_err(js_error)
+        pub fn become_handle(
+            &self,
+            other: &WasmAuthoringMobjectHandle,
+            match_height: bool,
+            match_width: bool,
+            match_center: bool,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            // Shared wrapper borrows allow become(self); the alias retains one semantic ID.
+            self.handle
+                .clone()
+                .become_handle(
+                    &other.handle,
+                    noon::ManimBecomeOptions {
+                        match_height,
+                        match_width,
+                        match_center,
+                        stretch,
+                    },
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = replaceHandle)]
@@ -2305,7 +2317,9 @@ mod tests {
         .unwrap();
         target.shift(1.0, -0.25).unwrap();
 
-        source.become_handle(&target).unwrap();
+        source
+            .become_handle(&target, noon::ManimBecomeOptions::default())
+            .unwrap();
         let source_state = source.state().unwrap();
         let target_state = target.state().unwrap();
         assert_eq!(source_state.content, target_state.content);
