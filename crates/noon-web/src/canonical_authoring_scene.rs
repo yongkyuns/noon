@@ -90,6 +90,12 @@ enum OrdinaryCompositionChild {
         reverse_member_order: bool,
         options: noon_core::AnimationOptions,
     },
+    FamilyTextWrite {
+        target: noon::MobjectFamily,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        reverse_member_order: bool,
+        options: noon_core::AnimationOptions,
+    },
     Rotate {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1480,6 +1486,16 @@ impl CanonicalAuthoringScene {
                     reverse_member_order: *reverse_member_order,
                     options: *options,
                 },
+                OrdinaryCompositionChild::FamilyTextWrite {
+                    target,
+                    reverse_member_order,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::FamilyTextWrite {
+                    target,
+                    reverse_member_order: *reverse_member_order,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
@@ -1637,7 +1653,8 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::FamilySubsetDisplay { entering, .. } => {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
-                OrdinaryCompositionChild::FamilyFade { entering, .. } => {
+                OrdinaryCompositionChild::FamilyFade { entering, .. }
+                | OrdinaryCompositionChild::FamilyTextWrite { entering, .. } => {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::Add {
@@ -1831,10 +1848,16 @@ impl CanonicalAuthoringScene {
                     entering,
                     options,
                     ..
+                }
+                | OrdinaryCompositionChild::FamilyTextWrite {
+                    target,
+                    entering,
+                    options,
+                    ..
                 } => {
                     if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
                         return Err(
-                            "ordinary fade family belongs to another authoring store".into()
+                            "ordinary family animation belongs to another authoring store".into(),
                         );
                     }
                     target.validate()?;
@@ -1853,7 +1876,7 @@ impl CanonicalAuthoringScene {
                         .collect::<BTreeSet<_>>();
                     if supplied_entering != expected_entering {
                         return Err(
-                            "ordinary fade wrapper identities do not match detached family leaves"
+                            "ordinary family wrapper identities do not match detached leaves"
                                 .into(),
                         );
                     }
@@ -1866,8 +1889,7 @@ impl CanonicalAuthoringScene {
                     for (id, member) in entering {
                         if !std::rc::Rc::ptr_eq(self.scene.store(), member.store()) {
                             return Err(
-                                "ordinary fade family member belongs to another authoring store"
-                                    .into(),
+                                "ordinary family member belongs to another authoring store".into(),
                             );
                         }
                         member.validate()?;
@@ -1876,9 +1898,7 @@ impl CanonicalAuthoringScene {
                             || !ids.insert(*id)
                             || !entering_nodes.insert(member.node_id())
                         {
-                            return Err(
-                                "ordinary fade family entering identity is already bound".into()
-                            );
+                            return Err("ordinary family entering identity is already bound".into());
                         }
                     }
                     continue;
@@ -4007,6 +4027,61 @@ mod wasm {
                 reverse_member_order,
                 options,
             });
+            Ok(())
+        }
+
+        /// Append one plain-Text family Write/Unwrite. Rust resolves global glyph
+        /// count, default timing, lifecycle, and per-leaf drivers atomically.
+        #[wasm_bindgen(js_name = appendFamilyTextWrite)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_family_text_write(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            reverse_member_order: bool,
+            introducer: bool,
+            remover: bool,
+            reverse_rate_function: bool,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .introducer(introducer)
+                .remover(remover)
+                .reverse_rate_function(reverse_rate_function);
+            self.children
+                .push(OrdinaryCompositionChild::FamilyTextWrite {
+                    target: target.semantic_family()?,
+                    entering: Vec::new(),
+                    reverse_member_order,
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyTextWriteEntering)]
+        pub fn append_family_text_write_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyTextWrite {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error(
+                    "family entering member must follow FamilyTextWrite",
+                ));
+            };
+            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+                return Err(js_error(
+                    "Text family entering member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("Text family object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
             Ok(())
         }
 
@@ -7342,6 +7417,68 @@ mod tests {
         assert!(!context.contains_mobject(&left).unwrap());
         assert!(!context.contains_mobject(&right).unwrap());
         assert!(context.contains_mobject(&writing).unwrap());
+    }
+
+    #[test]
+    fn ordinary_text_family_write_binds_and_removes_recursive_membership() {
+        let mut context = CanonicalAuthoringScene::default();
+        let left = context.scene.text(noon::Text::new("LEFT")).unwrap();
+        let right = context.scene.text(noon::Text::new("RIGHT")).unwrap();
+        let family = context.scene.family(&[&left, &right]).unwrap();
+        let write = [OrdinaryCompositionChild::FamilyTextWrite {
+            target: family.clone(),
+            entering: vec![
+                (ObjectId::new(0), left.clone()),
+                (ObjectId::new(1), right.clone()),
+            ],
+            reverse_member_order: false,
+            options: AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear)
+                .lag_ratio(0.2)
+                .introducer(true),
+        }];
+
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &write,
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            2.0
+        );
+        assert!(context.contains_mobject(&left).unwrap());
+        assert!(context.contains_mobject(&right).unwrap());
+        assert_eq!(context.bindings.len(), 2);
+
+        let unwrite = [OrdinaryCompositionChild::FamilyTextWrite {
+            target: family,
+            entering: Vec::new(),
+            reverse_member_order: true,
+            options: AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear)
+                .lag_ratio(0.2)
+                .introducer(false)
+                .remover(true)
+                .reverse_rate_function(true),
+        }];
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &unwrite,
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            3.0
+        );
+        assert!(!context.contains_mobject(&left).unwrap());
+        assert!(!context.contains_mobject(&right).unwrap());
     }
 
     #[test]

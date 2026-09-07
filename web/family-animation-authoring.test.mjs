@@ -29,7 +29,8 @@ test("retained family creation-animation module is valid Python and bundled", ()
   assert.match(moduleManifest, /python\/_manim_family_creation\.py/);
   assert.doesNotMatch(moduleManifest, /python\/_manim_family_create\.py/);
   assert.match(pythonSource, /familyAnimationRequest/);
-  assert.match(pythonSource, /familyWriteAnimationRequest/);
+  assert.doesNotMatch(pythonSource, /familyWriteAnimationRequest/);
+  assert.doesNotMatch(pythonSource, /_append_write_request|_write_request_inputs/);
   assert.match(pythonSource, /bindRetainedNativeText/);
 });
 

@@ -1539,6 +1539,8 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         animation = args[0]
         if _canonical_text_family_fade_animation(scene, animation) is not None:
             return "parallel", args, None
+        if _canonical_text_family_write_animation(scene, animation) is not None:
+            return "parallel", args, None
         if _canonical_text_write_animation(scene, animation) is not None:
             return "parallel", args, None
         if _canonical_subset_display_animation(scene, animation) is not None:
@@ -1712,6 +1714,32 @@ def _canonical_text_write_animation(scene: _base.Scene, animation: object):
     return target
 
 
+def _canonical_text_family_write_animation(scene: _base.Scene, animation: object):
+    """Classify a plain-Text family Write/Unwrite without traversing glyphs."""
+    if not isinstance(animation, _family_creation.Write):
+        return None
+    family = animation.target
+    if not isinstance(family, _compat.Group):
+        return None
+    leaves = _compat._leaf_mobjects(family)
+    if not leaves:
+        raise ValueError("canonical Text family Write requires at least one leaf")
+    if not all(isinstance(member, _typst.Text) for member in leaves):
+        if any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
+            raise NotImplementedError(
+                "canonical family Write supports plain Text; Typst and MathTypst remain #959"
+            )
+        return None
+    if getattr(family, "_semantic_family_handle", None) is None:
+        raise NotImplementedError("canonical Text family Write requires a shared family handle")
+    if animation.introducer:
+        if any(member._scene is not None for member in leaves):
+            raise ValueError("Text family Write requires a detached family")
+    elif any(member._scene is not scene for member in leaves):
+        raise ValueError("Text family Unwrite requires a family in this Scene")
+    return family, leaves
+
+
 def _canonical_text_write_options(animation: object):
     """Return only explicitly authored leaf options; Rust resolves omitted timing."""
     args = dict(_options.builder_args(animation))
@@ -1850,6 +1878,45 @@ def _build_canonical_composition_candidate(
                             str(reservation.object.id), member._semantic_handle
                         )
             else:
+                removals.extend(leaves)
+            return
+        family_write = _canonical_text_family_write_animation(self, animation)
+        if family_write is not None:
+            family, leaves = family_write
+            if child_kwargs:
+                unsupported = set(child_kwargs) - {
+                    "duration",
+                    "run_time",
+                    "easing",
+                    "rate_func",
+                }
+                if unsupported:
+                    names = ", ".join(sorted(unsupported))
+                    raise NotImplementedError(
+                        f"unsupported canonical Text family Write play option(s): {names}"
+                    )
+            child_run_time, rate_function, child_lag_ratio = (
+                _canonical_text_write_options(animation)
+            )
+            builder.appendFamilyTextWrite(
+                family._semantic_family_handle,
+                bool(animation.reverse),
+                bool(animation.introducer),
+                bool(animation.remover),
+                bool(animation.reverse_rate_function),
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+            )
+            if animation.introducer:
+                family_registrations.append(family)
+                for member in leaves:
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        builder.appendFamilyTextWriteEntering(
+                            str(reservation.object.id), member._semantic_handle
+                        )
+            if animation.remover:
                 removals.extend(leaves)
             return
         text_write = _canonical_text_write_animation(self, animation)
