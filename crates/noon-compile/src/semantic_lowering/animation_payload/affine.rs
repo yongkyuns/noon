@@ -601,6 +601,9 @@ where
             continue;
         }
         let (target_state, interpolation) = match leaf.payload {
+            SemanticScheduledAnimationPayload::SubsetDisplayMember { .. } => {
+                unreachable!("subset display payload was lowered above")
+            }
             SemanticScheduledAnimationPayload::TransformTo {
                 target_state,
                 interpolation,
