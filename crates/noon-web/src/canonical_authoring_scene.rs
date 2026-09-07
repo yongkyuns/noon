@@ -1,6 +1,4 @@
-use std::collections::BTreeMap;
-#[cfg(any(target_arch = "wasm32", test))]
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use noon_core::{
     Color, FamilyAnimationRequest, ObjectId, ObjectSnapshot, SemanticObjectState, SemanticPaint,
@@ -17,6 +15,29 @@ use crate::{
     materialize_retained_tracks, RetainedTextAuthoringSpec, RetainedTextBackendSpec,
     RetainedTrackAuthoringSpec,
 };
+
+#[derive(Clone)]
+enum OwnedSceneMembershipMember {
+    Mobject {
+        wrapper_id: Option<ObjectId>,
+        handle: noon::Mobject,
+    },
+    Family(noon::MobjectFamily),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SceneMembershipBatchKind {
+    Add,
+    Remove,
+    Clear,
+    Replace,
+}
+
+struct SceneMembershipBatch {
+    kind: SceneMembershipBatchKind,
+    members: Vec<OwnedSceneMembershipMember>,
+    bindings: Vec<(ObjectId, noon::Mobject)>,
+}
 
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone)]
@@ -160,11 +181,14 @@ impl CanonicalAuthoringScene {
     }
 
     pub fn bind_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
-            return Err("mobject belongs to another authoring store".into());
-        }
-        handle.validate()?;
-        self.bind_node(id, handle.node_id())
+        self.edit_membership(SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: Some(id),
+                handle: handle.clone(),
+            }],
+            bindings: vec![(id, handle.clone())],
+        })
     }
 
     /// Create and bind this scene's camera frame through the shared semantic transaction.
@@ -2165,22 +2189,155 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_add_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
-            return Err("mobject belongs to another authoring store".into());
+        self.edit_membership(SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: Some(id),
+                handle: handle.clone(),
+            }],
+            bindings: vec![(id, handle.clone())],
+        })
+    }
+
+    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), String> {
+        let mut new_bindings = Vec::new();
+        let mut seen_ids = BTreeSet::new();
+        let mut seen_nodes = BTreeSet::new();
+        for (wrapper_id, handle) in &batch.bindings {
+            if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
+                return Err("membership mobject belongs to another authoring store".into());
+            }
+            handle.validate()?;
+            let node = handle.node_id();
+            if !seen_ids.insert(*wrapper_id) || !seen_nodes.insert(node) {
+                return Err("membership batch contains a duplicate mobject binding".into());
+            }
+            match (self.bindings.get(wrapper_id), self.identities.get(&node)) {
+                (Some(bound_node), Some(bound_id))
+                    if *bound_node == node && *bound_id == *wrapper_id => {}
+                (None, None)
+                    if matches!(
+                        batch.kind,
+                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
+                    ) =>
+                {
+                    new_bindings.push((*wrapper_id, node));
+                }
+                _ => {
+                    return Err(format!(
+                        "canonical object {} has inconsistent membership binding",
+                        wrapper_id.get()
+                    ));
+                }
+            }
         }
-        handle.validate()?;
-        let node = handle.node_id();
-        let new_binding = match (self.bindings.get(&id), self.identities.get(&node)) {
-            (None, None) => true,
-            (Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => false,
-            _ => return Err(format!("canonical object {} is already bound", id.get())),
+        let mut borrowed = Vec::with_capacity(batch.members.len());
+        for member in &batch.members {
+            match member {
+                OwnedSceneMembershipMember::Mobject { wrapper_id, handle } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
+                        return Err("membership mobject belongs to another authoring store".into());
+                    }
+                    handle.validate()?;
+                    let node = handle.node_id();
+                    if let Some(wrapper_id) = wrapper_id {
+                        if !batch
+                            .bindings
+                            .iter()
+                            .any(|(id, bound)| *id == *wrapper_id && bound.node_id() == node)
+                        {
+                            return Err(format!(
+                                "canonical object {} has no validated membership binding",
+                                wrapper_id.get()
+                            ));
+                        }
+                    } else if matches!(
+                        batch.kind,
+                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
+                    ) {
+                        return Err("added membership mobject has no wrapper binding".into());
+                    }
+                    borrowed.push(noon::MobjectFamilyMember::Mobject(handle));
+                }
+                OwnedSceneMembershipMember::Family(family) => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), family.store()) {
+                        return Err("membership family belongs to another authoring store".into());
+                    }
+                    family.validate()?;
+                    if !seen_nodes.insert(family.node_id()) {
+                        return Err("membership batch contains a duplicate family".into());
+                    }
+                    borrowed.push(noon::MobjectFamilyMember::Family(family));
+                }
+            }
+        }
+        let request = match batch.kind {
+            SceneMembershipBatchKind::Add => noon::SceneMembershipRequest::Add(&borrowed),
+            SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),
+            SceneMembershipBatchKind::Clear => {
+                if !borrowed.is_empty() {
+                    return Err("Clear membership batch must not contain members".into());
+                }
+                noon::SceneMembershipRequest::Clear
+            }
+            SceneMembershipBatchKind::Replace => {
+                let [old, new] = borrowed.as_slice() else {
+                    return Err("Replace membership batch requires exactly old and new".into());
+                };
+                noon::SceneMembershipRequest::Replace {
+                    old: *old,
+                    new: *new,
+                }
+            }
         };
-        self.active_live_player()?.live_add(handle)?;
-        if new_binding {
+        #[cfg(not(any(target_arch = "wasm32", test)))]
+        self.scene.edit_membership(request)?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        match self.live_execution_ownership() {
+            "none" if self.scene.time() == 0.0 => {
+                self.scene.edit_membership(request)?;
+            }
+            "active" | "returned" => {
+                self.active_live_player()?.live_edit_membership(request)?;
+            }
+            "none" => {
+                return Err("membership edit cannot follow pre-execution canonical timing".into());
+            }
+            "transferred" => {
+                return Err("live execution session is running in the semantic engine".into());
+            }
+            _ => unreachable!("canonical live ownership has one closed set of states"),
+        }
+        for (id, node) in new_bindings {
             self.bindings.insert(id, node);
             self.identities.insert(node, id);
         }
         Ok(())
+    }
+
+    fn root_membership_keys(&self) -> Result<Vec<String>, String> {
+        self.scene
+            .store()
+            .borrow()
+            .semantic_family_members_checked(self.scene.root())
+            .map(|members| {
+                members
+                    .iter()
+                    .map(|node| format!("{}:{}", node.slot(), node.generation()))
+                    .collect()
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn root_membership_leaf_keys(&self) -> Result<Vec<String>, String> {
+        noon::semantic_family_leaf_ids(&self.scene.store().borrow(), self.scene.root()).map(
+            |members| {
+                members
+                    .iter()
+                    .map(|node| format!("{}:{}", node.slot(), node.generation()))
+                    .collect()
+            },
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2193,10 +2350,14 @@ impl CanonicalAuthoringScene {
             .identities
             .get(&node)
             .ok_or("live Mobject is not bound to this Scene")?;
-        self.active_live_player()?.live_remove(handle)?;
-        self.identities.remove(&node);
-        self.bindings.remove(&id);
-        Ok(())
+        self.edit_membership(SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Remove,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: Some(id),
+                handle: handle.clone(),
+            }],
+            bindings: vec![(id, handle.clone())],
+        })
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2737,6 +2898,84 @@ mod wasm {
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
         inner: CanonicalAuthoringScene,
+    }
+
+    /// Inert typed language-wrapper batch. Appending handles performs no semantic
+    /// mutation; the canonical context consumes the complete batch atomically.
+    #[wasm_bindgen]
+    pub struct WasmSceneMembershipBatch {
+        inner: SceneMembershipBatch,
+    }
+
+    #[wasm_bindgen]
+    impl WasmSceneMembershipBatch {
+        #[wasm_bindgen(constructor)]
+        pub fn new(kind: &str) -> Result<WasmSceneMembershipBatch, JsValue> {
+            let kind = match kind {
+                "add" => SceneMembershipBatchKind::Add,
+                "remove" => SceneMembershipBatchKind::Remove,
+                "clear" => SceneMembershipBatchKind::Clear,
+                "replace" => SceneMembershipBatchKind::Replace,
+                _ => {
+                    return Err(js_error(format!(
+                        "membership batch kind must be add, remove, clear, or replace; got {kind:?}"
+                    )))
+                }
+            };
+            Ok(Self {
+                inner: SceneMembershipBatch {
+                    kind,
+                    members: Vec::new(),
+                    bindings: Vec::new(),
+                },
+            })
+        }
+
+        #[wasm_bindgen(js_name = appendMobject)]
+        pub fn append_mobject(
+            &mut self,
+            object_id: &str,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let wrapper_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("membership object ID", object_id)?)
+            };
+            self.inner
+                .members
+                .push(OwnedSceneMembershipMember::Mobject {
+                    wrapper_id,
+                    handle: handle.semantic_mobject().clone(),
+                });
+            Ok(())
+        }
+
+        /// Reserve a derived Python wrapper identity for a leaf admitted through
+        /// an authoritative family member. It does not add another request member.
+        #[wasm_bindgen(js_name = reserveMobjectBinding)]
+        pub fn reserve_mobject_binding(
+            &mut self,
+            object_id: &str,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let wrapper_id = parse_object_id("membership object ID", object_id)?;
+            self.inner
+                .bindings
+                .push((wrapper_id, handle.semantic_mobject().clone()));
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamily)]
+        pub fn append_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<(), JsValue> {
+            self.inner.members.push(OwnedSceneMembershipMember::Family(
+                handle.semantic_family()?,
+            ));
+            Ok(())
+        }
     }
 
     #[wasm_bindgen]
@@ -3977,6 +4216,41 @@ mod wasm {
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
+        #[wasm_bindgen(js_name = beginMembershipBatch)]
+        pub fn begin_membership_batch(
+            &self,
+            kind: &str,
+        ) -> Result<WasmSceneMembershipBatch, JsValue> {
+            WasmSceneMembershipBatch::new(kind)
+        }
+
+        /// Consume one complete typed membership request and publish it once.
+        #[wasm_bindgen(js_name = editMembership)]
+        pub fn edit_membership(&mut self, batch: WasmSceneMembershipBatch) -> Result<(), JsValue> {
+            self.inner.edit_membership(batch.inner).map_err(js_error)
+        }
+
+        /// Return the authoritative direct-root semantic identities in painter order.
+        #[wasm_bindgen(js_name = rootMembershipKeys)]
+        pub fn root_membership_keys(&self) -> Result<js_sys::Array, JsValue> {
+            let keys = self.inner.root_membership_keys().map_err(js_error)?;
+            let result = js_sys::Array::new_with_length(keys.len() as u32);
+            for (index, key) in keys.into_iter().enumerate() {
+                result.set(index as u32, JsValue::from_str(&key));
+            }
+            Ok(result)
+        }
+
+        #[wasm_bindgen(js_name = rootMembershipLeafKeys)]
+        pub fn root_membership_leaf_keys(&self) -> Result<js_sys::Array, JsValue> {
+            let keys = self.inner.root_membership_leaf_keys().map_err(js_error)?;
+            let result = js_sys::Array::new_with_length(keys.len() as u32);
+            for (index, key) in keys.into_iter().enumerate() {
+                result.set(index as u32, JsValue::from_str(&key));
+            }
+            Ok(result)
+        }
+
         /// Evaluate one callback-local rotation without mutating authored scene state.
         #[wasm_bindgen(js_name = callbackRotateTransformAboutPoint)]
         #[allow(clippy::too_many_arguments)]
@@ -5755,6 +6029,102 @@ mod tests {
             interpolation: noon_core::SemanticTransformInterpolation::Affine,
             options,
         }
+    }
+
+    fn membership_mobject(id: u64, handle: &noon::Mobject) -> OwnedSceneMembershipMember {
+        OwnedSceneMembershipMember::Mobject {
+            wrapper_id: Some(ObjectId::new(id)),
+            handle: handle.clone(),
+        }
+    }
+
+    #[test]
+    fn canonical_membership_batch_commits_bindings_only_after_atomic_shared_edit() {
+        let mut context = CanonicalAuthoringScene::default();
+        let first = context.scene.circle(0.5).unwrap();
+        let second = context.scene.square(0.5).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                members: vec![
+                    membership_mobject(0, &first),
+                    membership_mobject(1, &second),
+                ],
+                bindings: vec![
+                    (ObjectId::new(0), first.clone()),
+                    (ObjectId::new(1), second.clone()),
+                ],
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_membership_keys().unwrap(),
+            vec![
+                format!(
+                    "{}:{}",
+                    first.node_id().slot(),
+                    first.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    second.node_id().slot(),
+                    second.node_id().generation()
+                ),
+            ]
+        );
+
+        let replacement = context.scene.rectangle(0.5, 1.0).unwrap();
+        let before = context.root_membership_keys().unwrap();
+        let error = context.edit_membership(SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Replace,
+            members: vec![
+                membership_mobject(0, &first),
+                membership_mobject(0, &replacement),
+            ],
+            bindings: vec![
+                (ObjectId::new(0), first.clone()),
+                (ObjectId::new(0), replacement.clone()),
+            ],
+        });
+        assert!(error.is_err());
+        assert_eq!(context.root_membership_keys().unwrap(), before);
+        assert!(!context.identities.contains_key(&replacement.node_id()));
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Replace,
+                members: vec![
+                    membership_mobject(0, &first),
+                    membership_mobject(2, &replacement),
+                ],
+                bindings: vec![
+                    (ObjectId::new(0), first.clone()),
+                    (ObjectId::new(2), replacement.clone()),
+                ],
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_membership_keys().unwrap(),
+            vec![
+                format!(
+                    "{}:{}",
+                    replacement.node_id().slot(),
+                    replacement.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    second.node_id().slot(),
+                    second.node_id().generation()
+                ),
+            ]
+        );
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Clear,
+                members: Vec::new(),
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert!(context.root_membership_keys().unwrap().is_empty());
     }
 
     #[test]

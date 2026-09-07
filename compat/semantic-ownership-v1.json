@@ -361,12 +361,10 @@
     {
       "id": "scene-membership-lifecycle",
       "surface": "Scene.remove/replace/clear and top-level ordering",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Scene.remove/replace/clear"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/reactive/lifecycle.rs", "symbol": "LifecyclePlan/validate_presence_transition"},
-      "reason": "Python still chooses presence transitions and mutates top-level wrapper ordering for scene membership changes.",
-      "replacement": "Author membership and presence changes through a stable shared scene handle, retaining only Python wrapper identity bookkeeping.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/semantic_scene_restructure.rs", "symbol": "plan_semantic_scene_membership"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_edit_membership/_canonical_scene_mobjects"}],
+      "reason": "One shared Rust planner validates and atomically applies family-aware add/remove/clear/replace requests and owns authoritative root painter order. Python reserves derived wrapper identities, submits one typed request, and maps the ordered Rust projection back to public wrappers after success."
     },
     {
       "id": "layout.arrange",

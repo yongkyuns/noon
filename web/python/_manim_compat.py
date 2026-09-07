@@ -21,6 +21,9 @@ OUT = (0.0, 0.0, 1.0)
 IN = (0.0, 0.0, -1.0)
 
 _INSTALLED = False
+_STANDARD_MEMBERSHIP_EDIT = None
+_STANDARD_MEMBERSHIP_VIEW = None
+_STANDARD_MEMBERSHIP_REGISTER = None
 
 
 def _manim_vmobject_kwargs(
@@ -571,6 +574,8 @@ class Scene(_BaseScene):
 
     def __init__(self) -> None:
         super().__init__()
+        # Explicit retained/export-only wrappers stay deletion-owned by #959.
+        # Ordinary membership and painter order are derived from shared Rust.
         self._compat_top_level: list[object] = []
 
     def setup(self) -> None:
@@ -583,6 +588,12 @@ class Scene(_BaseScene):
         pass
 
     def _register_top_level(self, value: object) -> None:
+        if _STANDARD_MEMBERSHIP_REGISTER is not None and (
+            getattr(value, "_semantic_handle", None) is not None
+            or getattr(value, "_semantic_family_handle", None) is not None
+        ):
+            _STANDARD_MEMBERSHIP_REGISTER(self, value)
+            return
         if not any(existing is value for existing in self._compat_top_level):
             self._compat_top_level.append(value)
 
@@ -594,91 +605,38 @@ class Scene(_BaseScene):
 
     @property
     def mobjects(self) -> list[object]:
-        return [value for value in self._compat_top_level if self._is_present(value)]
+        if _STANDARD_MEMBERSHIP_VIEW is None:
+            raise RuntimeError("typed Scene membership is not installed")
+        return _STANDARD_MEMBERSHIP_VIEW(self)
 
     def add(self, *mobjects: object, key: str | None = None) -> _BaseMobject | Scene:
         if not mobjects:
             return self
-        leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
-        if key is not None and len(leaves) != 1:
-            raise ValueError("an explicit key can only be used when adding one Mobject")
-
-        for index, member in enumerate(leaves):
-            newly_bound = member._scene is None
-            if newly_bound:
-                member._bind_to_scene(self, key=key if index == 0 else None)
-            elif member._scene is not self:
-                raise ValueError("Mobject already belongs to another Scene")
-
-            assert member._object is not None
-            tracks = self._ensure_lifecycle_timeline_available(
-                member._object, self._cursor, "Scene.add target"
-            )
-            if newly_bound and self._cursor > 0.0:
-                self._add_presence_track(
-                    member._object,
-                    False,
-                    True,
-                    self._cursor,
-                    key=f"@scene-add:{member._object.id}:{self._cursor:g}",
-                )
-            elif tracks and not self._presence_at(member._object, self._cursor):
-                self._add_presence_track(
-                    member._object,
-                    False,
-                    True,
-                    self._cursor,
-                    key=f"@scene-add:{member._object.id}:{self._cursor:g}",
-                )
-
-        for value in mobjects:
-            self._register_top_level(value)
+        if _STANDARD_MEMBERSHIP_EDIT is None:
+            raise RuntimeError("typed Scene membership is not installed")
+        _STANDARD_MEMBERSHIP_EDIT(self, "add", mobjects, key=key)
 
         # Preserve Noon's established one-object return as a backwards-compatible
         # extension. Typical Manim source ignores Scene.add's return value.
+        leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
         return leaves[0] if len(leaves) == 1 else self
 
     def remove(self, *mobjects: object) -> Scene:
-        leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
-        for member in leaves:
-            if member._scene is not self or member._object is None:
-                continue
-            self._ensure_lifecycle_timeline_available(
-                member._object, self._cursor, "Scene.remove target"
-            )
-            if self._presence_at(member._object, self._cursor):
-                self._add_presence_track(
-                    member._object,
-                    True,
-                    False,
-                    self._cursor,
-                    key=f"@scene-remove:{member._object.id}:{self._cursor:g}",
-                )
-        identities = {id(value) for value in mobjects}
-        self._compat_top_level = [
-            value for value in self._compat_top_level if id(value) not in identities
-        ]
+        if _STANDARD_MEMBERSHIP_EDIT is None:
+            raise RuntimeError("typed Scene membership is not installed")
+        _STANDARD_MEMBERSHIP_EDIT(self, "remove", mobjects)
         return self
 
     def clear(self) -> Scene:
-        return self.remove(*list(self._compat_top_level))
+        if _STANDARD_MEMBERSHIP_EDIT is None:
+            raise RuntimeError("typed Scene membership is not installed")
+        _STANDARD_MEMBERSHIP_EDIT(self, "clear")
+        return self
 
     def replace(self, old_mobject: object, new_mobject: object) -> Scene:
-        old_index = next(
-            (
-                index
-                for index, value in enumerate(self._compat_top_level)
-                if value is old_mobject
-            ),
-            None,
-        )
-        self.remove(old_mobject)
-        self.add(new_mobject)
-        if old_index is not None:
-            self._compat_top_level = [
-                value for value in self._compat_top_level if value is not new_mobject
-            ]
-            self._compat_top_level.insert(old_index, new_mobject)
+        if _STANDARD_MEMBERSHIP_EDIT is None:
+            raise RuntimeError("typed Scene membership is not installed")
+        _STANDARD_MEMBERSHIP_EDIT(self, "replace", (old_mobject, new_mobject))
         return self
 
     def _bind_introducer_target(self, target: object) -> None:

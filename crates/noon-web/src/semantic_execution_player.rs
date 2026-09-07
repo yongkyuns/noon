@@ -763,6 +763,29 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    /// Publish one already validated scene-membership batch through the active
+    /// semantic session. The player retains no membership or painter-order mirror.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_edit_membership(
+        &mut self,
+        request: noon::SceneMembershipRequest<'_>,
+    ) -> Result<(), String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .edit_membership(request)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn require_completed_live_segment(&self) -> Result<(), String> {
         self.require_callback_progression_available()?;
@@ -1533,18 +1556,22 @@ impl SemanticExecutionPlayer {
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
-        if snapshot || changes.is_all() || changes.is_structural() || !self.snapshot_sent {
+        if snapshot
+            || changes.is_all()
+            || changes.is_structural()
+            || changes.has_painter_order_change()
+            || !self.snapshot_sent
+        {
             let delta = self
                 .encoder
                 .encode_planned_snapshot_indices(
                     &self.session.planned_family_frame(),
                     self.session.family_animation_plans(),
                     camera,
-                    (0..self.session.frame().objects.len()).filter(|index| {
-                        self.session
-                            .execution_slot_for_frame_index(*index)
-                            .is_some()
-                    }),
+                    self.session
+                        .painter_order()
+                        .iter()
+                        .map(|&index| index as usize),
                 )
                 .map_err(|e| e.to_string())?;
             self.snapshot_sent = true;
