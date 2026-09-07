@@ -233,10 +233,17 @@ impl SemanticExecutionPlayer {
     ) -> Result<Self, String> {
         let clock = Self::playback_clock(&session, duration)?;
         let resource_bundle = Self::resource_bundle_for(&session)?;
+        let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(
+            transport_session,
+            &resource_bundle,
+        );
+        let resource_bundle = resource_bundle
+            .encode_binary()
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
             clock,
-            encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
+            encoder,
             resource_bundle,
             snapshot_sent: false,
             pending_callback_phase: None,
@@ -263,10 +270,17 @@ impl SemanticExecutionPlayer {
     ) -> Result<Self, String> {
         let clock = Self::playback_clock(&session, duration)?;
         let resource_bundle = Self::resource_bundle_for(&session)?;
+        let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(
+            transport_session,
+            &resource_bundle,
+        );
+        let resource_bundle = resource_bundle
+            .encode_binary()
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
             clock,
-            encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
+            encoder,
             resource_bundle,
             snapshot_sent: false,
             pending_callback_phase: None,
@@ -301,9 +315,16 @@ impl SemanticExecutionPlayer {
         // this player was bootstrapped. Refresh only at the explicit cross-worker
         // handoff boundary so ordinary typed in-process property edits stay local.
         let resource_bundle = Self::resource_bundle_for(&self.session)?;
+        let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(
+            transport_session,
+            &resource_bundle,
+        );
+        let resource_bundle = resource_bundle
+            .encode_binary()
+            .map_err(|error| error.to_string())?;
         self.clock = clock;
         self.resource_bundle = resource_bundle;
-        self.encoder = RetainedFamilyExecutionDeltaEncoder::new(transport_session);
+        self.encoder = encoder;
         self.snapshot_sent = false;
         // A transport recovery reuses this runtime but begins a new host lease.
         // Re-anchor the derived wall conversion at its next wake so elapsed wall
@@ -1512,7 +1533,7 @@ impl SemanticExecutionPlayer {
         &mut self.session
     }
 
-    fn resource_bundle_for(session: &ExecutionSession) -> Result<Vec<u8>, String> {
+    fn resource_bundle_for(session: &ExecutionSession) -> Result<RetainedResourceBundle, String> {
         RetainedResourceBundle::capture(
             session
                 .frame()
@@ -1523,7 +1544,6 @@ impl SemanticExecutionPlayer {
             session.geometry_resources(),
             session.font_resources(),
         )
-        .and_then(|bundle| bundle.encode_binary())
         .map_err(|error| error.to_string())
     }
 
@@ -1534,7 +1554,7 @@ impl SemanticExecutionPlayer {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
         if snapshot || changes.is_all() || changes.is_structural() || !self.snapshot_sent {
-            let delta = self
+            let mut delta = self
                 .encoder
                 .encode_planned_snapshot_indices(
                     &self.session.planned_family_frame(),
@@ -1547,18 +1567,57 @@ impl SemanticExecutionPlayer {
                     }),
                 )
                 .map_err(|e| e.to_string())?;
+            self.attach_resource_additions(&mut delta)?;
             self.snapshot_sent = true;
             Ok(Some(delta))
         } else {
-            self.encoder
+            let Some(mut delta) = self
+                .encoder
                 .encode_planned_incremental(
                     &self.session.planned_family_frame(),
                     self.session.family_animation_plans(),
                     &changes,
                     camera,
                 )
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?
+            else {
+                return Ok(None);
+            };
+            self.attach_resource_additions(&mut delta)?;
+            Ok(Some(delta))
         }
+    }
+
+    fn attach_resource_additions(
+        &mut self,
+        delta: &mut RetainedFamilyExecutionDeltaEnvelope,
+    ) -> Result<(), String> {
+        let referenced = delta
+            .retained
+            .objects
+            .iter()
+            .filter_map(|object| match &object.content {
+                crate::TransportObjectContent::Text { text } => Some(*text),
+                crate::TransportObjectContent::Geometry { .. } => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let handles = self.session.frame().objects.iter().filter_map(|object| {
+            let handle = object.text()?;
+            referenced
+                .contains(&crate::TransportTextResourceHandle::from_source_handle(
+                    handle,
+                ))
+                .then_some(handle)
+        });
+        self.encoder
+            .attach_resource_additions(
+                delta,
+                handles,
+                self.session.text_resources(),
+                self.session.geometry_resources(),
+                self.session.font_resources(),
+            )
+            .map_err(|error| error.to_string())
     }
 
     fn encoded_delta(&mut self, snapshot: bool) -> Result<Option<String>, String> {

@@ -196,7 +196,41 @@ pub struct RetainedResourceBundle {
     render_geometry_resources: Option<TransportRenderGeometryResources>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RetainedResourceInventory {
+    texts: BTreeSet<TransportTextResourceHandle>,
+    geometries: BTreeSet<TransportGeometryResourceHandle>,
+    fonts: BTreeSet<(String, u32)>,
+}
+
 impl RetainedResourceBundle {
+    pub(crate) fn inventory(&self) -> RetainedResourceInventory {
+        RetainedResourceInventory {
+            texts: self.texts.iter().map(|entry| entry.handle).collect(),
+            geometries: self.geometries.iter().map(|entry| entry.handle).collect(),
+            fonts: self
+                .fonts
+                .iter()
+                .map(|entry| (entry.face_key.clone(), entry.face_index))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn retain_additions(&mut self, installed: &mut RetainedResourceInventory) {
+        self.texts
+            .retain(|entry| installed.texts.insert(entry.handle));
+        self.geometries
+            .retain(|entry| installed.geometries.insert(entry.handle));
+        self.fonts.retain(|entry| {
+            installed
+                .fonts
+                .insert((entry.face_key.clone(), entry.face_index))
+        });
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.texts.is_empty() && self.geometries.is_empty() && self.fonts.is_empty()
+    }
     pub fn capture(
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
         texts: &impl TextResourceLookup,

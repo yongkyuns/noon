@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     RetainedExecutionDeltaEnvelope, RetainedFamilyPlanTransport, RetainedFamilyTransportError,
-    RetainedFamilyTransportState,
+    RetainedFamilyTransportState, RetainedResourceBundle,
 };
 
 type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
@@ -75,6 +75,8 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
     pub family_states: Vec<RetainedFamilyExecutionObjectState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub family_plans: Vec<RetainedFamilyPlanTransport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_additions: Option<RetainedResourceBundle>,
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {
@@ -93,6 +95,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .iter()
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
+            resource_additions: None,
             retained,
         };
         envelope.validate()?;
@@ -124,6 +127,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .iter()
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
+            resource_additions: None,
             retained,
         };
         envelope.validate()?;
@@ -145,6 +149,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 changes.object_indices().iter().copied(),
             )?,
             family_plans: Vec::new(),
+            resource_additions: None,
             retained,
         };
         envelope.validate()?;
@@ -179,6 +184,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .iter()
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
+            resource_additions: None,
             retained,
         };
         envelope.validate()?;
