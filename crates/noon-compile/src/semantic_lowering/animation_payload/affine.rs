@@ -1,11 +1,13 @@
 use std::collections::{hash_map::Entry, HashMap};
 
 use noon_core::{
-    validate_track_definition, ObjectId, Property, SemanticAffineLifecycleDirection,
+    validate_track_definition, CompositionTimeMap, CompositionTimeMapError, CompositionTimeMapStep,
+    ObjectId, Property, RateFunction, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationError, SemanticAnimationIntent,
     SemanticFadeDirection, SemanticLoweringError, SemanticNodeId, SemanticObjectContent,
     SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue, SemanticStore,
-    StoredGeometry, Style, TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
+    SemanticSubsetDisplayMode, StoredGeometry, Style, TimelineError, TrackDefinition, TrackId,
+    TrackValues, Transform2D,
 };
 
 use super::super::{
@@ -170,6 +172,10 @@ pub enum SemanticAffineAnimationTrackError {
         animation: SemanticNodeId,
         remover: bool,
         introducer: bool,
+    },
+    InvalidSubsetDisplayTimeMap {
+        animation: SemanticNodeId,
+        error: CompositionTimeMapError,
     },
     ReactiveDriverConflict {
         animation: SemanticNodeId,
@@ -354,6 +360,12 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
                 animation.slot(),
                 animation.generation()
             ),
+            Self::InvalidSubsetDisplayTimeMap { animation, error } => write!(
+                formatter,
+                "semantic subset display animation {}:{} has an invalid composed time map: {error}",
+                animation.slot(),
+                animation.generation()
+            ),
             Self::ReactiveDriverConflict {
                 animation,
                 target,
@@ -523,6 +535,71 @@ where
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
             continue;
         }
+        if let SemanticScheduledAnimationPayload::SubsetDisplayMember { index, count, mode } =
+            leaf.payload
+        {
+            if leaf.options.lag_ratio != 0.0
+                || leaf.options.path_arc != 0.0
+                || leaf.options.remover
+                || leaf.options.reverse_rate_function
+                || leaf.options.rate_func != RateFunction::Linear
+            {
+                return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
+                    animation: leaf.animation,
+                    remover: leaf.options.remover,
+                    introducer: leaf.options.introducer,
+                });
+            }
+            validate_subset_display_time_map(&leaf.time_map).map_err(|error| {
+                SemanticAffineAnimationTrackError::InvalidSubsetDisplayTimeMap {
+                    animation: leaf.animation,
+                    error,
+                }
+            })?;
+            let source = object_state(store, leaf, leaf.target)?;
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+                captured
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or(
+                    SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+                captures.insert(leaf.execution_object_id, captured);
+                captured
+            };
+            let phases = lower_subset_display_phases(source, from, index, count, mode)
+                .map_err(|issue| existing_payload_error(leaf, leaf.target, issue))?;
+            for phase in phases {
+                if phase.reserve_driver {
+                    push_published_channel(leaf, phase.channel, &mut driven, &mut tracks)?;
+                } else {
+                    let previous = tracks
+                        .last()
+                        .expect("subset continuation follows its visible phase");
+                    tracks.push(SemanticAffineAnimationTrack {
+                        animation: previous.animation,
+                        target: previous.target,
+                        execution_object_id: previous.execution_object_id,
+                        property: phase.channel.property,
+                        completion: phase.channel.completion,
+                        values: phase.channel.values,
+                        timing: leaf.timing,
+                        time_map: leaf.time_map.clone(),
+                    });
+                }
+                let track = tracks.last_mut().expect("pushed subset display phase");
+                track.timing.easing = phase.easing;
+                track.time_map.push(CompositionTimeMapStep::new(
+                    phase.start,
+                    phase.duration,
+                    RateFunction::Linear,
+                ));
+            }
+            continue;
+        }
         let (target_state, interpolation) = match leaf.payload {
             SemanticScheduledAnimationPayload::TransformTo {
                 target_state,
@@ -531,7 +608,6 @@ where
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
             | SemanticScheduledAnimationPayload::DrawBorderThenFill { .. }
-            | SemanticScheduledAnimationPayload::SubsetDisplayMember { .. }
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
             | SemanticScheduledAnimationPayload::Add
@@ -750,6 +826,15 @@ pub(super) struct LoweredAffineChannel {
     pub conflict_property: SemanticObjectProperty,
     pub completion: SemanticAnimationCompletion,
     pub values: TrackValues,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct LoweredSubsetDisplayPhase {
+    pub channel: LoweredAffineChannel,
+    pub start: f64,
+    pub duration: f64,
+    pub easing: RateFunction,
+    pub reserve_driver: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1346,6 +1431,110 @@ pub(super) fn lower_subset_display_channels(
         )?;
     }
     Ok(channels)
+}
+
+pub(super) fn validate_subset_display_time_map(
+    time_map: &CompositionTimeMap,
+) -> Result<(), CompositionTimeMapError> {
+    if let Some((index, step)) = time_map.steps.iter().enumerate().find(|(_, step)| {
+        !matches!(
+            step.rate_func,
+            RateFunction::Linear
+                | RateFunction::Smooth
+                | RateFunction::RushInto
+                | RateFunction::RushFrom
+                | RateFunction::EaseInOutCubic
+        )
+    }) {
+        return Err(CompositionTimeMapError::UnsupportedDiscreteRate {
+            index,
+            rate_func: step.rate_func,
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn lower_subset_display_phases(
+    source: &noon_core::SemanticObjectState,
+    from: EffectiveAnimationProperties,
+    member_index: usize,
+    count: usize,
+    mode: SemanticSubsetDisplayMode,
+) -> Result<Vec<LoweredSubsetDisplayPhase>, AffinePayloadIssue> {
+    debug_assert!(count > 0 && member_index < count);
+    let lower = member_index as f64 / count as f64;
+    let upper = (member_index + 1) as f64 / count as f64;
+    let channels = lower_subset_display_channels(source, from)?;
+    let mut phases = Vec::with_capacity(channels.len() * 2);
+    for channel in channels {
+        match mode {
+            SemanticSubsetDisplayMode::IncreasingFloor => {
+                phases.push(LoweredSubsetDisplayPhase {
+                    channel: channel.clone(),
+                    start: 0.0,
+                    duration: upper,
+                    easing: RateFunction::StepEnd,
+                    reserve_driver: true,
+                });
+                if upper < 1.0 {
+                    let mut hold = channel;
+                    hold.values = match &hold.values {
+                        TrackValues::Color { to, .. } => TrackValues::Color { from: *to, to: *to },
+                        _ => unreachable!("subset display uses color channels"),
+                    };
+                    phases.push(LoweredSubsetDisplayPhase {
+                        channel: hold,
+                        start: upper,
+                        duration: 1.0 - upper,
+                        easing: RateFunction::Linear,
+                        reserve_driver: false,
+                    });
+                }
+            }
+            SemanticSubsetDisplayMode::OneByOneCeil => {
+                phases.push(LoweredSubsetDisplayPhase {
+                    channel: channel.clone(),
+                    start: lower,
+                    duration: upper - lower,
+                    easing: RateFunction::StepStart,
+                    reserve_driver: true,
+                });
+                if upper < 1.0 {
+                    let mut hide = channel;
+                    hide.values = match &hide.values {
+                        TrackValues::Color { from, to } => TrackValues::Color {
+                            from: *to,
+                            to: *from,
+                        },
+                        _ => unreachable!("subset display uses color channels"),
+                    };
+                    hide.completion = match &hide.completion {
+                        SemanticAnimationCompletion::Fill { paint, .. } => {
+                            SemanticAnimationCompletion::Fill {
+                                paint: paint.clone(),
+                                opacity: 0.0,
+                            }
+                        }
+                        SemanticAnimationCompletion::Stroke { paint, .. } => {
+                            SemanticAnimationCompletion::Stroke {
+                                paint: paint.clone(),
+                                opacity: 0.0,
+                            }
+                        }
+                        _ => unreachable!("subset display uses paint completions"),
+                    };
+                    phases.push(LoweredSubsetDisplayPhase {
+                        channel: hide,
+                        start: upper,
+                        duration: 1.0 - upper,
+                        easing: RateFunction::StepStart,
+                        reserve_driver: false,
+                    });
+                }
+            }
+        }
+    }
+    Ok(phases)
 }
 
 pub(super) fn lower_indicate_channels(
