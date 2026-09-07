@@ -1453,7 +1453,7 @@ try {
     assert.ok(samples[3].left > 0 && samples[3].right > samples[2].right);
     assert.ok(samples[4].left > 0 && samples[4].right > 0
         && samples[4].right < samples[3].right,
-    `family Unwrite must erase the four-glyph leaf before the one-glyph leaf: ${JSON.stringify(samples)}`);
+      `family Unwrite must erase the four-glyph leaf before the one-glyph leaf: ${JSON.stringify(samples)}`);
     assert.ok(samples[5].left === 0 && samples[5].right === 0);
     const result = await page.evaluate(async () => {
       const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;

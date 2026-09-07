@@ -1883,7 +1883,14 @@ impl CanonicalAuthoringScene {
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
-                        noon_core::AnimationOptions::new(),
+                        if matches!(child, OrdinaryCompositionChild::FamilyTextWrite { .. }) {
+                            // Text glyph realization owns reversal, as it does for
+                            // a single TextWrite. Preserve the authored option on
+                            // the request while preflighting the remaining shape.
+                            noon_core::AnimationOptions::new().reverse_rate_function(false)
+                        } else {
+                            noon_core::AnimationOptions::new()
+                        },
                     )
                     .map_err(|error| error.to_string())?;
                     for (id, member) in entering {
