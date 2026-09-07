@@ -237,13 +237,37 @@ where
     let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
-    let admitted = prepared
+    let mut admitted = HashSet::new();
+    for member in prepared
         .candidate_mutations()
         .filter_map(|mutation| match mutation {
             noon_core::SemanticMutation::AddMember { member, .. } => Some(*member),
             _ => None,
         })
-        .collect::<HashSet<_>>();
+    {
+        admitted.insert(member);
+        let noon_core::SemanticTransactionNodeRef::Existing(member) = member else {
+            continue;
+        };
+        // Admission can attach an existing family as one authoritative scene
+        // member. Its already-authored leaves receive new execution rows in the
+        // same publication and therefore capture authored effective defaults just
+        // like a directly admitted object.
+        if prepared
+            .store()
+            .node(member)
+            .is_some_and(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family))
+        {
+            admitted.extend(
+                prepared
+                    .store()
+                    .ordered_leaf_nodes(member)
+                    .expect("prepared family admission has validated topology")
+                    .into_iter()
+                    .map(noon_core::SemanticTransactionNodeRef::Existing),
+            );
+        }
+    }
 
     for leaf in schedule.leaves() {
         if matches!(

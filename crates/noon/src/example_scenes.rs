@@ -7,6 +7,7 @@ pub mod mixed_scalar_composition;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
+pub mod text_family_fade;
 pub mod text_write;
 pub mod timed_composition;
 

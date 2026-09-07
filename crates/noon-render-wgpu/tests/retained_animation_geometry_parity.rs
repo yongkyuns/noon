@@ -39,6 +39,7 @@ fn assert_prepares_path(frame: &FrameState) {
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
+    preparer.set_painter_order(&[0]);
 
     let prepared = preparer
         .prepare_with_changes(

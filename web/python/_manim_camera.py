@@ -7,7 +7,6 @@ from typing import Any
 import noon as _base
 import _manim_compat as _compat
 import _manim_family_creation as _family_creation
-import _manim_retained_family_fade_batch as _retained_family_fade_batch
 import _manim_semantic_handles as _semantic_handles
 
 
@@ -55,10 +54,8 @@ def install() -> None:
     """Install final authoring wrappers and expose the moving-camera name."""
 
     # Camera is the final compatibility module installed by the browser bootstrap.
-    # Install semantic-family creation first, then the retained family-fade batch
-    # coordinator above that transaction so it can reuse the existing leaf scheduler.
+    # Install shared semantic-family construction before exposing camera wrappers.
     _family_creation.install()
-    _retained_family_fade_batch.install()
     _base.MovingCameraScene = MovingCameraScene
     if "MovingCameraScene" not in _base.__all__:
         _base.__all__.append("MovingCameraScene")

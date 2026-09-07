@@ -232,14 +232,26 @@ impl ExecutionSession {
         for &(root, target) in lifecycle_removals {
             semantic.remove_member(root, target);
         }
+        let family_removals = lifecycle_removals
+            .iter()
+            .map(|(_, target)| *target)
+            .collect::<BTreeSet<_>>();
         let mut release = Vec::with_capacity(entries.len());
         for entry in entries {
+            let removed_with_family =
+                matches!(
+                    &entry.completion,
+                    SemanticAnimationCompletion::Fade {
+                        direction: SemanticFadeDirection::Out
+                    }
+                ) && has_ancestor_in(store, entry.semantic_object, &family_removals);
             if matches!(
                 &entry.completion,
                 SemanticAnimationCompletion::Fade {
                     direction: SemanticFadeDirection::Out
                 } | SemanticAnimationCompletion::RevealLifecycle { remove: true }
-            ) {
+            ) && !removed_with_family
+            {
                 let root = lifecycle_root.ok_or(
                     ExecutionSegmentCompletionError::MissingLifecycleRoot(entry.semantic_object),
                 )?;
@@ -433,6 +445,33 @@ impl ExecutionSession {
             .carry_completed_publication(actual_time, publication);
         Ok(self.frame())
     }
+}
+
+fn has_ancestor_in(
+    store: &SemanticStore,
+    target: SemanticNodeId,
+    ancestors: &BTreeSet<SemanticNodeId>,
+) -> bool {
+    if ancestors.is_empty() {
+        return false;
+    }
+    let mut visited = BTreeSet::new();
+    let mut pending = vec![target];
+    while let Some(node) = pending.pop() {
+        if !visited.insert(node) {
+            continue;
+        }
+        let Some(node) = store.node(node) else {
+            return false;
+        };
+        for &parent in node.parents() {
+            if ancestors.contains(&parent) {
+                return true;
+            }
+            pending.push(parent);
+        }
+    }
+    false
 }
 
 #[cfg(test)]

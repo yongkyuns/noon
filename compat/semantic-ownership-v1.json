@@ -224,6 +224,14 @@
       "reason": "Python coerces the Manim call into scale plus a shift or point value. Rust resolves effective endpoint layout, authors the affine and appearance tracks, owns lifecycle membership, and schedules composition timing."
     },
     {
+      "id": "animation.family-fade",
+      "surface": "Typed Group/VGroup FadeIn/FadeOut opacity and lifecycle, including compositions with Text Write",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/execution_session.rs", "symbol": "SemanticCompositionRequest::FamilyFade"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_text_family_fade_animation"}],
+      "reason": "Rust traverses authoritative family leaves, applies shared composition timing, validates conflicts atomically and owns family root introduction/removal. Python passes handles and coerced options; affine family fade endpoints remain unsupported."
+    },
+    {
       "id": "animation.draw-border-then-fill",
       "surface": "Typed leaf DrawBorderThenFill and forward ordinary-vector Write families",
       "classification": "shared-rust",

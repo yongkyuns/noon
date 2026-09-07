@@ -116,6 +116,12 @@ enum OrdinaryCompositionChild {
         endpoint: noon::FadeEndpoint,
         options: noon_core::AnimationOptions,
     },
+    FamilyFade {
+        target: noon::MobjectFamily,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        direction: SemanticFadeDirection,
+        options: noon_core::AnimationOptions,
+    },
     Create {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1516,6 +1522,16 @@ impl CanonicalAuthoringScene {
                     endpoint: *endpoint,
                     options: *options,
                 },
+                OrdinaryCompositionChild::FamilyFade {
+                    target,
+                    direction,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::FamilyFade {
+                    target,
+                    direction: *direction,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Create {
                     target, options, ..
                 } => noon::AnimationCompositionRequest::Create {
@@ -1619,6 +1635,9 @@ impl CanonicalAuthoringScene {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::FamilySubsetDisplay { entering, .. } => {
+                    output.extend(entering.iter().map(|(id, target)| (*id, target)));
+                }
+                OrdinaryCompositionChild::FamilyFade { entering, .. } => {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::Add {
@@ -1802,6 +1821,63 @@ impl CanonicalAuthoringScene {
                         {
                             return Err(
                                 "ordinary subset-display entering identity is already bound".into(),
+                            );
+                        }
+                    }
+                    continue;
+                }
+                OrdinaryCompositionChild::FamilyFade {
+                    target,
+                    entering,
+                    options,
+                    ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                        return Err(
+                            "ordinary fade family belongs to another authoring store".into()
+                        );
+                    }
+                    target.validate()?;
+                    let family_leaves = noon::semantic_family_leaf_ids(
+                        &self.scene.store().borrow(),
+                        target.node_id(),
+                    )?;
+                    let expected_entering = family_leaves
+                        .iter()
+                        .copied()
+                        .filter(|id| !self.identities.contains_key(id))
+                        .collect::<BTreeSet<_>>();
+                    let supplied_entering = entering
+                        .iter()
+                        .map(|(_, member)| member.node_id())
+                        .collect::<BTreeSet<_>>();
+                    if supplied_entering != expected_entering {
+                        return Err(
+                            "ordinary fade wrapper identities do not match detached family leaves"
+                                .into(),
+                        );
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    for (id, member) in entering {
+                        if !std::rc::Rc::ptr_eq(self.scene.store(), member.store()) {
+                            return Err(
+                                "ordinary fade family member belongs to another authoring store"
+                                    .into(),
+                            );
+                        }
+                        member.validate()?;
+                        if self.bindings.contains_key(id)
+                            || self.identities.contains_key(&member.node_id())
+                            || !ids.insert(*id)
+                            || !entering_nodes.insert(member.node_id())
+                        {
+                            return Err(
+                                "ordinary fade family entering identity is already bound".into()
                             );
                         }
                     }
@@ -3983,6 +4059,49 @@ mod wasm {
                 endpoint,
                 options,
             });
+            Ok(())
+        }
+
+        /// Append a shared appearance/lifecycle fade over authoritative family leaves.
+        #[wasm_bindgen(js_name = appendFamilyFade)]
+        pub fn append_family_fade(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            direction: &str,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            self.children.push(OrdinaryCompositionChild::FamilyFade {
+                target: target.semantic_family()?,
+                entering: Vec::new(),
+                direction: parse_fade_direction(direction)?,
+                options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyFadeEntering)]
+        pub fn append_family_fade_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyFade {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error("family entering member must follow FamilyFade"));
+            };
+            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+                return Err(js_error(
+                    "fade family entering member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("fade family object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
             Ok(())
         }
 
@@ -7150,6 +7269,79 @@ mod tests {
         assert!(rejected.live_player.is_none());
         assert!(rejected.bindings.is_empty());
         assert_eq!(rejected.scene.store().borrow().scene_revision(), revision);
+    }
+
+    #[test]
+    fn ordinary_text_family_fade_composes_with_disjoint_text_write() {
+        let mut context = CanonicalAuthoringScene::default();
+        let left = context.scene.text(noon::Text::new("LEFT")).unwrap();
+        let right = context.scene.text(noon::Text::new("RIGHT")).unwrap();
+        let writing = context.scene.text(noon::Text::new("WRITE")).unwrap();
+        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family_options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear)
+            .lag_ratio(0.25);
+        let write_options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+        let entering = [
+            OrdinaryCompositionChild::FamilyFade {
+                target: family.clone(),
+                entering: vec![
+                    (ObjectId::new(0), left.clone()),
+                    (ObjectId::new(1), right.clone()),
+                ],
+                direction: SemanticFadeDirection::In,
+                options: family_options,
+            },
+            OrdinaryCompositionChild::TextWrite {
+                entering_id: Some(ObjectId::new(2)),
+                target: writing.clone(),
+                reverse_member_order: false,
+                options: write_options,
+            },
+        ];
+
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &entering,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            2.0
+        );
+        for target in [&left, &right, &writing] {
+            assert!(context.contains_mobject(target).unwrap());
+        }
+        assert_eq!(context.bindings.len(), 3);
+
+        let leaving = [OrdinaryCompositionChild::FamilyFade {
+            target: family,
+            entering: Vec::new(),
+            direction: SemanticFadeDirection::Out,
+            options: AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear)
+                .lag_ratio(0.25),
+        }];
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &leaving,
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            3.0
+        );
+        assert!(!context.contains_mobject(&left).unwrap());
+        assert!(!context.contains_mobject(&right).unwrap());
+        assert!(context.contains_mobject(&writing).unwrap());
     }
 
     #[test]

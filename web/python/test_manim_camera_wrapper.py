@@ -16,10 +16,7 @@ class MovingCameraWrapperTests(unittest.TestCase):
             bridge = ModuleType("js")
             bridge.noonResolveAnimationOptions = object()
             sys.modules["js"] = bridge
-            for name in (
-                "_manim_family_creation",
-                "_manim_retained_family_fade_batch",
-            ):
+            for name in ("_manim_family_creation",):
                 module = ModuleType(name)
                 module.install = lambda: None
                 sys.modules[name] = module

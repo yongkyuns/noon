@@ -341,6 +341,15 @@ pub async fn create_direct_ordinary_text_write_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for plain-Text family fades composed with a disjoint glyph Write.
+#[wasm_bindgen(js_name = createDirectTextFamilyFadeSmokeRenderer)]
+pub async fn create_direct_text_family_fade_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::text_family_fade::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct host for ordered ordinary-family subset-display semantics.
 #[wasm_bindgen(js_name = createDirectOrdinarySubsetDisplaySmokeRenderer)]
 pub async fn create_direct_ordinary_subset_display_smoke_renderer(

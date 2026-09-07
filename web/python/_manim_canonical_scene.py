@@ -1190,6 +1190,43 @@ def _canonical_fade_animation(
     return target, direction
 
 
+def _canonical_text_family_fade_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_compat.Group, list[_typst.Text], str] | None:
+    """Classify one plain-Text family fade without expanding its leaves."""
+    if type(animation) is _base.FadeIn:
+        direction = "in"
+    elif type(animation) is _base.FadeOut:
+        direction = "out"
+    else:
+        return None
+    family = getattr(animation, "target", None)
+    if not isinstance(family, _compat.Group):
+        return None
+    leaves = _compat._leaf_mobjects(family)
+    if not leaves:
+        raise ValueError("canonical Text family Fade requires at least one leaf")
+    if not all(isinstance(member, _typst.Text) for member in leaves):
+        if any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
+            raise NotImplementedError(
+                "canonical family Fade supports plain Text; Typst and MathTypst remain #959"
+            )
+        return None
+    if getattr(family, "_semantic_family_handle", None) is None:
+        raise NotImplementedError("canonical Text family Fade requires a shared family handle")
+    endpoint = _canonical_fade_endpoint(animation)
+    if endpoint != (1.0, "shift", 0.0, 0.0):
+        raise NotImplementedError(
+            "canonical Text family Fade does not support shift, scale, or target_position"
+        )
+    if direction == "in":
+        if any(member._scene is not None for member in leaves):
+            raise ValueError("Text family FadeIn requires a detached family")
+    elif any(member._scene is not scene for member in leaves):
+        raise ValueError("Text family FadeOut requires a family in this Scene")
+    return family, leaves, direction
+
+
 def _canonical_create_animation(
     scene: _base.Scene, animation: object
 ) -> _base.Mobject | None:
@@ -1347,7 +1384,12 @@ def _canonical_fade_endpoint(animation: object) -> tuple[float, str, float, floa
     return scale_factor, "shift", float(shift.x), float(shift.y)
 
 
-def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> object | None:
+def _canonical_fade_options(
+    animation: object,
+    kwargs: dict[str, object],
+    *,
+    allow_family_lag: bool = False,
+) -> object | None:
     """Resolve timing while Rust retains all fade endpoint meaning."""
     if _canonical_fade_endpoint(animation) is None:
         return None
@@ -1358,7 +1400,12 @@ def _canonical_fade_options(animation: object, kwargs: dict[str, object]) -> obj
             continue
         if name != lifecycle or args.pop(name) is not True:
             return None
-    return _canonical_affine_options(animation, kwargs, builder_args=args)
+    return _canonical_affine_options(
+        animation,
+        kwargs,
+        builder_args=args,
+        allow_family_lag=allow_family_lag,
+    )
 
 
 def _fade_object_id(
@@ -1490,6 +1537,8 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         import _manim_rotate as _rotate
 
         animation = args[0]
+        if _canonical_text_family_fade_animation(scene, animation) is not None:
+            return "parallel", args, None
         if _canonical_text_write_animation(scene, animation) is not None:
             return "parallel", args, None
         if _canonical_subset_display_animation(scene, animation) is not None:
@@ -1731,6 +1780,7 @@ def _build_canonical_composition_candidate(
     if play_rate is not None:
         candidate.setPlayRateFunction(play_rate)
     reservations: list[tuple[_base.Mobject, object]] = []
+    family_registrations: list[_compat.Group] = []
     removals: list[_base.Mobject] = []
     tracker_associations: list[_reactive.ValueTracker] = []
     next_object_id = self._next_object_id
@@ -1775,6 +1825,32 @@ def _build_canonical_composition_candidate(
             if child_kwargs:
                 raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
             builder.appendWait(float(animation.run_time))
+            return
+        family_fade = _canonical_text_family_fade_animation(self, animation)
+        if family_fade is not None:
+            family, leaves, direction = family_fade
+            child = _canonical_fade_options(
+                animation, child_kwargs, allow_family_lag=True
+            )
+            if child is None:
+                raise NotImplementedError("unsupported canonical Text family Fade options")
+            builder.appendFamilyFade(
+                family._semantic_family_handle,
+                direction,
+                float(child.run_time),
+                str(child.rate_func),
+                float(child.lag_ratio),
+            )
+            if direction == "in":
+                family_registrations.append(family)
+                for member in leaves:
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        builder.appendFamilyFadeEntering(
+                            str(reservation.object.id), member._semantic_handle
+                        )
+            else:
+                removals.extend(leaves)
             return
         text_write = _canonical_text_write_animation(self, animation)
         if text_write is not None:
@@ -2063,13 +2139,20 @@ def _build_canonical_composition_candidate(
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:
         raise ValueError(str(error)) from None
-    return (candidate, reservations, removals, tracker_associations) if supported else False
+    return (
+        candidate,
+        reservations,
+        family_registrations,
+        removals,
+        tracker_associations,
+    ) if supported else False
 
 
 def _play_canonical_composition(
     self: _base.Scene,
     candidate: object,
     reservations: list[tuple[_base.Mobject, object]],
+    family_registrations: list[_compat.Group],
     removals: list[_base.Mobject],
     tracker_associations: list[_reactive.ValueTracker],
 ) -> _base.Scene | _SemanticContinuationAwaitable:
@@ -2100,6 +2183,10 @@ def _play_canonical_composition(
         register = getattr(self, "_register_top_level", None)
         if register is not None:
             register(source)
+    register = getattr(self, "_register_top_level", None)
+    if register is not None:
+        for family in family_registrations:
+            register(family)
     def completed() -> None:
         for target in removals:
             _reconcile_fade_membership(self, target, "out")

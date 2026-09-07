@@ -120,6 +120,11 @@ pub(crate) enum SemanticCompositionRequest {
         mode: SubsetDisplayMode,
         options: AnimationOptions,
     },
+    FamilyFade {
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    },
     TextWrite {
         target: SemanticNodeId,
         reverse_member_order: bool,
@@ -1861,6 +1866,59 @@ impl ExecutionSession {
                     composition_options,
                 ))
             }
+            SemanticCompositionRequest::FamilyFade {
+                target,
+                direction,
+                options,
+            } => {
+                let expects_introducer = *direction == SemanticFadeDirection::In;
+                let expects_remover = *direction == SemanticFadeDirection::Out;
+                if options
+                    .introducer
+                    .is_some_and(|value| value != expects_introducer)
+                    || options
+                        .remover
+                        .is_some_and(|value| value != expects_remover)
+                    || options.path_arc.is_some_and(|value| value != 0.0)
+                {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "family fade lifecycle is fixed by its direction and does not support path arcs"
+                            .into(),
+                    ));
+                }
+                let leaves = self.require_family_fade_target(store, root, *target, *direction)?;
+                match direction {
+                    SemanticFadeDirection::In => {
+                        if !admitted.insert(*target) {
+                            return Err(ExecutionSessionAnimationError::CreateTarget {
+                                target: *target,
+                                error: ExecutionSessionCreateError::DuplicateTarget,
+                            });
+                        }
+                        declaration.add_member(root, *target);
+                    }
+                    SemanticFadeDirection::Out => removals.push((root, *target)),
+                }
+                let children: Vec<_> = leaves
+                    .into_iter()
+                    .map(|leaf| {
+                        declaration.create_fade_animation_with_endpoint(
+                            leaf,
+                            *direction,
+                            noon_core::SemanticFadeEndpoint::default(),
+                            AnimationOptions::new().rate_func(RateFunction::Linear),
+                        )
+                    })
+                    .collect();
+                let mut composition_options = *options;
+                composition_options.introducer = None;
+                composition_options.remover = None;
+                Ok(declaration.create_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    children,
+                    composition_options,
+                ))
+            }
             SemanticCompositionRequest::TextWrite {
                 target,
                 reverse_member_order,
@@ -2333,6 +2391,87 @@ impl ExecutionSession {
             }
         }
         Ok(())
+    }
+
+    fn require_family_fade_target(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+    ) -> Result<Vec<SemanticNodeId>, ExecutionSessionAnimationError> {
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::RootIsNotInExecutionDomain,
+            });
+        }
+        if !self.callback_schedule.is_empty() {
+            return Err(ExecutionSessionAnimationError::FadeTarget {
+                target,
+                error: ExecutionSessionFadeError::RequiredCallbacksUnsupported,
+            });
+        }
+        let node = store.node(target).ok_or_else(|| {
+            ExecutionSessionAnimationError::InvalidComposition(format!(
+                "family fade target {target:?} does not exist"
+            ))
+        })?;
+        if !matches!(node.kind(), noon_core::SemanticNodeKind::Family) {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "family fade target must be a semantic family".into(),
+            ));
+        }
+        match direction {
+            SemanticFadeDirection::In => {
+                if node.is_scene_owned()
+                    || !node.parents().is_empty()
+                    || self.reachability.is_reachable(target)
+                {
+                    return Err(ExecutionSessionAnimationError::FadeTarget {
+                        target,
+                        error: ExecutionSessionFadeError::TargetIsNotDetached,
+                    });
+                }
+            }
+            SemanticFadeDirection::Out => {
+                if node.parents().len() > 1 {
+                    return Err(ExecutionSessionAnimationError::FadeTarget {
+                        target,
+                        error: ExecutionSessionFadeError::TargetIsAliased,
+                    });
+                }
+                if node.parents() != [root] || !self.reachability.is_reachable(target) {
+                    return Err(ExecutionSessionAnimationError::FadeTarget {
+                        target,
+                        error: ExecutionSessionFadeError::TargetIsNotDirectRootMember,
+                    });
+                }
+            }
+        }
+        let leaves = store.ordered_leaf_nodes(target).map_err(|error| {
+            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+        })?;
+        if leaves.is_empty() {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "family fade requires at least one ordinary leaf".into(),
+            ));
+        }
+        for leaf in &leaves {
+            let state = store
+                .semantic_object_state_checked(*leaf)
+                .map_err(|error| ExecutionSessionAnimationError::TargetState {
+                    target: *leaf,
+                    error,
+                })?;
+            if !state.signal_bindings().is_empty() {
+                return Err(ExecutionSessionAnimationError::FadeTarget {
+                    target: *leaf,
+                    error: ExecutionSessionFadeError::ReactiveBindingsUnsupported,
+                });
+            }
+        }
+        Ok(leaves)
     }
 
     fn require_present_draw_border_target(
