@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-labelledby="title desc">
+  <title id="title">Text family reveal</title>
+  <desc id="desc">I and LONG reveal from left to right above a moving square</desc>
+  <rect width="320" height="180" rx="18" fill="#111827"/>
+  <g font-family="DejaVu Sans Mono, monospace" font-weight="700" fill="#f8fafc">
+    <text x="68" y="69" font-size="31">I</text>
+    <text x="151" y="69" font-size="31">LONG</text>
+    <text x="68" y="131" font-size="25">ONE</text>
+  </g>
+  <rect x="227" y="108" width="29" height="29" fill="none" stroke="#58c4dd" stroke-width="5"/>
+  <path d="M112 82h110" stroke="#f8fafc" stroke-width="3" stroke-dasharray="8 7" opacity="0.7"/>
+  <path d="M221 82l-11-6v12z" fill="#f8fafc" opacity="0.8"/>
+</svg>

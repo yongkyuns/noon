@@ -135,6 +135,16 @@ pub(crate) enum SemanticCompositionRequest {
         reverse_member_order: bool,
         options: AnimationOptions,
     },
+    TextReveal {
+        target: SemanticNodeId,
+        reverse: bool,
+        options: AnimationOptions,
+    },
+    FamilyReveal {
+        target: SemanticNodeId,
+        reverse: bool,
+        options: AnimationOptions,
+    },
     Rotate {
         target: SemanticNodeId,
         angle: f64,
@@ -205,6 +215,12 @@ enum ExecutionEvaluationMode {
     Evaluate,
     Seek,
     Advance,
+}
+
+#[derive(Clone, Copy)]
+enum FamilyGlyphOperation {
+    Write { reverse_member_order: bool },
+    Reveal { reverse: bool },
 }
 
 impl ExecutionEvaluationMode {
@@ -414,7 +430,7 @@ pub enum ExecutionSessionAnimationError {
     Schedule(SemanticAnimationScheduleError),
     Segment(ExecutionSegmentError),
     Payload(SemanticAffineAnimationTrackError),
-    TextWrite(noon_compile::TextWriteLoweringError),
+    TextGlyph(noon_compile::TextGlyphLoweringError),
     PreparedAnimation(PreparedSemanticAnimationLoweringError),
     PreparedSchedule(PreparedSemanticAnimationScheduleError),
     PreparedScalarAnimation(PreparedScalarAnimationTrackError),
@@ -521,7 +537,7 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
                 target.generation()
             ),
             Self::InvalidComposition(error) => formatter.write_str(error),
-            Self::TextWrite(error) => error.fmt(formatter),
+            Self::TextGlyph(error) => error.fmt(formatter),
             Self::PreparedTrack(error) => {
                 write!(formatter, "prepared animation track failed: {error}")
             }
@@ -1113,8 +1129,8 @@ impl ExecutionSession {
             })
         })?;
         let family_animations =
-            noon_compile::lower_semantic_text_write_animations(store, &schedule)
-                .map_err(ExecutionSessionAnimationError::TextWrite)?;
+            noon_compile::lower_semantic_text_glyph_animations(store, &schedule)
+                .map_err(ExecutionSessionAnimationError::TextGlyph)?;
         if tracks.is_empty() && family_animations.is_empty() {
             return Ok(segment);
         }
@@ -1949,68 +1965,38 @@ impl ExecutionSession {
                 target,
                 reverse_member_order,
                 options,
+            } => self.stage_family_glyph_animation(
+                store,
+                root,
+                *target,
+                FamilyGlyphOperation::Write {
+                    reverse_member_order: *reverse_member_order,
+                },
+                *options,
+                declaration,
+                admitted,
+                removals,
+            ),
+            SemanticCompositionRequest::TextReveal {
+                target,
+                reverse,
+                options,
             } => {
-                let introducer = options.introducer.unwrap_or(!reverse_member_order);
-                let remover = options.remover.unwrap_or(*reverse_member_order);
-                let leaves = self.require_family_fade_target(
-                    store,
-                    root,
-                    *target,
-                    if introducer {
-                        SemanticFadeDirection::In
-                    } else {
-                        SemanticFadeDirection::Out
-                    },
-                )?;
-                let mut prepared = Vec::with_capacity(leaves.len());
-                let mut total_member_count = 0_u32;
-                for (leaf_index, leaf) in leaves.into_iter().enumerate() {
-                    let state = store.semantic_object_state_checked(leaf).map_err(|_| {
-                        ExecutionSessionAnimationError::InvalidComposition(
-                            "family TextWrite supports only plain Text leaves".into(),
-                        )
-                    })?;
-                    let noon_core::SemanticObjectContent::Text(handle) = state.content else {
-                        return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "family TextWrite supports only plain Text leaves".into(),
-                        ));
-                    };
-                    let resource = store.text_resources().get(handle).ok_or_else(|| {
-                        ExecutionSessionAnimationError::InvalidComposition(
-                            "family TextWrite lost a Text resource".into(),
-                        )
-                    })?;
-                    if resource.kind != noon_core::TextSourceKind::Plain {
-                        return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "family TextWrite supports only plain Text leaves".into(),
-                        ));
-                    }
-                    let member_count = noon_core::plain_text_animation_members(resource)
-                        .map_err(|error| {
-                            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                        })?
-                        .len();
-                    let member_count = u32::try_from(member_count).map_err(|_| {
-                        ExecutionSessionAnimationError::InvalidComposition(
-                            "family TextWrite glyph count exceeds u32".into(),
-                        )
-                    })?;
-                    total_member_count =
-                        total_member_count
-                            .checked_add(member_count)
-                            .ok_or_else(|| {
-                                ExecutionSessionAnimationError::InvalidComposition(
-                                    "family TextWrite glyph count exceeds u32".into(),
-                                )
-                            })?;
-                    prepared.push((leaf, leaf_index));
-                }
-                if total_member_count == 0 {
+                if options
+                    .introducer
+                    .is_some_and(|introducer| introducer == *reverse)
+                {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
-                        "family TextWrite requires at least one visible glyph".into(),
+                        "TextReveal introducer must match Create/Uncreate direction".into(),
                     ));
                 }
-                if introducer {
+                let admitted_target = if *reverse {
+                    self.require_uncreate_target(store, root, *target)?
+                } else {
+                    self.require_create_target(store, *target)?;
+                    true
+                };
+                if admitted_target {
                     if !admitted.insert(*target) {
                         return Err(ExecutionSessionAnimationError::CreateTarget {
                             target: *target,
@@ -2019,29 +2005,25 @@ impl ExecutionSession {
                     }
                     declaration.add_member(root, *target);
                 }
-                if remover {
+                if options.remover.unwrap_or(*reverse) {
                     removals.push((root, *target));
                 }
-                let children = prepared
-                    .into_iter()
-                    .map(|(leaf, leaf_index)| {
-                        declaration.create_family_text_write_member_animation(
-                            leaf,
-                            *reverse_member_order,
-                            noon_core::SemanticTextWriteFamilyMember {
-                                family: *target,
-                                leaf_index,
-                            },
-                            *options,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                Ok(declaration.create_animation_composition(
-                    SemanticAnimationCompositionKind::Parallel,
-                    children,
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                ))
+                Ok(declaration.create_text_reveal_animation(*target, *reverse, *options))
             }
+            SemanticCompositionRequest::FamilyReveal {
+                target,
+                reverse,
+                options,
+            } => self.stage_family_glyph_animation(
+                store,
+                root,
+                *target,
+                FamilyGlyphOperation::Reveal { reverse: *reverse },
+                *options,
+                declaration,
+                admitted,
+                removals,
+            ),
             SemanticCompositionRequest::Rotate {
                 target,
                 angle,
@@ -2493,6 +2475,157 @@ impl ExecutionSession {
             }
         }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stage_family_glyph_animation(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        target: SemanticNodeId,
+        operation: FamilyGlyphOperation,
+        options: AnimationOptions,
+        declaration: &mut SemanticMutationTransaction,
+        admitted: &mut HashSet<SemanticNodeId>,
+        removals: &mut Vec<(SemanticNodeId, SemanticNodeId)>,
+    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        let node = store.node(target).ok_or_else(|| {
+            ExecutionSessionAnimationError::InvalidComposition(
+                "family glyph animation target does not exist".into(),
+            )
+        })?;
+        let present = node.parents() == [root] && self.reachability.is_reachable(target);
+        let (introducer, remover) = match operation {
+            FamilyGlyphOperation::Write {
+                reverse_member_order,
+            } => (
+                options.introducer.unwrap_or(!reverse_member_order),
+                options.remover.unwrap_or(reverse_member_order),
+            ),
+            FamilyGlyphOperation::Reveal { reverse } => {
+                if options.introducer.is_some_and(|value| value == reverse) {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "family Reveal introducer must match Create/Uncreate direction".into(),
+                    ));
+                }
+                (!present, options.remover.unwrap_or(reverse))
+            }
+        };
+        if matches!(operation, FamilyGlyphOperation::Reveal { reverse: false }) && present {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "family Create target must be detached".into(),
+            ));
+        }
+        let leaves = self.require_family_fade_target(
+            store,
+            root,
+            target,
+            if introducer {
+                SemanticFadeDirection::In
+            } else {
+                SemanticFadeDirection::Out
+            },
+        )?;
+        let mut total = 0_u32;
+        for leaf in &leaves {
+            let state = store.semantic_object_state_checked(*leaf).map_err(|_| {
+                ExecutionSessionAnimationError::InvalidComposition(
+                    "family glyph animation requires ordinary leaves".into(),
+                )
+            })?;
+            let count = match state.content {
+                noon_core::SemanticObjectContent::Geometry(_)
+                    if matches!(operation, FamilyGlyphOperation::Reveal { .. }) =>
+                {
+                    1
+                }
+                noon_core::SemanticObjectContent::Text(handle) => {
+                    let resource = store.text_resources().get(handle).ok_or_else(|| {
+                        ExecutionSessionAnimationError::InvalidComposition(
+                            "family glyph animation lost a Text resource".into(),
+                        )
+                    })?;
+                    if resource.kind != noon_core::TextSourceKind::Plain {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "family glyph animation supports plain Text and Reveal geometry".into(),
+                        ));
+                    }
+                    u32::try_from(
+                        noon_core::plain_text_animation_members(resource)
+                            .map_err(|error| {
+                                ExecutionSessionAnimationError::InvalidComposition(
+                                    error.to_string(),
+                                )
+                            })?
+                            .len(),
+                    )
+                    .map_err(|_| {
+                        ExecutionSessionAnimationError::InvalidComposition(
+                            "family glyph member count exceeds u32".into(),
+                        )
+                    })?
+                }
+                _ => {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "family Write supports only plain Text leaves".into(),
+                    ));
+                }
+            };
+            total = total.checked_add(count).ok_or_else(|| {
+                ExecutionSessionAnimationError::InvalidComposition(
+                    "family glyph member count exceeds u32".into(),
+                )
+            })?;
+        }
+        if total == 0 && matches!(operation, FamilyGlyphOperation::Write { .. }) {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "family TextWrite requires at least one visible glyph".into(),
+            ));
+        }
+        if introducer {
+            if !admitted.insert(target) {
+                return Err(ExecutionSessionAnimationError::CreateTarget {
+                    target,
+                    error: ExecutionSessionCreateError::DuplicateTarget,
+                });
+            }
+            declaration.add_member(root, target);
+        }
+        if remover {
+            removals.push((root, target));
+        }
+        let children = leaves
+            .into_iter()
+            .enumerate()
+            .map(|(leaf_index, leaf)| {
+                let family_member = noon_core::SemanticTextWriteFamilyMember {
+                    family: target,
+                    leaf_index,
+                };
+                match operation {
+                    FamilyGlyphOperation::Write {
+                        reverse_member_order,
+                    } => declaration.create_family_text_write_member_animation(
+                        leaf,
+                        reverse_member_order,
+                        family_member,
+                        options,
+                    ),
+                    FamilyGlyphOperation::Reveal { reverse } => declaration
+                        .create_family_text_reveal_member_animation(
+                            leaf,
+                            reverse,
+                            family_member,
+                            options,
+                        ),
+                }
+            })
+            .collect::<Vec<_>>();
+        Ok(declaration.create_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            children,
+            AnimationOptions::new().rate_func(RateFunction::Linear),
+        ))
     }
 
     fn require_family_fade_target(

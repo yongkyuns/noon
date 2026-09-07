@@ -1537,6 +1537,10 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
         import _manim_rotate as _rotate
 
         animation = args[0]
+        if _canonical_family_reveal_animation(scene, animation) is not None:
+            return "parallel", args, None
+        if _canonical_text_reveal_animation(scene, animation) is not None:
+            return "parallel", args, None
         if _canonical_text_family_fade_animation(scene, animation) is not None:
             return "parallel", args, None
         if _canonical_text_family_write_animation(scene, animation) is not None:
@@ -1740,6 +1744,75 @@ def _canonical_text_family_write_animation(scene: _base.Scene, animation: object
     return family, leaves
 
 
+def _canonical_text_reveal_animation(scene: _base.Scene, animation: object):
+    """Classify one plain-Text Create/Uncreate without deriving glyph state."""
+    if type(animation) not in (_base.Create, _base.Uncreate):
+        return None
+    target = getattr(animation, "target", None)
+    if isinstance(target, _compat.Group):
+        return None
+    if isinstance(target, _typst._RetainedTextMobject) and not isinstance(
+        target, _typst.Text
+    ):
+        raise NotImplementedError(
+            "canonical Text Create/Uncreate supports plain Text; "
+            "Typst and MathTypst remain #959"
+        )
+    if not isinstance(target, _typst.Text):
+        return None
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError(
+            "canonical Text Create/Uncreate requires a typed plain Text target"
+        )
+    reverse = type(animation) is _base.Uncreate
+    if not reverse and target._scene is not None:
+        if target._scene is scene:
+            raise ValueError("Text Create requires a detached target")
+        raise ValueError("Text Create target belongs to another Scene")
+    if reverse and target._scene not in (None, scene):
+        raise ValueError("Text Uncreate target belongs to another Scene")
+    return target, reverse
+
+
+def _canonical_family_reveal_animation(scene: _base.Scene, animation: object):
+    """Classify one typed family Create/Uncreate without scheduling its leaves."""
+    if type(animation) not in (_base.Create, _base.Uncreate):
+        return None
+    family = getattr(animation, "target", None)
+    if not isinstance(family, _compat.Group):
+        return None
+    leaves = _compat._leaf_mobjects(family)
+    if not leaves:
+        raise ValueError("canonical family Create/Uncreate requires at least one leaf")
+    if any(
+        isinstance(member, _typst._RetainedTextMobject)
+        and not isinstance(member, _typst.Text)
+        for member in leaves
+    ):
+        raise NotImplementedError(
+            "canonical family Create/Uncreate supports plain Text and ordinary vector "
+            "leaves; Typst and MathTypst remain #959"
+        )
+    if any(
+        not isinstance(member, _base.Mobject)
+        or getattr(member, "_semantic_handle", None) is None
+        for member in leaves
+    ):
+        raise NotImplementedError(
+            "canonical family Create/Uncreate requires typed ordinary leaves"
+        )
+    if getattr(family, "_semantic_family_handle", None) is None:
+        raise NotImplementedError(
+            "canonical family Create/Uncreate requires a shared family handle"
+        )
+    reverse = type(animation) is _base.Uncreate
+    if not reverse and any(member._scene is not None for member in leaves):
+        raise ValueError("family Create requires detached leaves")
+    if reverse and any(member._scene not in (None, scene) for member in leaves):
+        raise ValueError("family Uncreate target belongs to another Scene")
+    return family, leaves, reverse
+
+
 def _canonical_text_write_options(animation: object):
     """Return only explicitly authored leaf options; Rust resolves omitted timing."""
     args = dict(_options.builder_args(animation))
@@ -1755,6 +1828,39 @@ def _canonical_text_write_options(animation: object):
         None if run_time is None else float(run_time),
         None if rate_func is None else _compat._easing_from_rate_func(rate_func),
         None if lag_ratio is None else float(lag_ratio),
+    )
+
+
+def _canonical_text_reveal_options(animation: object):
+    """Pass authored reveal overrides while Rust owns Create/Uncreate defaults."""
+    args = dict(_options.builder_args(animation))
+    path_arc = float(args.get("path_arc", 0.0))
+    if not math.isfinite(path_arc):
+        raise ValueError("Text Create/Uncreate path_arc must be finite")
+    if not math.isclose(path_arc, 0.0, abs_tol=1e-15):
+        raise NotImplementedError("canonical Text Create/Uncreate does not support path_arc")
+    reverse = type(animation) is _base.Uncreate
+    introducer = args.get("introducer")
+    if reverse:
+        remover = None if bool(getattr(animation, "remover", True)) else False
+        reverse_rate = (
+            None
+            if bool(getattr(animation, "reverse_rate_function", True))
+            else False
+        )
+    else:
+        remover = args.get("remover")
+        reverse_rate = args.get("reverse_rate_function")
+    run_time = args.get("run_time")
+    lag_ratio = args.get("lag_ratio")
+    rate_func = args.get("rate_func")
+    return (
+        None if run_time is None else float(run_time),
+        None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+        None if lag_ratio is None else float(lag_ratio),
+        None if introducer is None else bool(introducer),
+        None if remover is None else bool(remover),
+        None if reverse_rate is None else bool(reverse_rate),
     )
 
 
@@ -1853,6 +1959,69 @@ def _build_canonical_composition_candidate(
             if child_kwargs:
                 raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
             builder.appendWait(float(animation.run_time))
+            return
+        family_reveal = _canonical_family_reveal_animation(self, animation)
+        if family_reveal is not None:
+            family, leaves, reverse = family_reveal
+            (
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+                introducer,
+                remover,
+                reverse_rate_function,
+            ) = _canonical_text_reveal_options(animation)
+            builder.appendFamilyReveal(
+                family._semantic_family_handle,
+                reverse,
+                introducer,
+                remover,
+                reverse_rate_function,
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+            )
+            detached = [member for member in leaves if member._scene is None]
+            if detached:
+                family_registrations.append(family)
+                for member in detached:
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        builder.appendFamilyRevealEntering(
+                            str(reservation.object.id), member._semantic_handle
+                        )
+            removes = reverse if remover is None else remover
+            if removes:
+                removals.extend(leaves)
+            return
+        text_reveal = _canonical_text_reveal_animation(self, animation)
+        if text_reveal is not None:
+            target, reverse = text_reveal
+            (
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+                introducer,
+                remover,
+                reverse_rate_function,
+            ) = _canonical_text_reveal_options(animation)
+            reservation = reserve(target) if target._scene is None else None
+            builder.appendTextReveal(
+                ""
+                if reservation is None or reservation.reuse_existing_identity
+                else str(reservation.object.id),
+                target._semantic_handle,
+                reverse,
+                introducer,
+                remover,
+                reverse_rate_function,
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+            )
+            removes = reverse if remover is None else remover
+            if removes:
+                removals.append(target)
             return
         family_fade = _canonical_text_family_fade_animation(self, animation)
         if family_fade is not None:
@@ -3167,7 +3336,7 @@ def _to_scene_spec(self: _base.Scene) -> dict[str, Any]:
     scene_spec_json = context.sceneSpecJson(
         _json(list(self._tracks)),
         _json(list(getattr(self, "_retained_animation_tracks", []))),
-        _json(list(getattr(self, "_retained_family_animations", []))),
+        _json([]),
         _camera_object_id(self),
     )
     return json.loads(str(scene_spec_json))

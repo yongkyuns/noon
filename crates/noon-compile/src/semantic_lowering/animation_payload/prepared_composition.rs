@@ -98,7 +98,7 @@ impl PreparedSemanticAnimationActivation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationLoweringError {
     Schedule(PreparedSemanticAnimationScheduleError),
-    TextWrite(super::TextWriteLoweringError),
+    TextGlyph(super::TextGlyphLoweringError),
     Target {
         animation: SemanticTransactionNodeRef,
         node: SemanticTransactionNodeRef,
@@ -232,8 +232,8 @@ where
         lower_prepared_semantic_animation_schedule(prepared, index, root, start_time, play_options)
             .map_err(PreparedSemanticAnimationLoweringError::Schedule)?;
     let family_animations =
-        super::lower_prepared_text_write_animations(prepared.store(), &schedule)
-            .map_err(PreparedSemanticAnimationLoweringError::TextWrite)?;
+        super::lower_prepared_text_glyph_animations(prepared.store(), &schedule)
+            .map_err(PreparedSemanticAnimationLoweringError::TextGlyph)?;
     let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
@@ -272,7 +272,7 @@ where
     for leaf in schedule.leaves() {
         if matches!(
             leaf.payload,
-            PreparedSemanticScheduledAnimationPayload::TextWrite { .. }
+            PreparedSemanticScheduledAnimationPayload::TextGlyph { .. }
         ) {
             continue;
         }
@@ -653,8 +653,8 @@ where
                     },
                 }
             }
-            PreparedSemanticScheduledAnimationPayload::TextWrite { .. } => {
-                unreachable!("TextWrite payload was lowered into the shared family channel")
+            PreparedSemanticScheduledAnimationPayload::TextGlyph { .. } => {
+                unreachable!("Text glyph payload was lowered into the shared family channel")
             }
             PreparedSemanticScheduledAnimationPayload::Add => {
                 if leaf.options.lag_ratio != 0.0

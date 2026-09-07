@@ -352,7 +352,7 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             | SemanticAnimationIntent::Add { target } => {
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
             }
-            SemanticAnimationIntent::TextWrite {
+            SemanticAnimationIntent::TextGlyph {
                 target,
                 family_member,
                 ..

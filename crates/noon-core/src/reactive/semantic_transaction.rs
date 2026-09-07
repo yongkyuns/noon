@@ -17,6 +17,16 @@ use super::{
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
+fn normalize_text_reveal_options(reverse: bool, mut options: AnimationOptions) -> AnimationOptions {
+    options.run_time.get_or_insert(1.0);
+    options.rate_func.get_or_insert(crate::RateFunction::Smooth);
+    options.lag_ratio.get_or_insert(1.0);
+    options.reverse_rate_function.get_or_insert(reverse);
+    options.introducer.get_or_insert(!reverse);
+    options.remover.get_or_insert(reverse);
+    options
+}
+
 mod prepared;
 pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
 
@@ -797,8 +807,9 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::AddAnimation {
             token,
             animation: SemanticTransactionAnimation::new(
-                SemanticTransactionAnimationIntent::TextWrite {
+                SemanticTransactionAnimationIntent::TextGlyph {
                     target: target.into(),
+                    mode: crate::FamilyAnimationMode::DrawBorderThenFill,
                     reverse_member_order,
                     family_member: None,
                 },
@@ -820,10 +831,68 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::AddAnimation {
             token,
             animation: SemanticTransactionAnimation::new(
-                SemanticTransactionAnimationIntent::TextWrite {
+                SemanticTransactionAnimationIntent::TextGlyph {
                     target: target.into(),
+                    mode: crate::FamilyAnimationMode::DrawBorderThenFill,
                     reverse_member_order,
                     family_member: Some(family_member),
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    /// Stage one plain Text Create/Uncreate through the shared glyph Reveal mode.
+    pub fn create_text_reveal_animation(
+        &mut self,
+        target: SemanticNodeId,
+        reverse: bool,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        self.create_text_glyph_animation(
+            target,
+            crate::FamilyAnimationMode::Reveal,
+            false,
+            None,
+            normalize_text_reveal_options(reverse, options),
+        )
+    }
+
+    /// Stage one family Text Create/Uncreate leaf with authoritative family position.
+    pub fn create_family_text_reveal_member_animation(
+        &mut self,
+        target: SemanticNodeId,
+        reverse: bool,
+        family_member: crate::SemanticTextWriteFamilyMember,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        self.create_text_glyph_animation(
+            target,
+            crate::FamilyAnimationMode::Reveal,
+            false,
+            Some(family_member),
+            normalize_text_reveal_options(reverse, options),
+        )
+    }
+
+    fn create_text_glyph_animation(
+        &mut self,
+        target: SemanticNodeId,
+        mode: crate::FamilyAnimationMode,
+        reverse_member_order: bool,
+        family_member: Option<crate::SemanticTextWriteFamilyMember>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::TextGlyph {
+                    target: target.into(),
+                    mode,
+                    reverse_member_order,
+                    family_member,
                 },
                 options,
             ),

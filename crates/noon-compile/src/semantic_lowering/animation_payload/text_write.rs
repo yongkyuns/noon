@@ -8,6 +8,7 @@ use super::super::{
     PreparedSemanticAnimationScheduleProjection, PreparedSemanticScheduledAnimationPayload,
     SemanticAnimationScheduleProjection, SemanticScheduledAnimationPayload,
 };
+use crate::semantic_lowering::compiled_scene::lower_semantic_geometry_value;
 
 /// One immutable glyph plan and its shared composition timing.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,7 +31,7 @@ pub struct CompiledFamilyAnimationChannel {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum TextWriteLoweringError {
+pub enum TextGlyphLoweringError {
     MissingSemanticTarget(SemanticTransactionNodeRef),
     InvalidMembers(RetainedAnimationMemberError),
     InvalidPlan(RetainedFamilyAnimationMemberPlanError),
@@ -44,13 +45,13 @@ pub enum TextWriteLoweringError {
     },
 }
 
-impl std::fmt::Display for TextWriteLoweringError {
+impl std::fmt::Display for TextGlyphLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "TextWrite lowering failed: {self:?}")
+        write!(formatter, "Text glyph lowering failed: {self:?}")
     }
 }
 
-impl std::error::Error for TextWriteLoweringError {}
+impl std::error::Error for TextGlyphLoweringError {}
 
 fn plan(
     store: &SemanticStore,
@@ -63,26 +64,37 @@ fn plan(
     >,
     spec: FamilyAnimationSpec,
     time_map: noon_core::CompositionTimeMap,
-) -> Result<CompiledFamilyAnimation, TextWriteLoweringError> {
+) -> Result<CompiledFamilyAnimation, TextGlyphLoweringError> {
     let state = store
         .semantic_object_state_checked(semantic_target)
-        .map_err(|_| TextWriteLoweringError::MissingSemanticTarget(semantic_target.into()))?;
-    let noon_core::SemanticObjectContent::Text(handle) = state.content else {
-        return Err(TextWriteLoweringError::MissingSemanticTarget(
-            semantic_target.into(),
-        ));
+        .map_err(|_| TextGlyphLoweringError::MissingSemanticTarget(semantic_target.into()))?;
+    let content = match (spec.mode, state.content) {
+        (FamilyAnimationMode::Reveal, noon_core::SemanticObjectContent::Geometry(geometry))
+            if family_member.is_some() =>
+        {
+            ObjectContentRef::Geometry(
+                lower_semantic_geometry_value(geometry, Some(store)).map_err(|_| {
+                    TextGlyphLoweringError::MissingSemanticTarget(semantic_target.into())
+                })?,
+            )
+        }
+        (_, noon_core::SemanticObjectContent::Text(handle)) => ObjectContentRef::Text(handle),
+        _ => {
+            return Err(TextGlyphLoweringError::MissingSemanticTarget(
+                semantic_target.into(),
+            ));
+        }
     };
-    let members =
-        RetainedAnimationMembers::resolve(&ObjectContentRef::Text(handle), store.text_resources())
-            .map_err(TextWriteLoweringError::InvalidMembers)?;
+    let members = RetainedAnimationMembers::resolve(&content, store.text_resources())
+        .map_err(TextGlyphLoweringError::InvalidMembers)?;
     let (first_member, total_member_count) = match family_member {
         Some(member) => {
             let (leaf, first, total) = family_spans
                 .get(&member)
                 .copied()
-                .ok_or(TextWriteLoweringError::InvalidFamilyMember(member))?;
+                .ok_or(TextGlyphLoweringError::InvalidFamilyMember(member))?;
             if leaf != semantic_target {
-                return Err(TextWriteLoweringError::InvalidFamilyMember(member));
+                return Err(TextGlyphLoweringError::InvalidFamilyMember(member));
             }
             (first, total)
         }
@@ -95,9 +107,9 @@ fn plan(
         first_member,
         total_member_count,
     )
-    .map_err(TextWriteLoweringError::InvalidPlan)?;
+    .map_err(TextGlyphLoweringError::InvalidPlan)?;
     spec.validate()
-        .map_err(TextWriteLoweringError::InvalidSpec)?;
+        .map_err(TextGlyphLoweringError::InvalidSpec)?;
     Ok(CompiledFamilyAnimation {
         target,
         plan,
@@ -108,40 +120,55 @@ fn plan(
 
 fn resolve_family_spans(
     store: &SemanticStore,
-    members: impl Iterator<Item = noon_core::SemanticTextWriteFamilyMember>,
+    members: impl Iterator<
+        Item = (
+            noon_core::SemanticTextWriteFamilyMember,
+            FamilyAnimationMode,
+        ),
+    >,
 ) -> Result<
     std::collections::HashMap<noon_core::SemanticTextWriteFamilyMember, (SemanticNodeId, u32, u32)>,
-    TextWriteLoweringError,
+    TextGlyphLoweringError,
 > {
-    let families = members
-        .map(|member| member.family)
-        .collect::<std::collections::HashSet<_>>();
+    let mut families = std::collections::HashMap::new();
+    for (member, mode) in members {
+        families.entry(member.family).or_insert(mode);
+    }
     let mut spans = std::collections::HashMap::new();
-    for family in families {
+    for (family, mode) in families {
         let leaves = store
             .ordered_leaf_nodes(family)
-            .map_err(|_| TextWriteLoweringError::MissingSemanticTarget(family.into()))?;
+            .map_err(|_| TextGlyphLoweringError::MissingSemanticTarget(family.into()))?;
         let mut counts = Vec::with_capacity(leaves.len());
         let mut total = 0_u32;
         for leaf in &leaves {
             let state = store
                 .semantic_object_state_checked(*leaf)
-                .map_err(|_| TextWriteLoweringError::MissingSemanticTarget((*leaf).into()))?;
-            let noon_core::SemanticObjectContent::Text(handle) = state.content else {
-                return Err(TextWriteLoweringError::MissingSemanticTarget(
-                    (*leaf).into(),
-                ));
+                .map_err(|_| TextGlyphLoweringError::MissingSemanticTarget((*leaf).into()))?;
+            let content = match (mode, state.content) {
+                (FamilyAnimationMode::Reveal, noon_core::SemanticObjectContent::Geometry(_)) => {
+                    None
+                }
+                (_, noon_core::SemanticObjectContent::Text(handle)) => Some(handle),
+                _ => {
+                    return Err(TextGlyphLoweringError::MissingSemanticTarget(
+                        (*leaf).into(),
+                    ));
+                }
             };
-            let count = RetainedAnimationMembers::resolve(
-                &ObjectContentRef::Text(handle),
-                store.text_resources(),
-            )
-            .map_err(TextWriteLoweringError::InvalidMembers)?
-            .member_count();
+            let count = match content {
+                Some(handle) => RetainedAnimationMembers::resolve(
+                    &ObjectContentRef::Text(handle),
+                    store.text_resources(),
+                )
+                .map_err(TextGlyphLoweringError::InvalidMembers)?
+                .member_count(),
+                None => 1,
+            };
             counts.push((total, count));
             total = total
                 .checked_add(count)
-                .ok_or(TextWriteLoweringError::InvalidFamilyMember(
+                .ok_or(TextGlyphLoweringError::InvalidFamilyMember(
                     noon_core::SemanticTextWriteFamilyMember {
                         family,
                         leaf_index: counts.len() - 1,
@@ -158,20 +185,21 @@ fn resolve_family_spans(
     Ok(spans)
 }
 
-pub fn lower_semantic_text_write_animations(
+pub fn lower_semantic_text_glyph_animations(
     store: &SemanticStore,
     schedule: &SemanticAnimationScheduleProjection,
-) -> Result<Vec<CompiledFamilyAnimation>, TextWriteLoweringError> {
+) -> Result<Vec<CompiledFamilyAnimation>, TextGlyphLoweringError> {
     let family_spans = resolve_family_spans(
         store,
         schedule
             .leaves()
             .iter()
             .filter_map(|leaf| match leaf.payload {
-                SemanticScheduledAnimationPayload::TextWrite {
+                SemanticScheduledAnimationPayload::TextGlyph {
+                    mode,
                     family_member: Some(member),
                     ..
-                } => Some(member),
+                } => Some((member, mode)),
                 _ => None,
             }),
     )?;
@@ -180,14 +208,14 @@ pub fn lower_semantic_text_write_animations(
         .iter()
         .map(|leaf| {
             let interval = noon_core::continuous_time_map_interval(leaf.timing, &leaf.time_map)
-                .map_err(TextWriteLoweringError::InvalidTimeMap)?;
+                .map_err(TextGlyphLoweringError::InvalidTimeMap)?;
             Ok((
                 leaf.animation.into(),
                 leaf.execution_object_id,
                 interval,
                 matches!(
                     leaf.payload,
-                    SemanticScheduledAnimationPayload::TextWrite { .. }
+                    SemanticScheduledAnimationPayload::TextGlyph { .. }
                 ),
             ))
         })
@@ -197,7 +225,8 @@ pub fn lower_semantic_text_write_animations(
         .leaves()
         .iter()
         .filter_map(|leaf| {
-            let SemanticScheduledAnimationPayload::TextWrite {
+            let SemanticScheduledAnimationPayload::TextGlyph {
+                mode,
                 reverse_member_order,
                 family_member,
             } = leaf.payload
@@ -206,7 +235,7 @@ pub fn lower_semantic_text_write_animations(
             };
             Some(
                 FamilyAnimationSpec::new(
-                    FamilyAnimationMode::DrawBorderThenFill,
+                    mode,
                     leaf.timing.start_time,
                     leaf.timing.duration,
                     leaf.options.lag_ratio,
@@ -214,7 +243,7 @@ pub fn lower_semantic_text_write_animations(
                     leaf.options.reverse_rate_function,
                     reverse_member_order,
                 )
-                .map_err(TextWriteLoweringError::InvalidSpec)
+                .map_err(TextGlyphLoweringError::InvalidSpec)
                 .and_then(|spec| {
                     plan(
                         store,
@@ -231,20 +260,21 @@ pub fn lower_semantic_text_write_animations(
         .collect()
 }
 
-pub fn lower_prepared_text_write_animations(
+pub fn lower_prepared_text_glyph_animations(
     store: &SemanticStore,
     schedule: &PreparedSemanticAnimationScheduleProjection,
-) -> Result<Vec<CompiledFamilyAnimation>, TextWriteLoweringError> {
+) -> Result<Vec<CompiledFamilyAnimation>, TextGlyphLoweringError> {
     let family_spans = resolve_family_spans(
         store,
         schedule
             .leaves()
             .iter()
             .filter_map(|leaf| match leaf.payload {
-                PreparedSemanticScheduledAnimationPayload::TextWrite {
+                PreparedSemanticScheduledAnimationPayload::TextGlyph {
+                    mode,
                     family_member: Some(member),
                     ..
-                } => Some(member),
+                } => Some((member, mode)),
                 _ => None,
             }),
     )?;
@@ -253,14 +283,14 @@ pub fn lower_prepared_text_write_animations(
         .iter()
         .map(|leaf| {
             let interval = noon_core::continuous_time_map_interval(leaf.timing, &leaf.time_map)
-                .map_err(TextWriteLoweringError::InvalidTimeMap)?;
+                .map_err(TextGlyphLoweringError::InvalidTimeMap)?;
             Ok((
                 leaf.animation,
                 leaf.execution_object_id,
                 interval,
                 matches!(
                     leaf.payload,
-                    PreparedSemanticScheduledAnimationPayload::TextWrite { .. }
+                    PreparedSemanticScheduledAnimationPayload::TextGlyph { .. }
                 ),
             ))
         })
@@ -270,7 +300,8 @@ pub fn lower_prepared_text_write_animations(
         .leaves()
         .iter()
         .filter_map(|leaf| {
-            let PreparedSemanticScheduledAnimationPayload::TextWrite {
+            let PreparedSemanticScheduledAnimationPayload::TextGlyph {
+                mode,
                 reverse_member_order,
                 family_member,
             } = leaf.payload
@@ -278,13 +309,13 @@ pub fn lower_prepared_text_write_animations(
                 return None;
             };
             let Some(target) = leaf.target.existing() else {
-                return Some(Err(TextWriteLoweringError::MissingSemanticTarget(
+                return Some(Err(TextGlyphLoweringError::MissingSemanticTarget(
                     leaf.target,
                 )));
             };
             Some(
                 FamilyAnimationSpec::new(
-                    FamilyAnimationMode::DrawBorderThenFill,
+                    mode,
                     leaf.timing.start_time,
                     leaf.timing.duration,
                     leaf.options.lag_ratio,
@@ -292,7 +323,7 @@ pub fn lower_prepared_text_write_animations(
                     leaf.options.reverse_rate_function,
                     reverse_member_order,
                 )
-                .map_err(TextWriteLoweringError::InvalidSpec)
+                .map_err(TextGlyphLoweringError::InvalidSpec)
                 .and_then(|spec| {
                     plan(
                         store,
@@ -311,7 +342,7 @@ pub fn lower_prepared_text_write_animations(
 
 fn reject_conflicts(
     drivers: &[(SemanticTransactionNodeRef, ObjectId, (f64, f64), bool)],
-) -> Result<(), TextWriteLoweringError> {
+) -> Result<(), TextGlyphLoweringError> {
     if !drivers.iter().any(|driver| driver.3) {
         return Ok(());
     }
@@ -330,7 +361,7 @@ fn reject_conflicts(
                 latest_text.filter(|(latest_end, _)| start < *latest_end)
             };
             if let Some((_, first)) = conflicting {
-                return Err(TextWriteLoweringError::ConflictingObjectDrivers {
+                return Err(TextGlyphLoweringError::ConflictingObjectDrivers {
                     target: *target,
                     first,
                     second: animation,
@@ -486,7 +517,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            lower_semantic_text_write_animations(&store, &schedule).unwrap(),
+            lower_semantic_text_glyph_animations(&store, &schedule).unwrap(),
             vec![prepared_animation]
         );
     }
@@ -528,8 +559,8 @@ mod tests {
                 AnimationOptions::new(),
                 |_| Option::<EffectiveAnimationProperties>::None,
             ),
-            Err(PreparedSemanticAnimationLoweringError::TextWrite(
-                TextWriteLoweringError::ConflictingObjectDrivers { .. }
+            Err(PreparedSemanticAnimationLoweringError::TextGlyph(
+                TextGlyphLoweringError::ConflictingObjectDrivers { .. }
             ))
         ));
         drop(parallel);

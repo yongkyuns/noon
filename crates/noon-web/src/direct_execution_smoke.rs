@@ -350,6 +350,15 @@ pub async fn create_direct_text_family_fade_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for shared Create/Uncreate over plain Text and a Text family.
+#[wasm_bindgen(js_name = createDirectTextFamilyRevealSmokeRenderer)]
+pub async fn create_direct_text_family_reveal_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::text_family_reveal::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct host for global glyph Write/Unwrite across a plain-Text family.
 #[wasm_bindgen(js_name = createDirectTextFamilyWriteSmokeRenderer)]
 pub async fn create_direct_text_family_write_smoke_renderer(

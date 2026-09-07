@@ -248,6 +248,14 @@
       "reason": "Python passes typed Text/family handles and explicit options. Rust derives global glyph order and count-dependent defaults, validates composition conflicts and membership atomically, and publishes compact per-leaf global spans with immutable glyph plans to the common renderer."
     },
     {
+      "id": "animation.text-reveal",
+      "surface": "Plain Text and Text/geometry Group/VGroup Create/Uncreate, including mixed ordinary compositions",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_text_reveal/declare_and_activate_family_reveal"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_text_reveal_animation/_canonical_family_reveal_animation"}],
+      "reason": "Python passes typed handles and explicit options. Rust owns global glyph ordering, Reveal defaults, local rate reversal, atomic family membership and conflicting-driver validation. The existing compact glyph plans and common retained renderer realize both Create/Uncreate and Write/Unwrite."
+    },
+    {
       "id": "animation.subset-display",
       "surface": "ShowIncreasingSubsets and ShowSubmobjectsOneByOne for ordinary direct-member families",
       "classification": "shared-rust",
@@ -257,11 +265,11 @@
     },
     {
       "id": "animation.lifecycle",
-      "surface": "Unconverted retained/group Create/Uncreate/FadeIn/FadeOut",
+      "surface": "Remaining Typst and other unconverted group lifecycle operations",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_lifecycle.py", "symbol": "_schedule_fade/_schedule_create"},
       "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_create/declare_and_activate_fade_with_endpoint"},
-      "reason": "The remaining #959 retained/group migration path still constructs endpoint snapshots, presence tracks, and final handoff state in Python; canonical typed leaf fades use the shared Rust operation.",
+      "reason": "The remaining #959 retained/group migration path still constructs endpoint snapshots, presence tracks, and final handoff state in Python; canonical typed leaf fades and plain Text family creation use shared Rust operations.",
       "replacement": "Move deterministic endpoint and lifecycle track lowering to the shared Rust facade.",
       "migration_issue": "#61"
     },

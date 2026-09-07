@@ -335,6 +335,38 @@ mod tests {
     }
 
     #[test]
+    fn compact_text_reveal_keeps_global_offset_and_reverses_only_local_progress() {
+        let (source, text_leaf, _) = mixed_plan();
+        let plan = RetainedFamilyAnimationPlan::single_leaf_span(
+            text_leaf,
+            ObjectId::new(10),
+            source.leaves()[0].members().clone(),
+            1,
+            5,
+        )
+        .unwrap();
+        assert_eq!(plan.leaves().len(), 1);
+        for (reverse_rate_function, expected) in [(false, [0.75, 0.5]), (true, [0.25, 0.5])] {
+            let animation = FamilyAnimationState {
+                lag_ratio: 0.25,
+                reverse_rate_function,
+                ..state(false)
+            };
+            let glyphs =
+                retained_family_reveal_members(plan.leaf_frame(animation, text_leaf).unwrap())
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+            for (glyph, expected) in glyphs.iter().zip(expected) {
+                let RetainedFamilyRevealMember::TextGlyph { reveal, .. } = glyph else {
+                    panic!("plain Text reveal must retain glyph descriptors");
+                };
+                assert_eq!(*reveal, expected);
+            }
+        }
+    }
+
+    #[test]
     fn runtime_object_helper_composes_plan_binding_and_reveal_realization() {
         let (plan, frame, states) = geometry_runtime_fixture();
         let family = RetainedFamilyFrame {
