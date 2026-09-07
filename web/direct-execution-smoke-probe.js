@@ -560,6 +560,7 @@ async function directOrdinaryAffineFadeProof(expectedBackend) {
   const samples = [];
   try {
     renderer.resize(canvas.width, canvas.height);
+    renderer.directWakeDirectiveJson(0);
     await presentDirectFrame(renderer);
     for (const [time, x] of [[500, -1], [1000, 0], [1500, 1]]) {
       renderer.advanceDirectRealtime(time);
