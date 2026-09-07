@@ -5,6 +5,7 @@ pub mod automatic_wait_text;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
 pub mod family_transform_indicate;
+pub mod live_geometry_construction;
 pub mod mixed_scalar_composition;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
@@ -693,7 +694,7 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
             }
             1 => {
                 let mut circle_options =
-                    crate::ManimPrimitiveOptions::circle(0.3).map_err(|error| error.to_string())?;
+                    crate::ManimGeometryOptions::circle(0.3).map_err(|error| error.to_string())?;
                 circle_options
                     .set_translation(2.0, -1.0)
                     .map_err(|error| error.to_string())?;
@@ -710,7 +711,7 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                     .set_stroke_opacity(0.9)
                     .map_err(|error| error.to_string())?;
                 let circle = live
-                    .create_manim_primitive(circle_options)
+                    .create_manim_geometry(circle_options)
                     .map_err(|error| error.to_string())?;
                 if live.contains(&circle).map_err(|error| error.to_string())? {
                     return Err("new live Circle must be detached before admission".into());
@@ -718,7 +719,7 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                 live.add(&circle).map_err(|error| error.to_string())?;
 
                 let mut square_options =
-                    crate::ManimPrimitiveOptions::square(0.5).map_err(|error| error.to_string())?;
+                    crate::ManimGeometryOptions::square(0.5).map_err(|error| error.to_string())?;
                 square_options
                     .set_translation(-2.0, 1.0)
                     .map_err(|error| error.to_string())?;
@@ -735,7 +736,7 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                     .set_object_opacity(0.75)
                     .map_err(|error| error.to_string())?;
                 let square = live
-                    .create_manim_primitive(square_options)
+                    .create_manim_geometry(square_options)
                     .map_err(|error| error.to_string())?;
                 if live.contains(&square).map_err(|error| error.to_string())? {
                     return Err("new live Square must be detached before admission".into());

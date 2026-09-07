@@ -1,0 +1,251 @@
+//! Inert typed geometry inputs for optional language wrappers.
+#![cfg(target_arch = "wasm32")]
+
+use noon_core::{Vec2, VectorPath};
+use wasm_bindgen::prelude::*;
+
+fn js_error(error: String) -> JsValue {
+    JsValue::from_str(&error)
+}
+
+/// Constructor values own no semantic store, identity, or execution state.
+#[wasm_bindgen]
+pub struct WasmManimGeometryOptions {
+    pub(crate) options: noon::ManimGeometryOptions,
+}
+
+#[wasm_bindgen]
+impl WasmManimGeometryOptions {
+    #[wasm_bindgen(js_name = setTranslation)]
+    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+        self.options.set_translation(x, y).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setScale)]
+    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+        self.options.set_scale(x, y).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setRotation)]
+    pub fn set_rotation(&mut self, angle: f64) -> Result<(), JsValue> {
+        self.options.set_rotation(angle).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setColor)]
+    pub fn set_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        self.options
+            .set_color(red, green, blue, alpha)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = disableFill)]
+    pub fn disable_fill(&mut self) {
+        self.options.disable_fill();
+    }
+
+    #[wasm_bindgen(js_name = setFill)]
+    pub fn set_fill(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), JsValue> {
+        self.options
+            .set_fill(red, green, blue, opacity)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setFillColor)]
+    pub fn set_fill_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        self.options
+            .set_fill_color(red, green, blue, alpha)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setFillOpacity)]
+    pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+        self.options.set_fill_opacity(opacity).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = disableStroke)]
+    pub fn disable_stroke(&mut self) {
+        self.options.disable_stroke();
+    }
+
+    #[wasm_bindgen(js_name = setStroke)]
+    pub fn set_stroke(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), JsValue> {
+        self.options
+            .set_stroke(red, green, blue, opacity)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setStrokeColor)]
+    pub fn set_stroke_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        self.options
+            .set_stroke_color(red, green, blue, alpha)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setStrokeOpacity)]
+    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+        self.options.set_stroke_opacity(opacity).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setStrokeWidth)]
+    pub fn set_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
+        self.options.set_stroke_width(width).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setStrokeWidthMode)]
+    pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), JsValue> {
+        self.options.set_stroke_width_mode(mode).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setStrokeJoin)]
+    pub fn set_stroke_join(&mut self, join: &str) -> Result<(), JsValue> {
+        self.options.set_stroke_join(join).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setStrokeCap)]
+    pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), JsValue> {
+        self.options.set_stroke_cap(cap).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setObjectOpacity)]
+    pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+        self.options.set_object_opacity(opacity).map_err(js_error)
+    }
+}
+
+impl WasmManimGeometryOptions {
+    pub(crate) fn from_options(options: noon::ManimGeometryOptions) -> Self {
+        Self { options }
+    }
+}
+
+#[wasm_bindgen]
+impl WasmManimGeometryOptions {
+    pub fn circle(radius: f64) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::circle(radius)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    pub fn square(side: f64) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::square(side)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    pub fn rectangle(width: f64, height: f64) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::rectangle(width, height)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    pub fn line(start_x: f64, start_y: f64, end_x: f64, end_y: f64) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::line(start_x, start_y, end_x, end_y)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    pub fn path(path: WasmAuthoringVectorPath) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::path(path.path)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+}
+
+/// Typed path commands are accumulated without importing a resource or allocating identity.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct WasmAuthoringVectorPath {
+    path: VectorPath,
+}
+
+fn point(x: f64, y: f64) -> Result<Vec2, JsValue> {
+    let value = noon::semantic_mobject::authoring_xy_f64(x, y).map_err(js_error)?;
+    Ok(Vec2::new(value.x as f32, value.y as f32))
+}
+
+#[wasm_bindgen]
+impl WasmAuthoringVectorPath {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[wasm_bindgen(js_name = moveTo)]
+    pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+        let to = point(x, y)?;
+        self.path = std::mem::take(&mut self.path).move_to(to);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = lineTo)]
+    pub fn line_to(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+        let to = point(x, y)?;
+        self.path = std::mem::take(&mut self.path).line_to(to);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = quadraticTo)]
+    pub fn quadratic_to(
+        &mut self,
+        control_x: f64,
+        control_y: f64,
+        x: f64,
+        y: f64,
+    ) -> Result<(), JsValue> {
+        let control = point(control_x, control_y)?;
+        let to = point(x, y)?;
+        self.path = std::mem::take(&mut self.path).quadratic_to(control, to);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = cubicTo)]
+    pub fn cubic_to(
+        &mut self,
+        first_x: f64,
+        first_y: f64,
+        second_x: f64,
+        second_y: f64,
+        x: f64,
+        y: f64,
+    ) -> Result<(), JsValue> {
+        let first = point(first_x, first_y)?;
+        let second = point(second_x, second_y)?;
+        let to = point(x, y)?;
+        self.path = std::mem::take(&mut self.path).cubic_to(first, second, to);
+        Ok(())
+    }
+
+    pub fn close(&mut self) {
+        self.path = std::mem::take(&mut self.path).close();
+    }
+}

@@ -214,17 +214,14 @@ mod wasm {
             ))
         }
 
-        #[wasm_bindgen(js_name = createMobject)]
-        pub fn create_mobject(
+        #[wasm_bindgen(js_name = createManimGeometry)]
+        pub fn create_manim_geometry(
             &self,
-            snapshot_json: &str,
+            candidate: crate::WasmManimGeometryOptions,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            let snapshot = serde_json::from_str(snapshot_json)
-                .map_err(|error| js_error(format!("invalid mobject snapshot: {error}")))?;
-            let handle =
-                noon::legacy::import_mobject_snapshot(Rc::clone(&self.semantics), snapshot)
-                    .map_err(js_error)?;
-            Ok(WasmAuthoringMobjectHandle { handle })
+            Mobject::from_manim_geometry(Rc::clone(&self.semantics), candidate.options)
+                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = createManimCircle)]
@@ -604,6 +601,11 @@ mod wasm {
     }
 
     impl WasmAuthoringFamilyLayout {
+        pub(crate) fn completed_bounds(&self) -> Result<Bounds2D64, JsValue> {
+            self.ensure_complete()?;
+            Ok(self.bounds.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0)))
+        }
+
         fn include_leaf_bounds(
             &mut self,
             id: SemanticNodeId,

@@ -94,7 +94,9 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             def create_handle(snapshot_json):
                 return FakeSemanticHandle(snapshot_json)
 
-            fake_js.noonCreateAuthoringMobjectHandle = create_handle
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, create_handle)
             sys.modules["js"] = fake_js
 
             # Match the relevant python-worker bootstrap order exactly: the rate-function
@@ -111,19 +113,12 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             import _noon_ir as _ir
             import noon as _base
 
-            raw = _ir.Mobject(
-                geometry={"rectangle": {"size": {"x": 1.0, "y": 1.0}}},
-                transform={
-                    "translation": {"x": 0.0, "y": 0.0},
-                    "scale": {"x": 1.0, "y": 1.0},
-                    "rotation": 0.0,
-                },
-                style={
-                    "fill": {"red": 0.0, "green": 0.0, "blue": 1.0, "alpha": 0.35},
-                    "stroke": {"red": 0.0, "green": 0.0, "blue": 1.0, "alpha": 0.0},
-                    "stroke_width": 4.0,
-                    "opacity": 1.0,
-                },
+            raw = _ir.Rectangle(
+                1.0,
+                1.0,
+                fill=_ir.Color(0.0, 0.0, 1.0, 0.35),
+                stroke=_ir.Color(0.0, 0.0, 1.0, 0.0),
+                stroke_width=4.0,
             )
             mobject = _base.Mobject(raw)
             handle = mobject._semantic_handle
@@ -143,20 +138,7 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             # Preserve the base Mobject fallback: if neither channel exists, set_color
             # creates a fill using the requested color alpha.
             empty = _base.Mobject(
-                _ir.Mobject(
-                    geometry={"rectangle": {"size": {"x": 1.0, "y": 1.0}}},
-                    transform={
-                        "translation": {"x": 0.0, "y": 0.0},
-                        "scale": {"x": 1.0, "y": 1.0},
-                        "rotation": 0.0,
-                    },
-                    style={
-                        "fill": None,
-                        "stroke": None,
-                        "stroke_width": 0.0,
-                        "opacity": 1.0,
-                    },
-                )
+                _ir.Rectangle(1.0, 1.0, fill=None, stroke=None, stroke_width=0.0)
             )
             empty.set_color(_base.GREEN)
             empty_style = empty.style

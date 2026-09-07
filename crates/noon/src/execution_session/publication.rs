@@ -187,7 +187,7 @@ impl EffectiveSemanticObject<'_> {
 }
 
 impl ExecutionSession {
-    fn require_published_store(
+    pub(crate) fn require_published_store(
         &self,
         store: &SemanticStore,
     ) -> Result<(), ExecutionSessionPublicationError> {

@@ -224,7 +224,9 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 @property
                 def wireObjectOpacity(self): return float(self.snapshot["style"]["opacity"])
 
-            fake_js.noonCreateAuthoringMobjectHandle = FakeHandle
+            import _typed_geometry_test_support as _geometry_test
+
+            _geometry_test.install_js_bridge(fake_js, FakeHandle)
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -235,7 +237,8 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             _manim_rate_functions.install()
             import _manim_phase_b  # noqa: F401
             import _manim_semantic_handles as handles
-            handles._create_handle = FakeHandle
+            import _typed_geometry_test_support as _geometry_test
+            _geometry_test.install_module_bridge(handles, FakeHandle)
             handles.install()
             import _manim_animate as animate
 

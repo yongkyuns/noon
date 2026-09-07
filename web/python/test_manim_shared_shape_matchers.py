@@ -57,6 +57,12 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     },
                 }
 
+            def matcher_options(cx, cy, width, height, **kwargs):
+                import _typed_geometry_test_support as geometry_test
+                value = geometry_test.FakeGeometryOptions.rectangle(width, height)
+                value.snapshot = snapshot(cx, cy, width, height, **kwargs)
+                return value
+
             class FakeHandle:
                 def __init__(self, store, snapshot_json):
                     self.store = store
@@ -129,25 +135,25 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     translation["y"] += float(y)
                     self._sync()
 
-                def surroundingRectangleSnapshotJson(self, buff_x, buff_y, corner_radius):
+                def beginSurroundingRectangle(self, buff_x, buff_y, corner_radius):
                     calls.append(("leaf-surround", float(buff_x), float(buff_y), float(corner_radius)))
-                    return json.dumps(snapshot(
+                    return matcher_options(
                         self.centerX,
                         self.centerY,
                         self.width + 2.0 * float(buff_x),
                         self.height + 2.0 * float(buff_y),
-                    ))
+                    )
 
-                def backgroundRectangleSnapshotJson(self, buff_x, buff_y, corner_radius, fill_opacity):
+                def beginBackgroundRectangle(self, buff_x, buff_y, corner_radius, fill_opacity):
                     calls.append(("leaf-background", float(buff_x), float(buff_y), float(corner_radius)))
-                    return json.dumps(snapshot(
+                    return matcher_options(
                         self.centerX,
                         self.centerY,
                         self.width + 2.0 * float(buff_x),
                         self.height + 2.0 * float(buff_y),
                         background=True,
                         fill_opacity=float(fill_opacity),
-                    ))
+                    )
 
                 def setStrokeWidth(self, value):
                     self.snapshot["style"]["stroke_width"] = float(value)
@@ -211,20 +217,20 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     _, min_y, _, max_y = self._bounds()
                     return max_y - min_y
 
-                def surroundingRectangleSnapshotJson(self, buff_x, buff_y, corner_radius):
+                def beginSurroundingRectangle(self, buff_x, buff_y, corner_radius):
                     calls.append(("family-surround", len(self.members), float(corner_radius)))
-                    return json.dumps(snapshot(
+                    return matcher_options(
                         self.centerX, self.centerY,
                         self.width + 2.0 * float(buff_x), self.height + 2.0 * float(buff_y)
-                    ))
+                    )
 
-                def backgroundRectangleSnapshotJson(self, buff_x, buff_y, corner_radius, fill_opacity):
+                def beginBackgroundRectangle(self, buff_x, buff_y, corner_radius, fill_opacity):
                     calls.append(("family-background", len(self.members), float(corner_radius)))
-                    return json.dumps(snapshot(
+                    return matcher_options(
                         self.centerX, self.centerY,
                         self.width + 2.0 * float(buff_x), self.height + 2.0 * float(buff_y),
                         background=True, fill_opacity=float(fill_opacity)
-                    ))
+                    )
 
             class FakeFamilyHandle:
                 def __init__(self, store):
@@ -276,8 +282,8 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     return FakeFamilyHandle(self)
 
             store = FakeStore()
-            handles._create_handle = store.createMobject
-            handles._create_rectangle_handle = store.createRectangle
+            import _typed_geometry_test_support as _geometry_test
+            _geometry_test.install_module_bridge(handles, store.createMobject)
             handles._create_family_handle = store.createFamily
             handles.install()
 

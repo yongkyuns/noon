@@ -21,6 +21,13 @@ test("Python authoring worker routes specialized geometry to typed store constru
   }
 });
 
+test("generic geometry inputs cross the optional wrapper as typed values", () => {
+  assert.match(source, /noonAuthoringGeometryOptions = WasmManimGeometryOptions/);
+  assert.match(source, /noonAuthoringVectorPath = \(\) => new WasmAuthoringVectorPath\(\)/);
+  assert.match(source, /authoringStore\.createManimGeometry\(options\)/);
+  assert.doesNotMatch(source, /noonCreateAuthoringMobjectHandle|\.createMobject\(/);
+});
+
 test("detached ValueTracker construction stays in the shared authoring store", async () => {
   assert.match(
     source,

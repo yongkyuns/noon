@@ -1194,6 +1194,30 @@ try {
     window.sharedAuthoringSmoke.primitiveConstructionExecution = null;
   });
 
+  const liveGeometrySource = await readFile(
+    path.join(repoRoot, "web/python/examples/live_geometry_construction.py"), "utf8",
+  );
+  await startSampledSource(page, liveGeometrySource, "scene-shared-live-geometry");
+  try {
+    const initial = await page.evaluate(async () =>
+      (await window.sharedAuthoringSmoke.sampledProof.execution.metrics()).metrics);
+    assert.equal(initial.objectCount, 3);
+    const final = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, result] = await Promise.all([execution.sampleToAuthoredTime(2), authored]);
+      return { duration: result.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(final.duration, 2);
+    assert.equal(final.metrics.objectCount, 6);
+    const canvas = page.locator("#scene-shared-live-geometry");
+    const blue = renderedWorldPixel(await canvas.screenshot(), -2, 0);
+    const green = renderedWorldPixel(await canvas.screenshot(), 2, 1);
+    assert.ok(blue.blue > blue.red + 30, "typed Path lost its blue fill");
+    assert.ok(green.green > green.red + 30, "late Rectangle did not animate through shared live publication");
+  } finally {
+    await stopSampledSource(page);
+  }
+
   // The literal Manim Text remover starts detached. Shared Rust must admit it,
   // shrink about its visual center, and remove it at the source barrier.
   const shrinkSource = await readFile(

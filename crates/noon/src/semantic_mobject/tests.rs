@@ -106,6 +106,100 @@ fn resource_geometry_is_store_owned_and_lowers_from_the_same_node() {
 }
 
 #[test]
+fn typed_manim_geometry_preserves_semantic_precision_and_matcher_defaults() {
+    let scene = Scene::new();
+    let before_revision = scene.store().borrow().scene_revision();
+    let before_nodes = scene.store().borrow().len();
+    let precise_x = 0.123_456_789_012_345;
+    let mut path = ManimGeometryOptions::path(
+        VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0)),
+    )
+    .unwrap();
+    path.set_translation(precise_x, -2.0).unwrap();
+    path.set_fill(0.2, 0.4, 0.6, 0.75).unwrap();
+    let object = Mobject::from_manim_geometry(Rc::clone(scene.store()), path).unwrap();
+
+    assert_eq!(scene.store().borrow().len(), before_nodes + 1);
+    assert_eq!(
+        scene.store().borrow().scene_revision(),
+        before_revision.checked_next().unwrap()
+    );
+    assert_eq!(object.state().unwrap().transform.translation.x, precise_x);
+    assert!(matches!(
+        object.state().unwrap().content.geometry(),
+        Some(StoredGeometry::Resource(_))
+    ));
+
+    let point = Bounds2D64::point(3.0, -1.0);
+    let surround = Mobject::from_manim_geometry(
+        Rc::clone(scene.store()),
+        ManimGeometryOptions::surrounding_rectangle(point, 0.25, 0.5, 0.1).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(surround.center().unwrap(), (3.0, -1.0));
+    assert!((surround.width().unwrap() - 0.5).abs() < 1.0e-6);
+    assert!((surround.height().unwrap() - 1.0).abs() < 1.0e-6);
+    assert_eq!(surround.fill_opacity().unwrap(), 0.0);
+
+    let background = Mobject::from_manim_geometry(
+        Rc::clone(scene.store()),
+        ManimGeometryOptions::background_rectangle(point, 0.25, 0.5, 0.0, 0.4).unwrap(),
+    )
+    .unwrap();
+    let style = background.state().unwrap().style;
+    assert_eq!(style.fill_opacity, 0.4);
+    assert_eq!(style.stroke_width, 0.0);
+    assert_eq!(style.stroke_opacity, 0.0);
+}
+
+#[test]
+fn invalid_typed_geometry_and_matcher_bounds_are_inert() {
+    let scene = Scene::new();
+    let revision = scene.store().borrow().scene_revision();
+    let nodes = scene.store().borrow().len();
+    let resources = scene.store().borrow().geometry_resources().len();
+
+    assert!(
+        ManimGeometryOptions::path(VectorPath::new().move_to(Vec2::new(f32::NAN, 0.0))).is_err()
+    );
+    assert!(ManimGeometryOptions::rectangle(0.0, 1.0).is_err());
+    assert!(ManimGeometryOptions::surrounding_rectangle(
+        Bounds2D64 {
+            min_x: 2.0,
+            min_y: 0.0,
+            max_x: 1.0,
+            max_y: 1.0,
+        },
+        0.1,
+        0.1,
+        0.0,
+    )
+    .is_err());
+    assert!(ManimGeometryOptions::background_rectangle(
+        Bounds2D64::point(0.0, 0.0),
+        0.0,
+        0.0,
+        0.0,
+        0.75,
+    )
+    .is_err());
+    let mut invalid_style = ManimGeometryOptions::path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0)),
+    )
+    .unwrap();
+    invalid_style.style.stroke_width = f64::NAN;
+    assert!(Mobject::from_manim_geometry(Rc::clone(scene.store()), invalid_style).is_err());
+
+    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(scene.store().borrow().len(), nodes);
+    assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
+}
+
+#[test]
 fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
     let scene = Scene::new();
     let revision = scene.store().borrow().scene_revision();
