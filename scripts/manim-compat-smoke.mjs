@@ -294,6 +294,7 @@ from noon import *
 class PlainTextLifecycle(Scene):
     def construct(self):
         text = Text("AB")
+        self.add(text)
         self.play(Write(text), run_time=1.0, rate_func=linear)
         assert text in self.mobjects
         self.play(Unwrite(text), run_time=1.0, rate_func=linear)
@@ -306,6 +307,7 @@ from noon import *
 class OverlappingRetainedFamilies(Scene):
     def construct(self):
         text = Text("AB")
+        self.add(text)
         self.play(Write(text), Unwrite(text), rate_func=linear)
 `;
 

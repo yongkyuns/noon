@@ -565,6 +565,17 @@ impl RetainedExecutionFrameMirror {
         }
     }
 
+    pub(crate) fn extend_installed_text_handles(
+        &mut self,
+        additions: &HashMap<TransportTextResourceHandle, TextResourceHandle>,
+    ) {
+        self.text_handles.extend(
+            additions
+                .iter()
+                .map(|(&transport, &local)| (transport, local)),
+        );
+    }
+
     fn resolve_content(
         &self,
         content: &TransportObjectContent,

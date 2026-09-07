@@ -1,9 +1,13 @@
-use noon_core::{Camera2DState, RetainedFamilyAnimationPlan};
+use noon_core::{
+    Camera2DState, FontResourceLookup, GeometryResourceLookup, RetainedFamilyAnimationPlan,
+    TextResourceHandle, TextResourceLookup,
+};
 use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
 use crate::{
     RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
     RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,
+    RetainedResourceBundle, RetainedResourceInventory, RetainedResourceTransportError,
 };
 
 /// Sequence-owning producer for the additive retained family execution envelope.
@@ -16,6 +20,7 @@ use crate::{
 pub struct RetainedFamilyExecutionDeltaEncoder {
     retained: RetainedExecutionDeltaEncoder,
     plan_index_remap: Vec<Option<u32>>,
+    resources: RetainedResourceInventory,
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
@@ -26,13 +31,55 @@ impl RetainedFamilyExecutionDeltaEncoder {
         Self {
             retained: RetainedExecutionDeltaEncoder::with_render_geometries(session, geometries),
             plan_index_remap: Vec::new(),
+            resources: RetainedResourceInventory::default(),
         }
     }
-    pub const fn new(session: u32) -> Self {
+    pub fn new(session: u32) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
             plan_index_remap: Vec::new(),
+            resources: RetainedResourceInventory::default(),
         }
+    }
+
+    pub(crate) fn new_with_resources(session: u32, resources: &RetainedResourceBundle) -> Self {
+        Self {
+            retained: RetainedExecutionDeltaEncoder::new(session),
+            plan_index_remap: Vec::new(),
+            resources: resources.inventory(),
+        }
+    }
+
+    pub(crate) fn attach_resource_additions(
+        &mut self,
+        envelope: &mut RetainedFamilyExecutionDeltaEnvelope,
+        text_handles: impl IntoIterator<Item = TextResourceHandle>,
+        texts: &impl TextResourceLookup,
+        geometries: &impl GeometryResourceLookup,
+        fonts: &impl FontResourceLookup,
+    ) -> Result<(), RetainedResourceTransportError> {
+        let new_texts = text_handles
+            .into_iter()
+            .filter(|handle| {
+                !self.resources.contains_text(
+                    crate::TransportTextResourceHandle::from_source_handle(*handle),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if new_texts.is_empty() {
+            return Ok(());
+        }
+        let mut additions = RetainedResourceBundle::capture_additions(
+            new_texts,
+            texts,
+            geometries,
+            fonts,
+            &self.resources,
+        )?;
+        additions.retain_additions(&mut self.resources);
+        debug_assert!(!additions.is_empty());
+        envelope.resource_additions = Some(additions);
+        Ok(())
     }
 
     pub fn encode_snapshot(

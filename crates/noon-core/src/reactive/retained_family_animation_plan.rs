@@ -1,9 +1,12 @@
+#[cfg(test)]
+use crate::TextResourceArena;
+
 use crate::{
     FamilyAnimationLeafProgress, FamilyAnimationLeafSpan, FamilyAnimationMemberEvaluationError,
     FamilyAnimationMemberPlan, FamilyAnimationMemberPlanBuilder, FamilyAnimationRequest,
     FamilyAnimationRequestError, FamilyAnimationState, ObjectId, RetainedAnimationMember,
     RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError, RetainedObjectDefinition,
-    SemanticNodeId, SemanticStore, TextResourceArena,
+    SemanticNodeId, SemanticStore, TextResourceLookup,
 };
 
 /// Prepared retained-content binding for one semantic family leaf.
@@ -85,7 +88,7 @@ impl RetainedFamilyAnimationPlan {
     pub fn from_request(
         request: &FamilyAnimationRequest,
         objects: &[RetainedObjectDefinition],
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<Self, RetainedFamilyAnimationRequestPlanError> {
         request.validate()?;
         let expected_leaves = request
@@ -188,7 +191,7 @@ impl RetainedFamilyAnimationPlanBuilder {
         &mut self,
         semantic_leaf: SemanticNodeId,
         object: &RetainedObjectDefinition,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyAnimationMemberPlanError> {
         let members = self
             .inner

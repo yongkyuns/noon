@@ -1635,8 +1635,8 @@ def _canonical_text_write_animation(scene: _base.Scene, animation: object):
     if getattr(target, "_semantic_handle", None) is None:
         raise NotImplementedError("canonical Text Write requires a typed plain Text target")
     if animation.introducer:
-        if target._scene is not None:
-            raise ValueError("forward Text Write requires a detached plain Text target")
+        if target._scene is not None and target._scene is not scene:
+            raise ValueError("Text Write target belongs to another Scene")
     elif target._scene is not scene:
         raise ValueError("reverse Text Write requires a plain Text target in this Scene")
     return target
@@ -1769,7 +1769,7 @@ def _build_canonical_composition_candidate(
             child_run_time, rate_function, child_lag_ratio = (
                 _canonical_text_write_options(animation)
             )
-            reservation = reserve(text_write) if animation.introducer else None
+            reservation = reserve(text_write) if animation.introducer and text_write._scene is None else None
             if animation.remover:
                 removals.append(text_write)
             builder.appendTextWrite(
