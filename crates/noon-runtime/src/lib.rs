@@ -3439,12 +3439,20 @@ mod tests {
 
     #[test]
     fn painter_reorder_keeps_dense_rows_and_publishes_only_shifted_order() {
-        let mut scene = SceneDefinition::new();
-        let first = scene.add(GeometryRef::circle(1.0));
-        let second = scene.add(GeometryRef::circle(2.0));
-        let third = scene.add(GeometryRef::circle(3.0));
+        let [first, second, third] = [1, 2, 3].map(ObjectId::new);
+        let objects = [first, second, third]
+            .into_iter()
+            .map(|id| {
+                CompiledObject::new(
+                    id,
+                    ObjectContentRef::Geometry(GeometryRef::circle(id.get() as f32)),
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                )
+            })
+            .collect();
         let mut instance =
-            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+            SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
         instance.take_frame_changes();
 
         instance
