@@ -1899,7 +1899,7 @@ impl ExecutionSession {
                     }
                     SemanticFadeDirection::Out => removals.push((root, *target)),
                 }
-                let children = leaves
+                let children: Vec<_> = leaves
                     .into_iter()
                     .map(|leaf| {
                         declaration.create_fade_animation_with_endpoint(

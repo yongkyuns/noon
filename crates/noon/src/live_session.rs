@@ -3994,7 +3994,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn family_fade_preserves_family_membership_and_ordered_lifecycle() {
-        let mut scene = Scene::new();
+        let scene = Scene::new();
         let label = scene.text(crate::Text::new("Fade")).unwrap();
         let shape = scene.circle(0.25).unwrap();
         let family = scene.family(&[&label, &shape]).unwrap();
