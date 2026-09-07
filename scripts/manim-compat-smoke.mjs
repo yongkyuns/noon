@@ -78,6 +78,8 @@ class Demo(Scene):
             run_time=0.75,
             rate_func=linear,
         )
+        # Masked target edits remain explicit export coverage during #959 migration.
+        self.play(circle.animate.set_y(1.5), run_time=0.4, rate_func=linear)
         self.play(FadeIn(Circle(radius=0.2, color=GREEN)), run_time=0.25)
 
         # Group fades remain explicit export coverage until shared lifecycle migration (#959).
@@ -128,8 +130,7 @@ class GroupMembershipLive(Scene):
         self.replace(pair, replacement)
         assert len(self.mobjects) == 1 and self.mobjects[0] is replacement
 
-        # set_y is intentionally not one of Noon's old fixed animation-builder methods.
-        self.play(replacement.animate.set_y(1.5), run_time=0.4, rate_func=linear)
+        self.wait(0.4)
         self.clear()
         assert self.mobjects == []
 
