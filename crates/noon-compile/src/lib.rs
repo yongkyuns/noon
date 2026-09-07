@@ -10,7 +10,7 @@ mod transform;
 use std::cmp::Ordering;
 use std::{collections::BTreeMap, sync::Arc};
 
-use noon_core::resolve_track_timing;
+use noon_core::{continuous_time_map_interval, resolve_track_timing};
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
     CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId, ObjectStateField, Property,
@@ -647,10 +647,10 @@ impl std::error::Error for CompilePatchError {}
 impl CompiledScene {
     /// Validate the bounded affine completion policy for newly activated tracks.
     /// Existing and candidate tracks are inspected only in affected channels.
-    /// Mapped composition leaves retain the root interval as their track timing;
-    /// completion reconciles only at that exact root endpoint, where runtime finish
-    /// semantics settle every leaf to its authored target independently of the
-    /// map's ordinary alpha-at-one sample.
+    /// Mapped composition leaves retain the root interval for completion, while
+    /// overlap checks use their mapped active intervals. Completion still reconciles
+    /// at the root endpoint, where runtime finish semantics settle every leaf to its
+    /// authored target independently of the map's ordinary alpha-at-one sample.
     pub fn preflight_reconcilable_track_additions(
         &self,
         tracks: &[TrackDefinition],
@@ -685,11 +685,14 @@ impl CompiledScene {
         }
         for (channel, candidate_tracks) in candidates {
             for (candidate_index, candidate) in candidate_tracks.iter().enumerate() {
-                let start = candidate.timing.start_time;
-                let end = start + candidate.timing.duration;
+                let (start, end) =
+                    continuous_time_map_interval(candidate.timing, &candidate.time_map)
+                        .expect("validated candidate track has a valid composition time map");
                 for existing in self.channel_tracks(channel) {
-                    let existing_end = existing.timing.start_time + existing.timing.duration;
-                    if start < existing_end && existing.timing.start_time < end {
+                    let (existing_start, existing_end) =
+                        continuous_time_map_interval(existing.timing, &existing.time_map)
+                            .expect("compiled track has a valid composition time map");
+                    if start < existing_end && existing_start < end {
                         return Err(CompilePatchError::OverlappingTrackReconciliation {
                             track: candidate.id,
                             other: existing.id,
@@ -697,8 +700,10 @@ impl CompiledScene {
                     }
                 }
                 for other in &candidate_tracks[..candidate_index] {
-                    let other_end = other.timing.start_time + other.timing.duration;
-                    if start < other_end && other.timing.start_time < end {
+                    let (other_start, other_end) =
+                        continuous_time_map_interval(other.timing, &other.time_map)
+                            .expect("validated candidate track has a valid composition time map");
+                    if start < other_end && other_start < end {
                         return Err(CompilePatchError::OverlappingTrackReconciliation {
                             track: candidate.id,
                             other: other.id,

@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon_core::{
-    resolve_track_timing, validate_style, validate_track_definition, validate_transform,
-    ObjectContentRef, ObjectId, Property, TrackDefinition, TrackId, TrackValues,
+    continuous_time_map_interval, resolve_track_timing, validate_style, validate_track_definition,
+    validate_transform, ObjectContentRef, ObjectId, Property, TrackDefinition, TrackId,
+    TrackValues,
 };
 
 use crate::{
@@ -19,18 +20,24 @@ struct TrackShadow {
     property: Property,
     start_time: f64,
     duration: f64,
+    reconciliation_end: f64,
+    authored_duration: f64,
     reconciled: bool,
     presence: Option<(bool, bool)>,
 }
 
 impl TrackShadow {
     fn from_compiled(track: &CompiledTrack) -> Self {
+        let (start_time, end_time) =
+            effective_track_interval(track.property, track.timing, &track.time_map);
         Self {
             id: track.id,
             object_index: track.object_index,
             property: track.property,
-            start_time: track.timing.start_time,
-            duration: track.timing.duration,
+            start_time,
+            duration: end_time - start_time,
+            reconciliation_end: track.timing.start_time + track.timing.duration,
+            authored_duration: track.timing.duration,
             reconciled: track.reconciled,
             presence: presence_endpoints(track.property, &track.values),
         }
@@ -38,16 +45,32 @@ impl TrackShadow {
 
     fn from_definition(track: &TrackDefinition, object_index: u32) -> Self {
         let timing = resolve_track_timing(track).expect("track was validated before preflight");
+        let (start_time, end_time) =
+            effective_track_interval(track.property, timing, &track.time_map);
         Self {
             id: track.id,
             object_index,
             property: track.property,
-            start_time: timing.start_time,
-            duration: timing.duration,
+            start_time,
+            duration: end_time - start_time,
+            reconciliation_end: timing.start_time + timing.duration,
+            authored_duration: timing.duration,
             reconciled: false,
             presence: presence_endpoints(track.property, &track.values),
         }
     }
+}
+
+fn effective_track_interval(
+    property: Property,
+    timing: noon_core::TrackTiming,
+    time_map: &noon_core::CompositionTimeMap,
+) -> (f64, f64) {
+    if property.is_instant() {
+        return (timing.start_time, timing.start_time + timing.duration);
+    }
+    continuous_time_map_interval(timing, time_map)
+        .expect("validated track has a valid composition time map")
 }
 
 #[derive(Clone, Copy)]
@@ -360,14 +383,14 @@ pub(super) fn preflight_transaction_with_resources(
                 let object_index = overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                let actual_end = reconciled.start_time + reconciled.duration;
+                let actual_end = reconciled.reconciliation_end;
                 if reconciled.object_index != object_index
                     || reconciled.property != *property
                     || actual_end.total_cmp(end_time) != std::cmp::Ordering::Equal
                 {
                     return Err(CompilePatchError::TrackReconciliationMismatch(*track));
                 }
-                if reconciled.duration <= 0.0
+                if reconciled.authored_duration <= 0.0
                     || !matches!(
                         reconciled.property,
                         Property::Position

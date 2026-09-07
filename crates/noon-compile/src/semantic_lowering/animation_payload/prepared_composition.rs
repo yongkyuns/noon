@@ -372,20 +372,43 @@ where
                         .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
                 for channel in channels {
                     let property = channel.property;
+                    if property == Property::Reveal {
+                        push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                        tracks
+                            .last_mut()
+                            .expect("pushed DrawBorderThenFill reveal")
+                            .time_map
+                            .push(CompositionTimeMapStep::new(0.0, 0.5, phase_rate_function));
+                        continue;
+                    }
+
+                    let hold_values = match &channel.values {
+                        TrackValues::Color { from, .. } => TrackValues::Color {
+                            from: *from,
+                            to: *from,
+                        },
+                        TrackValues::Scalar { from, .. } => TrackValues::Scalar {
+                            from: *from,
+                            to: *from,
+                        },
+                        _ => unreachable!("DrawBorderThenFill style channel is color or scalar"),
+                    };
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
-                    tracks
+                    let transition = tracks
                         .last_mut()
-                        .expect("pushed DrawBorderThenFill channel")
-                        .time_map
-                        .push(CompositionTimeMapStep::new(
-                            if property == Property::Reveal {
-                                0.0
-                            } else {
-                                0.5
-                            },
-                            0.5,
-                            phase_rate_function,
-                        ));
+                        .expect("pushed DrawBorderThenFill style transition");
+                    transition.time_map.push(CompositionTimeMapStep::new(
+                        0.5,
+                        0.5,
+                        phase_rate_function,
+                    ));
+                    let mut hold = transition.clone();
+                    hold.values = hold_values;
+                    hold.time_map = leaf.time_map.clone();
+                    hold.time_map
+                        .push(CompositionTimeMapStep::new(0.0, 0.5, RateFunction::Linear));
+                    let transition_index = tracks.len() - 1;
+                    tracks.insert(transition_index, hold);
                 }
                 continue;
             }
@@ -1062,16 +1085,25 @@ mod tests {
         .unwrap();
 
         assert_eq!(activation.run_time(), 2.0);
-        assert_eq!(activation.tracks().len(), 4);
+        assert_eq!(activation.tracks().len(), 7);
         for track in activation.tracks() {
             assert_eq!(track.time_map.steps.len(), 1);
             let phase = track.time_map.steps[0];
-            assert_eq!(phase.rate_func, RateFunction::Smooth);
             if track.property == Property::Reveal {
                 assert_eq!((phase.start, phase.duration), (0.0, 0.5));
+                assert_eq!(phase.rate_func, RateFunction::Smooth);
                 assert_eq!(track.values, TrackValues::Scalar { from: 0.0, to: 1.0 });
+            } else if phase.start == 0.0 {
+                assert_eq!((phase.start, phase.duration), (0.0, 0.5));
+                assert_eq!(phase.rate_func, RateFunction::Linear);
+                match &track.values {
+                    TrackValues::Color { from, to } => assert_eq!(from, to),
+                    TrackValues::Scalar { from, to } => assert_eq!(from, to),
+                    _ => panic!("outline hold must use a style channel"),
+                }
             } else {
                 assert_eq!((phase.start, phase.duration), (0.5, 0.5));
+                assert_eq!(phase.rate_func, RateFunction::Smooth);
             }
         }
         assert!(activation.tracks().iter().any(|track| {

@@ -3782,4 +3782,64 @@ mod recursive_composition_tests {
         assert_eq!(live.effective(&left).unwrap().transform.translation.x, -2.0);
         assert_eq!(live.effective(&right).unwrap().transform.translation.x, 2.0);
     }
+
+    #[test]
+    fn draw_border_then_fill_holds_the_explicit_outline_through_the_reveal_phase() {
+        let mut scene = Scene::new();
+        let mut square = scene.square(1.0).unwrap();
+        square
+            .set_fill(
+                f64::from(Color::ORANGE.red),
+                f64::from(Color::ORANGE.green),
+                f64::from(Color::ORANGE.blue),
+                1.0,
+            )
+            .unwrap();
+        square
+            .set_stroke_color(
+                f64::from(Color::BLUE.red),
+                f64::from(Color::BLUE.green),
+                f64::from(Color::BLUE.blue),
+                1.0,
+            )
+            .unwrap();
+        square.set_stroke_width(0.06).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_draw_border_then_fill(
+                &square,
+                DrawBorderThenFillOptions::new(0.04, Some(Color::YELLOW)),
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear)
+                    .introducer(true),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 0.5)
+            .unwrap();
+        let outline = live.effective(&square).unwrap().style;
+        assert_eq!(outline.fill.map(|fill| fill.alpha), Some(0.0));
+        assert_eq!(outline.stroke, Some(Color::YELLOW));
+        assert_eq!(outline.stroke_width, 0.04);
+
+        live.advance_segment_to(segment, segment.start_time() + 1.5)
+            .unwrap();
+        let filling = live.effective(&square).unwrap().style;
+        assert_eq!(filling.fill.map(|fill| fill.alpha), Some(0.5));
+        let stroke = filling.stroke.expect("fill phase retains a stroke");
+        assert!((stroke.red - (Color::YELLOW.red + Color::BLUE.red) * 0.5).abs() < 1e-6);
+        assert!((stroke.green - (Color::YELLOW.green + Color::BLUE.green) * 0.5).abs() < 1e-6);
+        assert!((stroke.blue - (Color::YELLOW.blue + Color::BLUE.blue) * 0.5).abs() < 1e-6);
+        assert!((filling.stroke_width - 0.05).abs() < 1e-6);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        let restored = live.effective(&square).unwrap().style;
+        assert_eq!(restored.fill, Some(Color::ORANGE));
+        assert_eq!(restored.stroke, Some(Color::BLUE));
+        assert_eq!(restored.stroke_width, 0.06);
+    }
 }
