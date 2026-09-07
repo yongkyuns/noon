@@ -4239,6 +4239,69 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn three_member_one_by_one_keeps_prior_member_at_fractional_boundaries() {
+        let scene = Scene::new();
+        let first = scene.square(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        let third = scene.square(1.0).unwrap();
+        let family = scene.family(&[&first, &second, &third]).unwrap();
+        family.prepare_subset_display().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+
+        let wait = live.wait_segment(3.0).unwrap();
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        live.complete_segment(wait).unwrap();
+        let segment = live
+            .declare_and_activate_family_subset_display(
+                &family,
+                SubsetDisplayMode::OneByOneCeil,
+                AnimationOptions::new()
+                    .run_time(3.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(segment.start_time(), 3.0);
+
+        live.advance_segment_to(segment, 4.0).unwrap();
+        assert_eq!(
+            [
+                live.effective(&first).unwrap().style.fill.unwrap().alpha,
+                live.effective(&second).unwrap().style.fill.unwrap().alpha,
+                live.effective(&third).unwrap().style.fill.unwrap().alpha,
+            ],
+            [1.0, 0.0, 0.0]
+        );
+        live.advance_segment_to(segment, 4.001).unwrap();
+        assert_eq!(
+            [
+                live.effective(&first).unwrap().style.fill.unwrap().alpha,
+                live.effective(&second).unwrap().style.fill.unwrap().alpha,
+                live.effective(&third).unwrap().style.fill.unwrap().alpha,
+            ],
+            [0.0, 1.0, 0.0]
+        );
+        live.advance_segment_to(segment, 5.0).unwrap();
+        assert_eq!(
+            [
+                live.effective(&first).unwrap().style.fill.unwrap().alpha,
+                live.effective(&second).unwrap().style.fill.unwrap().alpha,
+                live.effective(&third).unwrap().style.fill.unwrap().alpha,
+            ],
+            [0.0, 1.0, 0.0]
+        );
+        live.advance_segment_to(segment, 5.001).unwrap();
+        assert_eq!(
+            [
+                live.effective(&first).unwrap().style.fill.unwrap().alpha,
+                live.effective(&second).unwrap().style.fill.unwrap().alpha,
+                live.effective(&third).unwrap().style.fill.unwrap().alpha,
+            ],
+            [0.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
     fn live_subset_preparation_is_one_atomic_style_publication() {
         let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();

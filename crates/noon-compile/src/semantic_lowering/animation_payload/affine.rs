@@ -1465,8 +1465,11 @@ pub(super) fn lower_subset_display_phases(
     mode: SemanticSubsetDisplayMode,
 ) -> Result<Vec<LoweredSubsetDisplayPhase>, AffinePayloadIssue> {
     debug_assert!(count > 0 && member_index < count);
-    let lower = member_index as f64 / count as f64;
-    let upper = (member_index + 1) as f64 / count as f64;
+    // Continuous timeline progress is represented as f32. Store thresholds in that same domain so
+    // an exact root-time boundary such as one third remains the end of the prior member rather
+    // than rounding just past its f64 ratio during evaluation.
+    let lower = f64::from((member_index as f64 / count as f64) as f32);
+    let upper = f64::from(((member_index + 1) as f64 / count as f64) as f32);
     let channels = lower_subset_display_channels(source, from)?;
     let mut phases = Vec::with_capacity(channels.len() * 2);
     for channel in channels {
