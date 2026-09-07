@@ -174,6 +174,83 @@ impl RetainedFamilyExecutionDeltaEncoder {
         Ok(Some(envelope))
     }
 
+    /// Encode one sparse family-aware update with a compact painter-order splice.
+    /// Added rows begin with no family scheduler state; existing and retired rows
+    /// retain the ordinary sparse family-state update behavior.
+    pub fn encode_planned_incremental_with_painter_order(
+        &mut self,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        changes: &FrameChanges,
+        camera: Camera2DState,
+        painter_order: &[u32],
+    ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
+    {
+        self.validate_plan_count(plans)?;
+        if let Some(&index) = changes.added_indices().iter().find(|&&index| {
+            frame
+                .family_animations
+                .get(index)
+                .is_some_and(Option::is_some)
+        }) {
+            return Err(RetainedFamilyExecutionEncodeError::ActiveAddedObject(index));
+        }
+        let family_indices = changes
+            .object_indices()
+            .iter()
+            .copied()
+            .filter(|index| changes.added_indices().binary_search(index).is_err())
+            .collect::<Vec<_>>();
+        let family_changes = FrameChanges::objects(family_indices);
+        let mut next_remap = self.plan_index_remap.clone();
+        next_remap.resize(plans.len(), None);
+        let mut added_plan_indices = Vec::new();
+        for &object_index in family_changes.object_indices() {
+            if frame.family_animation(object_index).is_none() {
+                continue;
+            }
+            let object = &frame.retained.objects[object_index];
+            let core_index = frame.family_plan_index(object_index).ok_or(
+                RetainedFamilyExecutionTransportError::MissingPlanIndex(object.id),
+            )? as usize;
+            let next_wire_index = next_remap.iter().flatten().count() as u32;
+            let Some(mapping) = next_remap.get_mut(core_index) else {
+                return Err(RetainedFamilyExecutionTransportError::InvalidPlanIndex {
+                    object: object.id,
+                    plan_index: core_index as u32,
+                    plan_count: plans.len(),
+                }
+                .into());
+            };
+            if mapping.is_none() {
+                *mapping = Some(next_wire_index);
+                added_plan_indices.push(core_index);
+            }
+        }
+        let Some(retained) = self.retained.encode_incremental_with_painter_order(
+            frame.retained,
+            changes,
+            camera,
+            painter_order,
+        )?
+        else {
+            return Ok(None);
+        };
+        let added_plans = added_plan_indices
+            .iter()
+            .map(|&index| plans[index].clone())
+            .collect::<Vec<_>>();
+        let mut envelope = RetainedFamilyExecutionDeltaEnvelope::planned_incremental_with_plans(
+            retained,
+            frame,
+            &family_changes,
+            &added_plans,
+        )?;
+        remap_family_state_indices(&mut envelope, &next_remap)?;
+        self.plan_index_remap = next_remap;
+        Ok(Some(envelope))
+    }
+
     fn validate_plan_count(
         &self,
         plans: &[RetainedFamilyAnimationPlan],
@@ -250,6 +327,7 @@ fn remap_family_state_indices(
 pub enum RetainedFamilyExecutionEncodeError {
     Retained(RetainedExecutionTransportError),
     Family(RetainedFamilyExecutionTransportError),
+    ActiveAddedObject(usize),
 }
 
 impl std::fmt::Display for RetainedFamilyExecutionEncodeError {
@@ -257,6 +335,10 @@ impl std::fmt::Display for RetainedFamilyExecutionEncodeError {
         match self {
             Self::Retained(error) => error.fmt(formatter),
             Self::Family(error) => error.fmt(formatter),
+            Self::ActiveAddedObject(index) => write!(
+                formatter,
+                "new retained row {index} cannot begin with active family scheduler state"
+            ),
         }
     }
 }

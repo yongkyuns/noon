@@ -287,6 +287,9 @@ mod wasm {
             .map_err(js_error)?;
             let plans = self.mirror.family_plans();
             let family_frame = self.mirror.planned_family_frame().map_err(js_error)?;
+            if self.pending_changes.is_all() || self.pending_changes.has_painter_order_change() {
+                self.preparer.set_painter_order(self.mirror.painter_order());
+            }
             let family_active = !self.mirror.active_family_animation_indices().is_empty();
             let prepared = if !family_active {
                 self.preparer.release_planned_family_realization();

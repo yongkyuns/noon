@@ -356,6 +356,12 @@ impl InstalledRetainedFamilyExecutionState {
         &self.active_indices
     }
 
+    /// Extend stable dense state rows after the retained mirror admits new slots.
+    pub(crate) fn resize_for_frame(&mut self, frame: &FrameState) {
+        self.states.resize(frame.objects.len(), None);
+        self.plan_indices.resize(frame.objects.len(), None);
+    }
+
     /// Legacy convenience for callers that deliberately operate on one plan only.
     pub fn single_plan(
         &self,
@@ -624,6 +630,8 @@ mod tests {
                 render_transform: None,
                 render_geometry_resource: None,
             }],
+            removed_slots: Vec::new(),
+            painter_order: None,
         }
     }
 

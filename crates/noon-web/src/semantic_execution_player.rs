@@ -1556,12 +1556,7 @@ impl SemanticExecutionPlayer {
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
-        if snapshot
-            || changes.is_all()
-            || changes.is_structural()
-            || changes.has_painter_order_change()
-            || !self.snapshot_sent
-        {
+        if snapshot || changes.is_all() || !self.snapshot_sent {
             let delta = self
                 .encoder
                 .encode_planned_snapshot_indices(
@@ -1576,6 +1571,16 @@ impl SemanticExecutionPlayer {
                 .map_err(|e| e.to_string())?;
             self.snapshot_sent = true;
             Ok(Some(delta))
+        } else if changes.is_structural() || changes.has_painter_order_change() {
+            self.encoder
+                .encode_planned_incremental_with_painter_order(
+                    &self.session.planned_family_frame(),
+                    self.session.family_animation_plans(),
+                    &changes,
+                    camera,
+                    self.session.painter_order(),
+                )
+                .map_err(|e| e.to_string())
         } else {
             self.encoder
                 .encode_planned_incremental(

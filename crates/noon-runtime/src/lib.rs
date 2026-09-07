@@ -503,6 +503,13 @@ impl FrameChanges {
         changes
     }
 
+    /// Attach a locally bounded painter-order update to an existing object or
+    /// structural change set.
+    pub fn with_painter_order(mut self, range: std::ops::Range<usize>) -> Self {
+        self.insert_painter_order_range(range);
+        self
+    }
+
     pub fn with_structure(
         mut object_indices: Vec<usize>,
         mut added_indices: Vec<usize>,

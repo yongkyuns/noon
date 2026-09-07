@@ -53,6 +53,10 @@ impl InstalledRetainedExecutionMirror {
         self.resolved.as_ref()
     }
 
+    pub fn painter_order(&self) -> &[u32] {
+        self.wire.painter_order()
+    }
+
     pub fn family_frame(&self) -> Result<Option<RetainedFamilyFrame<'_>>, InstalledExecutionError> {
         if self.family.plans().is_empty() {
             return Ok(None);
@@ -165,6 +169,9 @@ impl InstalledRetainedExecutionMirror {
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             return Ok((outcome, changes));
         }
+        if let Some(frame) = self.resolved.as_ref() {
+            next_family.resize_for_frame(frame);
+        }
         self.family = next_family;
         Ok((outcome, changes))
     }
@@ -227,7 +234,7 @@ impl InstalledRetainedExecutionMirror {
             .resolved
             .as_mut()
             .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
-        if resolved.objects.len() != wire.objects.len() {
+        if resolved.objects.len() > wire.objects.len() {
             return Err(InstalledExecutionError::FrameShapeMismatch);
         }
 
@@ -237,6 +244,19 @@ impl InstalledRetainedExecutionMirror {
                 .objects
                 .get(index)
                 .ok_or(InstalledExecutionError::InvalidObjectIndex(index))?;
+            if index == resolved.objects.len() {
+                resolved.objects.push(source.clone());
+                resolved.presences.push(wire.presences[index]);
+                resolved.reveals.push(wire.reveals[index]);
+                resolved.morphs.push(wire.morphs[index]);
+                resolved
+                    .render_geometries
+                    .push(wire.render_geometries[index].clone());
+                resolved
+                    .render_transforms
+                    .push(wire.render_transforms[index]);
+                continue;
+            }
             let target = resolved
                 .objects
                 .get_mut(index)
@@ -550,6 +570,8 @@ mod tests {
             time: 0.5,
             camera: initial.camera,
             objects: vec![changed],
+            removed_slots: Vec::new(),
+            painter_order: None,
         };
         let (_, changes) = mirror.apply(delta).unwrap();
         assert_eq!(changes.object_indices(), &[0]);
