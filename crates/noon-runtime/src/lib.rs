@@ -731,7 +731,7 @@ pub struct SceneInstance {
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
     active_family_animation_indices: BTreeSet<usize>,
-    pending_family_endpoint_expirations: BTreeSet<usize>,
+    pending_family_endpoint_expirations: BTreeMap<usize, usize>,
 }
 
 impl Clone for SceneInstance {
@@ -783,7 +783,7 @@ impl SceneInstance {
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
             active_family_animation_indices: BTreeSet::new(),
-            pending_family_endpoint_expirations: BTreeSet::new(),
+            pending_family_endpoint_expirations: BTreeMap::new(),
         };
         instance.seek_unchecked(0.0);
         instance
@@ -1435,7 +1435,9 @@ impl SceneInstance {
         // End events leave one exact endpoint publication active for lifecycle
         // reconciliation. Revisit only those crossed endpoint channels on the next
         // tick so they expire without scanning historical family animations.
-        let mut requested = std::mem::take(&mut self.pending_family_endpoint_expirations);
+        let mut requested = std::mem::take(&mut self.pending_family_endpoint_expirations)
+            .into_values()
+            .collect::<BTreeSet<_>>();
         requested.extend(
             self.timeline_scheduler
                 .requested_family_animations()
@@ -1453,12 +1455,8 @@ impl SceneInstance {
         self.frame.family_animations[object_index] = None;
         self.frame.family_animation_plan_indices[object_index] = None;
         self.active_family_animation_indices.remove(&object_index);
-        let animations = self.compiled.family_animations();
-        self.pending_family_endpoint_expirations.retain(|index| {
-            animations
-                .get(*index)
-                .is_some_and(|animation| animation.object_index as usize != object_index)
-        });
+        self.pending_family_endpoint_expirations
+            .remove(&object_index);
     }
 
     fn update_family_animation(&mut self, animation_index: usize, time: f64) -> bool {
@@ -1468,12 +1466,17 @@ impl SceneInstance {
             let (_, end_time) = family_animation_interval(&animation);
             if time == end_time {
                 self.pending_family_endpoint_expirations
-                    .insert(animation_index);
+                    .insert(object_index, animation_index);
+            } else {
+                self.pending_family_endpoint_expirations
+                    .remove(&object_index);
             }
             return self.set_family_animation(animation_index, state);
         }
-        self.pending_family_endpoint_expirations
-            .remove(&animation_index);
+        if self.pending_family_endpoint_expirations.get(&object_index) == Some(&animation_index) {
+            self.pending_family_endpoint_expirations
+                .remove(&object_index);
+        }
         if self.frame.family_animation_plan_indices[object_index] != Some(animation.plan_index) {
             return false;
         }
