@@ -34,13 +34,16 @@ mod text_authoring;
 pub use animation_authoring::DeclaredAnimation;
 pub use execution_segment::*;
 pub use execution_session::*;
-pub use family_authoring::{MobjectFamily, MobjectFamilyMember};
+pub use family_authoring::{
+    semantic_family_leaf_ids, FamilyArrangePlan, FamilyTranslation, MobjectFamily,
+    MobjectFamilyMember,
+};
 pub use host_callbacks::*;
 pub use live_program::*;
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
-    EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint, FadeTranslation, IndicateOptions,
-    LiveSession, LiveSessionError, TransformToRequest,
+    DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
+    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, TransformToRequest,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::*;
@@ -58,10 +61,10 @@ pub use text_authoring::*;
 /// Common imports for direct typed semantic authoring.
 pub mod prelude {
     pub use crate::{
-        ContinuationStep, DeclaredAnimation, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
-        FadeTranslation, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
-        MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal, Scene, TrackerPosition,
-        ValueTracker,
+        ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState,
+        ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram,
+        LiveSession, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
+        NativeVectorSignal, Scene, TrackerPosition, ValueTracker,
     };
     pub use noon_core::{
         Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,

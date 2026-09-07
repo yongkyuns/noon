@@ -79,7 +79,7 @@ class Demo(Scene):
 const phaseBSource = `
 from noon import *
 
-class GroupAndSceneMembership(Scene):
+class GroupMembershipExport(Scene):
     def construct(self):
         left = Circle(radius=0.35, color=BLUE)
         right = Square(side_length=0.7, color=PINK)
@@ -102,7 +102,8 @@ class GroupAndSceneMembership(Scene):
         self.add(pair)
         assert len(self.mobjects) == 1 and self.mobjects[0] is pair
 
-        self.play(pair.animate.shift(UP).scale(0.8), run_time=0.5, rate_func=smooth)
+        # Family transforms are qualified by the live AnimateParity case below.
+        self.wait(0.5)
         self.remove(pair)
         assert self.mobjects == []
 
@@ -167,6 +168,8 @@ class AnimateParity(Scene):
                 .set_y(1.0)
         )
         assert len(self.mobjects) == 1 and self.mobjects[0] is detached
+        assert abs(detached.get_center()[0] - 1) < 1e-6
+        assert abs(detached.get_center()[1] - 1) < 1e-6
 
         square = Square(side_length=0.4, color=PINK)
         self.play(
@@ -178,6 +181,8 @@ class AnimateParity(Scene):
             Circle(radius=0.15, color=GREEN),
             Square(side_length=0.3, color=RED),
         ).arrange(RIGHT, buff=0.15)
+        for member in pair:
+            self.live_execution().add(member)
         self.play(pair.animate(run_time=1.2, lag_ratio=0.5).shift(UP))
 
         override = Circle(radius=0.2, color=PURPLE)
@@ -186,6 +191,11 @@ class AnimateParity(Scene):
             run_time=0.4,
             rate_func=smooth,
         )
+
+        assert abs(override.get_center()[0] - 1) < 1e-6
+        assert abs(detached.get_center()[0]) < 1e-6
+        assert abs(square.get_center()[1] - 1) < 1e-6
+        assert abs(pair.get_center()[1] - 1) < 1e-6
 
         late_args = Circle().animate
         late_args.shift(RIGHT)
@@ -436,8 +446,8 @@ try {
   const phaseBProperties = phaseB.document.tracks.map((track) => track.property);
   assert.equal(
     phaseBProperties.filter((property) => property === "transform").length,
-    3,
-    "group animate should lower to member transforms and generic set_y should lower once",
+    1,
+    "the remaining exported scalar transform should lower once",
   );
   assert.equal(
     phaseBProperties.filter((property) => property === "presence").length,
@@ -460,46 +470,11 @@ try {
   assert.equal(defaultStyle.stroke_cap, "butt");
 
   const animateParity = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     animateParitySource,
   );
-  assert.equal(animateParity.kind, "scene_document");
-  assert.equal(animateParity.document.objects.length, 5, "detached animate and groups should auto-bind flat objects");
-  const animateTracks = animateParity.document.tracks.filter((track) => track.property === "transform");
-  assert.equal(animateTracks.length, 6);
-
-  const byObject = new Map();
-  for (const track of animateTracks) {
-    const list = byObject.get(track.object) ?? [];
-    list.push(track);
-    byObject.set(track.object, list);
-  }
-  assert.equal(byObject.get(0)[0].timing.start_time, 0);
-  assert.equal(byObject.get(0)[0].timing.duration, 2);
-  assert.equal(byObject.get(0)[0].timing.easing, "linear");
-  assert.equal(byObject.get(0)[1].timing.start_time, 2);
-  assert.equal(byObject.get(0)[1].timing.duration, 0.5);
-  assert.equal(byObject.get(1)[0].timing.start_time, 2);
-  assert.equal(byObject.get(1)[0].timing.duration, 2);
-  assert.equal(byObject.get(1)[0].timing.easing, "smooth");
-
-  const groupFirst = byObject.get(2)[0];
-  const groupSecond = byObject.get(3)[0];
-  assert.ok(Math.abs(groupFirst.timing.start_time - 4.0) < 1e-9);
-  assert.ok(Math.abs(groupFirst.timing.duration - 0.8) < 1e-9);
-  assert.ok(Math.abs(groupSecond.timing.start_time - 4.4) < 1e-9);
-  assert.ok(Math.abs(groupSecond.timing.duration - 0.8) < 1e-9);
-  assert.equal(groupFirst.timing.easing, "smooth");
-  assert.equal(groupSecond.timing.easing, "smooth");
-
-  const overridden = byObject.get(4)[0];
-  assert.ok(Math.abs(overridden.timing.start_time - 5.2) < 1e-9);
-  assert.ok(Math.abs(overridden.timing.duration - 0.4) < 1e-9);
-  assert.equal(
-    overridden.timing.easing,
-    "smooth",
-    "Scene.play kwargs should override builder animation kwargs",
-  );
+  assert.ok(Math.abs(animateParity.duration - 5.6) < 1e-9);
+  assert.ok(animateParity.metrics.presentedFrames > 0, "shared family animate must render");
 
   const queryTransforms = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),

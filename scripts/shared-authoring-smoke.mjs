@@ -299,17 +299,25 @@ function textPixelStats(buffer) {
 }
 
 // Share source attachment across visual proofs; authored timing stays in Rust.
-async function startSampledSource(page, source, canvasId) {
-  await page.evaluate(async ({ source, canvasId }) => {
+async function startSampledSource(page, source, canvasId, width = 640, height = 360) {
+  console.log(`Checking sampled source ${canvasId}`);
+  await page.evaluate(async ({ source, canvasId, width, height }) => {
     const harness = window.sharedAuthoringSmoke;
     const canvas = document.createElement("canvas");
     canvas.id = canvasId;
-    canvas.width = 640;
-    canvas.height = 360;
+    canvas.width = width;
+    canvas.height = height;
     document.body.append(canvas);
-    const execution = new harness.AuthoringExecutionClient(canvas);
     let resolveAttached;
     let rejectAttached;
+    const execution = new harness.AuthoringExecutionClient(canvas, {
+      onError(error, owner) {
+        const failure = new Error(`${canvasId} ${owner}: ${error}`);
+        console.error(failure.message);
+        rejectAttached(failure);
+        execution.terminate();
+      },
+    });
     const attached = new Promise((resolve, reject) => {
       resolveAttached = resolve;
       rejectAttached = reject;
@@ -328,7 +336,7 @@ async function startSampledSource(page, source, canvasId) {
     harness.sampledProof = { execution, authored };
     await attached;
     await execution.sampleToAuthoredTime(0);
-  }, { source, canvasId });
+  }, { source, canvasId, width, height });
 }
 
 async function stopSampledSource(page) {
@@ -348,9 +356,13 @@ try {
   browser = await chromium.launch({ channel: "chromium", headless: true, args: browserArgs });
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
   const browserErrors = [];
-  page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error}`));
+  const recordBrowserError = (error) => {
+    browserErrors.push(error);
+    console.error(error);
+  };
+  page.on("pageerror", (error) => recordBrowserError(`pageerror: ${error}`));
   page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
+    if (message.type() === "error") recordBrowserError(`console: ${message.text()}`);
   });
   await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
 
@@ -1308,6 +1320,41 @@ try {
       return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
     });
     assert.equal(result.duration, 4.5);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const drawBorderThenFillSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_draw_border_then_fill.py"), "utf8",
+  );
+  // Match the direct proof's resolution so the thin outline covers a full pixel.
+  await startSampledSource(page, drawBorderThenFillSource, "scene-shared-draw-border-then-fill", 960, 540);
+  try {
+    const canvas = page.locator("#scene-shared-draw-border-then-fill");
+    await page.evaluate(() => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.5));
+    const outlineFrame = await canvas.screenshot();
+    const outline = renderedWorldPixel(outlineFrame, -1, 0.4);
+    const unfilled = renderedWorldPixel(outlineFrame, -1, 0);
+    assert.ok(Math.abs(outline.red - 247) < 15 && Math.abs(outline.green - 217) < 15 && Math.abs(outline.blue - 111) < 15,
+      `shared DrawBorderThenFill must reveal the yellow outline in phase one: ${JSON.stringify(outline)}`);
+    assert.ok(Math.max(unfilled.red, unfilled.green, unfilled.blue) < 40,
+      "shared DrawBorderThenFill must keep fill transparent in phase one");
+    for (const [time, x] of [[1.5, -1], [2, -1], [2.5, 1], [3, 1]]) {
+      await page.evaluate(
+        (sampleTime) => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(sampleTime),
+        time,
+      );
+      const color = renderedWorldPixel(await canvas.screenshot(), x, 0);
+      assert.ok(color.alpha > 40 && color.red > 90,
+        `shared DrawBorderThenFill at ${time}s missed filled member at ${x}`);
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.25), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3.25);
     assert.equal(result.metrics.objectCount, 2);
   } finally {
     await stopSampledSource(page);

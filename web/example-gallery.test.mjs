@@ -114,9 +114,7 @@ for (const id of [
   "manim-grow-from-center",
   "manim-grow-from-edge",
   "manim-spin-in-from-nothing",
-  "manim-rotating-demo",
   "manim-using-focus-on",
-  "manim-using-indicate",
   "manim-lagged-start-map",
 ]) {
   assert.equal(
@@ -124,6 +122,11 @@ for (const id of [
     "candidate",
     `${id}: exact upstream source should be public before separate raster qualification`,
   );
+}
+for (const id of ["manim-rotating-demo", "manim-using-indicate"]) {
+  const entry = manifest.entries.find((candidate) => candidate.id === id);
+  assert.equal(entry?.status, "blocked", `${id}: shared migration remains incomplete`);
+  assert.equal(entry?.dependency, "#61/#959", `${id}: retain explicit migration owners`);
 }
 for (const syntheticProbeId of [
   "parity-dot-ellipse",

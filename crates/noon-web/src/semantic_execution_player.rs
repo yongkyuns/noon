@@ -358,7 +358,7 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_move_to_point(
         &mut self,
         mobject: &noon::Mobject,
@@ -380,7 +380,7 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_manim_primitive(
         &mut self,
         options: noon::ManimPrimitiveOptions,
@@ -516,7 +516,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn with_live_session<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,
@@ -575,6 +575,32 @@ impl SemanticExecutionPlayer {
         .shift(mobject, x, y)
         .map(|_| ())
         .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_shift_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|session| session.shift_family(family, x, y))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_arrange_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        center: bool,
+    ) -> Result<(), String> {
+        self.with_live_session(|session| {
+            session.arrange_family(family, direction_x, direction_y, buff, center)
+        })
+        .map(|_| ())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2214,14 +2240,21 @@ mod tests {
         )
         .unwrap();
         let mut mirror = RetainedExecutionFrameMirror::default();
-        mirror.apply(player.delta(true).unwrap().unwrap()).unwrap();
+        let initial = player.delta(true).unwrap().unwrap();
+        assert_eq!(initial.objects[1].slot.generation, 0);
+        mirror.apply(initial).unwrap();
         player.live_remove(&toggled).unwrap();
+        let retired = player.delta(false).unwrap().unwrap();
+        assert!(retired.snapshot);
+        assert_eq!(retired.objects.len(), 1);
+        mirror.apply(retired).unwrap();
         player.live_add(&toggled).unwrap();
-        assert!(player.session.execution_slot_for_frame_index(1).is_none());
+        assert!(player.session.execution_slot_for_frame_index(1).is_some());
         let snapshot = player.delta(false).unwrap().unwrap();
         assert!(snapshot.snapshot);
         assert_eq!(snapshot.objects.len(), 2);
-        assert_eq!(snapshot.objects[1].slot.slot, 2);
+        assert_eq!(snapshot.objects[1].slot.slot, 1);
+        assert_eq!(snapshot.objects[1].slot.generation, 0);
         assert_eq!(snapshot.objects[1].order, 1);
         mirror.apply(snapshot).unwrap();
         player.live_set_translation(&toggled, 2.0, -1.0).unwrap();

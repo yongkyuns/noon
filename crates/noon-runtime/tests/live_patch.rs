@@ -309,7 +309,7 @@ fn structural_remove_and_create_touch_only_their_stable_frame_slots() {
 }
 
 #[test]
-fn remove_then_recreate_same_object_id_appends_a_new_live_slot() {
+fn remove_then_recreate_same_object_id_reuses_its_live_slot() {
     let mut definition = SceneDefinition::new();
     let object = definition.add(GeometryRef::circle(1.0));
     let compiled = CompiledScene::compile(&definition).unwrap();
@@ -326,12 +326,11 @@ fn remove_then_recreate_same_object_id_appends_a_new_live_slot() {
     live.apply_patch(&create).unwrap();
     definition.apply_patch(create).unwrap();
 
-    assert_eq!(live.frame().objects.len(), 2);
+    assert_eq!(live.frame().objects.len(), 1);
     assert_eq!(live.frame().objects[0].id, object);
-    assert!(!live.frame().presences[0]);
-    assert_eq!(live.frame().objects[1].id, object);
-    assert!(live.frame().presences[1]);
-    assert!(live.object_slot_is_live(1));
-    assert!(!live.object_slot_is_live(0));
+    assert!(live.frame().presences[0]);
+    assert!(live.object_slot_is_live(0));
+    assert_eq!(live.last_patch_stats().object_slots_reactivated, 1);
+    assert_eq!(live.last_patch_stats().object_slots_appended, 0);
     assert_live_matches_definition(&mut live, &definition, 0.0);
 }

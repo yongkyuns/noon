@@ -228,6 +228,25 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
             assert first._semantic_handle.shift_calls[-1] == (-1.0, 0.0)
             assert second._semantic_handle.shift_calls[-1] == (2.0, 0.0)
             assert store.arrange_finishes == 1
+
+            class FakeLiveContext:
+                def __init__(self):
+                    self.calls = []
+
+                def liveArrangeFamily(self, family, direction_x, direction_y, buff, center):
+                    self.calls.append(
+                        (family.identity, float(direction_x), float(direction_y), float(buff), bool(center))
+                    )
+
+            live = FakeLiveContext()
+            first._canonical_live_target_context = live
+            second._canonical_live_target_context = live
+            prior_direct_calls = list(store.arrange_calls)
+            family.arrange(direction=RIGHT, buff=0.15, center=False)
+            assert live.calls == [
+                (family._semantic_family_handle.identity, 1.0, 0.0, 0.15, False)
+            ]
+            assert store.arrange_calls == prior_direct_calls
             """
         )
         completed = subprocess.run(

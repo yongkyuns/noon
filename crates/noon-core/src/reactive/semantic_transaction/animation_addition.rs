@@ -31,6 +31,12 @@ pub enum SemanticTransactionAnimationIntent {
         color: Color,
         scale_center: crate::SemanticVec3,
     },
+    DrawBorderThenFill {
+        target: SemanticTransactionNodeRef,
+        stroke_width: f64,
+        stroke_color: Option<Color>,
+        phase_rate_function: crate::RateFunction,
+    },
     Rotate {
         target: SemanticTransactionNodeRef,
         angle: f64,
@@ -72,6 +78,7 @@ impl SemanticTransactionAnimationIntent {
             } => Some([Some(*target), Some(*target_state)]),
             Self::Rotate { target, .. }
             | Self::Indicate { target, .. }
+            | Self::DrawBorderThenFill { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
             | Self::Create { target }
@@ -83,6 +90,7 @@ impl SemanticTransactionAnimationIntent {
             Self::Composition { children, .. } => children.as_slice(),
             Self::TransformTo { .. }
             | Self::Indicate { .. }
+            | Self::DrawBorderThenFill { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -149,6 +157,17 @@ impl SemanticTransactionAnimation {
                 scale_factor: *scale_factor,
                 color: *color,
                 scale_center: *scale_center,
+            },
+            SemanticAnimationIntent::DrawBorderThenFill {
+                target,
+                stroke_width,
+                stroke_color,
+                phase_rate_function,
+            } => SemanticTransactionAnimationIntent::DrawBorderThenFill {
+                target: (*target).into(),
+                stroke_width: *stroke_width,
+                stroke_color: *stroke_color,
+                phase_rate_function: *phase_rate_function,
             },
             SemanticAnimationIntent::Fade {
                 target,
@@ -223,6 +242,17 @@ impl SemanticTransactionAnimation {
                 scale_factor: *scale_factor,
                 color: *color,
                 scale_center: *scale_center,
+            },
+            SemanticTransactionAnimationIntent::DrawBorderThenFill {
+                target,
+                stroke_width,
+                stroke_color,
+                phase_rate_function,
+            } => SemanticAnimationIntent::DrawBorderThenFill {
+                target: resolve_node_ref(*target, committed),
+                stroke_width: *stroke_width,
+                stroke_color: *stroke_color,
+                phase_rate_function: *phase_rate_function,
             },
             SemanticTransactionAnimationIntent::Fade {
                 target,
@@ -357,6 +387,30 @@ pub(super) fn preflight_transaction_animation(
                 || !color_is_finite
             {
                 return Err(SemanticMutationTransactionError::InvalidIndicateEndpoint { index });
+            }
+        }
+        SemanticTransactionAnimationIntent::DrawBorderThenFill {
+            target,
+            stroke_width,
+            stroke_color,
+            ..
+        } => {
+            catalog.ensure_animation_target(*target, index)?;
+            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            let color_is_finite = stroke_color.is_none_or(|color| {
+                color.red.is_finite()
+                    && color.green.is_finite()
+                    && color.blue.is_finite()
+                    && color.alpha.is_finite()
+            });
+            if !stroke_width.is_finite()
+                || *stroke_width < 0.0
+                || *stroke_width > f32::MAX as f64
+                || !color_is_finite
+            {
+                return Err(
+                    SemanticMutationTransactionError::InvalidDrawBorderThenFillOutline { index },
+                );
             }
         }
         SemanticTransactionAnimationIntent::Fade {
@@ -494,6 +548,20 @@ pub(super) fn commit_add_animation(
                 options,
             )
             .expect("preflighted semantic Indicate insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::DrawBorderThenFill {
+            target,
+            stroke_width,
+            stroke_color,
+            phase_rate_function,
+        } => store
+            .insert_semantic_draw_border_then_fill_animation(
+                *target,
+                *stroke_width,
+                *stroke_color,
+                *phase_rate_function,
+                options,
+            )
+            .expect("preflighted DrawBorderThenFill insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Fade {
             target,
             direction,

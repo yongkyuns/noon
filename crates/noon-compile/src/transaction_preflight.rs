@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon_core::{
-    resolve_track_timing, validate_style, validate_track_definition, validate_transform,
-    ObjectContentRef, ObjectId, Property, TrackDefinition, TrackId, TrackValues,
+    continuous_time_map_interval, resolve_track_timing, validate_style, validate_track_definition,
+    validate_transform, ObjectContentRef, ObjectId, Property, TrackDefinition, TrackId,
+    TrackValues,
 };
 
 use crate::{
@@ -19,18 +20,24 @@ struct TrackShadow {
     property: Property,
     start_time: f64,
     duration: f64,
+    reconciliation_end: f64,
+    authored_duration: f64,
     reconciled: bool,
     presence: Option<(bool, bool)>,
 }
 
 impl TrackShadow {
     fn from_compiled(track: &CompiledTrack) -> Self {
+        let (start_time, end_time) =
+            effective_track_interval(track.property, track.timing, &track.time_map);
         Self {
             id: track.id,
             object_index: track.object_index,
             property: track.property,
-            start_time: track.timing.start_time,
-            duration: track.timing.duration,
+            start_time,
+            duration: end_time - start_time,
+            reconciliation_end: track.timing.start_time + track.timing.duration,
+            authored_duration: track.timing.duration,
             reconciled: track.reconciled,
             presence: presence_endpoints(track.property, &track.values),
         }
@@ -38,22 +45,38 @@ impl TrackShadow {
 
     fn from_definition(track: &TrackDefinition, object_index: u32) -> Self {
         let timing = resolve_track_timing(track).expect("track was validated before preflight");
+        let (start_time, end_time) =
+            effective_track_interval(track.property, timing, &track.time_map);
         Self {
             id: track.id,
             object_index,
             property: track.property,
-            start_time: timing.start_time,
-            duration: timing.duration,
+            start_time,
+            duration: end_time - start_time,
+            reconciliation_end: timing.start_time + timing.duration,
+            authored_duration: timing.duration,
             reconciled: false,
             presence: presence_endpoints(track.property, &track.values),
         }
     }
 }
 
+fn effective_track_interval(
+    property: Property,
+    timing: noon_core::TrackTiming,
+    time_map: &noon_core::CompositionTimeMap,
+) -> (f64, f64) {
+    if property.is_instant() {
+        return (timing.start_time, timing.start_time + timing.duration);
+    }
+    continuous_time_map_interval(timing, time_map)
+        .expect("validated track has a valid composition time map")
+}
+
 #[derive(Clone, Copy)]
 enum ObjectOverlay {
     Present { index: u32, is_text: bool },
-    Removed,
+    Removed { index: u32 },
 }
 
 /// A transaction-local sparse overlay. It reads untouched identity and channel
@@ -85,7 +108,7 @@ impl PreflightOverlay {
     fn object_index(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<u32> {
         match self.objects.get(&id).copied() {
             Some(ObjectOverlay::Present { index, .. }) => Some(index),
-            Some(ObjectOverlay::Removed) => None,
+            Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied();
                 if index.is_some() {
@@ -99,7 +122,7 @@ impl PreflightOverlay {
     fn object_is_text(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<bool> {
         match self.objects.get(&id).copied() {
             Some(ObjectOverlay::Present { is_text, .. }) => Some(is_text),
-            Some(ObjectOverlay::Removed) => None,
+            Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied()?;
                 self.seen_objects.insert(id);
@@ -225,8 +248,6 @@ pub(super) fn preflight_transaction_with_resources(
                 if overlay.object_index(scene, object.id).is_some() {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
-                let index = u32::try_from(overlay.next_object_index)
-                    .map_err(|_| CompilePatchError::TooManyObjects(overlay.next_object_index))?;
                 validate_compiled_object(object)?;
                 validate_execution_content_resource(
                     &scene.resources,
@@ -235,7 +256,19 @@ pub(super) fn preflight_transaction_with_resources(
                     &object.content,
                     object.text_bounds,
                 )?;
-                overlay.next_object_index += 1;
+                let index = match overlay.objects.get(&object.id).copied() {
+                    Some(ObjectOverlay::Removed { index }) => index,
+                    _ => match scene.retired_object_indices.get(&object.id).copied() {
+                        Some(index) => index,
+                        None => {
+                            let index = u32::try_from(overlay.next_object_index).map_err(|_| {
+                                CompilePatchError::TooManyObjects(overlay.next_object_index)
+                            })?;
+                            overlay.next_object_index += 1;
+                            index
+                        }
+                    },
+                };
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
@@ -248,7 +281,9 @@ pub(super) fn preflight_transaction_with_resources(
                 let index = overlay
                     .object_index(scene, *id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
-                overlay.objects.insert(*id, ObjectOverlay::Removed);
+                overlay
+                    .objects
+                    .insert(*id, ObjectOverlay::Removed { index });
                 overlay.remove_object_tracks(scene, index);
             }
             ExecutionPatch::SetContent {
@@ -360,14 +395,14 @@ pub(super) fn preflight_transaction_with_resources(
                 let object_index = overlay
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                let actual_end = reconciled.start_time + reconciled.duration;
+                let actual_end = reconciled.reconciliation_end;
                 if reconciled.object_index != object_index
                     || reconciled.property != *property
                     || actual_end.total_cmp(end_time) != std::cmp::Ordering::Equal
                 {
                     return Err(CompilePatchError::TrackReconciliationMismatch(*track));
                 }
-                if reconciled.duration <= 0.0
+                if reconciled.authored_duration <= 0.0
                     || !matches!(
                         reconciled.property,
                         Property::Position
@@ -375,6 +410,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Scale
                             | Property::Fill
                             | Property::Stroke
+                            | Property::StrokeWidth
                             | Property::Opacity
                             | Property::Appearance
                             | Property::Reveal
@@ -388,7 +424,8 @@ pub(super) fn preflight_transaction_with_resources(
                         continue;
                     }
                     let other_end = other.start_time + other.duration;
-                    if reconciled.start_time < other_end && other.start_time < actual_end {
+                    let reconciled_end = reconciled.start_time + reconciled.duration;
+                    if reconciled.start_time < other_end && other.start_time < reconciled_end {
                         return Err(CompilePatchError::OverlappingTrackReconciliation {
                             track: *track,
                             other: other.id,

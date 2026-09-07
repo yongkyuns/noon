@@ -15,8 +15,9 @@ use crate::{
     },
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
-    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
-    MobjectFamily, MobjectFamilyMember, ValueTracker,
+    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
+    FamilyArrangePlan, FamilyTranslation, Mobject, MobjectFamily, MobjectFamilyMember,
+    ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -65,6 +66,38 @@ pub enum AffineLifecycleEndpoint {
 }
 
 pub type AffineLifecycleDirection = SemanticAffineLifecycleDirection;
+
+/// Outline style and local phase easing for shared DrawBorderThenFill semantics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawBorderThenFillOptions {
+    pub stroke_width: f64,
+    pub stroke_color: Option<Color>,
+    pub phase_rate_function: noon_core::RateFunction,
+}
+
+impl DrawBorderThenFillOptions {
+    pub const fn new(stroke_width: f64, stroke_color: Option<Color>) -> Self {
+        Self {
+            stroke_width,
+            stroke_color,
+            phase_rate_function: noon_core::RateFunction::Smooth,
+        }
+    }
+
+    pub const fn with_phase_rate_function(
+        mut self,
+        phase_rate_function: noon_core::RateFunction,
+    ) -> Self {
+        self.phase_rate_function = phase_rate_function;
+        self
+    }
+}
+
+impl Default for DrawBorderThenFillOptions {
+    fn default() -> Self {
+        Self::new(0.02, None)
+    }
+}
 
 /// Placement of the faded affine endpoint relative to activation-effective layout.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -189,6 +222,16 @@ pub enum AnimationCompositionRequest<'a> {
     FamilyIndicate {
         target: &'a MobjectFamily,
         indication: IndicateOptions,
+        options: AnimationOptions,
+    },
+    DrawBorderThenFill {
+        target: &'a Mobject,
+        outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    },
+    FamilyDrawBorderThenFill {
+        target: &'a MobjectFamily,
+        outline: DrawBorderThenFillOptions,
         options: AnimationOptions,
     },
     Rotate {
@@ -459,39 +502,41 @@ impl<'a> LiveSession<'a> {
             ));
         }
 
-        // A target created after bootstrap must start from the coherent effective row,
+        // A target for a reachable source starts from the coherent effective row,
         // rather than the authored base that an active driver or callback may have
-        // superseded. Immutable content remains authored. This subset intentionally
-        // rejects render-content and appearance overrides because SemanticObjectState
-        // has no exact authored representation for them.
+        // superseded. A detached source has no runtime row, so its authoritative
+        // authored state is already the exact capture. Immutable content remains
+        // authored. This subset intentionally rejects render-content and appearance
+        // overrides because SemanticObjectState has no exact representation for them.
         let mut state = source.state().map_err(LiveSessionError::Mobject)?;
         if !state.signal_bindings().is_empty() {
             return Err(LiveSessionError::Mobject(
                 "target editor cannot capture a reactive binding into a detached target".into(),
             ));
         }
-        let store = self.store.borrow();
-        let observed = self
-            .session
-            .effective_semantic_object(&store, source.node_id())?;
-        if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::Mobject(
-                "target editor requires effective authored content without reveal or morph overrides"
-                    .into(),
-            ));
+        if self.session.semantic_object_is_reachable(source.node_id()) {
+            let store = self.store.borrow();
+            let observed = self
+                .session
+                .effective_semantic_object(&store, source.node_id())?;
+            if !observed.authored_content_layout_applicable() {
+                return Err(LiveSessionError::Mobject(
+                    "target editor requires effective authored content without reveal or morph overrides"
+                        .into(),
+                ));
+            }
+            if observed.object.appearance != 1.0 {
+                return Err(LiveSessionError::Mobject(
+                    "target editor cannot represent a non-unit effective appearance".into(),
+                ));
+            }
+            state.transform.translation.x = f64::from(observed.object.transform.translation.x);
+            state.transform.translation.y = f64::from(observed.object.transform.translation.y);
+            state.transform.scale.x = f64::from(observed.object.transform.scale.x);
+            state.transform.scale.y = f64::from(observed.object.transform.scale.y);
+            state.transform.rotation_z = f64::from(observed.object.transform.rotation);
+            state.style = target_style_from_effective(&state.style, observed.object.style)?;
         }
-        if observed.object.appearance != 1.0 {
-            return Err(LiveSessionError::Mobject(
-                "target editor cannot represent a non-unit effective appearance".into(),
-            ));
-        }
-        state.transform.translation.x = f64::from(observed.object.transform.translation.x);
-        state.transform.translation.y = f64::from(observed.object.transform.translation.y);
-        state.transform.scale.x = f64::from(observed.object.transform.scale.x);
-        state.transform.scale.y = f64::from(observed.object.transform.scale.y);
-        state.transform.rotation_z = f64::from(observed.object.transform.rotation);
-        state.style = target_style_from_effective(&state.style, observed.object.style)?;
-        drop(store);
 
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(noon_core::SemanticNodeCreation::object(state));
@@ -723,6 +768,36 @@ impl<'a> LiveSession<'a> {
         let request = AnimationCompositionRequest::FamilyIndicate {
             target,
             indication,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Reveal one vector outline and restore its activation-effective final style.
+    pub fn declare_and_activate_draw_border_then_fill(
+        &mut self,
+        target: &Mobject,
+        outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::DrawBorderThenFill {
+            target,
+            outline,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Draw an ordered vector family through one atomic lagged composition.
+    pub fn declare_and_activate_family_draw_border_then_fill(
+        &mut self,
+        target: &MobjectFamily,
+        outline: DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::FamilyDrawBorderThenFill {
+            target,
+            outline,
             options,
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
@@ -1025,6 +1100,30 @@ impl<'a> LiveSession<'a> {
                     options: *options,
                 }
             }
+            AnimationCompositionRequest::DrawBorderThenFill {
+                target,
+                outline,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::DrawBorderThenFill {
+                    target: target.node_id(),
+                    outline: *outline,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilyDrawBorderThenFill {
+                target,
+                outline,
+                options,
+            } => {
+                self.require_family(target)?;
+                Request::FamilyDrawBorderThenFill {
+                    target: target.node_id(),
+                    outline: *outline,
+                    options: *options,
+                }
+            }
             AnimationCompositionRequest::Rotate {
                 target,
                 angle,
@@ -1261,6 +1360,87 @@ impl<'a> LiveSession<'a> {
         translation.x += x;
         translation.y += y;
         self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+    }
+
+    /// Shift every ordinary leaf of one semantic family in a single publication.
+    ///
+    /// Family traversal and alias handling stay in the shared semantic store. This
+    /// is also the live-safe edit path for a detached family target: its authored
+    /// leaves change without leaving the execution session on an older revision.
+    pub fn shift_family(
+        &mut self,
+        family: &MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        let leaves = self
+            .store
+            .borrow()
+            .ordered_family_leaf_pairs(family.node_id(), family.node_id())
+            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?
+            .into_iter()
+            .map(|(leaf, _)| leaf)
+            .collect::<Vec<_>>();
+        let mut transaction = SemanticMutationTransaction::new();
+        for leaf in leaves {
+            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
+                .map_err(LiveSessionError::Mobject)?;
+            let mut translation = self.authored(&mobject)?.transform.translation;
+            translation.x += x;
+            translation.y += y;
+            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+        }
+        self.apply(transaction)
+    }
+
+    /// Arrange direct family members from effective runtime layout and publish
+    /// every resulting leaf translation in one semantic transaction.
+    pub fn arrange_family(
+        &mut self,
+        family: &MobjectFamily,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        center: bool,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        let mut plan = FamilyArrangePlan::begin(&self.store.borrow(), family.node_id())
+            .map_err(LiveSessionError::Mobject)?;
+        plan.observe_leaf_bounds(|leaf| {
+            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
+            if !self.session.semantic_object_is_reachable(leaf) {
+                return mobject.layout_bounds();
+            }
+            self.effective_layout(&mobject).map_or_else(
+                |error| Err(error.to_string()),
+                |layout| {
+                    Ok(Some(Bounds2D64 {
+                        min_x: layout.center.0 - layout.width * 0.5,
+                        min_y: layout.center.1 - layout.height * 0.5,
+                        max_x: layout.center.0 + layout.width * 0.5,
+                        max_y: layout.center.1 + layout.height * 0.5,
+                    }))
+                },
+            )
+        })
+        .map_err(LiveSessionError::Mobject)?;
+        let shifts = plan
+            .finish(direction_x, direction_y, buff, center)
+            .map_err(LiveSessionError::Mobject)?
+            .into_iter()
+            .flat_map(FamilyTranslation::into_shifts)
+            .collect::<Vec<_>>();
+        let mut transaction = SemanticMutationTransaction::new();
+        for (leaf, x, y) in shifts {
+            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
+                .map_err(LiveSessionError::Mobject)?;
+            let mut translation = self.authored(&mobject)?.transform.translation;
+            translation.x += x;
+            translation.y += y;
+            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+        }
+        self.apply(transaction)
     }
 
     /// Move an object's effective layout center to one point through a single
@@ -2890,6 +3070,43 @@ mod tests {
     }
 
     #[test]
+    fn detached_target_editor_after_wait_uses_authored_state_and_enters_with_transform() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.5).unwrap();
+        let mut square = scene.square(1.0).unwrap();
+        square.set_translation(-2.0, 0.5).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let mut live = scene.live(&mut session);
+
+        let wait = live.wait_segment(1.0).unwrap();
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        let target = live.target_editor(&square).unwrap();
+        live.set_translation(&target, 3.0, -1.0).unwrap();
+        let request = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+            &square,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        ));
+        let segment = live
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+
+        assert!(live.contains(&square).unwrap());
+        assert_eq!(segment.start_time(), 1.0);
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.effective(&square).unwrap().transform.translation,
+            noon_core::Vec2::new(3.0, -1.0)
+        );
+    }
+
+    #[test]
     fn live_membership_detaches_readds_and_appends_without_changing_unrelated_slots() {
         let mut scene = Scene::new();
         let anchor = scene.circle(1.0).unwrap();
@@ -2921,7 +3138,7 @@ mod tests {
         }
 
         assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
-        assert_eq!(session.frame().objects.len(), 4);
+        assert_eq!(session.frame().objects.len(), 3);
     }
 
     #[test]
@@ -3166,6 +3383,126 @@ mod recursive_composition_tests {
         assert_eq!(session.publication_context(), before);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn composed_fade_out_completion_detaches_and_reenters_the_same_handle() {
+        let mut scene = Scene::new();
+        let fading = scene.circle(1.0).unwrap();
+        let companion = scene.square(1.0).unwrap();
+        scene.add(&fading).unwrap();
+        scene.add(&companion).unwrap();
+        for radius in [0.5, 0.6, 0.7] {
+            let retained = scene.circle(radius).unwrap();
+            scene.add(&retained).unwrap();
+        }
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let options = linear(0.2);
+        let fading_id = session.execution_object_id(fading.node_id()).unwrap();
+        let companion_id = session.execution_object_id(companion.node_id()).unwrap();
+        let fading_row = session
+            .frame()
+            .objects
+            .iter()
+            .position(|object| object.id == fading_id)
+            .unwrap();
+        let companion_row = session
+            .frame()
+            .objects
+            .iter()
+            .position(|object| object.id == companion_id)
+            .unwrap();
+        let row_count = session.frame().objects.len();
+
+        let fade_out = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children: vec![
+                AnimationCompositionRequest::Fade {
+                    target: &fading,
+                    direction: SemanticFadeDirection::Out,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+                AnimationCompositionRequest::Fade {
+                    target: &companion,
+                    direction: SemanticFadeDirection::Out,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+                AnimationCompositionRequest::Wait { duration: 0.1 },
+            ],
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+        };
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_composition(&fade_out, AnimationOptions::new())
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+
+        assert!(!live.contains(&fading).unwrap());
+        assert!(!live.contains(&companion).unwrap());
+        assert!(fading
+            .store()
+            .borrow()
+            .node(fading.node_id())
+            .unwrap()
+            .parents()
+            .is_empty());
+        assert_eq!(
+            live.session.execution_object_id(fading.node_id()),
+            Some(fading_id)
+        );
+        assert_eq!(
+            live.session.execution_object_id(companion.node_id()),
+            Some(companion_id)
+        );
+
+        let fade_in = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            children: vec![
+                AnimationCompositionRequest::Fade {
+                    target: &fading,
+                    direction: SemanticFadeDirection::In,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+                AnimationCompositionRequest::Fade {
+                    target: &companion,
+                    direction: SemanticFadeDirection::In,
+                    endpoint: FadeEndpoint::default(),
+                    options,
+                },
+            ],
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+        };
+        let reentry = live
+            .declare_and_activate_composition(&fade_in, AnimationOptions::new())
+            .unwrap();
+        assert!(live.contains(&fading).unwrap());
+        assert!(live.contains(&companion).unwrap());
+        assert_eq!(live.session.frame().objects.len(), row_count);
+        assert_eq!(
+            live.session
+                .frame()
+                .objects
+                .iter()
+                .position(|object| object.id == fading_id),
+            Some(fading_row)
+        );
+        assert_eq!(
+            live.session
+                .frame()
+                .objects
+                .iter()
+                .position(|object| object.id == companion_id),
+            Some(companion_row)
+        );
+        live.advance_segment_to(reentry, reentry.end_time())
+            .unwrap();
+        live.complete_segment(reentry).unwrap();
     }
 
     #[test]
@@ -3453,6 +3790,30 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn live_family_arrange_uses_detached_authored_bounds_in_one_publication() {
+        let scene = Scene::new();
+        let first = scene.square(0.4).unwrap();
+        let second = scene.circle(0.2).unwrap();
+        let family = scene.family(&[&first, &second]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let mut live = scene.live(&mut session);
+
+        live.arrange_family(&family, 1.0, 0.0, 0.2, true).unwrap();
+        let publication = live.session.publication_context();
+        let first_center = first.center().unwrap();
+        let second_center = second.center().unwrap();
+
+        assert_ne!(publication, before);
+        assert_eq!(
+            publication.scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        assert!((second_center.0 - first_center.0 - 0.6).abs() < 1e-6);
+        assert!((first_center.0 + second_center.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn invalid_family_topology_rolls_back_before_declaration() {
         let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
@@ -3623,5 +3984,65 @@ mod recursive_composition_tests {
         live.complete_segment(segment).unwrap();
         assert_eq!(live.effective(&left).unwrap().transform.translation.x, -2.0);
         assert_eq!(live.effective(&right).unwrap().transform.translation.x, 2.0);
+    }
+
+    #[test]
+    fn draw_border_then_fill_holds_the_explicit_outline_through_the_reveal_phase() {
+        let scene = Scene::new();
+        let mut square = scene.square(1.0).unwrap();
+        square
+            .set_fill(
+                f64::from(Color::ORANGE.red),
+                f64::from(Color::ORANGE.green),
+                f64::from(Color::ORANGE.blue),
+                1.0,
+            )
+            .unwrap();
+        square
+            .set_stroke_color(
+                f64::from(Color::BLUE.red),
+                f64::from(Color::BLUE.green),
+                f64::from(Color::BLUE.blue),
+                1.0,
+            )
+            .unwrap();
+        square.set_stroke_width(0.06).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_draw_border_then_fill(
+                &square,
+                DrawBorderThenFillOptions::new(0.04, Some(Color::YELLOW)),
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear)
+                    .introducer(true),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, segment.start_time() + 0.5)
+            .unwrap();
+        let outline = live.effective(&square).unwrap().style;
+        assert_eq!(outline.fill.map(|fill| fill.alpha), Some(0.0));
+        assert_eq!(outline.stroke, Some(Color::YELLOW));
+        assert_eq!(outline.stroke_width, 0.04);
+
+        live.advance_segment_to(segment, segment.start_time() + 1.5)
+            .unwrap();
+        let filling = live.effective(&square).unwrap().style;
+        assert_eq!(filling.fill.map(|fill| fill.alpha), Some(0.5));
+        let stroke = filling.stroke.expect("fill phase retains a stroke");
+        assert!((stroke.red - (Color::YELLOW.red + Color::BLUE.red) * 0.5).abs() < 1e-6);
+        assert!((stroke.green - (Color::YELLOW.green + Color::BLUE.green) * 0.5).abs() < 1e-6);
+        assert!((stroke.blue - (Color::YELLOW.blue + Color::BLUE.blue) * 0.5).abs() < 1e-6);
+        assert!((filling.stroke_width - 0.05).abs() < 1e-6);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        let restored = live.effective(&square).unwrap().style;
+        assert_eq!(restored.fill, Some(Color::ORANGE));
+        assert_eq!(restored.stroke, Some(Color::BLUE));
+        assert_eq!(restored.stroke_width, 0.06);
     }
 }

@@ -1573,6 +1573,14 @@ def _apply_family_translation(
 
 
 def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
+    context = _group_target_context(self)
+    if context is not None:
+        offset = _base._as_vec2(direction)
+        try:
+            context.liveShiftFamily(self._semantic_family_handle, offset.x, offset.y)
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return self
     shared = _shared_family_layout_session(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_SHIFT(self, direction)
@@ -1809,6 +1817,15 @@ def _group_arrange(
         return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
 
     axis = _base._as_vec2(_base.RIGHT if direction is None else direction)
+    context = _group_target_context(self)
+    if context is not None:
+        try:
+            context.liveArrangeFamily(
+                family_handle, axis.x, axis.y, float(buff), bool(center)
+            )
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return self
     arrangement = family_handle.arrangeSession(axis.x, axis.y, float(buff), bool(center))
     prepared: list[tuple[object, list[_base.Mobject], list[object]]] = []
 

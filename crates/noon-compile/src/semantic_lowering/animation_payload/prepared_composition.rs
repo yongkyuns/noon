@@ -1,10 +1,10 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use noon_core::{
-    validate_track_definition, AnimationOptions, ObjectId, PreparedSemanticMutationTransaction,
-    Property, RateFunction, SemanticLoweringError, SemanticObjectProperty,
-    SemanticTransactionNodeRef, SemanticTransactionReadError, TimelineError, TrackDefinition,
-    TrackId, TrackTiming, TrackValues,
+    validate_track_definition, AnimationOptions, CompositionTimeMapStep, ObjectId,
+    PreparedSemanticMutationTransaction, Property, RateFunction, SemanticLoweringError,
+    SemanticObjectProperty, SemanticTransactionNodeRef, SemanticTransactionReadError,
+    TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues,
 };
 
 use super::super::{
@@ -13,9 +13,9 @@ use super::super::{
 };
 use super::affine::{
     affine_center_dependency_conflict, driver_key, lower_affine_lifecycle_channels,
-    lower_fade_channels, lower_transform_channels, reserve_affine_center_dependencies,
-    validate_affine_payload, AffinePayloadIssue, EffectiveAnimationProperties,
-    SemanticAnimationCompletion,
+    lower_draw_border_then_fill_channels, lower_fade_channels, lower_transform_channels,
+    reserve_affine_center_dependencies, validate_affine_payload, AffinePayloadIssue,
+    EffectiveAnimationProperties, SemanticAnimationCompletion,
 };
 
 use super::transform_payload::SemanticAffineAnimationField;
@@ -223,6 +223,13 @@ where
     let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
+    let admitted = prepared
+        .candidate_mutations()
+        .filter_map(|mutation| match mutation {
+            noon_core::SemanticMutation::AddMember { member, .. } => Some(*member),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
 
     for leaf in schedule.leaves() {
         let source = prepared.object_state(leaf.target).map_err(|error| {
@@ -249,7 +256,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -278,7 +285,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -319,7 +326,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -339,6 +346,84 @@ where
                     leaf.execution_object_id,
                     leaf.animation,
                 );
+                continue;
+            }
+            PreparedSemanticScheduledAnimationPayload::DrawBorderThenFill {
+                stroke_width,
+                stroke_color,
+                phase_rate_function,
+            } => {
+                if leaf.options.lag_ratio != 0.0
+                    || leaf.options.path_arc != 0.0
+                    || leaf.options.remover
+                    || leaf.options.reverse_rate_function
+                    || leaf.options.rate_func != RateFunction::Linear
+                {
+                    return Err(
+                        PreparedSemanticAnimationLoweringError::UnsupportedLifecycle {
+                            animation: leaf.animation,
+                            remover: leaf.options.remover,
+                            introducer: leaf.options.introducer,
+                        },
+                    );
+                }
+                let from = capture_effective(
+                    leaf,
+                    source,
+                    admitted.contains(&leaf.target),
+                    &mut captures,
+                    &mut effective_properties,
+                )?;
+                let channels =
+                    lower_draw_border_then_fill_channels(source, from, stroke_width, stroke_color)
+                        .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
+                for channel in channels {
+                    let property = channel.property;
+                    if property == Property::Reveal {
+                        push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                        tracks
+                            .last_mut()
+                            .expect("pushed DrawBorderThenFill reveal")
+                            .timing
+                            .easing = phase_rate_function;
+                        tracks
+                            .last_mut()
+                            .expect("pushed DrawBorderThenFill reveal")
+                            .time_map
+                            .push(CompositionTimeMapStep::new(0.0, 0.5, RateFunction::Linear));
+                        continue;
+                    }
+
+                    let hold_values = match &channel.values {
+                        TrackValues::Color { from, .. } => TrackValues::Color {
+                            from: *from,
+                            to: *from,
+                        },
+                        TrackValues::Scalar { from, .. } => TrackValues::Scalar {
+                            from: *from,
+                            to: *from,
+                        },
+                        _ => unreachable!("DrawBorderThenFill style channel is color or scalar"),
+                    };
+                    push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                    let transition = tracks
+                        .last_mut()
+                        .expect("pushed DrawBorderThenFill style transition");
+                    transition.timing.easing = phase_rate_function;
+                    transition.time_map.push(CompositionTimeMapStep::new(
+                        0.5,
+                        0.5,
+                        RateFunction::Linear,
+                    ));
+                    let mut hold = transition.clone();
+                    hold.values = hold_values;
+                    hold.timing.easing = RateFunction::Linear;
+                    hold.time_map = leaf.time_map.clone();
+                    hold.time_map
+                        .push(CompositionTimeMapStep::new(0.0, 0.5, RateFunction::Linear));
+                    let transition_index = tracks.len() - 1;
+                    tracks.insert(transition_index, hold);
+                }
                 continue;
             }
             PreparedSemanticScheduledAnimationPayload::Fade {
@@ -377,7 +462,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -421,7 +506,7 @@ where
                 let from = capture_effective(
                     leaf,
                     source,
-                    index,
+                    admitted.contains(&leaf.target),
                     &mut captures,
                     &mut effective_properties,
                 )?;
@@ -517,7 +602,7 @@ where
 fn capture_effective<F>(
     leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
     source: &noon_core::SemanticObjectState,
-    index: &SemanticExecutionIndex,
+    admitted: bool,
     captures: &mut HashMap<ObjectId, EffectiveAnimationProperties>,
     effective_properties: &mut F,
 ) -> Result<EffectiveAnimationProperties, PreparedSemanticAnimationLoweringError>
@@ -529,12 +614,7 @@ where
     }
     let captured = if let Some(captured) = effective_properties(leaf.execution_object_id) {
         captured
-    } else if leaf
-        .target
-        .existing()
-        .and_then(|node| index.execution_object_id(node))
-        .is_none()
-    {
+    } else if admitted {
         EffectiveAnimationProperties {
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
                 |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
@@ -971,6 +1051,105 @@ mod tests {
                 RateFunction::Smooth.evaluate(0.25)
             );
         }
+    }
+
+    #[test]
+    fn prepared_draw_border_then_fill_maps_each_channel_to_one_local_phase() {
+        let mut store = noon_core::SemanticStore::new();
+        let root = store.insert_family();
+        let circle =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.4,
+            }));
+        let index = SemanticExecutionIndex::new();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_member(root, circle);
+        let animation = transaction.create_draw_border_then_fill_animation(
+            circle,
+            0.125,
+            Some(Color::BLUE),
+            RateFunction::Smooth,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear)
+                .introducer(true),
+        );
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let mut captured = effective(Vec2::ZERO);
+        captured.style.fill = Some(Color::GREEN);
+        captured.style.stroke = Some(Color {
+            alpha: 0.25,
+            ..Color::RED
+        });
+        captured.style.stroke_width = 0.25;
+
+        let activation = lower_prepared_semantic_animation_composition(
+            &prepared,
+            &index,
+            animation,
+            0.0,
+            AnimationOptions::new(),
+            |_| Some(captured),
+        )
+        .unwrap();
+
+        assert_eq!(activation.run_time(), 2.0);
+        assert_eq!(activation.tracks().len(), 7);
+        for track in activation.tracks() {
+            assert_eq!(track.time_map.steps.len(), 1);
+            let phase = track.time_map.steps[0];
+            if track.property == Property::Reveal {
+                assert_eq!((phase.start, phase.duration), (0.0, 0.5));
+                assert_eq!(phase.rate_func, RateFunction::Linear);
+                assert_eq!(track.timing.easing, RateFunction::Smooth);
+                assert_eq!(track.values, TrackValues::Scalar { from: 0.0, to: 1.0 });
+            } else if phase.start == 0.0 {
+                assert_eq!((phase.start, phase.duration), (0.0, 0.5));
+                assert_eq!(phase.rate_func, RateFunction::Linear);
+                match &track.values {
+                    TrackValues::Color { from, to } => assert_eq!(from, to),
+                    TrackValues::Scalar { from, to } => assert_eq!(from, to),
+                    _ => panic!("outline hold must use a style channel"),
+                }
+            } else {
+                assert_eq!((phase.start, phase.duration), (0.5, 0.5));
+                assert_eq!(phase.rate_func, RateFunction::Linear);
+                assert_eq!(track.timing.easing, RateFunction::Smooth);
+            }
+        }
+        assert!(activation.tracks().iter().any(|track| {
+            track.property == Property::Fill
+                && track.values
+                    == TrackValues::Color {
+                        from: Some(Color {
+                            alpha: 0.0,
+                            ..Color::GREEN
+                        }),
+                        to: Some(Color::GREEN),
+                    }
+        }));
+        assert!(activation.tracks().iter().any(|track| {
+            track.property == Property::Stroke
+                && track.values
+                    == TrackValues::Color {
+                        from: Some(Color {
+                            alpha: 0.25,
+                            ..Color::BLUE
+                        }),
+                        to: Some(Color {
+                            alpha: 0.25,
+                            ..Color::RED
+                        }),
+                    }
+        }));
+        assert!(activation.tracks().iter().any(|track| {
+            track.property == Property::StrokeWidth
+                && track.values
+                    == TrackValues::Scalar {
+                        from: 0.125,
+                        to: 0.25,
+                    }
+        }));
     }
 
     #[test]

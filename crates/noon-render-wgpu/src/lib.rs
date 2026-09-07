@@ -177,7 +177,7 @@ pub struct RenderStats {
     pub path_index_free_element_count: usize,
     /// Unique paths temporarily detached from the immutable mega stream.
     pub mega_path_detached_count: usize,
-    /// Appended semantic/render slots handled without a full preparation rebuild.
+    /// Appended or reactivated semantic/render slots handled without a full rebuild.
     pub structural_slots_added: usize,
     /// Retired semantic/render slots handled without compacting packed storage.
     pub structural_slots_retired: usize,
@@ -522,8 +522,9 @@ impl FramePreparer {
 
     /// Updates cached instance records using the runtime's consumed change set.
     ///
-    /// Structural removals retire packed slots in place. Tail-appended objects,
-    /// including new vector paths, extend packed storage and painter order locally.
+    /// Structural removals retire packed slots in place. Re-entered objects reactivate
+    /// their original packed slot, while tail-appended objects, including new vector
+    /// paths, extend packed storage and painter order locally.
     /// New path meshes append one arena chunk and one mega-index suffix; unrelated
     /// geometry and packed painter-order indices remain untouched.
     pub fn prepare_incremental<'a>(
@@ -537,9 +538,14 @@ impl FramePreparer {
 
         let old_slot_len = self.slots.len();
         let expected_added = frame.objects.len().saturating_sub(old_slot_len);
-        let added_are_tail = expected_added == changes.added_indices().len()
-            && changes
-                .added_indices()
+        let appended_indices = changes
+            .added_indices()
+            .iter()
+            .copied()
+            .filter(|index| *index >= old_slot_len)
+            .collect::<Vec<_>>();
+        let added_are_existing_or_tail = expected_added == appended_indices.len()
+            && appended_indices
                 .iter()
                 .copied()
                 .eq(old_slot_len..frame.objects.len());
@@ -547,11 +553,10 @@ impl FramePreparer {
             .removed_indices()
             .iter()
             .all(|&index| index < old_slot_len);
-        let can_append = changes
-            .added_indices()
+        let can_append = appended_indices
             .iter()
             .all(|&index| self.can_append_structural_slot(frame, index));
-        if !added_are_tail || !removed_are_existing || !can_append {
+        if !added_are_existing_or_tail || !removed_are_existing || !can_append {
             return self.rebuild(frame);
         }
 
@@ -559,8 +564,11 @@ impl FramePreparer {
             .object_indices()
             .iter()
             .copied()
-            .filter(|index| changes.added_indices().binary_search(index).is_err())
-            .filter(|index| changes.removed_indices().binary_search(index).is_err())
+            .filter(|index| *index < old_slot_len)
+            .filter(|index| {
+                changes.removed_indices().binary_search(index).is_err()
+                    || changes.added_indices().binary_search(index).is_ok()
+            })
             .filter(|&index| !self.slot_matches(frame, index))
             .collect::<Vec<_>>();
         if !replacement_indices
@@ -591,7 +599,7 @@ impl FramePreparer {
         for &object_index in changes.removed_indices() {
             instances_repacked += self.retire_structural_slot(object_index);
         }
-        for &object_index in changes.added_indices() {
+        for &object_index in &appended_indices {
             let appended = self.append_structural_slot(frame, object_index);
             instances_repacked += appended.instances_repacked;
             geometry_cache_misses += appended.geometry_cache_misses;
@@ -600,12 +608,12 @@ impl FramePreparer {
         }
 
         for &object_index in changes.object_indices() {
-            if changes.added_indices().binary_search(&object_index).is_ok()
-                || changes
-                    .removed_indices()
-                    .binary_search(&object_index)
-                    .is_ok()
-            {
+            let added = changes.added_indices().binary_search(&object_index).is_ok();
+            let removed = changes
+                .removed_indices()
+                .binary_search(&object_index)
+                .is_ok();
+            if object_index >= old_slot_len || (removed && !added) {
                 continue;
             }
             let object = &frame.objects[object_index];
@@ -3552,6 +3560,40 @@ mod structural_execution_delta_tests {
         assert_eq!(prepared.circle_dirty_ranges.len(), 1);
         assert_eq!(prepared.circle_dirty_ranges[0], 10..11);
         assert_eq!(prepared.circles[10].style.opacity, 0.0);
+    }
+
+    #[test]
+    fn reentering_a_retired_non_tail_row_reuses_its_painter_slot_without_rebuild() {
+        let mut frame = FrameState {
+            time: 0.0,
+            objects: (0..3).map(circle).collect(),
+            presences: vec![true; 3],
+            reveals: vec![1.0; 3],
+            morphs: vec![0.0; 3],
+            render_geometries: vec![None; 3],
+            render_transforms: vec![None; 3],
+        };
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+
+        frame.presences[0] = false;
+        preparer.prepare_incremental(&frame, &FrameChanges::structural(Vec::new(), vec![0]));
+        frame.presences[0] = true;
+        frame.objects[0].transform.translation.x = 2.0;
+        let prepared =
+            preparer.prepare_incremental(&frame, &FrameChanges::structural(vec![0], Vec::new()));
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(
+            prepared.circle_ids,
+            &[ObjectId::new(0), ObjectId::new(1), ObjectId::new(2)]
+        );
+        assert_eq!(prepared.circles[0].transform.translation, [2.0, 0.0]);
+        assert_ne!(prepared.circles[0].style.opacity, 0.0);
+        assert_eq!(prepared.circle_dirty_ranges.len(), 1);
+        assert_eq!(prepared.circle_dirty_ranges[0], 0..1);
     }
 
     #[test]

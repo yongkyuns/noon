@@ -242,6 +242,9 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                     self.calls.append(("finish-family", editor.index))
                     return editor.finish()
 
+                def liveShiftFamily(self, family, x, y):
+                    self.calls.append(("shift-family", family.identity(), float(x), float(y)))
+
             context = FakeCanonicalContext()
             scene = types.SimpleNamespace(
                 _canonical_authoring_context=context,
@@ -258,6 +261,8 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                 "leaf", "leaf", "begin-family", "finish-family",
                 "begin-family", "finish-family",
             ], context.calls
+            live_target.shift(RIGHT)
+            assert context.calls[-1][0] == "shift-family", context.calls
             """
         )
         completed = subprocess.run(

@@ -72,6 +72,11 @@ pub enum SemanticScheduledAnimationPayload {
         color: noon_core::Color,
         scale_center: noon_core::SemanticVec3,
     },
+    DrawBorderThenFill {
+        stroke_width: f64,
+        stroke_color: Option<noon_core::Color>,
+        phase_rate_function: RateFunction,
+    },
     Rotate {
         angle: f64,
     },
@@ -168,6 +173,11 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         scale_factor: f64,
         color: noon_core::Color,
         scale_center: noon_core::SemanticVec3,
+    },
+    DrawBorderThenFill {
+        stroke_width: f64,
+        stroke_color: Option<noon_core::Color>,
+        phase_rate_function: RateFunction,
     },
     Rotate {
         angle: f64,
@@ -411,9 +421,11 @@ impl std::error::Error for SemanticAnimationScheduleError {}
 /// execution timing without creating another scheduler or evaluator.
 ///
 /// The caller supplies the activation start and `Scene.play`-style root overrides.
-/// Detached declarations are therefore never scheduled merely because they exist in
-/// the semantic store. Target membership is read from the already-established
-/// semantic-to-execution index; this function never allocates execution object identity.
+/// Never-admitted declarations are therefore not scheduled merely because they exist
+/// in the semantic store. The index supplies stable derived identity for objects
+/// admitted at least once; current membership is validated by the execution-session
+/// reachability authority before activation. This function never allocates execution
+/// object identity.
 pub fn lower_semantic_animation_schedule(
     store: &SemanticStore,
     index: &SemanticExecutionIndex,
@@ -557,6 +569,15 @@ fn published_payload(
             color,
             scale_center,
         },
+        ScheduledAnimationPayload::DrawBorderThenFill {
+            stroke_width,
+            stroke_color,
+            phase_rate_function,
+        } => SemanticScheduledAnimationPayload::DrawBorderThenFill {
+            stroke_width,
+            stroke_color,
+            phase_rate_function,
+        },
         ScheduledAnimationPayload::Fade {
             direction,
             endpoint,
@@ -599,6 +620,15 @@ fn prepared_payload(
             color,
             scale_center,
         },
+        ScheduledAnimationPayload::DrawBorderThenFill {
+            stroke_width,
+            stroke_color,
+            phase_rate_function,
+        } => PreparedSemanticScheduledAnimationPayload::DrawBorderThenFill {
+            stroke_width,
+            stroke_color,
+            phase_rate_function,
+        },
         ScheduledAnimationPayload::Fade {
             direction,
             endpoint,
@@ -636,6 +666,12 @@ enum AnimationDeclarationIntent<R> {
         scale_factor: f64,
         color: noon_core::Color,
         scale_center: noon_core::SemanticVec3,
+    },
+    DrawBorderThenFill {
+        target: R,
+        stroke_width: f64,
+        stroke_color: Option<noon_core::Color>,
+        phase_rate_function: RateFunction,
     },
     Rotate {
         target: R,
@@ -730,6 +766,22 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     scale_factor: *scale_factor,
                     color: *color,
                     scale_center: *scale_center,
+                }
+            }
+            SemanticAnimationIntent::DrawBorderThenFill {
+                target,
+                stroke_width,
+                stroke_color,
+                phase_rate_function,
+            } => {
+                self.store
+                    .semantic_object_state_checked(*target)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::DrawBorderThenFill {
+                    target: *target,
+                    stroke_width: *stroke_width,
+                    stroke_color: *stroke_color,
+                    phase_rate_function: *phase_rate_function,
                 }
             }
             SemanticAnimationIntent::Rotate { target, angle } => {
@@ -859,6 +911,17 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         color: *color,
                         scale_center: *scale_center,
                     },
+                    SemanticAnimationIntent::DrawBorderThenFill {
+                        target,
+                        stroke_width,
+                        stroke_color,
+                        phase_rate_function,
+                    } => AnimationDeclarationIntent::DrawBorderThenFill {
+                        target: (*target).into(),
+                        stroke_width: *stroke_width,
+                        stroke_color: *stroke_color,
+                        phase_rate_function: *phase_rate_function,
+                    },
                     SemanticAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: (*target).into(),
@@ -933,6 +996,17 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         color: *color,
                         scale_center: *scale_center,
                     },
+                    SemanticTransactionAnimationIntent::DrawBorderThenFill {
+                        target,
+                        stroke_width,
+                        stroke_color,
+                        phase_rate_function,
+                    } => AnimationDeclarationIntent::DrawBorderThenFill {
+                        target: *target,
+                        stroke_width: *stroke_width,
+                        stroke_color: *stroke_color,
+                        phase_rate_function: *phase_rate_function,
+                    },
                     SemanticTransactionAnimationIntent::Rotate { target, angle } => {
                         AnimationDeclarationIntent::Rotate {
                             target: *target,
@@ -994,7 +1068,8 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
             }
             AnimationDeclarationIntent::Rotate { target, .. }
-            | AnimationDeclarationIntent::Indicate { target, .. } => {
+            | AnimationDeclarationIntent::Indicate { target, .. }
+            | AnimationDeclarationIntent::DrawBorderThenFill { target, .. } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
@@ -1070,6 +1145,11 @@ enum ScheduledAnimationPayload<R> {
         scale_factor: f64,
         color: noon_core::Color,
         scale_center: noon_core::SemanticVec3,
+    },
+    DrawBorderThenFill {
+        stroke_width: f64,
+        stroke_color: Option<noon_core::Color>,
+        phase_rate_function: RateFunction,
     },
     Rotate {
         angle: f64,
@@ -1248,6 +1328,49 @@ where
                         scale_factor,
                         color,
                         scale_center,
+                    },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::DrawBorderThenFill {
+            target,
+            stroke_width,
+            stroke_color,
+            phase_rate_function,
+        } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options = resolve_animation_options(
+                AnimationDefaults {
+                    introducer: true,
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            if options.remover {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::DrawBorderThenFill {
+                        stroke_width,
+                        stroke_color,
+                        phase_rate_function,
                     },
                     options,
                 },

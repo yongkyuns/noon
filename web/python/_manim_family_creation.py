@@ -55,7 +55,11 @@ class Write:
         stroke_color = animation_kwargs.pop("stroke_color", None)
         if not math.isfinite(stroke_width) or stroke_width < 0.0:
             raise ValueError("Write stroke_width must be finite and non-negative")
-        if not math.isclose(stroke_width, 2.0, abs_tol=1e-15) or stroke_color is not None:
+        leaves = _compat._leaf_mobjects(vmobject)
+        retained_text = any(_native_text(member) for member in leaves)
+        if retained_text and (
+            not math.isclose(stroke_width, 2.0, abs_tol=1e-15) or stroke_color is not None
+        ):
             raise NotImplementedError(
                 "retained Text Write currently supports Manim's default outline style only"
             )
@@ -68,6 +72,12 @@ class Write:
         self.remover = bool(remover)
         self.reverse_rate_function = bool(
             animation_kwargs.get("reverse_rate_function", False)
+        )
+        self.stroke_width = stroke_width
+        self.stroke_color = (
+            None
+            if stroke_color is None
+            else _phase_b._as_color("stroke_color", stroke_color)
         )
         animation_kwargs["rate_func"] = rate_func
         self.anim_args = animation_kwargs
@@ -113,10 +123,18 @@ def _family_candidate(animation: object):
         return None
 
     if _is_write_animation(animation):
-        if not all(_native_text(member) for member in leaves):
+        native_text = [_native_text(member) for member in leaves]
+        if not any(native_text):
+            if animation.reverse or animation.remover or animation.reverse_rate_function:
+                raise NotImplementedError(
+                    "reverse ordinary vector Write/Unwrite remains a retained compatibility case (#959)"
+                )
+            # Forward ordinary vector Write is classified by the final canonical
+            # Scene.play layer as shared family DrawBorderThenFill.
+            return None
+        if not all(native_text):
             raise NotImplementedError(
-                "canonical retained Write/Unwrite currently supports native Text families only; "
-                "ordinary vector Write needs qualified family DrawBorderThenFill realization"
+                "Write cannot mix retained Text and ordinary vector leaves"
             )
     elif not any(_native_text(member) for member in leaves):
         return None

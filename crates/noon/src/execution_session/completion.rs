@@ -258,7 +258,8 @@ impl ExecutionSession {
                 SemanticAnimationCompletion::Fill { .. }
                     | SemanticAnimationCompletion::Stroke { .. }
                     | SemanticAnimationCompletion::Property {
-                        property: SemanticObjectProperty::ObjectOpacity,
+                        property: SemanticObjectProperty::ObjectOpacity
+                            | SemanticObjectProperty::StrokeWidth,
                         ..
                     }
             );
@@ -287,6 +288,10 @@ impl ExecutionSession {
                     property: SemanticObjectProperty::ObjectOpacity,
                     value: SemanticSignalValue::Scalar(value),
                 } => style.object_opacity = *value,
+                SemanticAnimationCompletion::Property {
+                    property: SemanticObjectProperty::StrokeWidth,
+                    value: SemanticSignalValue::Scalar(value),
+                } => style.stroke_width = *value,
                 _ => unreachable!("style-domain completion was classified above"),
             };
         }
@@ -297,7 +302,10 @@ impl ExecutionSession {
         for entry in entries {
             match &entry.completion {
                 SemanticAnimationCompletion::Property { property, value } => {
-                    if *property != SemanticObjectProperty::ObjectOpacity {
+                    if !matches!(
+                        property,
+                        SemanticObjectProperty::ObjectOpacity | SemanticObjectProperty::StrokeWidth
+                    ) {
                         semantic.set_property(entry.semantic_object, *property, value.clone());
                     }
                 }

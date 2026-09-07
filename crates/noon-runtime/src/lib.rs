@@ -641,6 +641,7 @@ pub struct RuntimePatchStats {
     pub objects_recomputed: usize,
     pub groups_evaluated: usize,
     pub object_slots_appended: usize,
+    pub object_slots_reactivated: usize,
     pub object_slots_retired: usize,
     pub track_locators_removed: usize,
     pub full_group_rebuilds: usize,
@@ -959,6 +960,7 @@ impl SceneInstance {
         let compiled_stats = self.compiled.apply_execution_patch_with_stats(patch)?;
         let mut patch_stats = RuntimePatchStats {
             object_slots_appended: compiled_stats.object_slots_appended,
+            object_slots_reactivated: compiled_stats.object_slots_reactivated,
             object_slots_retired: compiled_stats.object_slots_retired,
             track_locators_removed: compiled_stats.track_locators_removed,
             ..RuntimePatchStats::default()
@@ -971,11 +973,17 @@ impl SceneInstance {
                     .object_index(object.id)
                     .expect("compiled create must expose its appended slot")
                     as usize;
-                debug_assert_eq!(object_index, self.frame.objects.len());
-                append_object_frame(&self.compiled, &mut self.frame, object_index);
+                if compiled_stats.object_slots_reactivated == 1 {
+                    let time = self.frame.time;
+                    reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
+                    self.mark_added(object_index);
+                } else {
+                    debug_assert_eq!(object_index, self.frame.objects.len());
+                    append_object_frame(&self.compiled, &mut self.frame, object_index);
+                    self.mark_added(object_index);
+                }
                 self.rebind_reactive_object(object.id, object_index);
                 self.reapply_reactive_for_object(object_index);
-                self.mark_added(object_index);
             }
             ExecutionPatch::RemoveObject(_) => {
                 let (object_index, old_channels) = removed.expect("remove context captured above");
@@ -1136,6 +1144,7 @@ impl SceneInstance {
                         Property::Transform,
                         Property::Fill,
                         Property::Stroke,
+                        Property::StrokeWidth,
                         Property::Opacity,
                     ],
                 );
@@ -1363,7 +1372,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 11] = [
+const PROPERTY_ORDER: [Property; 12] = [
     Property::Presence,
     Property::Transform,
     Property::Position,
@@ -1371,6 +1380,7 @@ const PROPERTY_ORDER: [Property; 11] = [
     Property::Scale,
     Property::Fill,
     Property::Stroke,
+    Property::StrokeWidth,
     Property::Opacity,
     Property::Appearance,
     Property::Reveal,
@@ -1636,6 +1646,7 @@ fn apply_group_to_row(
             Property::Scale => Some(EvaluatedValue::Vec2(base_transform.scale)),
             Property::Fill => Some(EvaluatedValue::Color(base_style.fill)),
             Property::Stroke => Some(EvaluatedValue::Color(base_style.stroke)),
+            Property::StrokeWidth => Some(EvaluatedValue::Scalar(base_style.stroke_width)),
             Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
             Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
@@ -1744,6 +1755,11 @@ fn apply_evaluated_value(
         (Property::Stroke, EvaluatedValue::Color(value)) => {
             let changed = row.style.stroke != value;
             row.style.stroke = value;
+            changed
+        }
+        (Property::StrokeWidth, EvaluatedValue::Scalar(value)) => {
+            let changed = row.style.stroke_width != value;
+            row.style.stroke_width = value;
             changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
@@ -2949,6 +2965,66 @@ mod tests {
                 ..Color::BLUE
             })
         );
+    }
+
+    #[test]
+    fn stroke_width_track_updates_only_its_style_row_and_spatial_bounds() {
+        let target = ObjectId::new(4);
+        let untouched = ObjectId::new(9);
+        let style = Style {
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.0,
+            ..Style::default()
+        };
+        let compiled = CompiledScene::compile_objects(
+            vec![
+                CompiledObject::new(
+                    target,
+                    GeometryRef::rectangle(2.0, 2.0),
+                    Transform2D::IDENTITY,
+                    style,
+                ),
+                CompiledObject::new(
+                    untouched,
+                    GeometryRef::circle(1.0),
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                ),
+            ],
+            &[TrackDefinition {
+                id: TrackId::new(0),
+                object: target,
+                property: Property::StrokeWidth,
+                values: TrackValues::Scalar { from: 0.0, to: 2.0 },
+                timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        )
+        .expect("scene must compile");
+        let mut instance = SceneInstance::new(compiled);
+        instance.take_frame_changes();
+        instance.take_spatial_changes();
+
+        instance.advance_to(1.0).expect("valid time");
+
+        assert_eq!(instance.frame().objects[0].style.stroke_width, 1.0);
+        assert_eq!(instance.frame().objects[1].id, untouched);
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(instance.take_spatial_changes().object_indices(), &[0]);
+
+        instance.advance_to(1.0).expect("same time remains valid");
+        assert!(instance.take_frame_changes().is_empty());
+
+        instance.seek(2.0).expect("endpoint seek remains valid");
+        assert_eq!(instance.frame().objects[0].style.stroke_width, 2.0);
+        instance.take_frame_changes();
+        instance.take_spatial_changes();
+        instance.seek(0.5).expect("historical seek remains valid");
+        assert_eq!(instance.frame().objects[0].style.stroke_width, 0.5);
+        // Historical seek may invalidate the full frame; both forms must cover
+        // the changed width. Normal forward updates above remain strictly local.
+        assert!(instance.take_frame_changes().contains_object(0));
+        assert!(instance.take_spatial_changes().contains_object(0));
     }
 
     #[test]

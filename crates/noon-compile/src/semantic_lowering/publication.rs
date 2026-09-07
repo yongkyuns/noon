@@ -128,6 +128,7 @@ struct PreparedEntry {
     object: SemanticTransactionNodeRef,
     compiled: CompiledObject,
     presentation: SemanticPresentation,
+    reentry: bool,
 }
 
 /// Fully fallible compiler work retained until transaction-local names become IDs.
@@ -382,10 +383,18 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
 
     let mut entries = possible_entry_refs
         .into_iter()
-        .map(|object| lower_prepared_entry(prepared, object, &mut resource_additions))
+        .map(|object| {
+            let reentry = object
+                .existing()
+                .is_some_and(|node| index.execution_object_id(node).is_some());
+            lower_prepared_entry(prepared, object, reentry, &mut resource_additions)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.presentation.order_key());
-    if let (Some(tail), Some(entry)) = (live_painter_tail, entries.first()) {
+    if let (Some(tail), Some(entry)) = (
+        live_painter_tail,
+        entries.iter().find(|entry| !entry.reentry),
+    ) {
         if entry.presentation.order_key() <= tail {
             return Err(SemanticPublicationLoweringError::PainterOrderInterleaving {
                 object: entry.object,
@@ -492,6 +501,7 @@ fn collect_existing_exit_leaves(
 fn lower_prepared_entry(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     object: SemanticTransactionNodeRef,
+    reentry: bool,
     resource_additions: &mut CompiledResources,
 ) -> Result<PreparedEntry, SemanticPublicationLoweringError> {
     let state = prepared.proposed_object_state(object)?;
@@ -534,6 +544,7 @@ fn lower_prepared_entry(
         object,
         compiled,
         presentation: state.presentation(),
+        reentry,
     })
 }
 

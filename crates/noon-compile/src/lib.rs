@@ -10,7 +10,7 @@ mod transform;
 use std::cmp::Ordering;
 use std::{collections::BTreeMap, sync::Arc};
 
-use noon_core::resolve_track_timing;
+use noon_core::{continuous_time_map_interval, resolve_track_timing};
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
     CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId, ObjectStateField, Property,
@@ -75,6 +75,7 @@ pub struct DynamicProperties {
     pub scale: bool,
     pub fill: bool,
     pub stroke: bool,
+    pub stroke_width: bool,
     pub opacity: bool,
     pub appearance: bool,
     pub reveal: bool,
@@ -91,6 +92,7 @@ impl DynamicProperties {
             Property::Scale => self.scale = true,
             Property::Fill => self.fill = true,
             Property::Stroke => self.stroke = true,
+            Property::StrokeWidth => self.stroke_width = true,
             Property::Opacity => self.opacity = true,
             Property::Appearance => self.appearance = true,
             Property::Reveal => self.reveal = true,
@@ -106,6 +108,7 @@ impl DynamicProperties {
             || self.scale
             || self.fill
             || self.stroke
+            || self.stroke_width
             || self.opacity
             || self.appearance
             || self.reveal
@@ -371,6 +374,7 @@ pub struct CompiledPatchStats {
     /// Global/unrelated track payload movement. This must remain zero for local edits.
     pub unrelated_track_slots_shifted: usize,
     pub object_slots_appended: usize,
+    pub object_slots_reactivated: usize,
     pub object_slots_retired: usize,
     pub object_indices_rewritten: usize,
     pub track_object_indices_rewritten: usize,
@@ -394,8 +398,9 @@ pub struct CompiledTransactionPreflightStats {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
-    // Stable append-only slot storage. Removal tombstones a slot instead of shifting it.
-    // A future compaction generation may reclaim retired capacity off the live-edit path.
+    // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
+    // of the same execution identity revives that row in place. A future compaction
+    // generation may reclaim other retired capacity off the live-edit path.
     objects: Vec<CompiledObject>,
     live_object_count: usize,
     /// Tracks are segmented by stable execution channel. Mutating one channel never
@@ -404,6 +409,7 @@ pub struct CompiledScene {
     tracks: BTreeMap<CompiledChannelKey, Vec<CompiledTrack>>,
     track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
+    retired_object_indices: BTreeMap<ObjectId, u32>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
     resources: CompiledResources,
 }
@@ -644,10 +650,10 @@ impl std::error::Error for CompilePatchError {}
 impl CompiledScene {
     /// Validate the bounded affine completion policy for newly activated tracks.
     /// Existing and candidate tracks are inspected only in affected channels.
-    /// Mapped composition leaves retain the root interval as their track timing;
-    /// completion reconciles only at that exact root endpoint, where runtime finish
-    /// semantics settle every leaf to its authored target independently of the
-    /// map's ordinary alpha-at-one sample.
+    /// Mapped composition leaves retain the root interval for completion, while
+    /// overlap checks use their mapped active intervals. Completion still reconciles
+    /// at the root endpoint, where runtime finish semantics settle every leaf to its
+    /// authored target independently of the map's ordinary alpha-at-one sample.
     pub fn preflight_reconcilable_track_additions(
         &self,
         tracks: &[TrackDefinition],
@@ -663,6 +669,7 @@ impl CompiledScene {
                         | Property::Scale
                         | Property::Fill
                         | Property::Stroke
+                        | Property::StrokeWidth
                         | Property::Opacity
                         | Property::Appearance
                         | Property::Reveal
@@ -681,11 +688,14 @@ impl CompiledScene {
         }
         for (channel, candidate_tracks) in candidates {
             for (candidate_index, candidate) in candidate_tracks.iter().enumerate() {
-                let start = candidate.timing.start_time;
-                let end = start + candidate.timing.duration;
+                let (start, end) =
+                    continuous_time_map_interval(candidate.timing, &candidate.time_map)
+                        .expect("validated candidate track has a valid composition time map");
                 for existing in self.channel_tracks(channel) {
-                    let existing_end = existing.timing.start_time + existing.timing.duration;
-                    if start < existing_end && existing.timing.start_time < end {
+                    let (existing_start, existing_end) =
+                        continuous_time_map_interval(existing.timing, &existing.time_map)
+                            .expect("compiled track has a valid composition time map");
+                    if start < existing_end && existing_start < end {
                         return Err(CompilePatchError::OverlappingTrackReconciliation {
                             track: candidate.id,
                             other: existing.id,
@@ -693,8 +703,10 @@ impl CompiledScene {
                     }
                 }
                 for other in &candidate_tracks[..candidate_index] {
-                    let other_end = other.timing.start_time + other.timing.duration;
-                    if start < other_end && other.timing.start_time < end {
+                    let (other_start, other_end) =
+                        continuous_time_map_interval(other.timing, &other.time_map)
+                            .expect("validated candidate track has a valid composition time map");
+                    if start < other_end && other_start < end {
                         return Err(CompilePatchError::OverlappingTrackReconciliation {
                             track: candidate.id,
                             other: other.id,
@@ -780,6 +792,7 @@ impl CompiledScene {
             tracks: tracks_by_channel,
             track_count,
             object_indices,
+            retired_object_indices: BTreeMap::new(),
             track_locators,
             resources: CompiledResources::default(),
         })
@@ -1007,8 +1020,6 @@ impl CompiledScene {
                 if self.object_indices.contains_key(&object.id) {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
-                let index = u32::try_from(self.objects.len())
-                    .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
                 validate_compiled_object(object)?;
                 validate_execution_content_resource(
                     &self.resources,
@@ -1020,6 +1031,16 @@ impl CompiledScene {
                 let mut object = object.clone();
                 object.dynamic = DynamicProperties::default();
                 object.live = true;
+                if let Some(index) = self.retired_object_indices.remove(&object.id) {
+                    self.objects[index as usize] = object;
+                    self.object_indices
+                        .insert(self.objects[index as usize].id, index);
+                    self.live_object_count += 1;
+                    stats.object_slots_reactivated = 1;
+                    return Ok(stats);
+                }
+                let index = u32::try_from(self.objects.len())
+                    .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
                 self.live_object_count += 1;
@@ -1045,6 +1066,7 @@ impl CompiledScene {
                 object.live = false;
                 object.dynamic = DynamicProperties::default();
                 self.object_indices.remove(id);
+                self.retired_object_indices.insert(*id, index);
                 self.live_object_count -= 1;
                 stats.object_slots_retired = 1;
                 // No unrelated object or track payload changes storage location.
@@ -1222,6 +1244,7 @@ impl CompiledScene {
                             | Property::Scale
                             | Property::Fill
                             | Property::Stroke
+                            | Property::StrokeWidth
                             | Property::Opacity
                             | Property::Appearance
                             | Property::Reveal
@@ -1234,10 +1257,13 @@ impl CompiledScene {
                     if other.id == *track {
                         continue;
                     }
-                    let other_end = other.timing.start_time + other.timing.duration;
-                    if compiled.timing.start_time < other_end
-                        && other.timing.start_time < actual_end
-                    {
+                    let (compiled_start, compiled_end) =
+                        continuous_time_map_interval(compiled.timing, &compiled.time_map)
+                            .expect("compiled track has a valid composition time map");
+                    let (other_start, other_end) =
+                        continuous_time_map_interval(other.timing, &other.time_map)
+                            .expect("compiled track has a valid composition time map");
+                    if compiled_start < other_end && other_start < compiled_end {
                         return Err(CompilePatchError::OverlappingTrackReconciliation {
                             track: *track,
                             other: other.id,
@@ -1546,10 +1572,11 @@ const fn property_rank(property: Property) -> u8 {
         Property::Scale => 4,
         Property::Fill => 5,
         Property::Stroke => 6,
-        Property::Opacity => 7,
-        Property::Appearance => 8,
-        Property::Reveal => 9,
-        Property::Morph => 10,
+        Property::StrokeWidth => 7,
+        Property::Opacity => 8,
+        Property::Appearance => 9,
+        Property::Reveal => 10,
+        Property::Morph => 11,
     }
 }
 
@@ -1777,6 +1804,7 @@ mod tests {
                 scale: false,
                 fill: false,
                 stroke: false,
+                stroke_width: false,
                 opacity: true,
                 appearance: false,
                 reveal: false,
@@ -1803,6 +1831,35 @@ mod tests {
             compiled.objects()[0].dynamic,
             DynamicProperties {
                 scale: true,
+                ..DynamicProperties::default()
+            }
+        );
+    }
+
+    #[test]
+    fn stroke_width_tracks_mark_only_stroke_width_dynamic() {
+        let object = ObjectId::new(7);
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )],
+            &[TrackDefinition {
+                id: TrackId::new(0),
+                object,
+                property: Property::StrokeWidth,
+                values: TrackValues::Scalar { from: 1.0, to: 2.0 },
+                timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        )
+        .expect("scene must compile");
+        assert_eq!(
+            compiled.objects()[0].dynamic,
+            DynamicProperties {
+                stroke_width: true,
                 ..DynamicProperties::default()
             }
         );
@@ -1947,6 +2004,7 @@ mod tests {
                 scale: false,
                 fill: false,
                 stroke: false,
+                stroke_width: false,
                 opacity: false,
                 appearance: false,
                 reveal: true,
@@ -2440,5 +2498,35 @@ mod tests {
         assert!(inserted.live);
         assert_eq!(inserted.dynamic, DynamicProperties::default());
         assert_eq!(compiled.live_object_count(), 1);
+    }
+
+    #[test]
+    fn typed_create_reactivates_the_same_retired_row() {
+        let returning = ObjectId::new(45);
+        let later = ObjectId::new(46);
+        let object = |id| {
+            CompiledObject::new(
+                id,
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        };
+        let mut compiled =
+            CompiledScene::compile_objects(vec![object(returning), object(later)], &[]).unwrap();
+
+        compiled
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(returning))
+            .unwrap();
+        let stats = compiled
+            .apply_execution_patch_with_stats(&ExecutionPatch::CreateObject(object(returning)))
+            .unwrap();
+
+        assert_eq!(compiled.object_index(returning), Some(0));
+        assert_eq!(compiled.object_index(later), Some(1));
+        assert_eq!(compiled.objects().len(), 2);
+        assert_eq!(compiled.live_object_count(), 2);
+        assert_eq!(stats.object_slots_reactivated, 1);
+        assert_eq!(stats.object_slots_appended, 0);
     }
 }
