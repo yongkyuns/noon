@@ -21,6 +21,7 @@ Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `r
 | Parallel Create | `noon::example_scenes::ordinary_square_and_circle_create_continuation_program()` | None; matches Python `manim_parity_square_and_circle.py` with one atomic admission and reveal segment |
 | MovingCameraCenter | `noon::example_scenes::ordinary_moving_camera_center_program()` | None; shared camera transforms and live admission after a wait match the literal Python scene |
 | Ordinary Uncreate | `noon::example_scenes::ordinary_uncreate_continuation_program()` | None; detached admission, reverse reveal, and endpoint removal share the same runtime |
+| Uncreate options | `noon::example_scenes::ordinary_uncreate_options::program()` / `python/examples/ordinary_uncreate_options.py` | None; shared Rust resolves easing, reveal direction and optional endpoint removal |
 | Static Typst / MathTypst | `noon::example_scenes::typst_text_reference()` / `math_typst_text_reference()` | None; shared semantic text resources supply glyphs and vector geometry |
 | Ordinary Create | `noon::example_scenes::ordinary_create_continuation_program()` | None; the typed Rust program owns introduction, reveal, endpoint reconciliation, and continuation admission |
 | Create → SquareToCircle → FadeOut | `noon::example_scenes::ordinary_create_then_content_morph_program()` | None; native and direct-WASM hosts run the same typed content and lifecycle continuation |
