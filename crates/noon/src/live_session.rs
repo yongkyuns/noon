@@ -3800,7 +3800,7 @@ mod recursive_composition_tests {
         let mut live = scene.live(&mut session);
 
         live.arrange_family(&family, 1.0, 0.0, 0.2, true).unwrap();
-        let publication = live.publication_context();
+        let publication = live.session.publication_context();
         let first_center = first.center().unwrap();
         let second_center = second.center().unwrap();
 

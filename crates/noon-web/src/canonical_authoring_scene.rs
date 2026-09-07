@@ -6103,18 +6103,8 @@ mod tests {
         context
             .live_arrange_family(&pair, 1.0, 0.0, 0.15, true)
             .unwrap();
-        let arranged_left = context
-            .active_live_player()
-            .unwrap()
-            .live_effective_layout(&left)
-            .unwrap()
-            .center;
-        let arranged_right = context
-            .active_live_player()
-            .unwrap()
-            .live_effective_layout(&right)
-            .unwrap()
-            .center;
+        let arranged_left = left.center().unwrap();
+        let arranged_right = right.center().unwrap();
         assert!((arranged_right.0 - arranged_left.0 - 0.45).abs() < 1e-6);
         assert_eq!(context.live_execution_ownership(), "returned");
         // Repeated explicit `Scene.live_execution()` helpers may adjust the loop

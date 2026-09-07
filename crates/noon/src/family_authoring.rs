@@ -3,6 +3,7 @@
 use crate::semantic_mobject::{
     authoring_render_f64 as render_f64, authoring_xy_f64 as semantic_xy_f64,
 };
+use crate::Mobject;
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
     SemanticObjectProperty, SemanticStore,
@@ -469,6 +470,45 @@ impl MobjectFamily {
 mod tests {
     use super::*;
     use crate::Scene;
+
+    #[test]
+    fn family_arrange_preserves_direct_order_spacing_and_recentering() {
+        let bounds = [
+            Some(Bounds2D64 {
+                min_x: -1.0,
+                min_y: -0.5,
+                max_x: 1.0,
+                max_y: 0.5,
+            }),
+            Some(Bounds2D64 {
+                min_x: -0.5,
+                min_y: -0.25,
+                max_x: 0.5,
+                max_y: 0.25,
+            }),
+        ];
+        let mut store = SemanticStore::new();
+        let first = store.insert_authoring_object();
+        let second = store.insert_authoring_object();
+        let nested = store.insert_family();
+        store.add_member(nested, second).unwrap();
+        let outer = store.insert_family();
+        store.add_member(outer, first).unwrap();
+        store.add_member(outer, nested).unwrap();
+
+        let mut rejected = FamilyArrangePlan::begin(&store, outer).unwrap();
+        assert!(rejected.accept_member_bounds(nested, bounds[1]).is_err());
+
+        let mut plan = FamilyArrangePlan::begin(&store, outer).unwrap();
+        plan.accept_member_bounds(first, bounds[0]).unwrap();
+        plan.accept_member_bounds(nested, bounds[1]).unwrap();
+        let translations = plan.finish(2.0, 0.0, 0.25, true).unwrap();
+        assert_eq!(translations.len(), 2);
+        assert_eq!(translations[0].source_members, vec![first]);
+        assert_eq!(translations[0].delta, (-0.75, 0.0));
+        assert_eq!(translations[1].source_members, vec![second]);
+        assert_eq!(translations[1].delta, (1.25, 0.0));
+    }
 
     #[test]
     fn ordinary_family_arrange_uses_shared_bounds_and_one_transaction() {
