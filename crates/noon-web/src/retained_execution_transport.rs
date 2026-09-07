@@ -417,20 +417,38 @@ impl RetainedExecutionDeltaEncoder {
         if changes.is_empty() {
             return Ok(None);
         }
-        let removed_indices = changes
-            .removed_indices()
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        let removed_slots = changes
+        let removed_rows = changes
             .removed_indices()
             .iter()
             .copied()
             .map(|index| {
                 self.transport_object(frame, index)
-                    .map(|object| object.slot)
+                    .map(|object| (index, object.slot))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let excluded_indices = removed_rows
+            .iter()
+            .map(|(index, _)| *index)
+            .collect::<HashSet<_>>();
+        // Several semantic publications may accumulate before the next worker
+        // delta. An object can therefore be re-added and removed again while its
+        // worker row remains absent throughout. Publish only removals that were
+        // live in the encoder's last worker state; still exclude every final
+        // removal from the changed-row payload below.
+        let removed_rows = removed_rows
+            .into_iter()
+            .filter(|(index, _)| {
+                self.snapshot_orders
+                    .get(*index)
+                    .copied()
+                    .flatten()
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        let removed_slots = removed_rows
+            .iter()
+            .map(|(_, slot)| *slot)
+            .collect::<Vec<_>>();
         let (order_updates, painter_order) = if let Some(order) = painter_order {
             let delta = changes
                 .painter_order_range()
@@ -482,7 +500,7 @@ impl RetainedExecutionDeltaEncoder {
             .object_indices()
             .iter()
             .copied()
-            .filter(|index| !removed_indices.contains(index))
+            .filter(|index| !excluded_indices.contains(index))
             .map(|index| {
                 let mut object = self.transport_object(frame, index)?;
                 object.order = order_update_map
@@ -494,7 +512,7 @@ impl RetainedExecutionDeltaEncoder {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
-        for index in &removed_indices {
+        for (index, _) in &removed_rows {
             if let Some(order) = self.snapshot_orders.get_mut(*index) {
                 *order = None;
             }
@@ -1436,7 +1454,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_replacement_slot_does_not_become_incremental_painter_rank() {
+    fn coalesced_readd_replace_publishes_only_net_membership() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(23);
         let initial = encoder
@@ -1444,6 +1462,15 @@ mod tests {
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
+
+        let removed = FrameChanges::with_structure(vec![0, 1], Vec::new(), vec![0, 1])
+            .with_painter_order(0..2);
+        let empty = encoder
+            .encode_incremental_with_painter_order(&frame, &removed, Camera2DState::default(), &[])
+            .unwrap()
+            .unwrap();
+        mirror.apply(empty).unwrap();
+        assert!(mirror.painter_order().is_empty());
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
@@ -1459,7 +1486,10 @@ mod tests {
         replaced.morphs.push(0.0);
         replaced.render_geometries.push(None);
         replaced.render_transforms.push(None);
-        let structural = FrameChanges::with_structure(vec![0, 1, 2], vec![2], vec![0, 1])
+        // Re-add the old pair and replace it before publishing another frame.
+        // The accumulated changes retain 0/1 in both added and removed sets,
+        // although those rows stayed absent at the worker boundary.
+        let structural = FrameChanges::with_structure(vec![0, 1, 2], vec![0, 1, 2], vec![0, 1])
             .with_painter_order(0..2);
         let replacement = encoder
             .encode_incremental_with_painter_order(
@@ -1470,11 +1500,12 @@ mod tests {
             )
             .unwrap()
             .unwrap();
+        assert!(replacement.removed_slots.is_empty());
         mirror.apply(replacement).unwrap();
         assert_eq!(mirror.painter_order(), &[2]);
 
         replaced.objects[2].appearance = 0.5;
-        let mut later = encoder
+        let later = encoder
             .encode_incremental(
                 &replaced,
                 &FrameChanges::objects(vec![2]),
@@ -1482,9 +1513,6 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        // Incremental row order is legacy metadata. The sparse stable slot and
-        // the retained painter permutation remain separate identities.
-        later.objects[0].order = 2;
         mirror.apply(later).unwrap();
         assert_eq!(mirror.painter_order(), &[2]);
         assert_eq!(mirror.frame().unwrap().objects[2].appearance, 0.5);
