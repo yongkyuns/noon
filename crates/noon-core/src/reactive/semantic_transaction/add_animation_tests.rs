@@ -118,6 +118,57 @@ fn invalid_affine_fade_endpoint_rolls_back_before_identity_allocation() {
 }
 
 #[test]
+fn prepared_draw_border_then_fill_preserves_shared_outline_semantics() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let before_len = store.len();
+    let mut transaction = SemanticMutationTransaction::new();
+    let local = transaction.create_draw_border_then_fill_animation(
+        target,
+        0.125,
+        Some(crate::BLUE),
+        RateFunction::Smooth,
+        AnimationOptions::new().run_time(2.0).introducer(true),
+    );
+
+    let result = transaction.apply(&mut store).unwrap();
+    let animation = result.resolve(local).unwrap();
+    assert_eq!(
+        store.semantic_animation_state(animation).unwrap().intent(),
+        &SemanticAnimationIntent::DrawBorderThenFill {
+            target,
+            stroke_width: 0.125,
+            stroke_color: Some(crate::BLUE),
+            phase_rate_function: RateFunction::Smooth,
+        }
+    );
+    assert_eq!(store.len(), before_len + 1);
+    assert_eq!(store.last_mutation_stats().slots_written, 1);
+}
+
+#[test]
+fn invalid_draw_border_then_fill_outline_rolls_back_before_identity_allocation() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let before_len = store.len();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.create_draw_border_then_fill_animation(
+        target,
+        -0.5,
+        None,
+        RateFunction::Smooth,
+        AnimationOptions::new(),
+    );
+
+    assert!(matches!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidDrawBorderThenFillOutline { index: 0 })
+    ));
+    assert_eq!(store.len(), before_len);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+}
+
+#[test]
 fn add_animation_preserves_composition_order_and_unresolved_options() {
     let mut store = SemanticStore::new();
     let first = transform(&mut store, 1.0);

@@ -1,5 +1,5 @@
 use super::{
-    AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
+    AnimationOptions, AnimationOptionsError, RateFunction, SemanticNodeId, SemanticNodeKind,
     SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
 };
 use crate::Color;
@@ -131,6 +131,13 @@ pub enum SemanticAnimationIntent {
         color: Color,
         scale_center: SemanticVec3,
     },
+    /// Reveal one vector outline, then restore its activation-effective style.
+    DrawBorderThenFill {
+        target: SemanticNodeId,
+        stroke_width: f64,
+        stroke_color: Option<Color>,
+        phase_rate_function: RateFunction,
+    },
     /// Rotate one centered 2D object along an angular path. This remains distinct
     /// from TransformTo point correspondence even when both share affine endpoints.
     Rotate { target: SemanticNodeId, angle: f64 },
@@ -174,6 +181,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::TransformTo { target, .. }
             | Self::Indicate { target, .. }
+            | Self::DrawBorderThenFill { target, .. }
             | Self::Rotate { target, .. }
             | Self::Fade { target, .. }
             | Self::AffineLifecycle { target, .. }
@@ -189,6 +197,7 @@ impl SemanticAnimationIntent {
             Self::TransformTo { target_state, .. } => Some(*target_state),
             Self::Rotate { .. }
             | Self::Indicate { .. }
+            | Self::DrawBorderThenFill { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
             | Self::Create { .. }
@@ -203,6 +212,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::TransformTo { .. }
             | Self::Indicate { .. }
+            | Self::DrawBorderThenFill { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -218,6 +228,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::TransformTo { .. }
             | Self::Indicate { .. }
+            | Self::DrawBorderThenFill { .. }
             | Self::Rotate { .. }
             | Self::Fade { .. }
             | Self::AffineLifecycle { .. }
@@ -265,6 +276,7 @@ pub enum SemanticAnimationError {
     SameTargetAndTargetState(SemanticNodeId),
     InvalidRotationAngle(f64),
     InvalidIndicateEndpoint,
+    InvalidDrawBorderThenFillOutline,
     InvalidFadeEndpoint,
     InvalidAffineLifecycleEndpoint,
     Signal(SemanticSignalError),
@@ -305,6 +317,9 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidIndicateEndpoint => formatter.write_str(
                 "Indicate scale, color, and shared scale center must be finite 2D values",
             ),
+            Self::InvalidDrawBorderThenFillOutline => {
+                formatter.write_str("DrawBorderThenFill outline width and color must be finite")
+            }
             Self::InvalidFadeEndpoint => formatter
                 .write_str("Fade scale, translation, and scale center must be finite 2D values"),
             Self::InvalidAffineLifecycleEndpoint => formatter.write_str(
@@ -463,6 +478,44 @@ impl SemanticStore {
                     target,
                     target_state,
                     interpolation,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one activation-relative two-phase vector outline/fill declaration.
+    pub fn insert_semantic_draw_border_then_fill_animation(
+        &mut self,
+        target: SemanticNodeId,
+        stroke_width: f64,
+        stroke_color: Option<Color>,
+        phase_rate_function: RateFunction,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        let color_is_finite = stroke_color.is_none_or(|color| {
+            color.red.is_finite()
+                && color.green.is_finite()
+                && color.blue.is_finite()
+                && color.alpha.is_finite()
+        });
+        if !stroke_width.is_finite()
+            || stroke_width < 0.0
+            || stroke_width > f32::MAX as f64
+            || !color_is_finite
+        {
+            return Err(SemanticAnimationError::InvalidDrawBorderThenFillOutline);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::DrawBorderThenFill {
+                    target,
+                    stroke_width,
+                    stroke_color,
+                    phase_rate_function,
                 },
                 options,
             )),
