@@ -4317,7 +4317,8 @@ mod recursive_composition_tests {
     #[test]
     fn subset_preparation_rejects_nested_families_without_partial_style_changes() {
         let scene = Scene::new();
-        let first = scene.square(1.0).unwrap();
+        let mut first = scene.square(1.0).unwrap();
+        first.set_fill_opacity(1.0).unwrap();
         let nested_member = scene.square(1.0).unwrap();
         let nested = scene.family(&[&nested_member]).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
