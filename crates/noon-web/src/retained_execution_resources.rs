@@ -151,11 +151,20 @@ impl InstalledRetainedExecutionMirror {
 
         // Family validation happens against the frame shape that will exist after the
         // retained delta, but live family state is not changed until the base mirror
-        // accepts the sequence. Incrementals cannot change retained identity/content,
-        // so the current resolved frame is sufficient for their sidecar validation.
+        // accepts the sequence. A sparse structural delta may introduce an already
+        // active family row, so validate that case against a staged retained frame.
         let mut next_family = self.family.clone();
-        if delta.retained.snapshot {
-            let preview = self.preview_resolved_snapshot(&delta.retained)?;
+        let adds_rows = !delta.retained.snapshot
+            && delta
+                .retained
+                .objects
+                .iter()
+                .any(|object| self.wire.frame_index_for_slot(object.slot).is_none());
+        if delta.retained.snapshot || adds_rows {
+            let (outcome, preview) = self.preview_resolved_delta(&delta.retained)?;
+            if outcome == RetainedTransportApplyOutcome::DroppedStale {
+                return Ok((outcome, FrameChanges::default()));
+            }
             next_family.apply(&delta, &preview, self.resources.texts())?;
         } else {
             let current = self
@@ -193,17 +202,16 @@ impl InstalledRetainedExecutionMirror {
         Ok(())
     }
 
-    fn preview_resolved_snapshot(
+    fn preview_resolved_delta(
         &self,
         delta: &RetainedExecutionDeltaEnvelope,
-    ) -> Result<FrameState, InstalledExecutionError> {
+    ) -> Result<(RetainedTransportApplyOutcome, FrameState), InstalledExecutionError> {
         let mut wire = self.wire.clone();
         let (outcome, _) = wire.apply(delta.clone())?;
-        debug_assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
         let frame = wire
             .frame()
             .ok_or(InstalledExecutionError::MissingWireFrame)?;
-        Ok(self.resolve_wire_frame(frame))
+        Ok((outcome, self.resolve_wire_frame(frame)))
     }
 
     fn rebuild_resolved_snapshot(&mut self) -> Result<(), InstalledExecutionError> {

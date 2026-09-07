@@ -175,8 +175,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
     }
 
     /// Encode one sparse family-aware update with a compact painter-order splice.
-    /// Added rows begin with no family scheduler state; existing and retired rows
-    /// retain the ordinary sparse family-state update behavior.
+    /// Newly admitted rows may begin an active family animation in this same atomic
+    /// delta; their plan descriptor is appended before their state references it.
     pub fn encode_planned_incremental_with_painter_order(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
@@ -187,21 +187,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
         self.validate_plan_count(plans)?;
-        if let Some(&index) = changes.added_indices().iter().find(|&&index| {
-            frame
-                .family_animations
-                .get(index)
-                .is_some_and(Option::is_some)
-        }) {
-            return Err(RetainedFamilyExecutionEncodeError::ActiveAddedObject(index));
-        }
-        let family_indices = changes
-            .object_indices()
-            .iter()
-            .copied()
-            .filter(|index| changes.added_indices().binary_search(index).is_err())
-            .collect::<Vec<_>>();
-        let family_changes = FrameChanges::objects(family_indices);
+        let family_changes = FrameChanges::objects(changes.object_indices().to_vec());
         let mut next_remap = self.plan_index_remap.clone();
         next_remap.resize(plans.len(), None);
         let mut added_plan_indices = Vec::new();
@@ -327,7 +313,6 @@ fn remap_family_state_indices(
 pub enum RetainedFamilyExecutionEncodeError {
     Retained(RetainedExecutionTransportError),
     Family(RetainedFamilyExecutionTransportError),
-    ActiveAddedObject(usize),
 }
 
 impl std::fmt::Display for RetainedFamilyExecutionEncodeError {
@@ -335,10 +320,6 @@ impl std::fmt::Display for RetainedFamilyExecutionEncodeError {
         match self {
             Self::Retained(error) => error.fmt(formatter),
             Self::Family(error) => error.fmt(formatter),
-            Self::ActiveAddedObject(index) => write!(
-                formatter,
-                "new retained row {index} cannot begin with active family scheduler state"
-            ),
         }
     }
 }
@@ -538,6 +519,60 @@ mod tests {
         assert_eq!(delta.family_plans.len(), 1);
         assert_eq!(delta.family_states.len(), 1);
         assert_eq!(delta.family_states[0].family_plan_index, Some(1));
+    }
+
+    #[test]
+    fn sparse_new_rows_publish_active_family_state_with_appended_plan() {
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(24);
+        let empty = FrameState {
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
+            time: 0.0,
+            objects: Vec::new(),
+            presences: Vec::new(),
+            reveals: Vec::new(),
+            morphs: Vec::new(),
+            render_geometries: Vec::new(),
+            render_transforms: Vec::new(),
+        };
+        encoder
+            .encode_planned_snapshot(
+                &RetainedPlannedFamilyFrame {
+                    retained: &empty,
+                    family_animations: &[],
+                    family_plan_indices: &[],
+                },
+                &[],
+                Camera2DState::default(),
+            )
+            .unwrap();
+
+        let (plan, frame, states) = fixture();
+        let plan_indices = [Some(0), Some(0)];
+        let delta = encoder
+            .encode_planned_incremental_with_painter_order(
+                &RetainedPlannedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                    family_plan_indices: &plan_indices,
+                },
+                &[plan],
+                &FrameChanges::with_structure(vec![0, 1], vec![0, 1], Vec::new())
+                    .with_painter_order(0..2),
+                Camera2DState::default(),
+                &[0, 1],
+            )
+            .unwrap()
+            .unwrap();
+
+        assert!(!delta.retained.snapshot);
+        assert_eq!(delta.retained.objects.len(), 2);
+        assert_eq!(delta.family_plans.len(), 1);
+        assert_eq!(delta.family_states.len(), 2);
+        assert!(delta
+            .family_states
+            .iter()
+            .all(|state| state.family_plan_index == Some(0)));
     }
 
     #[test]
