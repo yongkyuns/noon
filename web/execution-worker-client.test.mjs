@@ -9,8 +9,12 @@ class FakeCanvas {
   className = "";
   id = "scene";
   replacement = null;
+  transfers = 0;
+
+  remove() {}
 
   transferControlToOffscreen() {
+    this.transfers += 1;
     return { width: this.width, height: this.height };
   }
 
@@ -80,6 +84,7 @@ globalThis.Worker = FakeWorker;
 globalThis.window = { devicePixelRatio: 1 };
 
 const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+const { resetRenderHostSelectionForTests } = await import("./render-host-selection.js");
 
 const SCENE_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
 
@@ -108,6 +113,65 @@ function workerPair(offset = 0) {
   assert.ok(engine, "engine worker must be created");
   assert.ok(render, "render worker must be created");
   return { engine, render };
+}
+
+function deferredRenderHostProbe(t) {
+  const saved = new Map();
+  let settleProbe;
+  const probeReady = new Promise((resolve) => {
+    settleProbe = resolve;
+  });
+
+  class ProbeWorker extends FakeWorker {
+    #probe;
+
+    constructor(url, options = {}) {
+      super(url, options);
+      this.#probe =
+        String(url) === "blob:noon-render-host-probe#noon-render-capability-probe";
+    }
+
+    postMessage(message, transfer = []) {
+      if (!this.#probe) {
+        super.postMessage(message, transfer);
+        return;
+      }
+      void probeReady.then((ok) => {
+        this.onmessage?.({ data: { ok } });
+      });
+    }
+  }
+
+  for (const [name, value] of Object.entries({
+    document: {
+      createElement() {
+        return new FakeCanvas();
+      },
+    },
+    Worker: ProbeWorker,
+    Blob: class {},
+    URL: class extends URL {
+      static createObjectURL() {
+        return "blob:noon-render-host-probe";
+      }
+
+      static revokeObjectURL() {}
+    },
+    __NOON_RENDER_HOST__: null,
+    location: { href: "https://example.test/" },
+  })) {
+    saved.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  }
+  resetRenderHostSelectionForTests();
+  t.after(() => {
+    resetRenderHostSelectionForTests();
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  });
+  return (ok = true) => settleProbe(ok);
 }
 
 async function startClient(errors = []) {
@@ -145,6 +209,50 @@ async function waitForRequest(worker, type, occurrence = 1) {
   assert.fail(`missing ${worker.name} ${type} request`);
 }
 
+test("reserves prepare and fresh startup while render-host probing is pending", async (t) => {
+  const resolveProbe = deferredRenderHostProbe(t);
+  const canvas = new FakeCanvas();
+  const client = new ExecutionWorkerClient(canvas);
+  const offset = FakeWorker.instances.length;
+
+  const preparing = client.prepare({ transportMode: "transferable" });
+  await assert.rejects(
+    client.start(SCENE_JSON, { transportMode: "transferable" }),
+    /already started/,
+  );
+  assert.equal(canvas.transfers, 0, "host probing must finish before canvas ownership transfers");
+
+  resolveProbe();
+  const render = await waitForNewWorker(offset, "noon-render");
+  const prepareRequest = await waitForRequest(render, "prepare");
+  render.emitMessage(
+    renderMessage("prepared", {
+      requestId: prepareRequest.requestId,
+      transportMode: "transferable",
+      backend: "WebGL2",
+    }),
+  );
+  await preparing;
+  assert.equal(canvas.transfers, 1);
+  client.terminate();
+});
+
+test("reserves a fresh start and cancellation during host probing cannot transfer", async (t) => {
+  const resolveProbe = deferredRenderHostProbe(t);
+  const canvas = new FakeCanvas();
+  const client = new ExecutionWorkerClient(canvas);
+
+  const first = client.start(SCENE_JSON, { transportMode: "transferable" });
+  await assert.rejects(
+    client.start(SCENE_JSON, { transportMode: "transferable" }),
+    /already started/,
+  );
+  client.terminate();
+  resolveProbe();
+  await assert.rejects(first, /terminated during an asynchronous operation/);
+  assert.equal(canvas.transfers, 0);
+});
+
 test("engine and render requests use independent issuance spaces", async () => {
   const errors = [];
   const { client, engine, render } = await startClient(errors);
@@ -161,9 +269,11 @@ test("engine and render requests use independent issuance spaces", async () => {
   const metrics = await metricsPromise;
   assert.deepEqual(metrics.metrics, { ready: true });
   assert.deepEqual(metrics.engineMetrics, { host: {} });
+  assert.equal(metrics.renderHost, "worker");
 
   assert.deepEqual(client.diagnostics, {
     session: 1,
+    renderHost: "worker",
     engine: {
       nextRequestId: 1,
       pendingRequests: 0,
@@ -463,4 +573,13 @@ async function waitForNewEngine(offset) {
     await Promise.resolve();
   }
   assert.fail("replacement engine worker must be created");
+}
+
+async function waitForNewWorker(offset, name) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const worker = FakeWorker.instances.slice(offset).find((candidate) => candidate.name === name);
+    if (worker !== undefined) return worker;
+    await Promise.resolve();
+  }
+  assert.fail(`replacement ${name} worker must be created`);
 }

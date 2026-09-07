@@ -20,6 +20,7 @@ const exactFamilies = new Map([
   ["pages.yml", "deployment"],
   ["fuzz.yml", "fuzz"],
   ["branch-cleanup-once.yml", "maintenance"],
+  ["noon-agent-foundation.yml", "agent-authoring"],
 ]);
 
 function classifyWorkflow(name) {
@@ -54,6 +55,7 @@ const requiredFamilies = new Set([
   "platform-release",
   "manim",
   "playground",
+  "agent-authoring",
 ]);
 const presentFamilies = new Set(classified.map(({ family }) => family));
 for (const family of requiredFamilies) {
