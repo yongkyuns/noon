@@ -516,7 +516,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn with_live_session<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,
