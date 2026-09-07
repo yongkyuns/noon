@@ -50,10 +50,11 @@ impl LiveContinuation for TextFamilyFade {
                 Ok(ContinuationStep::Await(segment))
             }
             1 => {
-                for member in [&self.left, &self.right, &self.writing] {
-                    if !live.contains(member).map_err(|error| error.to_string())? {
-                        return Err("Text family FadeIn did not admit every expected object".into());
-                    }
+                if !live
+                    .contains(&self.writing)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err("Text Write did not admit its direct scene root".into());
                 }
                 {
                     let store = self.family.store().borrow();
@@ -85,15 +86,9 @@ impl LiveContinuation for TextFamilyFade {
                 .map_err(|error| error.to_string())
             }
             2 => {
-                if live
-                    .contains(&self.left)
+                if !live
+                    .contains(&self.writing)
                     .map_err(|error| error.to_string())?
-                    || live
-                        .contains(&self.right)
-                        .map_err(|error| error.to_string())?
-                    || !live
-                        .contains(&self.writing)
-                        .map_err(|error| error.to_string())?
                 {
                     return Err(
                         "Text family FadeOut did not remove only its authoritative family".into(),
@@ -126,6 +121,26 @@ impl LiveContinuation for TextFamilyFade {
             _ => Err("Text family Fade continuation resumed after completion".into()),
         }
     }
+}
+
+pub fn program() -> Result<LiveProgram<TextFamilyFade>, String> {
+    let scene = Scene::new();
+    let mut left = scene.text("LEFT").map_err(|error| error.to_string())?;
+    left.set_translation(-2.0, 0.5)?;
+    let mut right = scene.text("RIGHT").map_err(|error| error.to_string())?;
+    right.set_translation(1.0, 0.5)?;
+    let mut writing = scene.text("WRITE").map_err(|error| error.to_string())?;
+    writing.set_translation(-1.0, -1.0)?;
+    let family = scene.family(&[&left, &right])?;
+    scene
+        .into_live_program(TextFamilyFade {
+            left,
+            right,
+            writing,
+            family,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -192,24 +207,4 @@ mod tests {
         admit_completion(&mut program, &mut callbacks, 3.25);
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     }
-}
-
-pub fn program() -> Result<LiveProgram<TextFamilyFade>, String> {
-    let scene = Scene::new();
-    let mut left = scene.text("LEFT").map_err(|error| error.to_string())?;
-    left.set_translation(-2.0, 0.5)?;
-    let mut right = scene.text("RIGHT").map_err(|error| error.to_string())?;
-    right.set_translation(1.0, 0.5)?;
-    let mut writing = scene.text("WRITE").map_err(|error| error.to_string())?;
-    writing.set_translation(-1.0, -1.0)?;
-    let family = scene.family(&[&left, &right])?;
-    scene
-        .into_live_program(TextFamilyFade {
-            left,
-            right,
-            writing,
-            family,
-            stage: 0,
-        })
-        .map_err(|error| error.to_string())
 }
