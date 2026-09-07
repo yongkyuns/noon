@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="ScaleInPlace preview">
+  <rect width="640" height="360" fill="#111722"/>
+  <rect x="160" y="120" width="120" height="120" rx="8" fill="#58C4DD" opacity="0.28"/>
+  <rect x="135" y="95" width="170" height="170" rx="10" fill="none" stroke="#58C4DD" stroke-width="10"/>
+  <path d="M350 180h90" stroke="#8390a8" stroke-width="8" stroke-linecap="round"/>
+  <path d="M420 155l30 25-30 25" fill="none" stroke="#8390a8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="320" y="315" text-anchor="middle" fill="#dbe2ef" font-family="ui-monospace,monospace" font-size="26">ScaleInPlace</text>
+</svg>
