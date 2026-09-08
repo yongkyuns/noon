@@ -1,0 +1,23 @@
+name: Agent preview runner
+
+on:
+  pull_request:
+    paths:
+      - "scripts/agent-preview-process.mjs"
+      - "scripts/agent-preview-process.test.mjs"
+      - ".github/workflows/agent-preview-runner.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  process-supervisor:
+    name: Process supervisor contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Check syntax
+        run: node --check scripts/agent-preview-process.mjs
+      - name: Run process supervisor tests
+        run: node --test scripts/agent-preview-process.test.mjs
