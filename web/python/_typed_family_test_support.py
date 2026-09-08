@@ -30,6 +30,7 @@ class FakeMembershipBatch:
 
 
 def install_bridge(target, factory, family_class, object_class, *, js=False):
+    registry = {}
     for cls in (family_class, object_class):
         if not callable(getattr(cls, "identity", None)):
             # Some older snapshot fixtures use an integer identity in __init__.
@@ -44,6 +45,7 @@ def install_bridge(target, factory, family_class, object_class, *, js=False):
         changed = []
         for member in batch.members:
             identity = _identity(member)
+            registry[identity] = member
             accepted = (identity not in staged) if batch.kind == "add" else (identity in staged)
             changed.append(accepted)
             if accepted:
@@ -57,9 +59,43 @@ def install_bridge(target, factory, family_class, object_class, *, js=False):
     def create(batch):
         assert batch.kind == "add"
         family = factory()
+        registry[_identity(family)] = family
         edit(family, batch)
         return family
 
+    class FakeFamilyCopy:
+        def __init__(self, source, references):
+            self.copied = {}
+            if hasattr(source, "calls"):
+                source.calls.append("copyFamily")
+            self.root_handle = self.copy(source)
+            for reference in references.members:
+                self.copy(reference)
+
+        def copy(self, source):
+            key = _identity(source)
+            if key in self.copied:
+                return self.copied[key]
+            if isinstance(source, family_class):
+                target = factory()
+                self.copied[key] = target
+                target.members = [_identity(self.copy(registry[member])) for member in source.members]
+            else:
+                target = source.targetEditor()
+                self.copied[key] = target
+            registry[_identity(target)] = target
+            return target
+
+        def root(self):
+            return self.root_handle
+
+        def mobjectFor(self, source):
+            return self.copied[_identity(source)]
+
+        def familyFor(self, source):
+            return self.copied[_identity(source)]
+
+    family_class.copyFamily = lambda self, references: FakeFamilyCopy(self, references)
     family_class.editMembership = edit
     family_class.memberKeys = lambda self: [_key(identity) for identity in self.members]
     setattr(target, "noonCreateAuthoringFamilyHandle" if js else "_create_family_handle", create)

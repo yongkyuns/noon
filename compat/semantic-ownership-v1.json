@@ -152,7 +152,7 @@
       "id": "group-layout-bounds",
       "surface": "Deterministic Group/VGroup aggregate bounds, center, width/height, and critical-point queries",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "MobjectFamily::layout/FamilyLayout; LiveSession::effective_family_layout"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "MobjectFamily::layout/FamilyLayout"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_compat_bounds_for"}],
       "reason": "Rust aggregates semantic family membership using authored bounds or current effective runtime transforms through LiveSession. Python only checks local wrapper eligibility; it cannot feed per-leaf bounds or construct a partial observation."
     },
@@ -168,7 +168,7 @@
       "id": "group-relative-placement",
       "surface": "Deterministic Group/VGroup next_to/align_to without explicit submobject selection",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "RelativePlacement; FamilyLayout::next_to/align_to; LiveSession::next_family_to/align_family_to"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "RelativePlacement; FamilyLayout::next_to/align_to"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_next_to/_group_align_to"}],
       "reason": "Rust resolves family/leaf/point critical points, Manim's unnormalized next_to direction and buffer, align_to axis masking, and the authoritative recursive leaf mutation order. Python only coerces host arguments and selects the target handle kind."
     },
@@ -308,9 +308,9 @@
       "id": "animate.group-target-state",
       "surface": "Group.animate target derivation",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendFamilyTargetEditor/WasmAuthoringFamilyHandle::target_editor"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_target_mobject/_group_target_copy"}],
-      "reason": "Rust snapshots authoritative source-family order, validates every source/target wrapper pair, and constructs the target family graph; Python only mirrors wrapper identity while leaf target edits use the shared Mobject target editor."
+      "owner": {"language": "rust", "path": "crates/noon/src/family_copy.rs", "symbol": "MobjectFamily::copy_family"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_copy"}],
+      "reason": "Rust copies the complete semantic family in one transaction, preserving ordered edges and internal aliases. Live copies capture coherent effective leaf state. Python prepares class/attribute metadata and binds the returned typed copies; it does not construct target nodes or edges."
     },
     {
       "id": "scene-bound-deterministic-state",

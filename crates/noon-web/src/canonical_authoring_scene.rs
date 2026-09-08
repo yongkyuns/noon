@@ -2354,63 +2354,6 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn finish_live_family_target_members(
-        &mut self,
-        target_members: &[noon_core::SemanticNodeId],
-    ) -> Result<noon::MobjectFamily, String> {
-        enum OwnedMember {
-            Mobject(noon::Mobject),
-            Family(noon::MobjectFamily),
-        }
-        enum MemberKind {
-            Mobject,
-            Family,
-        }
-
-        let store = std::rc::Rc::clone(self.scene.store());
-        let mut owned = Vec::with_capacity(target_members.len());
-        for &id in target_members {
-            let kind = {
-                let store = store.borrow();
-                match store.node(id).map(|node| node.kind()) {
-                    Some(
-                        noon_core::SemanticNodeKind::Object(_)
-                        | noon_core::SemanticNodeKind::AuthoringObject,
-                    ) => MemberKind::Mobject,
-                    Some(noon_core::SemanticNodeKind::Family) => MemberKind::Family,
-                    Some(
-                        noon_core::SemanticNodeKind::Signal(_)
-                        | noon_core::SemanticNodeKind::Animation(_),
-                    ) => {
-                        return Err(
-                            "live family targets require ordinary mobjects or nested families"
-                                .into(),
-                        );
-                    }
-                    None => return Err(format!("unknown live family target member {id:?}")),
-                }
-            };
-            owned.push(match kind {
-                MemberKind::Mobject => {
-                    OwnedMember::Mobject(noon::Mobject::from_node(std::rc::Rc::clone(&store), id)?)
-                }
-                MemberKind::Family => OwnedMember::Family(noon::MobjectFamily::from_node(
-                    std::rc::Rc::clone(&store),
-                    id,
-                )?),
-            });
-        }
-        let members = owned
-            .iter()
-            .map(|member| match member {
-                OwnedMember::Mobject(mobject) => noon::MobjectFamilyMember::Mobject(mobject),
-                OwnedMember::Family(family) => noon::MobjectFamilyMember::Family(family),
-            })
-            .collect::<Vec<_>>();
-        self.live_family(&members)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
     fn live_become_mobject(
         &mut self,
         target: &noon::Mobject,
@@ -3105,6 +3048,13 @@ mod wasm {
     }
 
     impl WasmSceneMembershipBatch {
+        pub(crate) fn copy_references(&self) -> Result<Vec<noon::MobjectFamilyMember<'_>>, String> {
+            if self.inner.kind != SceneMembershipBatchKind::Add {
+                return Err("copy references require an add batch".into());
+            }
+            self.inner.family_members()
+        }
+
         pub(crate) fn create_family(
             &self,
             store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -6068,46 +6018,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        /// Begin an inert ordered family target. Member targets may be built
-        /// bottom-up before the family node and edges publish through this context.
-        #[wasm_bindgen(js_name = beginLiveFamilyTarget)]
-        pub fn begin_live_family_target(
+        /// Copy the complete family through one coherent live publication.
+        #[wasm_bindgen(js_name = liveCopyFamily)]
+        pub fn live_copy_family(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
-        ) -> Result<crate::WasmAuthoringFamilyTargetEditor, JsValue> {
-            let family = source.semantic_family()?;
-            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), family.store()) {
-                return Err(js_error(
-                    "family target and canonical context belong to different authoring stores",
-                ));
-            }
-            if self.inner.live_execution_ownership() == "transferred" {
-                return Err(js_error(
-                    "live execution session is running in the semantic engine",
-                ));
-            }
-            source.target_editor()
-        }
-
-        /// Atomically publish one completed family target through the current
-        /// live owner. Before bootstrap, the editor uses its ordinary one-transaction finish.
-        #[wasm_bindgen(js_name = finishLiveFamilyTarget)]
-        pub fn finish_live_family_target(
-            &mut self,
-            editor: &crate::WasmAuthoringFamilyTargetEditor,
-        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), editor.store()) {
-                return Err(js_error(
-                    "family target and canonical context belong to different authoring stores",
-                ));
-            }
-            if self.inner.live_execution_ownership() == "none" {
-                return editor.finish();
-            }
-
+            references: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmFamilyCopy, JsValue> {
+            let source = source.semantic_family()?;
             self.inner
-                .finish_live_family_target_members(editor.target_member_ids()?)
-                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .active_live_player()
+                .map_err(js_error)?
+                .live_copy_family(&source, &references.copy_references().map_err(js_error)?)
+                .map(crate::WasmFamilyCopy::from_copy)
                 .map_err(js_error)
         }
 
@@ -7664,31 +7587,16 @@ mod tests {
         context.live_add_mobject(ObjectId::new(2), &right).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
 
-        let left_target = context.live_target_editor(&left).unwrap();
-        let right_target = context.live_target_editor(&right).unwrap();
-        let mut editor = crate::FrontendFamilyTargetEditor::begin(
-            &context.scene.store().borrow(),
-            pair.node_id(),
-        )
-        .unwrap();
-        editor
-            .accept_member(left.node_id(), left_target.node_id())
+        let copied = context
+            .active_live_player()
+            .unwrap()
+            .live_copy_family(&pair, &[])
             .unwrap();
-        editor
-            .accept_member(right.node_id(), right_target.node_id())
-            .unwrap();
-        {
-            let store = context.scene.store().borrow();
-            for target in [&left_target, &right_target] {
-                assert!(matches!(
-                    store.node(target.node_id()).unwrap().kind(),
-                    noon_core::SemanticNodeKind::AuthoringObject
-                ));
-            }
-        }
-        let target_pair = context
-            .finish_live_family_target_members(editor.target_members().unwrap())
-            .unwrap();
+        let left_target = copied.mobject(&left).unwrap();
+        let right_target = copied.mobject(&right).unwrap();
+        assert_ne!(left_target.node_id(), left.node_id());
+        assert_ne!(right_target.node_id(), right.node_id());
+        let target_pair = copied.root().clone();
         context.live_shift_family(&target_pair, 0.0, 1.0).unwrap();
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {

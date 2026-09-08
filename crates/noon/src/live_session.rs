@@ -614,6 +614,21 @@ impl<'a> LiveSession<'a> {
     /// without resetting or relowering the active runtime.
     pub fn target_editor(&mut self, source: &Mobject) -> Result<Mobject, LiveSessionError> {
         self.require_mobject(source)?;
+        self.require_target_capture()?;
+
+        let state = self.capture_mobject_state(source)?;
+
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        let result = self.apply(transaction)?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one prepared target copy has one exact semantic impact")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+    }
+
+    fn require_target_capture(&self) -> Result<(), LiveSessionError> {
+        self.session.require_published_store(&self.store.borrow())?;
         if self.session.pending_callback_token().is_some() {
             return Err(LiveSessionError::Mobject(
                 "cannot create a target while a required callback phase is pending".into(),
@@ -625,15 +640,33 @@ impl<'a> LiveSession<'a> {
             ));
         }
 
-        let state = self.capture_mobject_state(source)?;
+        Ok(())
+    }
 
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+    /// Copy a complete family from this coherent runtime in one publication.
+    pub fn copy_family(
+        &mut self,
+        source: &MobjectFamily,
+    ) -> Result<crate::FamilyCopy, LiveSessionError> {
+        self.copy_family_with_references(source, &[])
+    }
+
+    /// Copy a family and detached metadata references from one coherent state.
+    pub fn copy_family_with_references(
+        &mut self,
+        source: &MobjectFamily,
+        references: &[crate::MobjectFamilyMember<'_>],
+    ) -> Result<crate::FamilyCopy, LiveSessionError> {
+        self.require_family(source)?;
+        self.require_target_capture()?;
+        let (transaction, pending) =
+            crate::family_copy::prepare_family_copy(source, references, |mobject| {
+                self.capture_mobject_state(mobject)
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(LiveSessionError::Mobject)?;
         let result = self.apply(transaction)?;
-        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one prepared target copy has one exact semantic impact")
-        };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+        pending.resolve(&result).map_err(LiveSessionError::Mobject)
     }
 
     /// Replace one object's presentation with another object's effective state while

@@ -17,6 +17,8 @@ pub mod example_scenes;
 mod execution_segment;
 mod execution_session;
 mod family_authoring;
+mod family_copy;
+pub use family_copy::FamilyCopy;
 mod family_layout;
 pub use family_layout::{FamilyLayout, FamilyLayoutTarget};
 mod focus_on_authoring;

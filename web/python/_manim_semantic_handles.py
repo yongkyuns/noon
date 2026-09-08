@@ -10,7 +10,6 @@ from __future__ import annotations
 import copy
 import json
 import sys
-from contextvars import ContextVar
 from typing import Any
 
 import noon as _base
@@ -207,8 +206,6 @@ _ORIGINAL_GROUP_MOVE_TO = _compat.Group.move_to
 _ORIGINAL_GROUP_NEXT_TO = _compat.Group.next_to
 _ORIGINAL_GROUP_ALIGN_TO = _compat.Group.align_to
 _ORIGINAL_GROUP_ARRANGE = _compat.Group.arrange
-_GROUP_COPY_DELEGATE = None
-_GROUP_TARGET_COPY = ContextVar("noon_group_target_copy", default=False)
 
 
 def _raw_from_json(value: str) -> _ir.Mobject:
@@ -877,7 +874,7 @@ def _clone_mobject(
 
 
 def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
-    return _clone_mobject(self, target_state=bool(_GROUP_TARGET_COPY.get()))
+    return _clone_mobject(self)
 
 
 def _target_mobject(self: _base.Mobject) -> _base.Mobject:
@@ -2119,19 +2116,6 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
-def _family_target_accept(editor: object, source: object, target: object) -> None:
-    source_kind, source_handle = _family_member_handle(source)
-    target_kind, target_handle = _family_member_handle(target)
-    if source_kind != target_kind or source_handle is None or target_handle is None:
-        raise RuntimeError("Group target wrapper mirror diverged from shared family membership")
-    if source_kind == "family":
-        editor.acceptFamily(source_handle, target_handle)
-    elif source_kind == "mobject":
-        editor.acceptMobject(source_handle, target_handle)
-    else:
-        raise RuntimeError("unsupported Group target member kind")
-
-
 def _group_target_context(value: object) -> object | None:
     contexts: list[object] = []
 
@@ -2157,87 +2141,57 @@ def _group_target_context(value: object) -> object | None:
     return context
 
 
-def _group_target_copy(self: _compat.Group) -> _compat.Group:
-    delegate = _GROUP_COPY_DELEGATE
-    if delegate is None:
-        raise RuntimeError("shared Group copy delegate is not installed")
-    source_family_handle = getattr(self, "_semantic_family_handle", None)
-    if source_family_handle is None:
-        raise RuntimeError("Group has no shared semantic family identity")
-
-    # Reuse the geometry layer's constructor-free wrapper clone so custom Group
-    # subclasses preserve named child references. During this call only, member
-    # `copy()` operations route leaf state through the shared target editor and
-    # nested Groups recursively construct their own shared target families.
-    token = _GROUP_TARGET_COPY.set(True)
-    family_handle = self.__dict__.pop("_semantic_family_handle", None)
-    try:
-        clone = delegate(self)
-    finally:
-        if family_handle is not None:
-            self._semantic_family_handle = family_handle
-        _GROUP_TARGET_COPY.reset(token)
-
-    if len(clone.submobjects) != len(self.submobjects):
-        raise RuntimeError("Group target wrapper copy changed direct membership")
-    context = _group_target_context(clone)
-    editor = (
-        context.beginLiveFamilyTarget(source_family_handle)
-        if context is not None
-        else source_family_handle.targetEditor()
-    )
-    for source_member, target_member in zip(
-        self.submobjects, clone.submobjects, strict=True
-    ):
-        _family_target_accept(editor, source_member, target_member)
-    clone._semantic_family_handle = (
-        context.finishLiveFamilyTarget(editor)
-        if context is not None
-        else editor.finish()
-    )
-    return clone
-
-
-def _group_target_mobject(self: _compat.Group) -> _compat.Group:
-    """Build a Group.animate target through the shared family target editor."""
-
-    return _group_target_copy(self)
-
-
 def _group_copy(self: _compat.Group) -> _compat.Group:
-    if _GROUP_TARGET_COPY.get():
-        return _group_target_copy(self)
-    delegate = _GROUP_COPY_DELEGATE
-    if delegate is None:
-        raise RuntimeError("shared Group copy delegate is not installed")
+    context = _group_target_context(self)
+    # Bound families outside construct() still have the same context on leaves.
+    if context is None:
+        contexts = [candidate for leaf in _compat._leaf_mobjects(self)
+                    if (candidate := _live_mutation_context(leaf)) is not None]
+        if contexts:
+            context = contexts[0]
+            if any(candidate is not context for candidate in contexts[1:]):
+                raise RuntimeError("family copy members belong to different live contexts")
 
-    # The geometry layer owns the constructor-free wrapper-copy algorithm, including
-    # remapping custom subclass attributes such as Arrow._shaft/_tip. A Pyodide
-    # JsProxy cannot be deep-copied, so temporarily remove only the shared family
-    # handle from that host-language metadata pass. Nested Groups recurse through
-    # this adapter and receive their own fresh family identities.
-    family_handle = self.__dict__.pop("_semantic_family_handle", None)
-    try:
-        clone = delegate(self)
-    finally:
-        if family_handle is not None:
-            self._semantic_family_handle = family_handle
+    def excluded_fields(value):
+        excluded = {
+            "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
+            "_semantic_family_handle", "_canonical_live_target_context",
+            "_noon_updater_registrations", "_noon_updater_registration_history",
+        }
+        if not isinstance(value, _compat.Group) and _is_bound(value) and hasattr(value, "_noon_updaters"):
+            excluded.add("_noon_updaters")
+        return excluded
 
-    # Constructor-based delegates may already have created a family handle. The
-    # browser geometry delegate uses object.__new__ and therefore needs one here.
-    if getattr(clone, "_semantic_family_handle", None) is None:
-        context = _live_constructor_context("family")
-        batch = _family_membership_batch(context, "add", tuple(clone.submobjects))
-        clone._semantic_family_handle = (
-            context.liveCreateFamily(batch)
-            if context is not None
-            else _create_family_handle(batch)
-        )
+    clone, pairs = _compat.prepare_family_wrapper_copy(self, excluded_fields)
+    # Verify host identity metadata before committing the semantic copy. Rust owns
+    # the graph; Python cannot add, reorder, or omit a copied semantic member.
+    for source, _ in pairs:
+        if isinstance(source, _compat.Group):
+            keys = []
+            for member in source.submobjects:
+                _, handle = _family_member_handle(member)
+                if handle is None:
+                    raise RuntimeError("family member has no shared semantic identity")
+                keys.append(f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}")
+            if keys != [str(key) for key in source._semantic_family_handle.memberKeys()]:
+                raise RuntimeError("Group wrapper mirror diverged from shared family membership")
+    references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
+    copied = (context.liveCopyFamily(self._semantic_family_handle, references)
+              if context is not None else self._semantic_family_handle.copyFamily(references))
+    for source, target in pairs:
+        if isinstance(source, _compat.Group):
+            target._semantic_family_handle = copied.familyFor(source._semantic_family_handle)
+        else:
+            _initialize_shared_wrapper(target)
+            target._semantic_handle = copied.mobjectFor(source._semantic_handle)
+            target._semantic_handle_fresh = True
+            if context is not None:
+                target._canonical_live_target_context = context
     return clone
 
 
 def install() -> None:
-    global _INSTALLED, _GROUP_COPY_DELEGATE
+    global _INSTALLED
     if _INSTALLED or _create_geometry_handle is None:
         return
     _INSTALLED = True
@@ -2246,6 +2200,8 @@ def install() -> None:
     _base.Mobject._current_raw = _current_raw
     _base.Mobject._apply = _apply
     _base.Mobject.copy = _copy_mobject
+    _base.Mobject.__deepcopy__ = _compat.deepcopy_semantic_wrapper
+    _compat.Group.__deepcopy__ = _compat.deepcopy_semantic_wrapper
     _base.Mobject._copy_for_animate_target = _target_mobject
     _base.Mobject.get_center = _get_center
     _base.Mobject.get_critical_point = _get_critical_point
@@ -2282,7 +2238,6 @@ def install() -> None:
     _compat.Line.__init__ = _line_init
 
     if _create_family_handle is not None:
-        _GROUP_COPY_DELEGATE = _compat.Group.copy
         _compat.Group.__init__ = _group_init
         _compat.Group.add = _group_add
         _compat.Group.remove = _group_remove
@@ -2292,4 +2247,4 @@ def install() -> None:
         _compat.Group.align_to = _group_align_to
         _compat.Group.arrange = _group_arrange
         _compat.Group.copy = _group_copy
-        _compat.Group._copy_for_animate_target = _group_target_mobject
+        _compat.Group._copy_for_animate_target = _group_copy
