@@ -376,6 +376,29 @@ try {
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonManimCompat.ready());
 
+  const sceneOnlyAuthoring = await page.evaluate(async () => {
+    const { PythonAuthoringClient } = await import("./authoring-client.js");
+    const client = new PythonAuthoringClient();
+    try {
+      await client.ready();
+      let patchError = null;
+      try {
+        await client.run("from _noon_ir import PatchBatch\nresult = PatchBatch(0)");
+      } catch (error) {
+        patchError = String(error);
+      }
+      const result = await client.run(
+        "import noon\nassert not hasattr(noon, 'PatchBatch')\nresult = noon.Scene()",
+      );
+      return { patchError, sharedScene: Boolean(result.semanticExecution), terminated: client.terminated };
+    } finally {
+      client.terminate();
+    }
+  });
+  assert.match(sceneOnlyAuthoring.patchError, /Python authoring result must be a noon.Scene/);
+  assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
+  assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");
+
   // #958/#61 prerequisite: every geometry wrapper has store-scoped identity,
   // including independent copies/targets after the JS store wrapper is released.
   const handleOwnership = await page.evaluate(async () => {

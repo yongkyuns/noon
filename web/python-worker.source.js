@@ -769,7 +769,7 @@ from _manim_canonical_scene import (
 from _manim_source_execution import (
     BARRIER_GLOBAL, compile_authoring_source, authoring_source_scope,
 )
-from noon import PatchBatch, Scene
+from noon import Scene
 
 __noon_namespace = {
     "context": json.loads(__noon_context_json),
@@ -860,16 +860,8 @@ if isinstance(__noon_result, Scene):
         if __noon_authored_duration is not None
         else float(__noon_result.time)
     )
-elif isinstance(__noon_result, PatchBatch):
-    __noon_semantic = None
-    __noon_kind = "patch_batch"
-    __noon_scene_spec = None
-    __noon_document = __noon_result.to_document()
-    __noon_duration = None
-    __noon_identities = None
-    __noon_callbacks = None
 else:
-    raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")
+    raise TypeError("Python authoring result must be a noon.Scene")
 json.dumps(
     {
         "kind": __noon_kind,
