@@ -1,0 +1,109 @@
+name: Gallery scalar read qualification (temporary)
+on:
+  push:
+    branches: [codex/gallery-scalar-prefetch-validation]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: gallery-scalar-prefetch
+  cancel-in-progress: true
+jobs:
+  prepare:
+    runs-on: macos-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    outputs:
+      candidate: ${{ steps.source.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Retain reviewed candidate instructions outside source checkout
+        run: |
+          mkdir -p "$RUNNER_TEMP/carrier"
+          cp apply-scalar-prefetch.py scalar-prefetch-tests.txt "$RUNNER_TEMP/carrier/"
+      - uses: actions/checkout@v7
+        with:
+          ref: 183bf3d39d158f68b53767ed99e7ca337326777b
+      - name: Prepare and validate source-only change
+        run: |
+          set -euo pipefail
+          mkdir -p qualification
+          python3 "$RUNNER_TEMP/carrier/apply-scalar-prefetch.py"
+          python3 -m unittest discover -s web/python -p 'test_*.py' 2>&1 | tee qualification/python.log
+          node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs 2>&1 | tee qualification/worker.log
+          bash scripts/renderer-host-boundary-ratchet.sh
+          node scripts/build-python-worker.mjs
+          git diff --check
+      - name: Export candidate, never master
+        id: source
+        run: |
+          set -euo pipefail
+          git add web/python/_manim_updaters.py web/python/_manim_canonical_scene.py web/python/test_updater_snapshot.py docs/mobile-web-rendering.md
+          test -z "$(git diff --cached --name-only -- .github crates)"
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git commit -m 'Prepare pinned callback scalar reads without JSPI or callback replay'
+          git rev-parse HEAD | tee qualification/source-sha.txt
+          echo "candidate=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git push origin HEAD:refs/heads/codex/gallery-prefetch-candidate-${GITHUB_RUN_ID}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: gallery-prefetch-contracts
+          path: qualification
+          retention-days: 7
+  gallery:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: webkit
+            profile: mobile-dpr2
+          - browser: chromium
+            profile: android
+          - browser: chromium
+            profile: desktop-dpr1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.candidate }}
+      - name: Validate unchanged engine and rebuild changed Python assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p qualification
+          git rev-parse HEAD | tee qualification/source-sha.txt
+          git fetch --depth=1 origin e81476c3c3b3be11ff7d3aa74972bef2c1a36813
+          git diff --exit-code e81476c3c3b3be11ff7d3aa74972bef2c1a36813 HEAD -- crates Cargo.toml Cargo.lock
+          gh api repos/yongkyuns/noon/actions/runs/34224490113 > qualification/runtime-run.json
+          gh run download 34224490113 --repo yongkyuns/noon --name gallery-web-runtime --dir web
+          node scripts/build-python-worker.mjs
+          sha256sum web/pkg/* web/python-worker.js web/python/compat-bundle.*.json > qualification/assets-sha256.txt
+      - run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: All ready examples and four no-JSPI controls
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/gallery/first
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Independent fresh-context repeat
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/gallery/repeat
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: prefetch-gallery-${{ matrix.browser }}-${{ matrix.profile }}
+          path: |
+            qualification
+            browser-smoke-artifacts
+          retention-days: 7
