@@ -3177,6 +3177,31 @@ result = scene
     await rasterPage.evaluate(async () => {
       await window.noonHostRaster.ready();
       await window.noonHostRaster.load(`from noon import *
+class RejectedAdmission(Scene):
+    def construct(self):
+        entering = Square()
+        try:
+            self.play(Create(entering), object())
+            raise AssertionError("unsupported composition was accepted")
+        except NotImplementedError:
+            pass
+        assert entering not in self.mobjects
+        assert not getattr(self, "_legacy_geometry_materialized", False)
+        self.play(Create(entering), run_time=0.1)
+        self.play(Uncreate(entering), run_time=0.1)
+        assert entering not in self.mobjects
+`, 1);
+    });
+    const admitted = await rasterPage.evaluate(() => window.noonHostRaster.renderThrough(2, [0, 0.1, 0.2]));
+    assert.equal(admitted.time, 0.2);
+    assert.equal(admitted.objectCount, 0);
+    assert.equal(admitted.authoredDuration, 0.2);
+
+    await rasterPage.reload({ waitUntil: "load" });
+    await rasterPage.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+    await rasterPage.evaluate(async () => {
+      await window.noonHostRaster.ready();
+      await window.noonHostRaster.load(`from noon import *
 class LateFailure(Scene):
     def construct(self):
         self.add(Circle())

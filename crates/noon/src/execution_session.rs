@@ -183,6 +183,10 @@ pub(crate) enum SemanticCompositionRequest {
         target: SemanticNodeId,
         options: AnimationOptions,
     },
+    Uncreate {
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    },
     AffineLifecycle {
         target: SemanticNodeId,
         direction: SemanticAffineLifecycleDirection,
@@ -2150,6 +2154,19 @@ impl ExecutionSession {
                 admit(*target, declaration, admitted)?;
                 Ok(declaration.create_create_animation(*target, *options))
             }
+            SemanticCompositionRequest::Uncreate { target, options } => {
+                if self.require_uncreate_target(store, root, *target)? {
+                    admit(*target, declaration, admitted)?;
+                }
+                // The reveal track completion owns leaf removal. Explicit
+                // composition removals are for families and non-track effects.
+                Ok(declaration.create_create_animation(
+                    *target,
+                    options
+                        .remover(options.remover.unwrap_or(true))
+                        .reverse_rate_function(options.reverse_rate_function.unwrap_or(true)),
+                ))
+            }
             SemanticCompositionRequest::AffineLifecycle {
                 target,
                 direction,
@@ -2360,30 +2377,11 @@ impl ExecutionSession {
         target: SemanticNodeId,
         options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
-        self.require_animation_declaration_context(store)?;
-        let admitted = self.require_uncreate_target(store, root, target)?;
-        let remover = options.remover.unwrap_or(true);
-        let reverse_rate_function = options.reverse_rate_function.unwrap_or(true);
-        let mut declaration = SemanticMutationTransaction::new();
-        if admitted {
-            declaration.add_member(root, target);
-        }
-        let animation = declaration.create_create_animation(
-            target,
-            options
-                .remover(remover)
-                .reverse_rate_function(reverse_rate_function),
-        );
-        self.declare_and_activate_prepared_animation(
+        self.declare_and_activate_composition(
             store,
-            declaration,
-            animation,
+            root,
+            &SemanticCompositionRequest::Uncreate { target, options },
             AnimationOptions::new(),
-            Some(if admitted {
-                PreparedAnimationLifecycle::Introduce(root)
-            } else {
-                PreparedAnimationLifecycle::FadeOut(root)
-            }),
         )
     }
 

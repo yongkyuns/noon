@@ -303,6 +303,7 @@ const expectedTypeSurface = [
   "beginOrdinaryCreate(",
   "export class WasmOrdinaryCreateParallelBuilder",
   "appendCreate(object_id: string, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",
+  "appendUncreate(object_id: string, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, remover: boolean, reverse_rate_function: boolean): void",
   "beginOrdinaryCreateParallel(play_run_time: number | null | undefined, rate_function: string): WasmOrdinaryCreateParallelBuilder",
   "ordinaryPlayCreateParallel(candidate: WasmOrdinaryCreateParallelBuilder): number",
   "beginOrdinaryCreateParallelSegment(candidate: WasmOrdinaryCreateParallelBuilder): number",

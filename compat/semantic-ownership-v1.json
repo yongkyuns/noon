@@ -220,7 +220,7 @@
       "surface": "Typed leaf FadeIn/FadeOut with scale, shift, or target_position",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_fade_with_endpoint"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_fade_endpoint/_play_canonical_fade"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_fade_endpoint/_build_canonical_composition_candidate"}],
       "reason": "Python coerces the Manim call into scale plus a shift or point value. Rust resolves effective endpoint layout, authors the affine and appearance tracks, owns lifecycle membership, and schedules composition timing."
     },
     {

@@ -351,6 +351,10 @@ pub enum AnimationCompositionRequest<'a> {
         target: &'a Mobject,
         options: AnimationOptions,
     },
+    Uncreate {
+        target: &'a Mobject,
+        options: AnimationOptions,
+    },
     AffineLifecycle {
         target: &'a Mobject,
         direction: AffineLifecycleDirection,
@@ -1733,6 +1737,13 @@ impl<'a> LiveSession<'a> {
             AnimationCompositionRequest::Create { target, options } => {
                 self.require_mobject(target)?;
                 Request::Create {
+                    target: target.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::Uncreate { target, options } => {
+                self.require_mobject(target)?;
+                Request::Uncreate {
                     target: target.node_id(),
                     options: *options,
                 }
