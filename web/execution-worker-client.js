@@ -55,8 +55,6 @@ export class ExecutionWorkerClient {
   #playing = true;
   #onError;
   #onRecoverableError;
-  #hostAuthoringClient = null;
-  #hostCallbacks = null;
   #semanticAuthoringClient = null;
   #semanticContextId = null;
   #semanticCallbackSessionId = null;
@@ -313,8 +311,6 @@ export class ExecutionWorkerClient {
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
       this.#semanticPacing = pacing;
-      this.#hostAuthoringClient = null;
-      this.#hostCallbacks = null;
       this.#playing = !initiallyPaused;
       this.#fatalOwner = null;
       return ready;
@@ -561,27 +557,6 @@ export class ExecutionWorkerClient {
     return this.#ready;
   }
 
-  async replaceScene(
-    sceneJson,
-    { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
-  ) {
-    this.#requireLegacyMode("replace scenes");
-    validateSceneJson(sceneJson);
-    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
-    const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
-    const result = await this.#requestEngine("replace_scene", {
-      sceneJson,
-      loopDurationSeconds: duration,
-    });
-    this.#rememberPlaying(result);
-    this.#sceneJson = result.sceneJson ?? sceneJson;
-    if (duration !== null) {
-      this.#loopDurationSeconds = duration;
-    }
-    await this.configureHostCallbacks(callbacks, authoringClient);
-    return result;
-  }
-
   async switchToSemanticExecution(
     contextId,
     authoringClient,
@@ -695,8 +670,6 @@ export class ExecutionWorkerClient {
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
       this.#loopDurationSeconds = duration;
-      this.#hostAuthoringClient = null;
-      this.#hostCallbacks = null;
       this.#fatalOwner = null;
       if (previousMode === EXECUTION_MODE_SEMANTIC) {
         retireSemanticEndpoint(oldEngine);
@@ -831,34 +804,6 @@ export class ExecutionWorkerClient {
     return result;
   }
 
-  async configureHostCallbacks(callbacks, authoringClient = null) {
-    this.#requireLegacyMode("configure host callbacks");
-    await this.ready();
-    return this.#configureHostCallbacks(callbacks, authoringClient);
-  }
-
-  async #configureHostCallbacks(callbacks, authoringClient) {
-    if (callbacks === null || callbacks === undefined) {
-      this.#hostCallbacks = null;
-      await this.#requestEngine("configure_callbacks", { callbacks: null });
-      return;
-    }
-    validateCallbacks(callbacks);
-    validateAuthoringClient(authoringClient);
-    if (this.#hostAuthoringClient !== authoringClient) {
-      const channel = new MessageChannel();
-      await authoringClient.attachEnginePort(channel.port2);
-      await this.#requestEngine(
-        "attach_host_port",
-        { port: channel.port1 },
-        [channel.port1],
-      );
-      this.#hostAuthoringClient = authoringClient;
-    }
-    this.#hostCallbacks = cloneCallbacks(callbacks);
-    await this.#requestEngine("configure_callbacks", { callbacks: this.#hostCallbacks });
-  }
-
   async state() {
     return this.#requestEngine("state", {});
   }
@@ -916,9 +861,6 @@ export class ExecutionWorkerClient {
     const generation = this.#lifecycleGeneration;
     const mode = this.#mode;
     const wasPlaying = this.#playing;
-    const callbacks = mode === EXECUTION_MODE_LEGACY ? this.#hostCallbacks : null;
-    const authoringClient =
-      mode === EXECUTION_MODE_LEGACY ? this.#hostAuthoringClient : null;
     const reconnectError = new Error("execution engine worker restarting");
     closeEndpoint(this.#engineWorker);
     this.#engineWorker = null;
@@ -967,13 +909,6 @@ export class ExecutionWorkerClient {
         this.#rememberPlaying(paused);
         this.#assertLifecycleCurrent(generation);
       }
-      if (callbacks !== null && authoringClient !== null) {
-        this.#hostAuthoringClient = null;
-        await this.#configureHostCallbacks(callbacks, authoringClient);
-        this.#assertLifecycleCurrent(generation);
-        await this.#requestEngine("request_callback_phase", {});
-        this.#assertLifecycleCurrent(generation);
-      }
       this.#fatalOwner = null;
       return ready;
     } catch (error) {
@@ -991,9 +926,6 @@ export class ExecutionWorkerClient {
     const transportMode = this.#transportMode;
     const sharedSlotCapacity = this.#sharedSlotCapacity;
     const wasPlaying = this.#playing;
-    const callbacks = mode === EXECUTION_MODE_LEGACY ? this.#hostCallbacks : null;
-    const authoringClient =
-      mode === EXECUTION_MODE_LEGACY ? this.#hostAuthoringClient : null;
     const semanticAuthoringClient = this.#semanticAuthoringClient;
     const semanticContextId = this.#semanticContextId;
     const semanticCallbackSessionId = this.#semanticCallbackSessionId;
@@ -1019,10 +951,6 @@ export class ExecutionWorkerClient {
     if (!wasPlaying && mode !== EXECUTION_MODE_SEMANTIC) {
       const paused = await this.#requestEngine("pause", {});
       this.#rememberPlaying(paused);
-    }
-    if (callbacks !== null && authoringClient !== null) {
-      this.#hostAuthoringClient = null;
-      await this.#configureHostCallbacks(callbacks, authoringClient);
     }
     this.#fatalOwner = null;
     return ready;
@@ -1067,8 +995,6 @@ export class ExecutionWorkerClient {
     if (!preserveHostConfiguration) {
       this.#renderHost = null;
       this.#renderHostSelection = null;
-      this.#hostAuthoringClient = null;
-      this.#hostCallbacks = null;
       this.#semanticAuthoringClient = null;
       this.#semanticContextId = null;
       this.#semanticCallbackSessionId = null;
@@ -1143,13 +1069,6 @@ export class ExecutionWorkerClient {
         validateWorkerEnvelope(message, channel);
         if (message.type === "ready") {
           resolveReady?.(message);
-          return;
-        }
-        if (message.type === "host_callback_error") {
-          this.#notifyRecoverableError(
-            new Error(message.message || "host callback failed"),
-            "host",
-          );
           return;
         }
         if (message.type === "recoverable_error") {
@@ -1621,41 +1540,6 @@ function validateSharedSlotCapacity(sharedSlotCapacity) {
     throw new TypeError("shared execution slot capacity must be a positive safe integer");
   }
   return sharedSlotCapacity;
-}
-
-function validateCallbacks(callbacks) {
-  if (!callbacks || typeof callbacks !== "object") {
-    throw new TypeError("callback configuration must be an object");
-  }
-  if (!Number.isSafeInteger(callbacks.session_id) || callbacks.session_id < 0) {
-    throw new TypeError("callback configuration has an invalid session ID");
-  }
-  if (!Array.isArray(callbacks.slots) || callbacks.slots.length === 0) {
-    throw new TypeError("callback configuration must contain slots");
-  }
-}
-
-function validateAuthoringClient(authoringClient) {
-  if (!authoringClient || typeof authoringClient.attachEnginePort !== "function") {
-    throw new TypeError("host callbacks require a PythonAuthoringClient");
-  }
-}
-
-function cloneCallbacks(callbacks) {
-  return {
-    session_id: callbacks.session_id,
-    slots: callbacks.slots.map(cloneCallbackSlot),
-  };
-}
-
-function cloneCallbackSlot(slot) {
-  const cloned = { id: slot.id, objects: [...slot.objects] };
-  for (const field of ["active_after", "active_through"]) {
-    if (Object.prototype.hasOwnProperty.call(slot, field)) {
-      cloned[field] = slot[field];
-    }
-  }
-  return cloned;
 }
 
 function checkedNextRequestId(current) {

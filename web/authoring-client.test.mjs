@@ -477,41 +477,6 @@ test("Scene duration accepts zero and rejects missing, negative, or non-finite v
   );
 });
 
-test("runs one callback phase and validates its PatchBatch", async () => {
-  const worker = new FakeWorker();
-  const client = new PythonAuthoringClient(worker);
-  worker.emit("message", workerMessage("ready"));
-  await client.ready();
-
-  const frame = {
-    time: 0.25,
-    delta_time: 0.25,
-    objects: [],
-    invocations: [{ callback: 0, object_indices: [] }],
-  };
-  const resultPromise = client.runCallbackPhase(2, frame, 7);
-  await Promise.resolve();
-  assert.deepEqual(worker.messages[0], {
-    channel: AUTHORING_CHANNEL,
-    protocolVersion: AUTHORING_PROTOCOL_VERSION,
-    type: "callback_phase",
-    requestId: 0,
-    sessionId: 2,
-    frame,
-    sequence: 7,
-  });
-
-  const batch = { version: 1, sequence: 7, patches: [] };
-  worker.emit(
-    "message",
-    workerMessage("callback_result", {
-      requestId: 0,
-      patchBatchJson: JSON.stringify(batch),
-    }),
-  );
-  assert.deepEqual(await resultPromise, batch);
-});
-
 test("rejects only the request associated with a Python execution error", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
@@ -670,42 +635,6 @@ test("malformed pending payloads remain fatal and reject the pending request", a
   assert.equal(worker.terminated, true);
   assert.equal(client.diagnostics.pendingRequests, 0);
   assert.equal(client.diagnostics.staleResponses, 0);
-});
-
-test("drops malformed stale callback payloads before parsing them", async () => {
-  const worker = new FakeWorker();
-  const client = new PythonAuthoringClient(worker);
-  worker.emit("message", workerMessage("ready"));
-  await client.ready();
-
-  const frame = {
-    time: 0.25,
-    delta_time: 0.25,
-    objects: [],
-    invocations: [{ callback: 0, object_indices: [] }],
-  };
-  const batch = { version: 1, sequence: 7, patches: [] };
-  const callbackPromise = client.runCallbackPhase(2, frame, 7);
-  await Promise.resolve();
-  worker.emit(
-    "message",
-    workerMessage("callback_result", {
-      requestId: 0,
-      patchBatchJson: JSON.stringify(batch),
-    }),
-  );
-  await callbackPromise;
-
-  worker.emit(
-    "message",
-    workerMessage("callback_result", {
-      requestId: 0,
-      patchBatchJson: "{",
-    }),
-  );
-  assert.equal(client.terminated, false);
-  assert.equal(worker.terminated, false);
-  assert.equal(client.diagnostics.staleResponses, 1);
 });
 
 test("treats never-issued future response IDs as fatal protocol corruption", async () => {
