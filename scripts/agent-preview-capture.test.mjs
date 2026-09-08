@@ -10,9 +10,9 @@ function png1x1() {
   png.writeUInt32BE(13, 8); png.write("IHDR", 12, "ascii");
   png.writeUInt32BE(1, 16); png.writeUInt32BE(1, 20);
   png[24] = 8; png[25] = 6;
-  png.writeUInt32BE(0, 33);
-  png.writeUInt32BE(0, 37); png.write("IDAT", 41, "ascii"); png.writeUInt32BE(0, 45);
-  png.writeUInt32BE(0, 49); png.write("IEND", 53, "ascii");
+  png.writeUInt32BE(0, 29);
+  png.writeUInt32BE(0, 33); png.write("IDAT", 37, "ascii"); png.writeUInt32BE(0, 41);
+  png.writeUInt32BE(0, 45); png.write("IEND", 49, "ascii"); png.writeUInt32BE(0, 53);
   return png;
 }
 
