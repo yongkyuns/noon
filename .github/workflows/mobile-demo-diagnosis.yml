@@ -10,6 +10,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      - name: Restore exact local patch bytes and validate integrity
+        run: python3 scripts/mobile-patch-transfer.py
       - name: Validate exact source patch and prepare clean baseline
         env:
           BASE: 16d0a45eef9ec0328e59deb58802cc4ed31dac31
