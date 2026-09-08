@@ -244,6 +244,11 @@ if [[ -e 'crates/noon-web/src/legacy/clock.rs' ]]; then
 fi
 
 deleted_legacy_validation_paths=(
+  'crates/noon/src/analytic_geometry_authoring.rs'
+  'crates/noon/src/polygram_authoring.rs'
+  'crates/noon/src/line_matcher_authoring.rs'
+  'crates/noon/src/shape_matcher_authoring.rs'
+  'crates/noon-web/examples/manim_elbow_oracle.rs'
   'crates/noon-web/src/authoring_facade.rs'
   'crates/noon/src/legacy/composition_authoring.rs'
   'web/noon-authoring.js'

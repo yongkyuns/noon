@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import subprocess
 from pathlib import Path
 
@@ -38,21 +39,12 @@ def manim_observations():
 
 
 def noon_observations():
-    result = subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--quiet",
-            "-p",
-            "noon-web",
-            "--example",
-            "manim_elbow_oracle",
-        ],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
+    subprocess.run(
+        ["cargo", "build", "--quiet", "--workspace", "--all-features", "--example", "manim_elbow_oracle"],
+        cwd=ROOT, check=True,
     )
+    binary = ROOT / os.environ.get("CARGO_TARGET_DIR", "target") / "debug/examples/manim_elbow_oracle"
+    result = subprocess.run([str(binary)], cwd=ROOT, check=True, capture_output=True, text=True)
     return json.loads(result.stdout)
 
 
