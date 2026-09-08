@@ -544,3 +544,86 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
+    class Tracker:
+        def __init__(self, owner, slot):
+            self._canonical_context = owner
+            self._canonical_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=3)
+            self.authored_value = 999
+
+    def context(self, owner):
+        return updaters._CanonicalCallbackContext(
+            {"time": 1.0, "delta_time": 0.25, "token": {"generation": 5}, "objects": []}, owner
+        )
+
+    async def test_capture_reads_are_deduplicated_pinned_and_do_not_invoke_or_replay(self):
+        owner = object()
+        context = self.context(owner)
+        tracker = self.Tracker(owner, 7)
+        calls, reads = [], []
+        def callback(mobject, captured=tracker):
+            calls.append(context.scalar((captured._canonical_handle.semanticSlot, 3)))
+        async def read(key):
+            reads.append(key)
+            return 0.0
+        context._read_scalar_async = read
+        await context.prefetch_captured_scalars([callback, callback], self.Tracker)
+        self.assertEqual(calls, [])
+        self.assertEqual(reads, [(7, 3)])
+        self.assertEqual(context.effective_batch()["writes"], [])
+        callback(None)
+        self.assertEqual(calls, [0.0])
+        self.assertNotEqual(calls[0], tracker.authored_value)
+
+    async def test_unused_invalid_capture_defers_failure_until_actual_read(self):
+        owner = object()
+        context = self.context(owner)
+        tracker = self.Tracker(owner, 8)
+        calls = []
+        def callback(mobject):
+            if False:
+                mobject = tracker
+            calls.append("once")
+        async def read(key):
+            raise ValueError("stale phase scalar")
+        context._read_scalar_async = read
+        await context.prefetch_captured_scalars([callback], self.Tracker)
+        callback(None)
+        self.assertEqual(calls, ["once"])
+        with self.assertRaisesRegex(RuntimeError, "stale phase scalar"):
+            context.scalar((8, 3))
+
+    async def test_foreign_values_and_authored_descriptors_are_not_evaluated(self):
+        owner = object()
+        context = self.context(owner)
+        foreign = self.Tracker(object(), 1)
+        class DescriptorTracker:
+            _canonical_context = owner
+            @property
+            def _canonical_handle(self):
+                raise AssertionError("authored descriptor invoked")
+        descriptor = DescriptorTracker()
+        reads = []
+        async def read(key):
+            reads.append(key)
+            return 1.0
+        context._read_scalar_async = read
+        await context.prefetch_captured_scalars([lambda m: foreign], self.Tracker)
+        await context.prefetch_captured_scalars([lambda m: descriptor], DescriptorTracker)
+        self.assertEqual(reads, [])
+
+    async def test_capture_cache_does_not_cross_phase_contexts(self):
+        owner = object()
+        tracker = self.Tracker(owner, 2)
+        first, second = self.context(owner), self.context(owner)
+        callback = lambda m: tracker
+        async def earlier(key): return 2.0
+        async def later(key): return 5.0
+        first._read_scalar_async = earlier
+        second._read_scalar_async = later
+        await first.prefetch_captured_scalars([callback], self.Tracker)
+        await second.prefetch_captured_scalars([callback], self.Tracker)
+        self.assertEqual(first.scalar((2, 3)), 2.0)
+        self.assertEqual(second.scalar((2, 3)), 5.0)

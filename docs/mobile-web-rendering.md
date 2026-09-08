@@ -216,3 +216,15 @@ unchanged Python RotationUpdater gallery example. The full-gallery browser gate
 executes every ready source and explicitly disables JSPI for the four cases
 identified by the public audit. This complements, rather than replaces, the
 canonical raster/timeline qualification and performance gates.
+
+
+For async continuation callbacks, direct captured/default/global ValueTracker
+wrappers are optional sparse-read hints. Their values are fetched asynchronously
+from the same Rust-pinned callback phase before invoking the unchanged callback
+once. The cache expires with that phase; no authored tracker value, callback
+replay, whole-scene snapshot or frontend dependency graph substitutes for Rust.
+Failed speculative reads are deferred until actual use, so an unused invalid
+capture does not introduce a callback failure. Dynamic indirect read misses still
+require the existing suspended-read support. Cost is proportional to active
+callback metadata plus unique captured scalar read hints; this does not claim
+arbitrary callbacks have a complete statically discoverable read set.
