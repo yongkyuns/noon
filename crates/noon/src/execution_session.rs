@@ -72,7 +72,7 @@ enum PreparedAnimationLifecycle {
     Composition {
         root: SemanticNodeId,
         admits: bool,
-        removals: Vec<(SemanticNodeId, SemanticNodeId)>,
+        removals: Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
     },
 }
 
@@ -83,6 +83,10 @@ enum PreparedAnimationLifecycle {
 /// until `declare_and_activate_composition` succeeds.
 #[derive(Clone)]
 pub(crate) enum SemanticCompositionRequest {
+    FocusOn {
+        focus: crate::FocusOnOptions,
+        options: AnimationOptions,
+    },
     TransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
@@ -154,6 +158,7 @@ pub(crate) enum SemanticCompositionRequest {
     Rotate {
         target: SemanticNodeId,
         angle: f64,
+        hold_origin: bool,
         options: AnimationOptions,
     },
     ValueTracker {
@@ -1662,12 +1667,12 @@ impl ExecutionSession {
         root: SemanticNodeId,
         request: &SemanticCompositionRequest,
         declaration: &mut SemanticMutationTransaction,
-        admitted: &mut HashSet<SemanticNodeId>,
-        removals: &mut Vec<(SemanticNodeId, SemanticNodeId)>,
+        admitted: &mut HashSet<SemanticTransactionNodeRef>,
+        removals: &mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         let admit = |target: SemanticNodeId,
                      declaration: &mut SemanticMutationTransaction,
-                     admitted: &mut HashSet<SemanticNodeId>|
+                     admitted: &mut HashSet<SemanticTransactionNodeRef>|
          -> Result<(), ExecutionSessionAnimationError> {
             let state = store
                 .semantic_object_state_checked(target)
@@ -1695,7 +1700,7 @@ impl ExecutionSession {
                     error: ExecutionSessionCreateError::TargetIsNotDetached,
                 });
             }
-            if !admitted.insert(target) {
+            if !admitted.insert(target.into()) {
                 return Err(ExecutionSessionAnimationError::CreateTarget {
                     target,
                     error: ExecutionSessionCreateError::DuplicateTarget,
@@ -1705,6 +1710,15 @@ impl ExecutionSession {
             Ok(())
         };
         match request {
+            SemanticCompositionRequest::FocusOn { focus, options } => {
+                let (target, animation) = focus
+                    .stage(declaration, *options)
+                    .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+                declaration.add_member(root, target);
+                admitted.insert(target.into());
+                removals.push((root, target.into()));
+                Ok(animation)
+            }
             SemanticCompositionRequest::TransformTo {
                 source,
                 target_state,
@@ -1954,7 +1968,7 @@ impl ExecutionSession {
                 let leaves = self.require_family_fade_target(store, root, *target, *direction)?;
                 match direction {
                     SemanticFadeDirection::In => {
-                        if !admitted.insert(*target) {
+                        if !admitted.insert((*target).into()) {
                             return Err(ExecutionSessionAnimationError::CreateTarget {
                                 target: *target,
                                 error: ExecutionSessionCreateError::DuplicateTarget,
@@ -1962,7 +1976,7 @@ impl ExecutionSession {
                         }
                         declaration.add_member(root, *target);
                     }
-                    SemanticFadeDirection::Out => removals.push((root, *target)),
+                    SemanticFadeDirection::Out => removals.push((root, (*target).into())),
                 }
                 let children: Vec<_> = leaves
                     .into_iter()
@@ -1997,7 +2011,7 @@ impl ExecutionSession {
                     self.require_present_draw_border_target(store, root, *target)?;
                 }
                 if remover {
-                    removals.push((root, *target));
+                    removals.push((root, (*target).into()));
                 }
                 Ok(declaration.create_text_write_animation(
                     *target,
@@ -2041,7 +2055,7 @@ impl ExecutionSession {
                     true
                 };
                 if admitted_target {
-                    if !admitted.insert(*target) {
+                    if !admitted.insert((*target).into()) {
                         return Err(ExecutionSessionAnimationError::CreateTarget {
                             target: *target,
                             error: ExecutionSessionCreateError::DuplicateTarget,
@@ -2050,7 +2064,7 @@ impl ExecutionSession {
                     declaration.add_member(root, *target);
                 }
                 if options.remover.unwrap_or(*reverse) {
-                    removals.push((root, *target));
+                    removals.push((root, (*target).into()));
                 }
                 Ok(declaration.create_text_reveal_animation(*target, *reverse, *options))
             }
@@ -2085,10 +2099,16 @@ impl ExecutionSession {
             SemanticCompositionRequest::Rotate {
                 target,
                 angle,
+                hold_origin,
                 options,
             } => {
                 admit(*target, declaration, admitted)?;
-                Ok(declaration.create_rotate_animation(*target, *angle, *options))
+                Ok(declaration.create_rotate_animation_with_origin_constraint(
+                    *target,
+                    *angle,
+                    *hold_origin,
+                    *options,
+                ))
             }
             SemanticCompositionRequest::ValueTracker {
                 signal,
@@ -2142,7 +2162,7 @@ impl ExecutionSession {
                     admit(*target, declaration, admitted)?;
                 }
                 if *direction == SemanticAffineLifecycleDirection::RemoveTo {
-                    removals.push((root, *target));
+                    removals.push((root, (*target).into()));
                 }
                 Ok(declaration
                     .create_affine_lifecycle_animation(*target, *direction, *endpoint, *options))
@@ -2190,11 +2210,11 @@ impl ExecutionSession {
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *options))
             }
-            SemanticCompositionRequest::Rotate { target, angle, options } => {
+            SemanticCompositionRequest::Rotate { target, angle, hold_origin, options } => {
                 if !self.reachability.is_object_reachable(*target) {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
-                Ok(declaration.create_rotate_animation(*target, *angle, *options))
+                Ok(declaration.create_rotate_animation_with_origin_constraint(*target, *angle, *hold_origin, *options))
             }
             SemanticCompositionRequest::ValueTracker { signal, target, options } => {
                 Ok(declaration.create_scalar_animation(*signal, *target, *options))
@@ -2544,8 +2564,8 @@ impl ExecutionSession {
         operation: FamilyGlyphOperation,
         options: AnimationOptions,
         declaration: &mut SemanticMutationTransaction,
-        admitted: &mut HashSet<SemanticNodeId>,
-        removals: &mut Vec<(SemanticNodeId, SemanticNodeId)>,
+        admitted: &mut HashSet<SemanticTransactionNodeRef>,
+        removals: &mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         let node = store.node(target).ok_or_else(|| {
             ExecutionSessionAnimationError::InvalidComposition(
@@ -2641,7 +2661,7 @@ impl ExecutionSession {
             ));
         }
         if introducer {
-            if !admitted.insert(target) {
+            if !admitted.insert(target.into()) {
                 return Err(ExecutionSessionAnimationError::CreateTarget {
                     target,
                     error: ExecutionSessionCreateError::DuplicateTarget,
@@ -2650,7 +2670,7 @@ impl ExecutionSession {
             declaration.add_member(root, target);
         }
         if remover {
-            removals.push((root, target));
+            removals.push((root, target.into()));
         }
         let children = leaves
             .into_iter()
@@ -3223,9 +3243,10 @@ impl ExecutionSession {
                 kind: PendingSegmentCompletionKind {
                     lifecycle_root: lifecycle.as_ref().map(|lifecycle| lifecycle.root()),
                     lifecycle_removals: match lifecycle.as_ref() {
-                        Some(PreparedAnimationLifecycle::Composition { removals, .. }) => {
-                            removals.clone()
-                        }
+                        Some(PreparedAnimationLifecycle::Composition { removals, .. }) => removals
+                            .iter()
+                            .map(|(root, target)| (*root, resolve_committed_node(*target, &result)))
+                            .collect(),
                         _ => lifecycle
                             .as_ref()
                             .and_then(|lifecycle| lifecycle.removal())

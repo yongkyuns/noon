@@ -2998,3 +2998,7 @@ mod line_callback_tests {
         assert_eq!(line.style.stroke, Some(Color::RED));
     }
 }
+
+pub mod ordinary_focus_on;
+
+pub mod ordinary_rotating;

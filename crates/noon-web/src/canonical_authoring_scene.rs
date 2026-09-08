@@ -36,6 +36,10 @@ struct SceneMembershipBatch {
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone)]
 enum OrdinaryCompositionChild {
+    FocusOn {
+        focus: noon::FocusOnOptions,
+        options: noon_core::AnimationOptions,
+    },
     TransformTo {
         entering_id: Option<ObjectId>,
         source: noon::Mobject,
@@ -110,6 +114,7 @@ enum OrdinaryCompositionChild {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
         angle: f64,
+        pivot: Option<noon::ManimRotationPivot>,
         options: noon_core::AnimationOptions,
     },
     ValueTracker {
@@ -1406,6 +1411,12 @@ impl CanonicalAuthoringScene {
             );
         fn request(child: &OrdinaryCompositionChild) -> noon::AnimationCompositionRequest<'_> {
             match child {
+                OrdinaryCompositionChild::FocusOn { focus, options } => {
+                    noon::AnimationCompositionRequest::FocusOn {
+                        focus: *focus,
+                        options: *options,
+                    }
+                }
                 OrdinaryCompositionChild::TransformTo {
                     source,
                     target,
@@ -1533,12 +1544,21 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
+                    pivot,
                     options,
                     ..
-                } => noon::AnimationCompositionRequest::Rotate {
-                    target,
-                    angle: *angle,
-                    options: *options,
+                } => match pivot {
+                    Some(pivot) => noon::AnimationCompositionRequest::ManimRotate {
+                        target,
+                        angle: *angle,
+                        pivot: *pivot,
+                        options: *options,
+                    },
+                    None => noon::AnimationCompositionRequest::Rotate {
+                        target,
+                        angle: *angle,
+                        options: *options,
+                    },
                 },
                 OrdinaryCompositionChild::ValueTracker {
                     tracker,
@@ -1720,7 +1740,8 @@ impl CanonicalAuthoringScene {
                         output.push((*id, target));
                     }
                 }
-                OrdinaryCompositionChild::Wait { .. } => {}
+                OrdinaryCompositionChild::FocusOn { .. }
+                | OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
@@ -1796,6 +1817,9 @@ impl CanonicalAuthoringScene {
         let mut entering_nodes = BTreeSet::new();
         for child in children {
             let (entering_id, target, options) = match child {
+                // Value-only requests have no wrapper identity to validate. Shared
+                // transaction preparation validates construction and animation options.
+                OrdinaryCompositionChild::FocusOn { .. } => continue,
                 OrdinaryCompositionChild::Wait { duration } => {
                     if !duration.is_finite() || *duration < 0.0 {
                         return Err(
@@ -2109,6 +2133,7 @@ impl CanonicalAuthoringScene {
                     target,
                     angle,
                     options,
+                    ..
                 } => {
                     if !angle.is_finite() {
                         return Err("ordinary Rotate angle must be finite".into());
@@ -3388,6 +3413,7 @@ mod wasm {
                 entering_id,
                 target: target.semantic_mobject().clone(),
                 angle,
+                pivot: None,
                 options: noon_core::AnimationOptions::new()
                     .run_time(child_run_time)
                     .rate_func(rate_function),
@@ -3641,6 +3667,39 @@ mod wasm {
             self.push_rotate(None, target, angle, child_run_time, rate_function)
         }
 
+        /// Inert request: the native live session validates the effective pivot.
+        #[allow(clippy::too_many_arguments)]
+        #[wasm_bindgen(js_name = appendManimRotate)]
+        pub fn append_manim_rotate(
+            &mut self,
+            object_id: Option<String>,
+            target: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+            pivot_kind: &str,
+            pivot_x: f64,
+            pivot_y: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<(), JsValue> {
+            let pivot = match pivot_kind {
+                "center" => noon::ManimRotationPivot::Center,
+                "point" => noon::ManimRotationPivot::Point(pivot_x, pivot_y),
+                "edge" => noon::ManimRotationPivot::Edge(pivot_x, pivot_y),
+                _ => return Err(js_error("unknown procedural rotation pivot kind")),
+            };
+            self.children.push(OrdinaryCompositionChild::Rotate {
+                entering_id: object_id
+                    .as_deref()
+                    .map(|id| parse_object_id("object ID", id))
+                    .transpose()?,
+                target: target.semantic_mobject().clone(),
+                angle,
+                pivot: Some(pivot),
+                options: Self::optional_options(child_run_time, rate_function)?,
+            });
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = appendWait)]
         pub fn append_wait(&mut self, child_run_time: f64) -> Result<(), JsValue> {
             if !child_run_time.is_finite() || child_run_time < 0.0 {
@@ -3748,6 +3807,33 @@ mod wasm {
                     indication: noon::IndicateOptions::new(scale_factor, color),
                     options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
                 });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFocusOn)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_focus_on(
+            &mut self,
+            x: f64,
+            y: f64,
+            opacity: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<(), JsValue> {
+            let color =
+                callback_color("focus color", Some(red), Some(green), Some(blue), Some(1.0))?
+                    .expect("all focus color channels supplied");
+            self.children.push(OrdinaryCompositionChild::FocusOn {
+                focus: noon::FocusOnOptions {
+                    point: (x, y),
+                    opacity,
+                    color,
+                },
+                options: Self::optional_options(child_run_time, rate_function)?,
+            });
             Ok(())
         }
 
@@ -7429,6 +7515,42 @@ mod tests {
     }
 
     #[test]
+    fn focus_on_creates_and_removes_a_spotlight_without_wrapper_identity() {
+        let mut context = CanonicalAuthoringScene::default();
+        let revision = context.scene.store().borrow().scene_revision();
+        let options = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let child = |opacity| OrdinaryCompositionChild::FocusOn {
+            focus: noon::FocusOnOptions {
+                opacity,
+                ..noon::FocusOnOptions::new((2.0, 1.0))
+            },
+            options,
+        };
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &[child(-1.0)],
+                options,
+                AnimationOptions::new()
+            )
+            .is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &[child(0.2)],
+                    options,
+                    AnimationOptions::new()
+                )
+                .unwrap(),
+            2.0
+        );
+        assert!(context.members().unwrap().is_empty());
+        assert!(context.bindings.is_empty());
+    }
+
+    #[test]
     fn passing_flash_publishes_wrapper_binding_only_after_atomic_admission() {
         let mut context = CanonicalAuthoringScene::default();
         let line = context.scene.line((-2.0, 0.0), (2.0, 0.0)).unwrap();
@@ -8179,6 +8301,7 @@ mod tests {
                 entering_id: None,
                 target: square.clone(),
                 angle: std::f64::consts::PI,
+                pivot: None,
                 options,
             },
             OrdinaryCompositionChild::ValueTracker {
@@ -8204,6 +8327,7 @@ mod tests {
                 entering_id: None,
                 target: square.clone(),
                 angle: std::f64::consts::PI,
+                pivot: None,
                 options,
             },
             OrdinaryCompositionChild::ValueTracker {
@@ -8249,6 +8373,7 @@ mod tests {
                 entering_id: None,
                 target: rotating.clone(),
                 angle: std::f64::consts::PI,
+                pivot: None,
                 options: child,
             },
             bound_transform_child(&moving, moving_target, child),

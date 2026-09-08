@@ -285,3 +285,42 @@ fn pending_preflight_is_bounded_and_does_not_touch_large_unrelated_scene() {
     assert_eq!(store.len(), before_len + 1);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
 }
+
+#[test]
+fn prepared_allocator_identities_are_unpublished_and_match_commit_with_reused_slots() {
+    let mut store = SemanticStore::new();
+    let stale = store.insert_semantic_object(object_state(1.0));
+    store.remove_node(stale).unwrap();
+    let revision = store.scene_revision();
+    let make = || {
+        let mut transaction = SemanticMutationTransaction::new();
+        let cancelled = transaction.create_node(SemanticNodeCreation::object(object_state(1.0)));
+        let source = transaction.create_node(SemanticNodeCreation::object(object_state(2.0)));
+        let target = transaction.create_node(SemanticNodeCreation::object(object_state(3.0)));
+        let animation =
+            transaction.create_transform_animation(source, target, AnimationOptions::new());
+        transaction.remove_node(cancelled);
+        (transaction, cancelled, [source, target, animation])
+    };
+    let (transaction, cancelled, tokens) = make();
+    let prepared = transaction.prepare(&mut store).unwrap();
+    assert_eq!(prepared.planned_node_id(cancelled), None);
+    let planned = tokens.map(|token| prepared.planned_node_id(token).unwrap());
+    assert_eq!(planned[0].slot(), stale.slot());
+    assert_ne!(planned[0].generation(), stale.generation());
+    assert!(planned
+        .iter()
+        .all(|node| prepared.store().node(*node).is_none()));
+    drop(prepared);
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.len(), 0);
+    let (transaction, _, tokens) = make();
+    let prepared = transaction.prepare(&mut store).unwrap();
+    assert_eq!(
+        tokens.map(|token| prepared.planned_node_id(token).unwrap()),
+        planned
+    );
+    let result = prepared.commit();
+    assert_eq!(tokens.map(|token| result.resolve(token).unwrap()), planned);
+    assert!(store.node(stale).is_none());
+}

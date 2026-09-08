@@ -534,7 +534,7 @@ where
             );
             continue;
         }
-        if let SemanticScheduledAnimationPayload::Rotate { angle } = leaf.payload {
+        if let SemanticScheduledAnimationPayload::Rotate { angle, hold_origin } = leaf.payload {
             let source = object_state(store, leaf, leaf.target)?;
             let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
                 captured
@@ -549,9 +549,11 @@ where
                 captures.insert(leaf.execution_object_id, captured);
                 captured
             };
-            let channel = lower_rotation_channel(source, from, angle)
+            let channels = lower_rotation_channels(source, from, angle, hold_origin)
                 .map_err(|issue| rotation_payload_error(leaf, issue))?;
-            push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+            for channel in channels {
+                push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+            }
             continue;
         }
         if let SemanticScheduledAnimationPayload::PassingFlash { time_width } = leaf.payload {
@@ -735,9 +737,16 @@ fn validate_leaf_matches_declaration(
         {
             Ok(())
         }
-        SemanticAnimationIntent::Rotate { target, angle }
-            if *target == leaf.target
-                && leaf.payload == SemanticScheduledAnimationPayload::Rotate { angle: *angle } =>
+        SemanticAnimationIntent::Rotate {
+            target,
+            angle,
+            hold_origin,
+        } if *target == leaf.target
+            && leaf.payload
+                == SemanticScheduledAnimationPayload::Rotate {
+                    angle: *angle,
+                    hold_origin: *hold_origin,
+                } =>
         {
             Ok(())
         }
@@ -1898,11 +1907,12 @@ pub(super) fn lower_transform_channels(
     Ok(channels)
 }
 
-pub(super) fn lower_rotation_channel(
+pub(super) fn lower_rotation_channels(
     source: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
     angle: f64,
-) -> Result<LoweredAffineChannel, AffinePayloadIssue> {
+    hold_origin: bool,
+) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
     if !transform_is_finite(from.transform) {
         return Err(AffinePayloadIssue::InvalidEffectiveTransform);
     }
@@ -1922,7 +1932,7 @@ pub(super) fn lower_rotation_channel(
             SemanticAffineAnimationField::RotationZ,
         ));
     }
-    Ok(LoweredAffineChannel {
+    let mut channels = vec![LoweredAffineChannel {
         property: Property::Rotation,
         conflict_property: SemanticObjectProperty::RotationZ,
         completion: SemanticAnimationCompletion::Property {
@@ -1933,7 +1943,22 @@ pub(super) fn lower_rotation_channel(
             from: from.transform.rotation,
             to: endpoint as f32,
         },
-    })
+    }];
+    if hold_origin {
+        push_affine_channel(
+            source,
+            SemanticObjectProperty::Translation,
+            Property::Position,
+            TrackValues::Vec2 {
+                from: from.transform.translation,
+                to: from.transform.translation,
+            },
+            SemanticAnimationCompletion::Release,
+            true,
+            &mut channels,
+        )?;
+    }
+    Ok(channels)
 }
 
 #[allow(clippy::too_many_arguments)]

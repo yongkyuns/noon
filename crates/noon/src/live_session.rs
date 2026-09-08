@@ -243,6 +243,10 @@ pub struct TransformToRequest<'a> {
 /// runtime state, or a second scene representation.
 #[derive(Clone)]
 pub enum AnimationCompositionRequest<'a> {
+    FocusOn {
+        focus: crate::FocusOnOptions,
+        options: AnimationOptions,
+    },
     TransformTo(TransformToRequest<'a>),
     FamilyTransformTo {
         source: &'a MobjectFamily,
@@ -311,6 +315,13 @@ pub enum AnimationCompositionRequest<'a> {
     Rotate {
         target: &'a Mobject,
         angle: f64,
+        options: AnimationOptions,
+    },
+    /// Exact centered 2D procedural rotation, with shared Manim pivot validation.
+    ManimRotate {
+        target: &'a Mobject,
+        angle: f64,
+        pivot: crate::ManimRotationPivot,
         options: AnimationOptions,
     },
     /// Animate one borrowed scalar tracker through the shared composition scheduler.
@@ -823,6 +834,40 @@ impl<'a> LiveSession<'a> {
         self.layout_at_transform(mobject, transform, publication)
     }
 
+    fn validate_manim_rotation_pivot(
+        &self,
+        target: &Mobject,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<(), LiveSessionError> {
+        let (bounds, origin) = if self.session.semantic_object_is_reachable(target.node_id()) {
+            let store = self.store.borrow();
+            let observed = self
+                .session
+                .effective_semantic_object(&store, target.node_id())?;
+            if !observed.authored_content_layout_applicable() {
+                return Err(LiveSessionError::Mobject("procedural rotation requires effective authored content without reveal or morph overrides".into()));
+            }
+            let transform = observed.object.transform;
+            drop(store);
+            (
+                target.layout_bounds_at(transform),
+                (
+                    f64::from(transform.translation.x),
+                    f64::from(transform.translation.y),
+                ),
+            )
+        } else {
+            let state = target.state().map_err(LiveSessionError::Mobject)?;
+            (
+                target.layout_bounds(),
+                (state.transform.translation.x, state.transform.translation.y),
+            )
+        };
+        pivot
+            .validate(bounds.map_err(LiveSessionError::Mobject)?, origin)
+            .map_err(LiveSessionError::Mobject)
+    }
+
     /// Read one analytic Line's world endpoints at the current publication.
     pub fn effective_line_endpoints(
         &self,
@@ -1112,6 +1157,18 @@ impl<'a> LiveSession<'a> {
         )
     }
 
+    /// Construct, animate and remove a fixed-point spotlight in one shared session.
+    pub fn declare_and_activate_focus_on(
+        &mut self,
+        focus: crate::FocusOnOptions,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::FocusOn { focus, options },
+            AnimationOptions::new(),
+        )
+    }
+
     /// Flash one exact analytic Line through fixed transient membership.
     pub fn declare_and_activate_passing_flash(
         &mut self,
@@ -1388,6 +1445,10 @@ impl<'a> LiveSession<'a> {
     ) -> Result<crate::execution_session::SemanticCompositionRequest, LiveSessionError> {
         use crate::execution_session::SemanticCompositionRequest as Request;
         Ok(match request {
+            AnimationCompositionRequest::FocusOn { focus, options } => Request::FocusOn {
+                focus: *focus,
+                options: *options,
+            },
             AnimationCompositionRequest::TransformTo(child) => {
                 self.require_mobject(child.source)?;
                 self.require_mobject(child.target_state)?;
@@ -1557,6 +1618,22 @@ impl<'a> LiveSession<'a> {
                 Request::Rotate {
                     target: target.node_id(),
                     angle: *angle,
+                    hold_origin: false,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::ManimRotate {
+                target,
+                angle,
+                pivot,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                self.validate_manim_rotation_pivot(target, *pivot)?;
+                Request::Rotate {
+                    target: target.node_id(),
+                    angle: *angle,
+                    hold_origin: true,
                     options: *options,
                 }
             }

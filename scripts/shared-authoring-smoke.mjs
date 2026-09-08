@@ -351,6 +351,7 @@ async function startSampledSource(page, source, canvasId, width = 640, height = 
       async onSemanticContinuation(registration) {
         await execution.startSemanticExecution(registration.semanticExecution, {
           authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, registration.duration),
           transportMode: "transferable",
           pacing: "external_samples",
         });
@@ -1222,6 +1223,77 @@ try {
       "late Underline did not use the animated target bounds");
     assert.ok(blue.blue > blue.red + 30, "typed Path lost its blue fill");
     assert.ok(green.green > green.red + 30, "late Rectangle did not animate through shared live publication");
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const rotatingSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_rotating.py"), "utf8",
+  );
+  await startSampledSource(page, rotatingSource, "scene-shared-rotating", 960, 540);
+  try {
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.75));
+    const canvas = page.locator("#scene-shared-rotating");
+    const screenshot = await canvas.screenshot();
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
+    assert.ok(cyan(renderedWorldPixel(screenshot, 2, 2)) && !cyan(renderedWorldPixel(screenshot, 3, 1)),
+      "shared Rotating lost its deferred pivot or linear angular path");
+    const duration = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.5), authored]);
+      return completed.duration;
+    });
+    assert.equal(duration, 3.5);
+    assert.ok(cyan(renderedWorldPixel(await canvas.screenshot(), 2, 2)),
+      "shared Rotate lost its signed quarter-turn endpoint");
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const rotatingDefaultsSource = await readFile(
+    path.join(repoRoot, "web/python/examples/manim_parity_rotating_centered.py"), "utf8",
+  );
+  await startSampledSource(page, rotatingDefaultsSource, "scene-shared-rotating-defaults", 960, 540);
+  try {
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.625));
+    const canvas = page.locator("#scene-shared-rotating-defaults");
+    const diagonal = renderedWorldPixel(await canvas.screenshot(), 0.95, 0);
+    assert.ok(diagonal.blue > diagonal.red + 30, "default Rotating did not follow its linear full-turn path");
+    const duration = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(5), authored]);
+      return completed.duration;
+    });
+    assert.equal(duration, 5);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const focusSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_focus_on.py"), "utf8",
+  );
+  await startSampledSource(page, focusSource, "scene-shared-focus-on", 960, 540);
+  try {
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(1.25));
+    const canvas = page.locator("#scene-shared-focus-on");
+    const screenshot = await canvas.screenshot();
+    const middle = renderedWorldPixel(screenshot, 1, 0.5);
+    const outside = renderedWorldPixel(screenshot, -6, 3);
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
+    assert.ok(cyan(middle) && !cyan(outside), "shared FocusOn did not shrink its spotlight");
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(2.5), authored]);
+      return completed.duration;
+    });
+    assert.equal(result, 2.5);
+    const final = await canvas.screenshot();
+    assert.ok(!cyan(renderedWorldPixel(final, 1, 0.5)), "FocusOn left its spotlight visible");
+    const square = renderedWorldPixel(final, -3, -2);
+    assert.ok(square.blue > square.red + 30, "FocusOn removed unrelated scene content");
   } finally {
     await stopSampledSource(page);
   }
@@ -3056,6 +3128,24 @@ result = scene
       `MovingDots tracker endpoint missing: ${JSON.stringify(blueDot)}`);
     assert.ok(redLine.red > 100 && redLine.red > redLine.green,
       `MovingDots Line endpoint match missing: ${JSON.stringify(redLine)}`);
+
+    await rasterPage.reload({ waitUntil: "load" });
+    await rasterPage.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+    const rotating = await rasterPage.evaluate(async (source) => {
+      await window.noonHostRaster.ready();
+      return window.noonHostRaster.load(source, 6);
+    }, rotatingDefaultsSource);
+    assert.equal(rotating.kind, "semantic_execution");
+    assert.equal(rotating.objectCount, 1);
+    const rotationTimes = [0, 0.625, 5];
+    await rasterPage.evaluate((times) => window.noonHostRaster.renderThrough(1, times), rotationTimes);
+    const diagonal = renderedWorldPixel(await rasterPage.locator("#scene").screenshot(), 0.95, 0);
+    assert.ok(diagonal.blue > diagonal.red + 30, "raster host did not sample the five-second angular path");
+    const rotated = await rasterPage.evaluate((times) => window.noonHostRaster.renderThrough(2, times), rotationTimes);
+    assert.equal(rotated.time, 5);
+    assert.equal(rotated.authoredDuration, 5);
+    assert.equal(rotated.objectCount, 1);
+    assert.equal(rotated.presented, true);
   } finally {
     await rasterPage.close();
   }

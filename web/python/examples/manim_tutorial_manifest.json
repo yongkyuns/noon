@@ -330,7 +330,7 @@
     {
       "id": "manim-rotating-demo",
       "title": "RotatingDemo",
-      "summary": "ManimCE v0.21 Rotating reference example, unchanged except for the import module. Blocked until broad principal-axis Rotating and the following shared family Transform use one semantic playback route.",
+      "summary": "ManimCE v0.21 Rotating reference example, unchanged except for the import module. Blocked until shared Rust family rotation and principal-axis motion are implemented; the former Python snapshot scheduler has been deleted.",
       "status": "blocked",
       "path": "python/examples/manim_example_rotating_demo.py",
       "category": "rotation",
@@ -359,6 +359,8 @@
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
       "expected_duration": 3,
+      "qualification_mode": "shared-live",
+      "expected_object_count": 2,
       "thumbnail": "thumbnails/manim/generated/using-focus-on.png",
       "thumbnail_alt": "Exact-source Manim UsingFocusOn",
       "thumbnail_time": 2.5,
