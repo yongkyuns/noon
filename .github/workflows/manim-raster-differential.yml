@@ -1,6 +1,12 @@
 name: Manim raster differential
 
 on:
+  pull_request:
+    paths:
+      - "web/semantic-preview-session*"
+      - "web/manim-raster-host.js"
+      - "scripts/semantic-preview-*"
+      - ".github/workflows/manim-raster-differential.yml"
   push:
     branches:
       - master
@@ -31,6 +37,8 @@ jobs:
         uses: actions/checkout@v7
       - name: Validate raster ratchet policy
         run: node scripts/manim-raster-policy.test.mjs
+      - name: Validate preview evidence assertions
+        run: node --test scripts/semantic-preview-observations.test.mjs
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -78,6 +86,16 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+      - name: Verify semantic preview frames, cancellation, and fresh-run recovery
+        run: timeout --signal=TERM 180s node scripts/semantic-preview-smoke.mjs
+      - name: Upload semantic preview evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: semantic-preview-evidence
+          path: browser-smoke-artifacts/semantic-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Render and compare retained Typst fixtures
         env:
           NOON_MANIM_TYPST_RASTER_BACKENDS: webgpu,webgl
@@ -100,7 +118,21 @@ jobs:
         env:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
-        run: node scripts/manim-raster-differential.mjs
+        run: |
+          # Preserve the exact command status and full output outside the raster
+          # directory (the oracle intentionally resets that directory at startup).
+          status=0
+          node scripts/manim-raster-differential.mjs > "$RUNNER_TEMP/noon-raster-command.log" 2>&1 || status=$?
+          tail -n 100 "$RUNNER_TEMP/noon-raster-command.log"
+          exit "$status"
+      - name: Upload canonical raster command output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: manim-raster-command-output
+          path: ${{ runner.temp }}/noon-raster-command.log
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture semantic state at raster frame times
         env:
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts

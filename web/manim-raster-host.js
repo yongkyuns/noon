@@ -4,15 +4,16 @@ import initNoonWeb, {
 } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
+import { SemanticPreviewSession } from "./semantic-preview-session.js";
 
 const canvas = document.querySelector("#scene");
-const client = new PythonAuthoringClient();
-const readyPromise = Promise.all([initNoonWeb(), client.ready()]);
+const readyPromise = initNoonWeb();
 
+let client = null;
 let engine = null;
-let execution = null;
-let sourceFailure = null;
+let preview = null;
 let renderer = null;
+let closed = false;
 let currentFrameIndex = -1;
 let currentLogicalTime = 0;
 let activeFrameTimes = null;
@@ -41,6 +42,7 @@ async function presentDelta(deltaJson) {
 
 async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
   await readyPromise;
+  if (closed) throw new Error("host raster page is closed");
   if (typeof source !== "string" || source.trim() === "") {
     throw new TypeError("host raster source must be non-empty");
   }
@@ -48,45 +50,21 @@ async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
   if (!Number.isFinite(loopDuration) || loopDuration <= 0) {
     throw new RangeError("host raster loop duration must be positive and finite");
   }
-  if (renderer !== null || engine !== null || execution !== null) {
+  if (renderer !== null || engine !== null || preview !== null || client !== null) {
     throw new Error("host raster page supports one authored scene per page");
   }
 
   if (mode === "semantic") {
-    let resolveAttached;
-    let rejectAttached;
-    const attached = new Promise((resolve, reject) => {
-      resolveAttached = resolve;
-      rejectAttached = reject;
+    preview = new SemanticPreviewSession({
+      createAuthoringClient: () => new PythonAuthoringClient(),
+      createExecutionClient: (options) => new AuthoringExecutionClient(canvas, options),
     });
-    const sourceRun = client.run(source, {}, {
-      async onSemanticContinuation(registration) {
-        if (execution !== null) throw new Error("raster source registered a second execution context");
-        execution = new AuthoringExecutionClient(canvas);
-        await execution.startSemanticExecution(registration.semanticExecution, {
-          authoringClient: client,
-          loopDurationSeconds: loopDuration,
-          transportMode: "transferable",
-          pacing: "external_samples",
-        });
-        resolveAttached();
-      },
-    });
-    sourceRun.then((result) => {
-      authoredDuration = result.duration;
-      if (execution === null) rejectAttached(new Error("raster source produced no continuation"));
-    }, (error) => {
-      sourceFailure = error;
-      rejectAttached(error);
-    });
-    await attached;
-    await execution.sampleToAuthoredTime(0);
-    const metrics = (await execution.metrics()).metrics;
+    const result = await preview.open(source, { loopDurationSeconds: loopDuration });
     return {
       kind: "semantic_execution",
-      duration: authoredDuration,
-      objectCount: metrics.objectCount,
-      rendererBackend: metrics.backend,
+      duration: result.authoredDuration,
+      objectCount: result.frame.objectCount,
+      rendererBackend: result.frame.rendererBackend,
     };
   }
   if (mode !== "document") throw new Error(`unsupported raster mode ${mode}`);
@@ -94,7 +72,9 @@ async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
   // This #959-owned codec/renderer diagnostic explicitly consumes a scene
   // document. Canonical callback execution is qualified by the shared-authoring
   // and direct Rust/WASM proofs without this legacy document adapter.
+  client = new PythonAuthoringClient();
   const result = await client.run(source, {}, { exportDocument: true });
+  if (closed) throw new Error("host raster page is closed");
   if (result.kind !== "scene_document") {
     throw new Error("host raster harness requires a scene document");
   }
@@ -111,6 +91,11 @@ async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
   // fixed camera; moving-camera fixtures must exercise the production camera role.
   const initialDelta = engine.initialDeltaJson();
   renderer = await ExecutionCanvasRenderer.create(canvas.transferControlToOffscreen(), initialDelta);
+  if (closed) {
+    renderer.free();
+    renderer = null;
+    throw new Error("host raster page is closed");
+  }
   renderer.resize(canvas.width, canvas.height);
   let presented = false;
   for (let attempt = 0; attempt < 4 && !presented; attempt += 1) {
@@ -120,6 +105,7 @@ async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
     throw new Error("host raster renderer could not present its initial snapshot");
   }
   await waitForPaint();
+  if (closed) throw new Error("host raster page is closed");
 
   return {
     kind: result.kind,
@@ -130,10 +116,10 @@ async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
 }
 
 async function advanceOneFrame(frameIndex, time) {
-  if (sourceFailure !== null) throw sourceFailure;
-  if (execution !== null) {
-    const sampled = await execution.sampleToAuthoredTime(time);
-    currentLogicalTime = sampled.time;
+  if (closed) throw new Error("host raster page is closed");
+  if (preview !== null) {
+    const sampled = await preview.sample(time);
+    currentLogicalTime = sampled.frame.publishedTime;
   } else {
     await presentDelta(engine.tickDeltaJson(time * 1000));
     currentLogicalTime = time;
@@ -159,7 +145,8 @@ function normalizeFrameTimes(frameTimes, targetFrame) {
 }
 
 async function renderThrough(frameIndex, frameTimes) {
-  if (execution === null && (renderer === null || engine === null)) {
+  if (closed) throw new Error("host raster page is closed");
+  if (preview === null && (renderer === null || engine === null)) {
     throw new Error("host raster scene has not been loaded");
   }
   const targetFrame = Number(frameIndex);
@@ -187,17 +174,19 @@ async function renderThrough(frameIndex, frameTimes) {
     await advanceOneFrame(frame, activeFrameTimes[frame]);
   }
   await waitForPaint();
+  if (closed) throw new Error("host raster page is closed");
 
-  if (execution !== null) {
-    const metrics = (await execution.metrics()).metrics;
+  if (preview !== null) {
+    const report = preview.snapshot;
+    if (report.state !== "ready") throw new Error(report.error ?? "preview session is not ready");
     return {
       error: null,
       presented: true,
       time: currentLogicalTime,
-      objectCount: metrics.objectCount,
-      rendererBackend: metrics.backend,
-      drawCalls: metrics.drawCalls,
-      authoredDuration,
+      objectCount: report.frame.objectCount,
+      rendererBackend: report.frame.rendererBackend,
+      drawCalls: report.frame.drawCalls,
+      authoredDuration: report.authoredDuration,
       frameIndex: currentFrameIndex,
     };
   }
@@ -222,8 +211,19 @@ async function renderThrough(frameIndex, frameTimes) {
   };
 }
 
+function close() {
+  if (closed) return;
+  closed = true;
+  preview?.close();
+  client?.terminate();
+  renderer?.free();
+  engine?.free();
+}
+
 window.noonHostRaster = {
   ready: () => readyPromise,
   load,
   renderThrough,
+  status: () => preview?.snapshot ?? null,
+  close,
 };

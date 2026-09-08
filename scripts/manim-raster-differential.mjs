@@ -210,7 +210,12 @@ function noonSourceFor(fixture, { semantic = false } = {}) {
     // selects the fixture without rewriting its construct method or callbacks.
     return `${adapted}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${fixture.scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
   }
-  return `${adapted}\n\nresult = ${fixture.scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
+  // The export harness constructs explicitly so it can retain the exact selected
+  // Scene object. Mirror execute_construct's authoring-scope ownership around that
+  // lifecycle: once the first canonical play creates a retained session, subsequent
+  // constructors and edits must publish through that same owner rather than mutate
+  // detached semantic handles outside its revision context.
+  return `${adapted}\n\nimport _manim_reactive as _noon_reactive\nresult = ${fixture.scene}()\n_noon_authoring_token = _noon_reactive._enter_authoring_scene(result)\ntry:\n    result.setup()\n    try:\n        result.construct()\n    finally:\n        result.tear_down()\nfinally:\n    _noon_reactive._leave_authoring_scene(_noon_authoring_token)\n`;
 }
 
 async function authorNoonScenes() {
