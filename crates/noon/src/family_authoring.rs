@@ -8,7 +8,11 @@ use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
     SemanticObjectProperty, SemanticStore,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{btree_map::Entry, BTreeMap},
+    rc::Rc,
+};
 
 /// Ordered family translation over authoritative shared semantic leaf identity.
 ///
@@ -472,12 +476,24 @@ impl MobjectFamily {
             .into_iter()
             .flat_map(FamilyTranslation::into_shifts)
             .collect::<Vec<_>>();
-        let mut transaction = SemanticMutationTransaction::new();
+        // A leaf may occur under several direct members. Accumulate those
+        // ordered translations before publishing one final property per identity.
+        let mut translations = BTreeMap::new();
         for (leaf, x, y) in shifts {
-            let mobject = crate::Mobject::from_node(Rc::clone(&self.store), leaf)?;
-            let mut translation = mobject.state()?.transform.translation;
+            let translation = match translations.entry(leaf) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry.insert(
+                    crate::Mobject::from_node(Rc::clone(&self.store), leaf)?
+                        .state()?
+                        .transform
+                        .translation,
+                ),
+            };
             translation.x += x;
             translation.y += y;
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        for (leaf, translation) in translations {
             transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
         }
         transaction
@@ -584,6 +600,38 @@ mod tests {
         );
         assert!((second_center.0 - first_center.0 - 0.6).abs() < 1e-6);
         assert!((first_center.0 + second_center.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn family_arrange_accumulates_aliases_atomically_and_rejects_invalid_input() {
+        let scene = Scene::new();
+        let first = scene.circle(0.2).unwrap();
+        let mut second = scene.circle(0.2).unwrap();
+        second.shift(2.0, 0.0).unwrap();
+        let unrelated = scene.square(1.0).unwrap();
+        let unrelated_before = unrelated.state().unwrap();
+        let nested = scene.family(&[&first, &second]).unwrap();
+        let outer = scene.family(&[&first]).unwrap();
+        scene
+            .store()
+            .borrow_mut()
+            .add_member(outer.node_id(), nested.node_id())
+            .unwrap();
+        let before = scene.store().borrow().scene_revision();
+
+        assert!(outer.arrange(1.0, 0.0, f64::NAN, true).is_err());
+        assert_eq!(scene.store().borrow().scene_revision(), before);
+        assert_eq!(first.center().unwrap(), (0.0, 0.0));
+        assert_eq!(second.center().unwrap(), (2.0, 0.0));
+
+        outer.arrange(1.0, 0.0, 0.2, true).unwrap();
+        assert_eq!(
+            scene.store().borrow().scene_revision(),
+            before.checked_next().unwrap()
+        );
+        assert!((first.center().unwrap().0 + 2.0).abs() < 1e-6);
+        assert!((second.center().unwrap().0 - 1.3).abs() < 1e-6);
+        assert_eq!(unrelated.state().unwrap(), unrelated_before);
     }
 
     #[test]

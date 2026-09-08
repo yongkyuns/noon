@@ -1899,7 +1899,7 @@ def _group_arrange(
         return self
 
     family_handle = getattr(self, "_semantic_family_handle", None)
-    if family_handle is None or not hasattr(family_handle, "arrangeSession"):
+    if family_handle is None or not hasattr(family_handle, "arrange"):
         return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
 
     axis = _base._as_vec2(_base.RIGHT if direction is None else direction)
@@ -1912,33 +1912,19 @@ def _group_arrange(
         except Exception as error:
             raise ValueError(str(error)) from None
         return self
-    arrangement = family_handle.arrangeSession(axis.x, axis.y, float(buff), bool(center))
-    prepared: list[tuple[object, list[_base.Mobject], list[object]]] = []
-
-    for member in self.submobjects:
-        if isinstance(member, _compat.Group):
-            shared = _shared_family_layout_session(member, mutation=True)
-            if shared is None or not hasattr(arrangement, "includeFamily"):
-                return _ORIGINAL_GROUP_ARRANGE(
-                    self, direction=direction, buff=buff, center=center
-                )
-            arrangement.includeFamily(shared[0])
-            prepared.append((member, shared[1], shared[2]))
-        elif isinstance(member, _base.Mobject):
-            adapter = _family_layout_leaf_adapter(member, mutation=True)
-            if adapter is None:
-                return _ORIGINAL_GROUP_ARRANGE(
-                    self, direction=direction, buff=buff, center=center
-                )
-            arrangement.includeMobject(adapter)
-            prepared.append((member, [member], [adapter]))
-        else:
-            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
-
-    for member, leaves, leaf_handles in prepared:
-        translation = arrangement.nextTranslation()
-        _apply_family_translation(member, translation, leaves, leaf_handles)
-    arrangement.finish()
+    # Resolve wrapper eligibility before mutation. Rust owns family traversal,
+    # bounds, spacing, and the single atomic publication of all leaf translations.
+    leaves = _compat._leaf_mobjects(self)
+    leaf_handles = [_family_layout_leaf_adapter(member, mutation=True) for member in leaves]
+    if any(handle is None for handle in leaf_handles):
+        return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
+    try:
+        family_handle.arrange(axis.x, axis.y, float(buff), bool(center))
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    # Only the explicit #959 legacy export path still needs projected values.
+    for member, handle in zip(leaves, leaf_handles):
+        _sync_bound_transform(member, handle)
     return self
 
 

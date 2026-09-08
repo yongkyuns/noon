@@ -94,6 +94,11 @@ fn main() -> Result<(), String> {
             0.0, 0.1, 0.3, 0.5, 0.9, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5,
         ],
     )?;
+    emit(
+        "ordinary_draw_border_then_fill",
+        example_scenes::draw_border_then_fill::program()?,
+        &[0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.25],
+    )?;
     let mut session = example_scenes::specialized_geometry::session()?;
     let times = [0.0, 0.5, 1.0];
     let mut frames = Vec::new();

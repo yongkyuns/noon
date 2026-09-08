@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ManimSharedFamilyArrangeTests(unittest.TestCase):
-    def test_group_arrange_dispatches_order_and_spacing_to_shared_family_plan(self) -> None:
+    def test_group_arrange_uses_one_shared_call_and_preserves_live_dispatch(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -57,83 +57,18 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
                     pass
 
 
-            class FakeLayoutSession:
-                def __init__(self, family):
-                    self.family = family
-                    self.members = []
-
-                def includeMobject(self, member):
-                    self.members.append(member)
-
-
-            class FakeTranslation:
-                def __init__(self, store, expected, delta):
-                    self.store = store
-                    self.expected = list(expected)
-                    self.delta = delta
-                    self.next_index = 0
-
-                def applyMobject(self, member):
-                    assert member.identity == self.expected[self.next_index]
-                    member.shift(*self.delta)
-                    self.store.applied.append(member.identity)
-                    self.next_index += 1
-
-                def finish(self):
-                    assert self.next_index == len(self.expected)
-
-
-            class FakeArrange:
-                def __init__(self, family, direction_x, direction_y, buff, center):
-                    self.family = family
-                    self.store = family.store
-                    self.expected = list(family.members)
-                    self.next_include = 0
-                    self.next_translation = 0
-                    self.store.arrange_calls.append(
-                        (family.identity, float(direction_x), float(direction_y), float(buff), bool(center))
-                    )
-
-                def _accept(self, identity, kind):
-                    assert identity == self.expected[self.next_include]
-                    self.store.arrange_includes.append((kind, identity))
-                    self.next_include += 1
-
-                def includeMobject(self, member):
-                    self._accept(member.identity, \"mobject\")
-
-                def includeFamily(self, layout):
-                    self._accept(layout.family.identity, \"family\")
-
-                def nextTranslation(self):
-                    assert self.next_include == len(self.expected)
-                    identity = self.expected[self.next_translation]
-                    expected_leaves = [member.identity for member in self.store.leaves(identity)]
-                    deltas = [(-1.0, 0.0), (2.0, 0.0), (4.0, 0.0)]
-                    translation = FakeTranslation(
-                        self.store,
-                        expected_leaves,
-                        deltas[self.next_translation],
-                    )
-                    self.next_translation += 1
-                    return translation
-
-                def finish(self):
-                    assert self.next_translation == len(self.expected)
-                    self.store.arrange_finishes += 1
-
-
             class FakeFamilyHandle:
                 def __init__(self, store):
                     self.store = store
                     self.identity = store.allocate(self)
                     self.members = []
 
-                def layoutSession(self):
-                    return FakeLayoutSession(self)
-
-                def arrangeSession(self, direction_x, direction_y, buff, center):
-                    return FakeArrange(self, direction_x, direction_y, buff, center)
+                def arrange(self, direction_x, direction_y, buff, center):
+                    self.store.arrange_calls.append(
+                        (self.identity, direction_x, direction_y, buff, center)
+                    )
+                    if self.store.reject_arrange:
+                        raise RuntimeError("invalid shared arrangement")
 
                 @property
                 def memberCount(self):
@@ -166,24 +101,13 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
                     self.next_identity = 0
                     self.entities = {}
                     self.arrange_calls = []
-                    self.arrange_includes = []
-                    self.arrange_finishes = 0
-                    self.applied = []
+                    self.reject_arrange = False
 
                 def allocate(self, entity):
                     value = self.next_identity
                     self.next_identity += 1
                     self.entities[value] = entity
                     return value
-
-                def leaves(self, identity):
-                    entity = self.entities[identity]
-                    if isinstance(entity, FakeObjectHandle):
-                        return [entity]
-                    result = []
-                    for child in entity.members:
-                        result.extend(self.leaves(child))
-                    return result
 
                 def createMobject(self, snapshot_json):
                     return FakeObjectHandle(self, snapshot_json)
@@ -215,17 +139,16 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
             assert store.arrange_calls == [
                 (family._semantic_family_handle.identity, 2.0, 0.0, 0.25, True)
             ]
-            assert store.arrange_includes == [
-                (\"mobject\", first._semantic_handle.identity),
-                (\"family\", nested._semantic_family_handle.identity),
-            ]
-            assert store.applied == [
-                first._semantic_handle.identity,
-                second._semantic_handle.identity,
-            ]
-            assert first._semantic_handle.shift_calls[-1] == (-1.0, 0.0)
-            assert second._semantic_handle.shift_calls[-1] == (2.0, 0.0)
-            assert store.arrange_finishes == 1
+            assert first._semantic_handle.shift_calls == []
+            assert second._semantic_handle.shift_calls == []
+
+            store.reject_arrange = True
+            try:
+                family.arrange()
+                raise AssertionError("shared rejection was swallowed")
+            except ValueError as error:
+                assert str(error) == "invalid shared arrangement"
+            store.reject_arrange = False
 
             class FakeLiveContext:
                 def __init__(self):
