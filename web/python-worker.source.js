@@ -805,7 +805,9 @@ __noon_namespace = {
     "context": json.loads(__noon_context_json),
     "__name__": "__main__",
 }
-__noon_code, __noon_portable_constructs = compile_authoring_source(__noon_source)
+__noon_code, __noon_portable_constructs = compile_authoring_source(
+    __noon_source, portable=not bool(__noon_export_document)
+)
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
 exec(__noon_code, __noon_namespace)

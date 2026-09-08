@@ -580,16 +580,17 @@ async def execute_construct(
         scene.setup()
         try:
             portable_construct = None
-            if (canonical and portable_constructs and not export_document
-                    and type(scene).play is _play
-                    and type(scene).wait is _canonical_wait):
-                from _manim_source_execution import bind_portable_construct
-
-                # setup() may replace construct. Bind the current selected code,
-                # not a function captured before setup or a decorator's wrapped body.
-                portable_construct = bind_portable_construct(
-                    scene.construct, portable_constructs
+            if canonical and portable_constructs and not export_document:
+                from _manim_source_execution import (
+                    bind_portable_construct, has_portable_scene_methods,
                 )
+
+                # Inspect the instance after setup(), without executing getters.
+                # Overrides and dynamic lookup retain the original call path.
+                if has_portable_scene_methods(scene, _play, _canonical_wait):
+                    portable_construct = bind_portable_construct(
+                        scene.construct, portable_constructs
+                    )
             if export_document:
                 # #959 owns this explicit codec/export boundary. Ordinary supported
                 # operations retain their existing Rust endpoint helpers here; they
@@ -640,7 +641,7 @@ def _require_portable_barrier_admission(scene: _base.Scene) -> None:
         )
 
 
-async def await_source_barrier(method, *args, **kwargs):
+async def await_source_barrier(method, /, *args, **kwargs):
     """Yield at one compiled host call, using the existing canonical awaitable."""
     scene = getattr(method, "__self__", None)
     if (not isinstance(scene, _base.Scene)

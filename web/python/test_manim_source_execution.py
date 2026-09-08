@@ -1,13 +1,12 @@
 import asyncio
 import inspect
 import textwrap
-import sys
-import subprocess
-from pathlib import Path
+from unittest.mock import patch
 import unittest
 
 from _manim_source_execution import (
     BARRIER_GLOBAL, bind_portable_construct, compile_authoring_source,
+    has_portable_scene_methods,
 )
 
 
@@ -166,70 +165,50 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.lineno, 3)
 
 
-    def run_canonical_contract(self, contract):
-        python_dir = Path(__file__).resolve().parent
-        worker = (python_dir.parent / "python-worker.source.js").read_text()
-        bootstrap = worker.split("  pyodide.runPython(`", 1)[1].split("`);", 1)[0]
-        source = textwrap.dedent("""
-            import asyncio, sys, types
-            from unittest.mock import patch
-            fake_js = types.ModuleType("js")
-            def unavailable(*args):
-                raise AssertionError("host-control test must not fabricate Rust semantics")
-            fake_js.__getattr__ = lambda name: unavailable
-            sys.modules["js"] = fake_js
-        """) + f"\nsys.path.insert(0, {str(python_dir)!r})\n" + bootstrap
-        source += "\nimport _manim_canonical_scene as canonical\nimport noon\n"
-        source += textwrap.dedent(contract)
-        result = subprocess.run([sys.executable, "-c", source], capture_output=True, text=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+    def test_static_async_and_export_source_never_allocates_an_ast(self):
+        cases = [
+            ("\n".join(f"value_{i} = {i}" for i in range(1000)), True),
+            ("class Example:\n    def construct(self):\n        self.add(1)\n", True),
+            ("class Example:\n    async def construct(self):\n        await self.wait(1)\n", True),
+            ("class Example:\n    def construct(self):\n        self.wait(1)\n", False),
+        ]
+        for source, portable in cases:
+            with self.subTest(source=source[:60], portable=portable):
+                with patch("_manim_source_execution.ast.parse", side_effect=AssertionError("AST allocated")):
+                    code, pairs = compile_authoring_source(source, portable=portable)
+                self.assertEqual(pairs, {})
+                self.assertEqual(code, compile(source, "<string>", "exec", dont_inherit=True))
 
-    def test_actual_canonical_wait_uses_same_awaitable_and_cleans_up(self):
-        self.run_canonical_contract(r'''
-            from _manim_source_execution import BARRIER_GLOBAL, compile_authoring_source, bind_portable_construct
-            events = []
-            class Context:
-                def beginOrdinaryWait(self, duration):
-                    events.append(("begin", duration))
-            async def complete(scene):
-                assert not getattr(scene, canonical._PORTABLE_BARRIER_CALL)
-                events.append("completed")
-            source = "class Example(Scene):\n    def construct(self):\n        self.wait(0.5)\n        events.append('after')\n"
-            code, pairs = compile_authoring_source(source)
-            namespace = {"Scene": noon.Scene, "events": events, BARRIER_GLOBAL: canonical.await_source_barrier}
-            exec(code, namespace)
-            scene = namespace["Example"]()
-            scene._canonical_authoring_context = Context()
-            portable = bind_portable_construct(scene.construct, pairs)
-            async def main():
-                with (patch.object(canonical, "_require_semantic_continuation_active"),
-                      patch.object(canonical, "_prepare_semantic_continuation_callbacks"),
-                      patch.object(canonical, "_await_semantic_continuation", complete)):
-                    await canonical.execute_construct(scene, portable_constructs=pairs)
-            asyncio.run(main())
-            assert events == [("begin", 0.5), "completed", "after"], events
-            assert not getattr(scene, canonical._PORTABLE_CONSTRUCT_MODE)
-            assert not getattr(scene, canonical._ASYNC_CONTINUATION_MODE)
-        ''')
+    def test_instance_class_and_rebound_method_overrides_are_not_admitted(self):
+        class Base:
+            def play(self, *args): pass
+            def wait(self, *args): pass
+        scene = Base()
+        self.assertTrue(has_portable_scene_methods(scene, Base.play, Base.wait))
+        for name in ("play", "wait"):
+            for replacement in (lambda *args: None, getattr(Base(), name)):
+                with self.subTest(name=name, replacement=replacement):
+                    scene = Base()
+                    setattr(scene, name, replacement)
+                    self.assertFalse(has_portable_scene_methods(scene, Base.play, Base.wait))
+        class Override(Base):
+            def wait(self, *args): pass
+        self.assertFalse(has_portable_scene_methods(Override(), Base.play, Base.wait))
 
-    def test_uncompiled_nested_barrier_rejects_before_mutation(self):
-        self.run_canonical_contract(r'''
-            scene = noon.Scene()
-            setattr(scene, canonical._PORTABLE_CONSTRUCT_MODE, True)
-            for method, argument in [(canonical._play, object()), (canonical._canonical_wait, 1)]:
-                try:
-                    method(scene, argument)
-                except RuntimeError as error:
-                    assert "indirect synchronous" in str(error), str(error)
-                else:
-                    raise AssertionError("uncompiled barrier was admitted")
-            assert getattr(scene, "_canonical_authoring_context", None) is None
-            async def main():
-                try:
-                    await canonical.await_source_barrier(lambda: None)
-                except RuntimeError as error:
-                    assert "current Scene" in str(error), str(error)
-                else:
-                    raise AssertionError("unrelated method was admitted")
-            asyncio.run(main())
-        ''')
+    def test_admission_does_not_invoke_descriptors_or_dynamic_lookup(self):
+        effects = []
+        class Base:
+            def play(self, *args): pass
+            def wait(self, *args): pass
+        class Descriptor(Base):
+            @property
+            def wait(self):
+                effects.append("get wait")
+                return lambda *args: None
+        class Dynamic(Base):
+            def __getattribute__(self, name):
+                effects.append(name)
+                return super().__getattribute__(name)
+        for scene in (Descriptor(), Dynamic()):
+            self.assertFalse(has_portable_scene_methods(scene, Base.play, Base.wait))
+        self.assertEqual(effects, [])

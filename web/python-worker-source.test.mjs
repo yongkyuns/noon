@@ -162,7 +162,7 @@ test("fatal interpreter rejection is forwarded once and closes the dead worker",
 });
 
 test("source compilation never replays module effects or changes fixtures", () => {
-  assert.match(source, /compile_authoring_source\(__noon_source\)/);
+  assert.match(source, /compile_authoring_source\(\s*__noon_source, portable=not bool\(__noon_export_document\)\s*\)/);
   assert.match(source, /exec\(__noon_code, __noon_namespace\)/);
   assert.doesNotMatch(source, /exec\(__noon_source,|source\.replace/);
   assert.match(source, /__noon_namespace\[BARRIER_GLOBAL\] = await_source_barrier/);

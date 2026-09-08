@@ -132,18 +132,28 @@ def _function_codes(code: CodeType):
 
 
 def compile_authoring_source(
-    source: str, filename: str = "<string>"
+    source: str, filename: str = "<string>", *, portable: bool = True
 ) -> tuple[CodeType, dict[CodeType, CodeType]]:
     """Return original module code and optional portable construct code pairs."""
-    tree = ast.parse(source, filename=filename, mode="exec")
-    original = compile(tree, filename, "exec", dont_inherit=True)
-    compiler = _ConstructCompiler()
-    candidate = compiler.visit(copy.deepcopy(tree))
-    if not compiler.locations:
+    original = compile(source, filename, "exec", dont_inherit=True)
+    # Static, explicitly async and export-only source takes the original compiler
+    # path. Inspect immutable code metadata before allocating any Python AST.
+    if not portable or BARRIER_GLOBAL in source:
         return original, {}
-    # A reserved helper must never shadow a name authored by the user. Refuse the
-    # optimization rather than changing that program's namespace or behavior.
-    if BARRIER_GLOBAL in source:
+    originals = list(_function_codes(original))
+    if not any(
+        code.co_name == "construct"
+        and not code.co_flags & (inspect.CO_COROUTINE | inspect.CO_GENERATOR)
+        and {"play", "wait"}.intersection(code.co_names)
+        for code in originals
+    ):
+        return original, {}
+    tree = ast.parse(source, filename=filename, mode="exec")
+    compiler = _ConstructCompiler()
+    # The original code has already been compiled. Only candidate construct
+    # bodies need copying for conservative rejection; never clone the module.
+    candidate = compiler.visit(tree)
+    if not compiler.locations:
         return original, {}
     portable = compile(ast.fix_missing_locations(candidate), filename, "exec", dont_inherit=True)
     portable_codes = {
@@ -152,7 +162,7 @@ def compile_authoring_source(
         if code.co_flags & inspect.CO_COROUTINE
     }
     pairs = {}
-    for code in _function_codes(original):
+    for code in originals:
         if (code.co_name, code.co_firstlineno) not in compiler.locations:
             continue
         replacement = portable_codes.get((code.co_qualname, code.co_firstlineno))
@@ -176,3 +186,16 @@ def bind_portable_construct(
     )
     portable.__kwdefaults__ = original.__kwdefaults__
     return MethodType(portable, method.__self__)
+
+
+def has_portable_scene_methods(scene: object, play: FunctionType, wait: FunctionType) -> bool:
+    """Admit only ordinary method lookup, without invoking authored descriptors.
+
+    Class-only checks miss instance overrides installed by setup(). Dynamic
+    attribute lookup and descriptors retain their original synchronous behavior.
+    """
+    return (
+        type(scene).__getattribute__ is object.__getattribute__
+        and inspect.getattr_static(scene, "play", None) is play
+        and inspect.getattr_static(scene, "wait", None) is wait
+    )
