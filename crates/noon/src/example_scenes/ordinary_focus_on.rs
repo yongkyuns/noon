@@ -55,6 +55,8 @@ pub fn program() -> Result<LiveProgram<OrdinaryFocusOn>, String> {
     let mut square = scene.square(1.0)?;
     square.set_translation(-3.0, -2.0)?;
     square.set_fill_color(0.0, 0.0, 1.0, 1.0)?;
+    square.set_fill_opacity(1.0)?;
+    square.disable_stroke()?;
     scene.add(&square)?;
     scene
         .into_live_program(OrdinaryFocusOn { square, stage: 0 })
