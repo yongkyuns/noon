@@ -21,8 +21,9 @@ const retainedExecutionWebPaths = new Set([
 ]);
 
 const retainedExecutionRustPaths = new Set([
-  // This module wires the retained WASM exports consumed by the browser workers.
+  // Shared runtime publication and its WASM exports feed the retained renderer.
   "crates/noon-web/src/lib.rs",
+  "crates/noon-web/src/semantic_execution_player.rs",
 ]);
 
 const hostUpdaterDiagnosticPaths = new Set([
