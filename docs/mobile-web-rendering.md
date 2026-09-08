@@ -152,3 +152,31 @@ forced hosting and automatic hosting with JSPI deliberately absent, requires a
 visible intermediate SquareToCircle frame and the final FadeOut removal at the
 actual authored time, and retains Text, edit/rerun and resize coverage. Browser
 emulation does not establish physical-device iOS qualification.
+
+
+### Review hardening and qualification
+
+Portable execution admits only the ordinary `play`, `wait`, `add`, `remove` and
+`clear` methods, checked on the instance after `setup()` without invoking authored
+properties. Instance/class overrides, custom attribute lookup, method replacement
+and explicit `__dict__` access retain the original synchronous path. In particular,
+an overridden membership method must not hide an uncompiled suspension barrier.
+
+Static, explicitly async and export-only input bypasses Python AST preparation.
+Eligible synchronous constructs still pay a one-time source preparation cost; this
+is not a claim of literally identical startup cost for every source size. No
+source analysis or new Python work is added to the renderer's per-frame loop.
+
+The mobile test exercises the real initial autoplay. It briefly holds the worker
+module's network response to capture an empty canvas, then releases the unchanged
+worker and observes intermediate rendering. This avoids mistaking a replacement's
+blocked metrics request (old-context retirement waits behind the new construct)
+for missing intermediate frames. Pixel comparisons use the complete empty canvas,
+including fractional clipping edges, rather than assuming its top-left pixel is
+the renderer's background color. Existing pixel and authored-time thresholds stay
+unchanged. Test artifacts retain the empty, intermediate and final captures.
+
+The same browser test also runs setup-installed overrides, property and dynamic
+lookup, and explicit async source through the public editor and Run path. The
+source compiler's unit tests cover ordering, cancellation, globals/defaults/closure
+preservation, unsupported source rejection and the no-AST fast paths.

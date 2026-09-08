@@ -95,6 +95,7 @@ function changedPixels(bytes, backgroundBytes) {
 let browser = null;
 let activePage = null;
 let activeErrors = [];
+let releasePendingStartup = null;
 try {
   await waitForServer();
   browser = await webkit.launch({ headless: true });
@@ -104,15 +105,25 @@ try {
     { name: "automatic-no-jspi", host: null, disableJspi: true },
   ]) {
     const context = await browser.newContext({ ...devices["iPhone 13"] });
-    if (variant.disableJspi) {
-      await context.route("**/python-worker.js", async (route) => {
-        const response = await route.fetch();
-        await route.fulfill({ response, body:
-          "delete WebAssembly.promising; delete WebAssembly.Suspending;\n" +
-          "if (typeof WebAssembly.promising !== 'undefined' || typeof WebAssembly.Suspending !== 'undefined') throw new Error('JSPI test precondition failed');\n" + await response.text(),
-        });
+    // Hold only the worker module response while recording the empty canvas.
+    // This preserves the real startup autoplay while making its first execution
+    // observable; clicking Run after preload would measure a replacement whose
+    // metrics wait for the previous Python context to retire.
+    let releaseStartup;
+    const startup = new Promise((resolve) => { releaseStartup = resolve; });
+    releasePendingStartup = releaseStartup;
+    await context.route("**/python-worker.js", async (route) => {
+      const response = await route.fetch();
+      await startup;
+      if (!variant.disableJspi) {
+        await route.fulfill({ response });
+        return;
+      }
+      await route.fulfill({ response, body:
+        "delete WebAssembly.promising; delete WebAssembly.Suspending;\n" +
+        "if (typeof WebAssembly.promising !== 'undefined' || typeof WebAssembly.Suspending !== 'undefined') throw new Error('JSPI test precondition failed');\n" + await response.text(),
       });
-    }
+    });
     const page = await context.newPage();
     activePage = page;
     const pageErrors = [];
@@ -125,7 +136,7 @@ try {
 
     await page.goto(
       `${baseUrl}/web/index.html?example=parity-square-to-circle${variant.host ? `&renderHost=${variant.host}` : ""}`,
-      { waitUntil: "load" },
+      { waitUntil: "domcontentloaded" },
     );
     // Neutralize only CSS chrome, keeping border widths and canvas dimensions.
     // Otherwise a rounded decorative border is miscounted as engine geometry.
@@ -134,8 +145,6 @@ try {
       "box-shadow: none !important; background: #000 !important; }",
     });
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
-    await waitForIdle(page);
-
     await page.locator("#scene").scrollIntoViewIfNeeded();
     // Capture the empty canvas at the same bounds. Fractional CSS clipping can
     // include an edge pixel of the surrounding pane; it is not the clear color.
@@ -143,14 +152,9 @@ try {
     const background = await page.locator("#scene").screenshot();
     await writeFile(path.join(artifactDir, `${variant.name}-background.png`), background);
 
-    // Observe the first execution, not a metrics call blocked by retirement of a
-    // previous Python context. Context retirement is serialized behind an active
-    // construct, even though its replacement renderer is already presenting.
-    // The unmodified SquareToCircle must visibly animate and then FadeOut.
-    await page.evaluate(() => {
-      window.__mobileRun = window.__noonExampleGallery.run();
-      window.__mobileRun.catch(() => {});
-    });
+    // Release the unchanged worker and observe automatic initial playback.
+    releaseStartup();
+    releasePendingStartup = null;
     let metrics;
     const samples = [];
     let observation = null;
@@ -183,7 +187,7 @@ try {
     const intermediate = await page.locator("#scene").screenshot();
     await writeFile(path.join(artifactDir, `${variant.name}-intermediate.png`), intermediate);
     assert.ok(changedPixels(intermediate, background) > 20, "mobile intermediate frame is blank");
-    await page.evaluate(() => window.__mobileRun);
+    await waitForIdle(page);
     await assertApplied(page, "parity-square-to-circle");
     const final = await page.locator("#scene").screenshot();
     await writeFile(path.join(artifactDir, `${variant.name}-final.png`), final);
@@ -326,6 +330,7 @@ class ExplicitAsync(Scene):
   await activePage?.screenshot({ path: path.join(artifactDir, "failure.png"), timeout: 5_000 }).catch(() => {});
   throw error;
 } finally {
+  releasePendingStartup?.();
   await browser?.close();
   server.kill("SIGTERM");
 }

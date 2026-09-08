@@ -587,7 +587,10 @@ async def execute_construct(
 
                 # Inspect the instance after setup(), without executing getters.
                 # Overrides and dynamic lookup retain the original call path.
-                if has_portable_scene_methods(scene, _play, _canonical_wait):
+                if has_portable_scene_methods(
+                    scene, play=_play, wait=_canonical_wait,
+                    add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
+                ):
                     portable_construct = bind_portable_construct(
                         scene.construct, portable_constructs
                     )

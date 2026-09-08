@@ -133,6 +133,9 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
             "self.play(1)\nself.helper()",
             "self.play(1)\nsuper().construct()",
             "self.play(1)\nself.play = replacement",
+            "self.play(1)\nself.add = replacement",
+            "self.play(1)\ndel self.clear",
+            "self.play(1)\nself.__dict__['wait'] = replacement",
             "self.play(1)\nyield 2",
             "self.play(1)\nf = lambda: self.wait(1)",
             "self.play(1)\ndef helper():\n    self.wait(1)",
@@ -184,16 +187,16 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
             def play(self, *args): pass
             def wait(self, *args): pass
         scene = Base()
-        self.assertTrue(has_portable_scene_methods(scene, Base.play, Base.wait))
+        self.assertTrue(has_portable_scene_methods(scene, play=Base.play, wait=Base.wait))
         for name in ("play", "wait"):
             for replacement in (lambda *args: None, getattr(Base(), name)):
                 with self.subTest(name=name, replacement=replacement):
                     scene = Base()
                     setattr(scene, name, replacement)
-                    self.assertFalse(has_portable_scene_methods(scene, Base.play, Base.wait))
+                    self.assertFalse(has_portable_scene_methods(scene, play=Base.play, wait=Base.wait))
         class Override(Base):
             def wait(self, *args): pass
-        self.assertFalse(has_portable_scene_methods(Override(), Base.play, Base.wait))
+        self.assertFalse(has_portable_scene_methods(Override(), play=Base.play, wait=Base.wait))
 
     def test_admission_does_not_invoke_descriptors_or_dynamic_lookup(self):
         effects = []
@@ -210,5 +213,19 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
                 effects.append(name)
                 return super().__getattribute__(name)
         for scene in (Descriptor(), Dynamic()):
-            self.assertFalse(has_portable_scene_methods(scene, Base.play, Base.wait))
+            self.assertFalse(has_portable_scene_methods(scene, play=Base.play, wait=Base.wait))
         self.assertEqual(effects, [])
+
+    def test_membership_overrides_cannot_hide_uncompiled_barriers(self):
+        class Base:
+            def play(self, *args): pass
+            def wait(self, *args): pass
+            def add(self, *args): pass
+            def remove(self, *args): pass
+            def clear(self, *args): pass
+        methods = {name: getattr(Base, name) for name in ("play", "wait", "add", "remove", "clear")}
+        self.assertTrue(has_portable_scene_methods(Base(), **methods))
+        for name in ("add", "remove", "clear"):
+            with self.subTest(name=name):
+                overridden = type("Example", (Base,), {name: lambda self: self.wait(1)})
+                self.assertFalse(has_portable_scene_methods(overridden(), **methods))

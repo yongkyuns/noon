@@ -60,6 +60,9 @@ class _ConstructBody(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute):
         if isinstance(node.value, ast.Name) and node.value.id == self.receiver:
+            if (node.attr.startswith("__") or
+                    (node.attr in _SCENE_CALLS and isinstance(node.ctx, (ast.Store, ast.Del)))):
+                self.unsupported = True
             if node.attr in {"play", "wait"}:
                 # Aliasing, storing, passing, or using a barrier's return value
                 # requires the original synchronous/explicit async execution.
@@ -188,7 +191,7 @@ def bind_portable_construct(
     return MethodType(portable, method.__self__)
 
 
-def has_portable_scene_methods(scene: object, play: FunctionType, wait: FunctionType) -> bool:
+def has_portable_scene_methods(scene: object, **methods: FunctionType) -> bool:
     """Admit only ordinary method lookup, without invoking authored descriptors.
 
     Class-only checks miss instance overrides installed by setup(). Dynamic
@@ -196,6 +199,6 @@ def has_portable_scene_methods(scene: object, play: FunctionType, wait: Function
     """
     return (
         type(scene).__getattribute__ is object.__getattribute__
-        and inspect.getattr_static(scene, "play", None) is play
-        and inspect.getattr_static(scene, "wait", None) is wait
+        and all(inspect.getattr_static(scene, name, None) is method
+                for name, method in methods.items())
     )
