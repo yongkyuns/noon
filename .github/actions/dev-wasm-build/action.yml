@@ -1,0 +1,151 @@
+name: Qualified dev WASM build
+description: Build current source with a shared compiler-cache contract and exact artifact provenance.
+inputs:
+  preflight:
+    description: Run the existing web preflight as part of the package build.
+    default: "false"
+  publish-cache:
+    description: Publish compiler objects after success; restricted to trusted master seed runs.
+    default: "false"
+  cache-ref:
+    description: Preferred seed commit (PR base); never selects the source checkout or an executable.
+    default: ""
+outputs:
+  seconds:
+    description: Browser package build seconds, excluding setup and cache restoration.
+    value: ${{ steps.build.outputs.seconds }}
+runs:
+  using: composite
+  steps:
+    - name: Initialize dev WASM contract
+      id: setup
+      shell: bash
+      env:
+        NOON_CI_PUBLISH_CACHE: ${{ inputs.publish-cache }}
+        NOON_CI_PREFLIGHT: ${{ inputs.preflight }}
+      run: node .github/ci/wasm-build.mjs init
+
+    - name: Use repository-pinned Rust and WASM target
+      shell: bash
+      run: |
+        node .github/ci/wasm-build.mjs measure toolchain bash -euo pipefail -c '
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+        '
+        node .github/ci/wasm-build.mjs start cargo-sources-restore
+
+    - name: Restore Cargo sources
+      id: sources
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-sources-
+
+    - name: Resolve and validate the dependency lockfile
+      shell: bash
+      env:
+        RUSTC_WRAPPER: ""
+      run: |
+        node .github/ci/wasm-build.mjs end cargo-sources-restore
+        node .github/ci/wasm-build.mjs measure dependency-resolution bash -euo pipefail -c '
+          if [[ ! -f Cargo.lock ]]; then cargo generate-lockfile; fi
+          cargo metadata --locked --no-deps --format-version=1 > /dev/null
+        '
+
+    - name: Identify compiler-cache inputs
+      id: identity
+      shell: bash
+      env:
+        NOON_CI_CACHE_REF: ${{ inputs.cache-ref }}
+      run: |
+        node .github/ci/wasm-build.mjs prepare
+        node .github/ci/wasm-build.mjs start compiler-cache-restore
+
+    - name: Restore trusted dev WASM compiler cache
+      id: cache
+      uses: actions/cache/restore@v6
+      with:
+        # Identical paths are required for both the key AND Actions' cache version.
+        path: |
+          /home/runner/.cache/noon-sccache-wasm
+          ~/.cache/.wasm-pack
+        key: ${{ steps.identity.outputs.key }}
+        restore-keys: |
+          ${{ steps.identity.outputs.restore-0 }}
+          ${{ steps.identity.outputs.restore-1 }}
+          ${{ steps.identity.outputs.restore-2 }}
+
+    - name: Measure compiler-cache restoration
+      shell: bash
+      run: node .github/ci/wasm-build.mjs end compiler-cache-restore
+
+    - name: Use pinned sccache
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        version: v0.16.0
+
+    - name: Install pinned wasm-pack
+      uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+      with:
+        tool: wasm-pack@0.15.0
+        fallback: none
+
+    - name: Build and validate current source
+      id: build
+      shell: bash
+      env:
+        NOON_SKIP_WEB_PREFLIGHT: ${{ inputs.preflight == 'true' && '0' || '1' }}
+        NOON_SKIP_PLAYGROUND_TEST: "1"
+        NOON_WASM_PROFILE: "dev"
+        NOON_WASM_SKIP_OPT: "1"
+      run: |
+        sccache --zero-stats
+        node .github/ci/wasm-build.mjs measure package bash scripts/build-web-demo.sh
+
+    - name: Stamp and verify generated artifacts
+      shell: bash
+      run: |
+        node .github/ci/wasm-build.mjs measure provenance node .github/ci/wasm-build.mjs stamp
+        node .github/ci/wasm-build.mjs verify
+
+    - name: Publish trusted compiler seed
+      if: steps.setup.outputs.publish == 'true' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          /home/runner/.cache/noon-sccache-wasm
+          ~/.cache/.wasm-pack
+        key: ${{ steps.identity.outputs.key }}
+
+    - name: Publish trusted Cargo sources
+      if: steps.setup.outputs.publish == 'true' && steps.sources.outputs.cache-hit != 'true' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ steps.sources.outputs.cache-primary-key }}
+
+    - name: Summarize cache and build evidence
+      if: always()
+      shell: bash
+      env:
+        NOON_CI_REQUESTED_KEY: ${{ steps.identity.outputs.key }}
+        NOON_CI_MATCHED_KEY: ${{ steps.cache.outputs.cache-matched-key }}
+        NOON_CI_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        NOON_CI_CACHE_OUTCOME: ${{ steps.cache.outcome }}
+        NOON_CI_BUILD_OUTCOME: ${{ steps.build.outcome }}
+      run: node .github/ci/wasm-build.mjs report
+
+    - name: Upload cache and build evidence
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: wasm-build-evidence-${{ github.job }}-${{ github.run_attempt }}
+        path: ci-artifacts/wasm-build
+        if-no-files-found: ignore
+        retention-days: 7

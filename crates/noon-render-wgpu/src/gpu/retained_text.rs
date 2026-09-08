@@ -2699,6 +2699,8 @@ impl GpuRenderer {
         RetainedUploadStats { geometry, text }
     }
 
+    /// Encode the normal retained painter-order pass, optionally recording its
+    /// beginning/end into a host-owned two-entry timestamp query set.
     pub fn encode_retained(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -2706,10 +2708,14 @@ impl GpuRenderer {
         prepared: &PreparedRetainedGpuFrame<'_>,
         text_state: &RetainedTextGpuState,
         clear_color: wgpu::Color,
+        query_set: Option<&wgpu::QuerySet>,
     ) -> Result<RetainedDrawStats, TextGpuDrawError> {
         if prepared.geometry_only {
             return Ok(RetainedDrawStats {
-                geometry: self.encode(encoder, view, &prepared.geometry, clear_color),
+                geometry: match query_set {
+                    Some(queries) => self.encode_profiled(encoder, view, &prepared.geometry, clear_color, queries),
+                    None => self.encode(encoder, view, &prepared.geometry, clear_color),
+                },
                 text: TextGpuDrawStats::default(),
             });
         }
@@ -2740,7 +2746,11 @@ impl GpuRenderer {
             label: Some("Noon retained geometry/text painter-order pass"),
             color_attachments: &color_attachments,
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: Some(1),
+            }),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -3541,6 +3551,7 @@ mod tests {
                 &prepared,
                 &text_state,
                 wgpu::Color::TRANSPARENT,
+                None,
             )
             .unwrap();
         queue.submit(Some(encoder.finish()));

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { browserArgs } from "./manim-raster-support.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -70,8 +71,7 @@ let timer;
 try {
   browser = await chromium.launch({
     channel: "chromium", headless: true,
-    args: ["--enable-unsafe-webgpu", "--enable-unsafe-swiftshader", "--use-gpu-in-tests",
-      "--ignore-gpu-blocklist", "--use-gl=angle", "--use-angle=swiftshader", "--disable-gpu-sandbox"],
+    args: browserArgs("webgpu"),
   });
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
   const errors = [];
@@ -143,6 +143,7 @@ try {
         const recovery = (await execution.metrics()).metrics;
         const recoveryCanvasChanged = execution.canvas !== originalCanvas;
         const mode = execution.mode;
+        const backend = execution.rendererBackend;
         execution.terminate();
 
         const cold = createExecution();
@@ -158,7 +159,7 @@ try {
         return {
           counts: [geometry.objectCount, text.objectCount, afterFailure.objectCount, rerun.objectCount, recovery.objectCount],
           instances: [geometry.instancesDrawn, text.instancesDrawn, rerun.instancesDrawn, recovery.instancesDrawn],
-          sameCanvas, recoveryCanvasChanged, mode, seekTime: seek.time, invalidContextError,
+          sameCanvas, recoveryCanvasChanged, mode, backend, seekTime: seek.time, invalidContextError,
           cancellations: [cancelledStart, cancelledRerun, cancelledRestart],
         };
       } finally {
@@ -173,6 +174,7 @@ try {
   assert.equal(result.sameCanvas, true);
   assert.equal(result.recoveryCanvasChanged, true);
   assert.equal(result.mode, "semantic");
+  assert.equal(result.backend, "WebGPU");
   assert.equal(result.seekTime, 0.75);
   assert.ok(result.invalidContextError);
   for (const cancellation of result.cancellations) {

@@ -1338,17 +1338,37 @@ mod wasm {
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                             label: Some("Noon direct execution render frame"),
                         });
-                let draw = self
-                    .renderer
-                    .encode_retained(
-                        &mut encoder,
-                        &view,
-                        &prepared,
-                        &self.direct_text_gpu,
-                        self.clear_color,
-                    )
-                    .map_err(js_error)?;
+                let timestamp_slot = self
+                    .timestamp_profiler
+                    .as_mut()
+                    .and_then(GpuTimestampProfiler::reserve_slot);
+                let profiler = self.timestamp_profiler.as_ref();
+                let draw = self.renderer.encode_retained(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &self.direct_text_gpu,
+                    self.clear_color,
+                    timestamp_slot.map(|slot| profiler.expect("reserved profiler").query_set(slot)),
+                );
+                let draw = match draw {
+                    Ok(draw) => draw,
+                    Err(error) => {
+                        if let Some(slot) = timestamp_slot {
+                            profiler.expect("reserved profiler").cancel_slot(slot);
+                        }
+                        return Err(js_error(error));
+                    }
+                };
+                if let Some(slot) = timestamp_slot {
+                    profiler
+                        .expect("reserved profiler")
+                        .resolve(&mut encoder, slot);
+                }
                 self.queue.submit(Some(encoder.finish()));
+                if let Some(slot) = timestamp_slot {
+                    profiler.expect("reserved profiler").map_after_submit(slot);
+                }
                 draw
             };
             self.queue.present(surface_texture);

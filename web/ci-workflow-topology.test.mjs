@@ -11,6 +11,7 @@ assert.ok(workflowFiles.length > 0, "CI workflow inventory must not be empty");
 const exactFamilies = new Map([
   ["pr-fast.yml", "pr-fast"],
   ["ci.yml", "main"],
+  ["ci-measurements.yml", "ci-diagnostics"],
   ["architecture-ratchets.yml", "architecture"],
   ["layer-dependency-ratchet.yml", "architecture"],
   ["compiler-cache-seed.yml", "cache-seed"],

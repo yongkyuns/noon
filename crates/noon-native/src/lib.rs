@@ -552,7 +552,14 @@ impl NativeApp {
             });
         let _draw = gpu
             .renderer
-            .encode_retained(&mut encoder, &view, &prepared, &gpu.text_state, CLEAR_COLOR)
+            .encode_retained(
+                &mut encoder,
+                &view,
+                &prepared,
+                &gpu.text_state,
+                CLEAR_COLOR,
+                None,
+            )
             .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         #[cfg(test)]
         {
