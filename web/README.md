@@ -78,6 +78,8 @@ Sequential `.animate` operations are evaluated at semantic scene time. A later a
 
 Transform semantics are authored in Rust and lowered into renderer-independent execution data. Analytic primitives and fixed path geometry remain distinct execution representations.
 
+`node scripts/manim-typst-authoring-smoke.mjs` qualifies native Text, multiline text, Rust-owned layout, Typst/MathTypst font scaling, and mixed painter order through shared execution and actual glyph rendering. Its optional `NOON_TEXT_AUTHORING_REPORT` contains read-only runtime observations; the harness does not export an authored scene document.
+
 ## Live authoring
 
 Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. A rerun replaces the session; it does not currently qualify incremental hot reload or identity preservation between independently authored scenes. Within a running session, shared Rust semantics own object identity and mutations.
