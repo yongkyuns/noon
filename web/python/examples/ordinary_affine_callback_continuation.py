@@ -7,19 +7,27 @@ when the segment has completed and its player lease was returned.
 """
 
 import _manim_updaters
-from noon import Circle, Color, Scene, Transform, linear
+from noon import Circle, Color, Scene, Transform, VGroup, linear
 
 
 class OrdinaryAffineCallbackContinuation(Scene):
     async def construct(self):
         circle = Circle(radius=0.4).set_fill(Color(0.0, 0.4, 1.0), opacity=1.0)
         self.add(circle)
+        family = VGroup(circle)
         phase_counts: dict[float, int] = {}
 
         def lift(mobject, _dt):
             phase_time = _manim_updaters._canonical_callback_time(mobject)
             phase_counts[phase_time] = phase_counts.get(phase_time, 0) + 1
             assert phase_counts[phase_time] == 1
+            if phase_time == 0.0:
+                try:
+                    family.get_center()
+                except NotImplementedError as error:
+                    assert "active callback phase" in str(error)
+                else:
+                    raise AssertionError("family query bypassed the active callback overlay")
             center = mobject.get_center()
             mobject.move_to((center.x, 1.0, 0.0))
 
@@ -40,3 +48,11 @@ class OrdinaryAffineCallbackContinuation(Scene):
         assert len(phase_counts) >= 2
         assert self.time == 1.0
         assert circle.get_center() == (2.0, 1.0)
+        # Registered callbacks keep their Rust-owned effective values after the
+        # phase completes; family queries must not materialize raw geometry.
+        def reject_raw_projection():
+            raise AssertionError("callback family query materialized Python geometry")
+        circle._current_raw = reject_raw_projection
+        assert family.get_center() == (2.0, 1.0)
+        assert abs(family.width - 0.8) < 1e-6
+        assert abs(family.height - 0.8) < 1e-6
