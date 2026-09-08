@@ -351,6 +351,7 @@ async function startSampledSource(page, source, canvasId, width = 640, height = 
       async onSemanticContinuation(registration) {
         await execution.startSemanticExecution(registration.semanticExecution, {
           authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, registration.duration),
           transportMode: "transferable",
           pacing: "external_samples",
         });
