@@ -61,7 +61,6 @@ async function handleMainMessage(message) {
         });
         return;
       case "replace_scene":
-      case "reconcile_scene":
       case "apply_patch":
       case "configure_callbacks":
       case "attach_host_port":

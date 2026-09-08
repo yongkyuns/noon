@@ -16,3 +16,9 @@ test("explicit transport diagnostics cannot regain the deleted split retained su
     assert.equal(method in ExecutionWorkerClient.prototype, false, method);
   }
 });
+
+test("execution client cannot restore unused migration transition APIs", () => {
+  for (const method of ["reconcileScene", "switchToLegacy", "switchToRetainedCanonical", "rebuildRetainedCanonical"]) {
+    assert.equal(method in ExecutionWorkerClient.prototype, false, method);
+  }
+});
