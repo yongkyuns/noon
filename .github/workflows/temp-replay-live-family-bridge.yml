@@ -18,7 +18,7 @@ jobs:
         with:
           ref: codex/noon-preview-session
           fetch-depth: 0
-      - name: Replay focused bridge hunks
+      - name: Replay only missing live-family bridge hunks
         shell: python
         run: |
           from pathlib import Path
@@ -61,28 +61,8 @@ jobs:
               ]),
           )
 
-          # Expose the existing LiveSession::family operation through the retained player.
-          insert_before_once(
-              "crates/noon-web/src/semantic_execution_player.rs",
-              "\n".join([
-                  "    #[cfg(any(target_arch = \"wasm32\", test))]",
-                  "    pub(crate) fn live_replace_content(",
-              ]),
-              "\n".join([
-                  "    /// Create one detached family through the retained session so its node and",
-                  "    /// ordered edges share the current semantic/runtime publication.",
-                  "    #[cfg(any(target_arch = \"wasm32\", test))]",
-                  "    pub(crate) fn live_family(",
-                  "        &mut self,",
-                  "        members: &[noon::MobjectFamilyMember<'_>],",
-                  "    ) -> Result<noon::MobjectFamily, String> {",
-                  "        self.with_live_session(|live| live.family(members))",
-                  "    }",
-                  "",
-              ]) + "\n",
-          )
-
-          # Route an unbound add-membership operand batch to that retained owner.
+          # Current master already owns live_family on CanonicalAuthoringScene and
+          # SemanticExecutionPlayer. Add only the typed operand bridge to that owner.
           insert_before_once(
               "crates/noon-web/src/canonical_authoring_scene.rs",
               "\n".join([
@@ -90,19 +70,6 @@ jobs:
                   "    fn live_shift_family(",
               ]),
               "\n".join([
-                  "    #[cfg(any(target_arch = \"wasm32\", test))]",
-                  "    fn live_family(",
-                  "        &mut self,",
-                  "        members: &[noon::MobjectFamilyMember<'_>],",
-                  "    ) -> Result<noon::MobjectFamily, String> {",
-                  "        match self.live_execution_ownership() {",
-                  "            \"active\" | \"returned\" => self.active_live_player()?.live_family(members),",
-                  "            \"none\" => Err(\"live family creation requires an active canonical session\".into()),",
-                  "            \"transferred\" => Err(\"live execution session is running in the semantic engine\".into()),",
-                  "            _ => unreachable!(\"canonical live ownership has one closed set of states\"),",
-                  "        }",
-                  "    }",
-                  "",
                   "    /// Reuse inert typed membership operands to publish a detached family.",
                   "    #[cfg(any(target_arch = \"wasm32\", test))]",
                   "    fn create_live_family(",
@@ -129,7 +96,7 @@ jobs:
               ]) + "\n",
           )
 
-          # Export only the operand bridge; semantic identity remains Rust-owned.
+          # Export only the typed operand bridge; identity and publication stay Rust-owned.
           insert_before_once(
               "crates/noon-web/src/canonical_authoring_scene.rs",
               "\n".join([
@@ -217,11 +184,12 @@ jobs:
           cargo fmt --all
           cargo fmt --all -- --check
           cargo test -p noon-web live_family_constructor --lib
+          cargo test -p noon live_session --lib
       - name: Commit bridge and remove temporary workflow
         run: |
           git config user.name "Noon development agent"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/temp-replay-live-family-bridge.yml
-          git add crates/noon/src/live_session.rs crates/noon-web/src/semantic_execution_player.rs crates/noon-web/src/canonical_authoring_scene.rs
+          git add crates/noon/src/live_session.rs crates/noon-web/src/canonical_authoring_scene.rs
           git commit -m "Restore live family publication bridge on current master"
           git push origin HEAD:codex/noon-preview-session
