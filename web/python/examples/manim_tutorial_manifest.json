@@ -433,6 +433,8 @@
     },
     {
       "id": "parity-rotation-updater",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 2,
       "title": "RotationUpdater",
       "summary": "ManimCE v0.21 Example Gallery RotationUpdater, byte-for-byte except for the import module.",
       "status": "ready",

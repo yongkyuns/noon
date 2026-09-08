@@ -14,7 +14,7 @@ import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 6;
+const AUTHORING_PROTOCOL_VERSION = 7;
 const AUTHORING_STARTUP_METRICS_VERSION = 1;
 const moduleGraphReadyAt = performance.now();
 
@@ -629,7 +629,6 @@ async function handleRequest(request) {
           pyodide,
           request.source,
           request.context,
-          request.exportDocument ?? false,
         );
         if (run.continuation !== null) {
           await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
@@ -747,13 +746,12 @@ function retireSemanticContext(token, entry) {
   }
 }
 
-async function runAuthoringSource(pyodide, source, context, exportDocument = false) {
+async function runAuthoringSource(pyodide, source, context) {
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
   dictConstructor.destroy();
   globals.set("__noon_source", source);
   globals.set("__noon_context_json", JSON.stringify(context));
-  globals.set("__noon_export_document", exportDocument);
 
   try {
     const resultJson = await pyodide.runPythonAsync(
@@ -765,7 +763,6 @@ from _manim_canonical_scene import (
     await_source_barrier,
     await_module_source_barrier,
     execution_context,
-    materialize_legacy_geometry,
 )
 from _manim_source_execution import (
     BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL, compile_authoring_source,
@@ -778,13 +775,13 @@ __noon_namespace = {
     "__name__": "__main__",
 }
 __noon_code, __noon_portable_constructs = compile_authoring_source(
-    __noon_source, portable=not bool(__noon_export_document)
+    __noon_source
 )
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
 if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
     __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
-with authoring_source_scope(export_document=bool(__noon_export_document)):
+with authoring_source_scope():
     await execute_authoring_module(__noon_code, __noon_namespace)
 
 if "result" in __noon_namespace:
@@ -810,63 +807,32 @@ else:
         )
     __noon_result = __noon_scene_classes[0]()
     await execute_construct(
-        __noon_result, export_document=bool(__noon_export_document),
+        __noon_result,
         portable_constructs=__noon_portable_constructs,
     )
 
 if isinstance(__noon_result, Scene):
-    __noon_kind = "scene_document"
     from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
-    __noon_context = (None if __noon_export_document else
-        execution_context(__noon_result))
-    __noon_semantic = None
-    __noon_live_duration = None
-    __noon_authored_duration = None
-    if __noon_context is not None:
-        __noon_live_duration = __noon_context.liveHandoffDuration()
-        __noon_authored_duration = __noon_context.authoredDuration()
-        __noon_callback_session = _manim_updaters.canonical_callback_session_id(__noon_result)
-        __noon_semantic = {
-            "context_id": str(noonRegisterSemanticExecution(__noon_context)),
-            "callback_session_id": __noon_callback_session,
-        }
-        __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
-        if __noon_continuation_generation is not None:
-            __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
-        __noon_scene_spec = None
-        __noon_document = None
-        __noon_identities = None
-    else:
-        if not __noon_export_document:
-            raise RuntimeError(
-                "shared Scene cannot fall back to scene-document execution; "
-                "remove incompatible legacy declarations or request exportDocument explicitly"
-            )
-        # A native Text timeline/export remains in the canonical context so its
-        # temporary #959 codec is derived from the Rust store at finalization.
-        # Explicit geometry-only export retains the existing materialization.
-        if not getattr(__noon_result, "_semantic_text_handles", {}):
-            materialize_legacy_geometry(__noon_result)
-        __noon_scene_spec = __noon_result.to_scene_spec()
-        __noon_document = __noon_result.to_document()
-        __noon_identities = __noon_result.identity_document()
-    __noon_duration = (
-        float(__noon_live_duration)
-        if __noon_live_duration is not None
-        else float(__noon_authored_duration)
-        if __noon_authored_duration is not None
-        else float(__noon_result.time)
-    )
+    __noon_context = execution_context(__noon_result)
+    if __noon_context is None:
+        raise RuntimeError("shared Scene cannot fall back to scene-document execution; remove incompatible legacy declarations")
+    __noon_live_duration = __noon_context.liveHandoffDuration()
+    __noon_semantic = {
+        "context_id": str(noonRegisterSemanticExecution(__noon_context)),
+        "callback_session_id": _manim_updaters.canonical_callback_session_id(__noon_result),
+    }
+    __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
+    if __noon_continuation_generation is not None:
+        __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
+    __noon_duration = float(__noon_live_duration if __noon_live_duration is not None else __noon_context.authoredDuration())
+
 else:
     raise TypeError("Python authoring result must be a noon.Scene")
 json.dumps(
     {
-        "kind": __noon_kind,
+        "kind": "semantic_scene",
         "semantic_execution": __noon_semantic,
-        "document": __noon_document,
-        "scene_spec": __noon_scene_spec,
         "duration": __noon_duration,
-        "identities": __noon_identities,
     },
     separators=(",", ":"),
     allow_nan=False,
@@ -934,10 +900,6 @@ function validateRequest(request) {
     throw new Error("Python authoring request has an invalid request ID");
   }
   if (request.type === "run") {
-    if (request.exportDocument !== undefined && typeof request.exportDocument !== "boolean") {
-      throw new Error("exportDocument must be boolean");
-    }
-
     if (typeof request.source !== "string" || request.source.trim() === "") {
       throw new Error("Python authoring source must be a non-empty string");
     }

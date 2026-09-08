@@ -6,9 +6,7 @@ import {
   AUTHORING_PROTOCOL_VERSION,
   PythonAuthoringClient,
   parseAuthoringResult,
-  validateSceneDocument,
   validateSceneDuration,
-  validateSceneIdentities,
   validateSemanticExecutionDescriptor,
 } from "./authoring-client.js";
 
@@ -48,14 +46,7 @@ function workerMessage(type, payload = {}) {
 }
 
 function sceneResult(overrides = {}) {
-  return {
-    kind: "scene_document",
-    document: { version: 1, objects: [], tracks: [] },
-    scene_spec: { version: 1, objects: [], tracks: [], camera_object: null },
-    duration: 0,
-    identities: { objects: [], tracks: [] },
-    ...overrides,
-  };
+  return { kind: "semantic_scene", semantic_execution: { context_id: "scene" }, duration: 0, ...overrides };
 }
 
 function semanticResult(contextId = "scene") {
@@ -93,7 +84,6 @@ test("correlates a Python request with a validated shared Scene response", async
     requestId: 0,
     source: "result = scene",
     context: { example: "scene" },
-    exportDocument: false,
   });
 
   worker.emit(
@@ -106,91 +96,26 @@ test("correlates a Python request with a validated shared Scene response", async
   assert.deepEqual(await resultPromise, parsedSemanticResult());
 });
 
-test("requests legacy Scene export only through an explicit boolean option", async () => {
-  const worker = new FakeWorker();
-  const client = new PythonAuthoringClient(worker);
-  worker.emit("message", workerMessage("ready"));
-
-  const resultPromise = client.run("result = scene", {}, { exportDocument: true });
-  await Promise.resolve();
-  assert.equal(worker.messages[0].type, "run");
-  assert.equal(worker.messages[0].exportDocument, true);
-  worker.emit(
-    "message",
-    workerMessage("result", {
-      requestId: 0,
-      resultJson: JSON.stringify(sceneResult()),
-    }),
-  );
-  await resultPromise;
-
-  await assert.rejects(
-    client.run("result = scene", {}, { exportDocument: "yes" }),
-    /exportDocument must be a boolean/,
-  );
-});
-
-test("correlates a Python request with mixed content and duration metadata", async () => {
-  const worker = new FakeWorker();
-  const client = new PythonAuthoringClient(worker);
-  worker.emit("message", workerMessage("ready"));
-  await client.ready();
-
-  const resultPromise = client.run("result = scene");
-  await Promise.resolve();
-  const scene = { version: 1, objects: [{ id: 0 }], tracks: [] };
-  const identities = { objects: [{ id: 0, key: "@object:0" }], tracks: [] };
-  const sceneSpec = {
-    version: 1,
-    objects: [
-      { id: 0, content: { kind: "geometry" } },
-      { id: 2 ** 52, content: { kind: "text" } },
-    ],
-    tracks: [],
-  };
-  worker.emit(
-    "message",
-    workerMessage("result", {
-      requestId: 0,
-      resultJson: JSON.stringify({
-        kind: "scene_document",
-        document: scene,
-        scene_spec: sceneSpec,
-        duration: 2.75,
-        identities,
-      }),
-    }),
-  );
-
-  assert.deepEqual(await resultPromise, {
-    kind: "scene_document",
-    document: scene,
-    sceneSpec,
-    duration: 2.75,
-    identities,
-  });
-});
-
-test("scene results without canonical SceneSpec are rejected at the current protocol boundary", () => {
+test("scene results without a semantic execution descriptor are rejected", () => {
   const scene = { version: 1, objects: [], tracks: [] };
   assert.throws(
     () =>
       parseAuthoringResult(
         JSON.stringify({
-          kind: "scene_document",
+          kind: "semantic_scene",
           document: scene,
           duration: 0,
           identities: { objects: [], tracks: [] },
         }),
       ),
-    /must include canonical SceneSpec/,
+    /requires a semantic execution descriptor/,
   );
 });
 
-test("semantic execution descriptor bypasses legacy document and SceneSpec validation", () => {
+test("semantic execution results carry only shared execution metadata", () => {
   const result = parseAuthoringResult(
     JSON.stringify({
-      kind: "scene_document",
+      kind: "semantic_scene",
       semantic_execution: { context_id: "semantic-7" },
       duration: 2,
       document: "not a legacy scene",
@@ -198,7 +123,7 @@ test("semantic execution descriptor bypasses legacy document and SceneSpec valid
     }),
   );
   assert.deepEqual(result, {
-    kind: "scene_document",
+    kind: "semantic_scene",
     semanticExecution: { contextId: "semantic-7" },
     duration: 2,
   });
@@ -467,10 +392,8 @@ test("Scene duration accepts zero and rejects missing, negative, or non-finite v
   assert.throws(() => validateSceneDuration(Number.POSITIVE_INFINITY), /finite and non-negative/);
 
   const sceneResult = {
-    kind: "scene_document",
-    document: { version: 1, objects: [], tracks: [] },
-    scene_spec: { version: 1, objects: [], tracks: [] },
-    identities: { objects: [], tracks: [] },
+    kind: "semantic_scene",
+    semantic_execution: { context_id: "scene" },
   };
   assert.throws(
     () => parseAuthoringResult(JSON.stringify(sceneResult)),
@@ -690,28 +613,6 @@ test("rejects malformed encoded worker results", () => {
   assert.throws(
     () => parseAuthoringResult(JSON.stringify({ kind: "unknown" })),
     /Unknown Python authoring result kind/,
-  );
-});
-
-test("rejects malformed Scene documents before they reach Rust", () => {
-  assert.throws(
-    () => validateSceneDocument({ version: 1, objects: {}, tracks: [] }),
-    /objects must be an array/,
-  );
-  assert.throws(
-    () => validateSceneDocument({ version: 1, objects: [], tracks: {} }),
-    /tracks must be an array/,
-  );
-});
-
-test("rejects Scene identities that do not cover the document", () => {
-  assert.throws(
-    () =>
-      validateSceneIdentities(
-        { objects: [], tracks: [] },
-        { version: 1, objects: [{ id: 0 }], tracks: [] },
-      ),
-    /must match its definitions/,
   );
 });
 
