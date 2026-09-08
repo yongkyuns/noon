@@ -46,7 +46,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/browser-backend-visual-parity.mjs
   node --check scripts/browser-visual-parity-lib.mjs
   node --check scripts/manim-raster-differential.mjs
-  node --check scripts/manim-seek-playback-raster.mjs
+  node --check scripts/shared-playback-raster.mjs
+  node --check scripts/manim-raster-support.mjs
   node --check scripts/manim-typst-authoring-smoke.mjs
   node --check scripts/manim-reference-inventory.mjs
   node --check scripts/manim-reference-ledger.mjs
@@ -72,6 +73,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/updater-callback-smoke.mjs
   node --check scripts/manim-host-updater-diagnostics.mjs
   node --check scripts/pr-risk-classifier.mjs
+  node --test scripts/manim-raster-support.test.mjs
   node --test scripts/browser-visual-parity-lib.test.mjs
   node --test scripts/manim-reference-inventory.test.mjs
   node --test scripts/manim-reference-ledger.test.mjs

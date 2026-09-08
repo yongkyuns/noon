@@ -277,24 +277,10 @@ pub fn verify_scene_replay(
 mod wasm {
     use wasm_bindgen::prelude::*;
 
-    use super::{playback_snapshot_json, scene_snapshot_json, verify_scene_replay};
+    use super::verify_scene_replay;
 
     fn js_error(error: impl std::fmt::Display) -> JsValue {
         JsValue::from_str(&error.to_string())
-    }
-
-    #[wasm_bindgen(js_name = evaluateSceneSnapshot)]
-    pub fn evaluate_scene_snapshot(scene_json: &str, time: f64) -> Result<String, JsValue> {
-        scene_snapshot_json(scene_json, time).map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = evaluateScenePlaybackSnapshot)]
-    pub fn evaluate_scene_playback_snapshot(
-        scene_json: &str,
-        times_json: &str,
-    ) -> Result<String, JsValue> {
-        let times: Vec<f64> = serde_json::from_str(times_json).map_err(js_error)?;
-        playback_snapshot_json(scene_json, &times).map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = verifySceneReplay)]

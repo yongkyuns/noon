@@ -407,7 +407,7 @@ async function sampleRenderedPixel(canvas, worldX, worldY) {
   return data[0] + data[1] + data[2];
 }
 
-async function sampleRenderedColor(canvas, worldX, worldY) {
+async function renderedPixelContext(canvas) {
   const bitmap = await createImageBitmap(await canvas.convertToBlob({ type: "image/png" }));
   const pixels = new OffscreenCanvas(canvas.width, canvas.height);
   const context = pixels.getContext("2d", { willReadFrequently: true });
@@ -416,7 +416,11 @@ async function sampleRenderedColor(canvas, worldX, worldY) {
   }
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
+  return context;
+}
 
+async function sampleRenderedColor(canvas, worldX, worldY) {
+  const context = await renderedPixelContext(canvas);
   const worldHeight = 8;
   const worldWidth = worldHeight * (canvas.width / canvas.height);
   const x = Math.round(((worldX + worldWidth / 2) / worldWidth) * (canvas.width - 1));
@@ -476,6 +480,13 @@ async function directAffineCallbackProof(expectedBackend) {
         bootstrapVacatedLuma,
       })}`,
     );
+  }
+  let seekError = null;
+  const beforeRejectedSeek = renderer.time();
+  try { renderer.seekDirect(0.5); } catch (error) { seekError = String(error); }
+  if (!seekError?.includes("opaque host callback sessions do not support seek")
+      || renderer.time() !== beforeRejectedSeek) {
+    throw new Error(`callback seek must reject without advancing the session: ${seekError}`);
   }
   await advanceDirectCallbackFrame(renderer, 1000);
   await advanceDirectCallbackFrame(renderer, 2000);
@@ -1490,12 +1501,18 @@ async function directTextFamilyFadeProof(expectedBackend) {
 
 async function directExactPropertyTracksProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
+  const seekCanvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectExactPropertyTracksSmokeRenderer(canvas);
+  let seeker = null;
   const samples = [];
+  const forwardPixels = new Map();
+  const times = [0, 0.25, 1, 1.75, 2];
   try {
+    seeker = await createDirectExactPropertyTracksSmokeRenderer(seekCanvas);
     renderer.resize(canvas.width, canvas.height);
+    seeker.resize(seekCanvas.width, seekCanvas.height);
     renderer.directWakeDirectiveJson(0);
-    for (const time of [0, 1, 2]) {
+    for (const time of times) {
       renderer.advanceDirectRealtime(time * 1000);
       await settleDirectPublication(renderer, time * 1000);
       const circle = await sampleRenderedColor(canvas, -2 + 2 * time, 1);
@@ -1503,18 +1520,35 @@ async function directExactPropertyTracksProof(expectedBackend) {
       if (circle.red <= circle.green + 30 || square.blue <= square.red + 100) {
         throw new Error(`exact property track rendered the wrong endpoint at ${time}: ${JSON.stringify({ circle, square })}`);
       }
+      const pixels = await renderedPixelContext(canvas);
+      forwardPixels.set(time, pixels.getImageData(0, 0, canvas.width, canvas.height).data);
       samples.push({ time, circle, square });
     }
-    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 2
-        || samples[0].circle.red <= samples[1].circle.red
-        || samples[1].circle.red <= samples[2].circle.red) {
+    if (renderer.rendererBackend() !== expectedBackend || seeker.rendererBackend() !== expectedBackend
+        || renderer.objectCount() !== 2 || seeker.objectCount() !== 2
+        || samples.some((sample, index) => index > 0 && sample.circle.red >= samples[index - 1].circle.red)) {
       throw new Error(`exact property track playback lost authored opacity: ${JSON.stringify(samples)}`);
     }
-    return samples;
+    // Independent typed Rust sessions: seek starts at the endpoint and walks
+    // backward, then jumps forward again. No authored document or JS state replay.
+    for (const time of [...times].reverse().concat([1.75])) {
+      seeker.seekDirect(time);
+      await settleDirectPublication(seeker, 0);
+      const context = await renderedPixelContext(seekCanvas);
+      const actual = context.getImageData(0, 0, seekCanvas.width, seekCanvas.height).data;
+      const expected = forwardPixels.get(time);
+      if (actual.some((value, index) => value !== expected[index])) {
+        throw new Error(`typed direct seek and forward playback pixels differ at ${time}s`);
+      }
+    }
+    return { samples, seekPixelsEqual: true, backwardSeek: true, independentSessions: true };
   } finally {
     renderer.free();
+    seeker?.free();
     if (expectedBackend === "WebGL2") {
-      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+      for (const surface of [canvas, seekCanvas]) {
+        surface.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+      }
     }
   }
 }

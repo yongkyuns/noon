@@ -761,6 +761,28 @@ mod wasm {
             self.source.frame().map_or(0.0, |frame| frame.time)
         }
 
+        /// Seek a direct Rust/WASM execution session and publish its renderer-facing changes.
+        #[wasm_bindgen(js_name = seekDirect)]
+        pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
+            self.ensure_direct_source_idle()?;
+            let (pending, camera) = {
+                let session = self.source.direct_mut().ok_or_else(|| {
+                    js_message("typed execution APIs require a direct session source")
+                })?;
+                if session.has_required_callbacks() {
+                    return Err(js_message(
+                        "opaque host callback sessions do not support seek or replay",
+                    ));
+                }
+                session.seek(time).map_err(js_error)?;
+                let camera = session.camera().map_err(js_error)?;
+                (session.wake_state().frame_pending(), camera)
+            };
+            self.sync_camera(camera)?;
+            self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            Ok(pending)
+        }
+
         /// Return one direct-session browser scheduling directive. JavaScript owns
         /// only the concrete RAF/timer handles; cadence, deadlines, and presentation
         /// dirtiness remain derived from the authoritative ExecutionSession.
@@ -1071,27 +1093,6 @@ mod wasm {
                     ));
                 }
                 session.evaluate(time).map_err(js_error)?;
-                let camera = session.camera().map_err(js_error)?;
-                (session.wake_state().frame_pending(), camera)
-            };
-            self.sync_camera(camera)?;
-            self.direct_wake_clock = BrowserExecutionWakeClock::default();
-            Ok(pending)
-        }
-
-        /// Seek a direct Rust/WASM execution session and publish its renderer-facing changes.
-        pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
-            self.ensure_direct_source_idle()?;
-            let (pending, camera) = {
-                let session = self.source.direct_mut().ok_or_else(|| {
-                    js_message("typed execution APIs require a direct session source")
-                })?;
-                if session.has_required_callbacks() {
-                    return Err(js_message(
-                        "opaque host callback sessions do not support seek or replay",
-                    ));
-                }
-                session.seek(time).map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
             };
