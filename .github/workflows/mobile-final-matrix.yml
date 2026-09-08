@@ -1,0 +1,64 @@
+name: Mobile final matrix (temporary)
+on:
+  push:
+    branches: [codex/mobile-final-matrix]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [webkit, chromium]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: a9b7e4299e1531817e31b7b895095e79f7a869f4
+      - name: Exact-source and unchanged-runtime provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p mobile-final-evidence
+          git rev-parse HEAD > mobile-final-evidence/source-sha.txt
+          git fetch --depth=1 origin 85cbf71bcea286e76a952c7fb9752b79030819f3
+          git diff --exit-code 85cbf71bcea286e76a952c7fb9752b79030819f3 HEAD -- crates Cargo.toml Cargo.lock
+          gh run download 34178180732 --repo yongkyuns/noon --name playground-cross-browser-web-runtime --dir "$RUNNER_TEMP/runtime"
+          mkdir -p web/pkg
+          cp -a "$RUNNER_TEMP/runtime/pkg/." web/pkg/
+          node scripts/build-python-worker.mjs
+      - name: Install pinned browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Select Android browser without changing source or assertions
+        if: matrix.browser == 'chromium'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/playground-main-thread-mobile-smoke.mjs')
+          s=p.read_text()
+          s=s.replace('const { webkit, devices } = playwright;', 'const { chromium: webkit, devices } = playwright;')
+          s=s.replace('devices["iPhone 13"]', 'devices["Pixel 7"]')
+          s=s.replace('webkit.launch({ headless: true })', 'webkit.launch({ headless: true, args: ["--disable-features=WebGPU", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--use-gl=angle", "--use-angle=swiftshader", "--disable-gpu-sandbox", "--disable-dev-shm-usage"] })')
+          s=s.replace('mobile WebKit ${variant.name}', 'mobile Chromium ${variant.name}')
+          p.write_text(s)
+          PY
+          git diff > mobile-final-evidence/browser-selection.patch
+      - name: Actual mobile autoplay, pixels, no-JSPI, Text and source contracts
+        env:
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-final-evidence/first
+        run: node scripts/playground-main-thread-mobile-smoke.mjs
+      - name: Fresh-context repeat
+        env:
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-final-evidence/repeat
+        run: node scripts/playground-main-thread-mobile-smoke.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mobile-final-${{ matrix.browser }}
+          path: mobile-final-evidence
+          retention-days: 7
