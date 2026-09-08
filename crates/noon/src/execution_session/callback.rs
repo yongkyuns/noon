@@ -163,6 +163,28 @@ impl CallbackSchedule {
         }
     }
 
+    pub(super) fn plan(&self) -> &SemanticHostCallbackPlan {
+        &self.plan
+    }
+
+    /// Install a new compiler plan at the current frame without evaluating any
+    /// historical callbacks. Invalidate phase completion at this publication:
+    /// an active newly registered occurrence can next run with dt=0.
+    pub(super) fn at_publication(plan: SemanticHostCallbackPlan, time: f64) -> Self {
+        let mut schedule = Self::new(plan);
+        // Disable the next-activation barrier only while reconstructing the
+        // active membership. This must consume every event through `time`.
+        schedule.next_required_activation_event = None;
+        let preview = schedule.preview(time, time);
+        schedule.event_cursor = preview.event_cursor;
+        schedule.active_occurrences = preview.active_occurrences;
+        schedule.next_required_activation_event = schedule.plan.events()[schedule.event_cursor..]
+            .iter()
+            .position(|event| Self::event_requires_phase(&schedule.plan, *event))
+            .map(|offset| schedule.event_cursor + offset);
+        schedule
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.plan.is_empty()
     }
