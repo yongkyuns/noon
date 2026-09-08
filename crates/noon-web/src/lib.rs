@@ -15,7 +15,6 @@ mod direct_execution_smoke;
 mod execution_canvas;
 mod execution_transport;
 mod execution_wake;
-mod family_bounds;
 mod geometry_export;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 mod gpu_diagnostics;
@@ -57,7 +56,6 @@ pub use direct_execution_smoke::*;
 pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use execution_wake::*;
-pub use family_bounds::*;
 pub use legacy::{PlayerError, ReconcileOutcome};
 pub use lifecycle::*;
 pub use renderer_observation::*;

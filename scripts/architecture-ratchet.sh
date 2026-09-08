@@ -203,7 +203,7 @@ fi
 deleted_legacy_web_surface_found=0
 deleted_legacy_web_references="$(
   git grep -nE \
-    '(^|[^[:alnum:]_])(NoonCanvasPlayer|demoSceneJson|WasmAuthoringFamilyMemberHandle|noonCreateAuthoringFamilyMemberHandle|evaluateSceneSnapshot|evaluateScenePlaybackSnapshot|scene_snapshot_json|playback_snapshot_json|normalized_frame_json)([^[:alnum:]_]|$)' \
+    '(^|[^[:alnum:]_])(NoonCanvasPlayer|demoSceneJson|WasmAuthoringFamilyMemberHandle|FrontendFamilyBoundsPlan|noonCreateAuthoringFamilyMemberHandle|evaluateSceneSnapshot|evaluateScenePlaybackSnapshot|scene_snapshot_json|playback_snapshot_json|normalized_frame_json)([^[:alnum:]_]|$)' \
     -- \
     'crates/noon-web/src' \
     'web/python-worker.source.js' \
