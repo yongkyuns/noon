@@ -362,6 +362,8 @@ const expectedTypeSurface = [
   "export class WasmAuthoringFamilyTargetEditor",
   "layout(): WasmAuthoringFamilyLayout",
   "memberKeys(): string[]",
+  "createFamily(batch: WasmSceneMembershipBatch): WasmAuthoringFamilyHandle",
+  "editMembership(batch: WasmSceneMembershipBatch): Uint8Array",
   "liveCreateFamily(batch: WasmSceneMembershipBatch): WasmAuthoringFamilyHandle",
   "liveEditFamilyMembership(handle: WasmAuthoringFamilyHandle, batch: WasmSceneMembershipBatch): Uint8Array",
   "arrange(direction_x: number, direction_y: number, buff: number, center: boolean): void",

@@ -261,8 +261,12 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = createFamily)]
-        pub fn create_family(&self) -> Result<WasmAuthoringFamilyHandle, JsValue> {
-            noon::MobjectFamily::create(Rc::clone(&self.semantics), &[])
+        pub fn create_family(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+            batch
+                .create_family(Rc::clone(&self.semantics))
                 .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
@@ -683,40 +687,15 @@ mod wasm {
                 .ok_or_else(|| JsValue::from_str("family member index is out of bounds"))
         }
 
-        #[wasm_bindgen(js_name = addMobject)]
-        pub fn add_mobject(
-            &mut self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<bool, JsValue> {
-            self.semantic_family()?
-                .add((&member.handle).into())
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = addFamily)]
-        pub fn add_family(&mut self, member: &WasmAuthoringFamilyHandle) -> Result<bool, JsValue> {
-            self.semantic_family()?
-                .add((&member.semantic_family()?).into())
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = removeMobject)]
-        pub fn remove_mobject(
-            &mut self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<bool, JsValue> {
-            self.semantic_family()?
-                .remove((&member.handle).into())
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = removeFamily)]
-        pub fn remove_family(
-            &mut self,
-            member: &WasmAuthoringFamilyHandle,
-        ) -> Result<bool, JsValue> {
-            self.semantic_family()?
-                .remove((&member.semantic_family()?).into())
+        /// Apply the complete authored edit before returning per-argument decisions.
+        #[wasm_bindgen(js_name = editMembership)]
+        pub fn edit_membership(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<Vec<u8>, JsValue> {
+            batch
+                .edit_family(&self.semantic_family()?)
+                .map(|changed| changed.into_iter().map(u8::from).collect())
                 .map_err(js_error)
         }
     }

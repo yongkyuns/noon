@@ -168,8 +168,10 @@ except ImportError:  # Native CPython tests do not have the browser bridge.
 
 try:
     from js import noonCreateAuthoringFamilyHandle as _create_family_handle
-except ImportError:  # Older/mock bridges may expose only leaf Mobject handles.
+    from js import noonAuthoringMembershipBatch as _new_membership_batch
+except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _create_family_handle = None
+    _new_membership_batch = None
 
 _INSTALLED = False
 _ORIGINAL_INIT = _base.Mobject.__init__
@@ -198,7 +200,6 @@ _ORIGINAL_CIRCLE_INIT = _compat.Circle.__init__
 _ORIGINAL_SQUARE_INIT = _compat.Square.__init__
 _ORIGINAL_RECTANGLE_INIT = _compat.Rectangle.__init__
 _ORIGINAL_LINE_INIT = _compat.Line.__init__
-_ORIGINAL_GROUP_INIT = _compat.Group.__init__
 _ORIGINAL_GROUP_ADD = _compat.Group.add
 _ORIGINAL_GROUP_REMOVE = _compat.Group.remove
 _ORIGINAL_GROUP_SHIFT = _compat.Group.shift
@@ -1983,24 +1984,6 @@ def _family_member_handle(value: object) -> tuple[str | None, object | None]:
     return None, None
 
 
-def _family_add_handle(family_handle: object, value: object) -> bool:
-    kind, handle = _family_member_handle(value)
-    if handle is None:
-        raise RuntimeError("family member has no shared semantic identity")
-    if kind == "family":
-        return bool(family_handle.addFamily(handle))
-    return bool(family_handle.addMobject(handle))
-
-
-def _family_remove_handle(family_handle: object, value: object) -> bool:
-    kind, handle = _family_member_handle(value)
-    if handle is None:
-        raise RuntimeError("family member has no shared semantic identity")
-    if kind == "family":
-        return bool(family_handle.removeFamily(handle))
-    return bool(family_handle.removeMobject(handle))
-
-
 def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) -> None:
     for mobject in mobjects:
         if not isinstance(mobject, (_base.Mobject, _compat.Group)):
@@ -2010,7 +1993,11 @@ def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) 
 
 
 def _family_membership_batch(context: object, kind: str, mobjects: tuple[object, ...]):
-    batch = context.beginMembershipBatch(kind)
+    batch = (
+        context.beginMembershipBatch(kind)
+        if context is not None
+        else _new_membership_batch(kind)
+    )
     for value in mobjects:
         member_kind, handle = _family_member_handle(value)
         if handle is None:
@@ -2025,12 +2012,12 @@ def _family_membership_batch(context: object, kind: str, mobjects: tuple[object,
 def _group_init(self: _compat.Group, *mobjects: object) -> None:
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
-    if context is None:
-        self._semantic_family_handle = _create_family_handle()
-        _ORIGINAL_GROUP_INIT(self, *mobjects)
-        return
     batch = _family_membership_batch(context, "add", mobjects)
-    family = context.liveCreateFamily(batch)
+    family = (
+        context.liveCreateFamily(batch)
+        if context is not None
+        else _create_family_handle(batch)
+    )
     # Rust selects the authoritative ordered members; this map retains Python identity.
     wrappers = {}
     for value in mobjects:
@@ -2047,16 +2034,15 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
         return self
     family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
-    if context is not None:
-        batch = _family_membership_batch(context, "add", mobjects)
-        changed = context.liveEditFamilyMembership(family_handle, batch)
-        for value, accepted in zip(mobjects, changed):
-            if accepted:
-                _ORIGINAL_GROUP_ADD(self, value)
-        return self
-    for mobject in mobjects:
-        if _family_add_handle(family_handle, mobject):
-            _ORIGINAL_GROUP_ADD(self, mobject)
+    batch = _family_membership_batch(context, "add", mobjects)
+    changed = (
+        context.liveEditFamilyMembership(family_handle, batch)
+        if context is not None
+        else family_handle.editMembership(batch)
+    )
+    accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
+    if accepted:
+        _ORIGINAL_GROUP_ADD(self, *accepted)
     return self
 
 
@@ -2065,16 +2051,15 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
         return self
     family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
-    if context is not None:
-        batch = _family_membership_batch(context, "remove", mobjects)
-        changed = context.liveEditFamilyMembership(family_handle, batch)
-        for value, accepted in zip(mobjects, changed):
-            if accepted:
-                _ORIGINAL_GROUP_REMOVE(self, value)
-        return self
-    for mobject in mobjects:
-        if _family_remove_handle(family_handle, mobject):
-            _ORIGINAL_GROUP_REMOVE(self, mobject)
+    batch = _family_membership_batch(context, "remove", mobjects)
+    changed = (
+        context.liveEditFamilyMembership(family_handle, batch)
+        if context is not None
+        else family_handle.editMembership(batch)
+    )
+    accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
+    if accepted:
+        _ORIGINAL_GROUP_REMOVE(self, *accepted)
     return self
 
 
@@ -2186,13 +2171,12 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
     # browser geometry delegate uses object.__new__ and therefore needs one here.
     if getattr(clone, "_semantic_family_handle", None) is None:
         context = _live_constructor_context("family")
-        if context is not None:
-            batch = _family_membership_batch(context, "add", tuple(clone.submobjects))
-            clone._semantic_family_handle = context.liveCreateFamily(batch)
-        else:
-            clone._semantic_family_handle = _create_family_handle()
-            for member in clone.submobjects:
-                _family_add_handle(clone._semantic_family_handle, member)
+        batch = _family_membership_batch(context, "add", tuple(clone.submobjects))
+        clone._semantic_family_handle = (
+            context.liveCreateFamily(batch)
+            if context is not None
+            else _create_family_handle(batch)
+        )
     return clone
 
 

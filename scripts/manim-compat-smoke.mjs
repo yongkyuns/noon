@@ -110,6 +110,19 @@ class GroupMembershipLive(Scene):
         alias = VGroup(left)
         assert int(alias._semantic_family_handle.memberCount) == 1
 
+        duplicate = VGroup(left, alias, left)
+        assert list(duplicate) == [left, alias]
+        spare = Circle(radius=0.1)
+        cycle = VGroup(pair)
+        before = list(pair.submobjects)
+        try:
+            pair.add(spare, cycle)
+            raise AssertionError("authored cyclic batch must fail")
+        except Exception as error:
+            assert "cycle" in str(error).lower()
+        assert pair.submobjects == before
+        assert int(pair._semantic_family_handle.memberCount) == 2
+
         assert isinstance(pair, Mobject)
         assert isinstance(pair, Group)
         self.add(pair)
@@ -366,7 +379,12 @@ try {
     const otherStore = new wasm.WasmAuthoringStore();
     const circle = store.createManimCircle(0.6);
     const foreign = otherStore.createManimCircle(0.6);
-    const family = store.createFamily();
+    const batch = (...members) => {
+      const request = new wasm.WasmSceneMembershipBatch("add");
+      for (const member of members) request.appendMobject("", member);
+      return request;
+    };
+    const family = store.createFamily(batch());
     const copy = circle.cloneHandle();
     const target = circle.targetEditor();
     const identity = (handle) => `${handle.semanticSlot}:${handle.semanticGeneration}`;
@@ -377,11 +395,11 @@ try {
       return false;
     };
     const sameNumericId = identity(circle) === identity(foreign);
-    const foreignAddRejected = rejectsForeign(() => family.addMobject(foreign));
-    for (const handle of [circle, copy, target]) family.addMobject(handle);
+    const foreignAddRejected = rejectsForeign(() => family.editMembership(batch(circle, foreign)));
+    if (family.memberCount !== 0) throw new Error("failed authored batch partially committed");
+    family.editMembership(batch(circle, copy, target));
     const layout = family.layout();
-    const foreignFamily = otherStore.createFamily();
-    foreignFamily.addMobject(foreign);
+    const foreignFamily = otherStore.createFamily(batch(foreign));
     const foreignLayout = foreignFamily.layout();
     const foreignObjectPlacementRejected = rejectsForeign(() => layout.moveToMobject(foreign, 0, 0, 1, 1));
     const foreignFamilyPlacementRejected = rejectsForeign(() => layout.moveToFamily(foreignLayout, 0, 0, 1, 1));

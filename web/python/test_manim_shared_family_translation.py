@@ -111,28 +111,6 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
                 def memberCount(self):
                     return len(self.members)
 
-                def addMobject(self, member):
-                    if member.identity in self.members:
-                        return False
-                    self.members.append(member.identity)
-                    return True
-
-                def addFamily(self, member):
-                    if member.identity in self.members:
-                        return False
-                    self.members.append(member.identity)
-                    return True
-
-                def removeMobject(self, member):
-                    if member.identity not in self.members:
-                        return False
-                    self.members.remove(member.identity)
-                    return True
-
-                def removeFamily(self, member):
-                    return self.removeMobject(member)
-
-
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
@@ -158,7 +136,8 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
             store = FakeStore()
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, store.createMobject)
-            handles._create_family_handle = store.createFamily
+            import _typed_family_test_support as _family_test
+            _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
             handles.install()
 
             from noon import Circle, RIGHT, Square, VGroup

@@ -26,10 +26,9 @@ pub fn session() -> Result<ExecutionSession, String> {
     second.shift(0.8, 0.0)?;
     let nested = scene.family(&[(&second).into()])?;
     let family = scene.family(&[])?;
-    family.add((&first).into())?;
-    family.add((&nested).into())?;
-    family.remove((&nested).into())?;
-    family.add((&nested).into())?;
+    family.add_many(&[(&first).into(), (&nested).into(), (&first).into()])?;
+    family.remove_many(&[(&first).into(), (&nested).into()])?;
+    family.add_many(&[(&first).into(), (&nested).into()])?;
     let target = scene.family(&[(&anchor).into()])?;
     family.layout()?.next_to(
         Target::Mobject(&anchor),
