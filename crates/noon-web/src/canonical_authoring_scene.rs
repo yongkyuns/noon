@@ -1547,10 +1547,12 @@ impl CanonicalAuthoringScene {
                         );
                     }
                     target.validate()?;
-                    let family_leaves = noon::semantic_family_leaf_ids(
-                        &self.scene.store().borrow(),
-                        target.node_id(),
-                    )?;
+                    let family_leaves = self
+                        .scene
+                        .store()
+                        .borrow()
+                        .ordered_leaf_nodes(target.node_id())
+                        .map_err(|e| e.to_string())?;
                     let expected_entering = family_leaves
                         .iter()
                         .copied()
@@ -1612,10 +1614,12 @@ impl CanonicalAuthoringScene {
                         );
                     }
                     target.validate()?;
-                    let family_leaves = noon::semantic_family_leaf_ids(
-                        &self.scene.store().borrow(),
-                        target.node_id(),
-                    )?;
+                    let family_leaves = self
+                        .scene
+                        .store()
+                        .borrow()
+                        .ordered_leaf_nodes(target.node_id())
+                        .map_err(|e| e.to_string())?;
                     let expected_entering = family_leaves
                         .iter()
                         .copied()
@@ -1892,18 +1896,10 @@ impl CanonicalAuthoringScene {
     fn live_arrange_family(
         &mut self,
         family: &noon::MobjectFamily,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-        center: bool,
+        options: &noon::FamilyArrangeOptions,
     ) -> Result<(), String> {
-        self.active_live_player()?.live_arrange_family(
-            family,
-            direction_x,
-            direction_y,
-            buff,
-            center,
-        )
+        self.active_live_player()?
+            .live_arrange_family(family, options)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -5797,14 +5793,11 @@ mod wasm {
         pub fn live_arrange_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            center: bool,
+            options: &crate::authoring_mobject::WasmFamilyArrangeOptions,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .live_arrange_family(&family, direction_x, direction_y, buff, center)
+                .live_arrange_family(&family, &options.options)
                 .map_err(js_error)
         }
 
@@ -6901,7 +6894,10 @@ mod tests {
             vec![true, false]
         );
         context
-            .live_arrange_family(&pair, 1.0, 0.0, 0.15, true)
+            .live_arrange_family(
+                &pair,
+                &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.15, true),
+            )
             .unwrap();
         let player = context.active_live_player().unwrap();
         let before = player.live_family_layout(&pair).unwrap();

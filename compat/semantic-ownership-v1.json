@@ -172,13 +172,11 @@
     },
     {
       "id": "group-placement",
-      "surface": "Group/VGroup arrange forwarded placement kwargs and legacy placement fallback",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_next_to fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "noon::FamilyLayout and noon::MobjectFamily::arrange"},
-      "reason": "Default arrangement and typed next_to with explicit/indexed family aligners are shared-Rust-owned. The forwarded arrange placement kwargs path still sequences calls in Python; legacy/export placement retains Python query fallback.",
-      "replacement": "Route forwarded arrange placement policy through shared family arrangement, then delete the remaining legacy/export placement formulas.",
-      "migration_issue": "#61"
+      "surface": "Group/VGroup authored and live move_to/next_to/align_to with selected-member anchors",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "FamilyLayout/LayoutAnchor"},
+      "reason": "Family observations, selected anchors and relative-placement math are shared Rust operations. Live placement reads effective bounds and uses the same local mutation transaction. Python passes wrapper references and coerces vector/index arguments; remaining explicit legacy snapshot fallback is separately inventoried.",
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_move_to/_group_next_to/_group_align_to"}]
     },
     {
       "id": "mobject.become-replace",
@@ -382,11 +380,11 @@
     },
     {
       "id": "layout.arrange",
-      "surface": "Deterministic Group/VGroup arrange(direction, buff, center) without forwarded placement kwargs",
+      "surface": "Group/VGroup arrange with edge, coordinate mask, explicit/indexed aligners and shared family aliases",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon/src/family_authoring.rs", "symbol": "FamilyArrangePlan/manim_family_arrange_deltas/MobjectFamily::arrange"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_arrangement.rs", "symbol": "FamilyArrangePlan/MobjectFamily::arrange_with_options"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_arrange"}],
-      "reason": "The common Rust family planner owns direct-member order, validated bounds, spacing and recentering. MobjectFamily::arrange and LiveSession::arrange_family publish atomic translations; the WASM facade calls that same atomic operation directly. Python checks wrapper eligibility and supplies options without feeding bounds or applying per-leaf edits."
+      "reason": "One shared planner resolves direct-member selections, observes local leaf bounds, stages successive placements against preceding moves and centers unique semantic leaves once. Authored and live options calls publish one atomic transaction. Python passes one typed options object without sequencing member placements or supplying bounds."
     },
     {
       "id": "rate-function.lookup",

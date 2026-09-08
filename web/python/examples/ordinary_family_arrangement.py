@@ -17,8 +17,9 @@ class OrdinaryFamilyArrangement(Scene):
         family = VGroup(first, nested)
         family.remove(nested)
         family.add(nested)
-        family.arrange(UP, buff=0.3, center=False)
-        assert abs(nested.width - 3.7) < 1e-5
+        family.arrange(UP, buff=0.3, center=False, aligned_edge=LEFT)
+        assert abs(nested.width - 2.4) < 1e-5
+        assert abs(nested.get_center().x) < 1e-5
         nested.move_to(ORIGIN, coor_mask=(1, 0, 0))
         nested.next_to(ORIGIN, direction=2 * UP, buff=0.25, coor_mask=(0, 1, 0),
                        index_of_submobject_to_align=-1)

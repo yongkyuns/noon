@@ -1357,6 +1357,16 @@ def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
     return _base._critical(value._current_raw(), direction)
 
 
+def _semantic_member_index(index):
+    if index is None:
+        return None
+    import operator
+    index = operator.index(index)
+    if not -(1 << 31) <= index < (1 << 31):
+        raise IndexError("alignment submobject index is unavailable")
+    return index
+
+
 def _layout_anchor(value, index=None):
     if isinstance(value, _compat.Group):
         if any(_handle_for(leaf) is None for leaf in _compat._leaf_mobjects(value)):
@@ -1366,12 +1376,7 @@ def _layout_anchor(value, index=None):
         handle = _handle_for(value)
     if handle is None or not hasattr(handle, "layoutAnchor"):
         return None
-    if index is not None:
-        import operator
-        index = operator.index(index)
-        if not -(1 << 31) <= index < (1 << 31):
-            raise IndexError("alignment submobject index is unavailable")
-    return handle.layoutAnchor(index)
+    return handle.layoutAnchor(_semantic_member_index(index))
 
 
 def _selected_next_to(self, target, direction, buff, aligned_edge,
@@ -1997,44 +2002,41 @@ def _group_arrange(
     center: bool = True,
     **kwargs: Any,
 ) -> _compat.Group:
-    # Forwarded placement kwargs can select additional alignment semantics; retain
-    # the pinned compatibility path until shared member-selection support lands.
-    if kwargs:
-        return _ORIGINAL_GROUP_ARRANGE(
-            self,
-            direction=direction,
-            buff=buff,
-            center=center,
-            **kwargs,
-        )
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    if family_handle is None or not hasattr(family_handle, "arrangeOptions"):
+        return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
     if not self.submobjects:
         return self
-
-    family_handle = getattr(self, "_semantic_family_handle", None)
-    if family_handle is None or not hasattr(family_handle, "arrange"):
-        return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
-
+    unknown = set(kwargs) - {"aligned_edge", "coor_mask", "submobject_to_align", "index_of_submobject_to_align"}
+    if unknown:
+        raise TypeError(f"arrange got unexpected placement keyword {sorted(unknown)[0]!r}")
     axis = _base._as_vec2(_base.RIGHT if direction is None else direction)
+    edge = _base._as_vec2(kwargs.get("aligned_edge", _base.ORIGIN))
+    mask = _alignment_mask2(kwargs.get("coor_mask", (1, 1, 1)))
+    index = _semantic_member_index(kwargs.get("index_of_submobject_to_align"))
+    options = family_handle.arrangeOptions(axis.x, axis.y, float(buff), bool(center),
+                                           edge.x, edge.y, mask.x, mask.y, index)
+    aligner = kwargs.get("submobject_to_align")
+    if aligner is not None:
+        anchor = _layout_anchor(aligner)
+        if anchor is None:
+            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
+        options.setAligner(anchor)
     context = _group_target_context(self)
-    if context is not None:
-        try:
-            context.liveArrangeFamily(
-                family_handle, axis.x, axis.y, float(buff), bool(center)
-            )
-        except Exception as error:
-            raise ValueError(str(error)) from None
-        return self
-    # Resolve wrapper eligibility before mutation. Rust owns family traversal,
-    # bounds, spacing, and the single atomic publication of all leaf translations.
-    leaves = _compat._leaf_mobjects(self)
-    leaf_handles = [_family_layout_leaf_adapter(member, mutation=True) for member in leaves]
-    if any(handle is None for handle in leaf_handles):
-        return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
     try:
-        family_handle.arrange(axis.x, axis.y, float(buff), bool(center))
+        if context is not None:
+            context.liveArrangeFamily(family_handle, options)
+            return self
+        leaves = _compat._leaf_mobjects(self)
+        leaf_handles = [_family_layout_leaf_adapter(member, mutation=True) for member in leaves]
+        if any(handle is None for handle in leaf_handles):
+            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
+        family_handle.arrange(options)
     except Exception as error:
+        if "alignment submobject index" in str(error):
+            raise IndexError(str(error)) from None
         raise ValueError(str(error)) from None
-    # Only the explicit #959 legacy export path still needs projected values.
+    # Only the explicit #959 export path still needs projected values.
     for member, handle in zip(leaves, leaf_handles):
         _sync_bound_transform(member, handle)
     return self

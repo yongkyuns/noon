@@ -2,7 +2,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    family_authoring::{semantic_family_leaf_ids, FamilyTranslation},
+    family_authoring::FamilyTranslation,
     semantic_mobject::{authoring_render_f64, authoring_xy_f64, ManimNextToArgs},
     Bounds2D64, Mobject, MobjectFamily, SemanticNodeId, SemanticStore,
 };
@@ -63,6 +63,14 @@ impl LayoutAnchor {
     pub fn member(mut self, index: isize) -> Self {
         self.index = Some(index);
         self
+    }
+
+    pub(crate) fn from_node(store: Rc<RefCell<SemanticStore>>, node: SemanticNodeId) -> Self {
+        Self {
+            store,
+            node,
+            index: None,
+        }
     }
 
     pub(crate) fn store(&self) -> &Rc<RefCell<SemanticStore>> {
@@ -137,7 +145,12 @@ impl LayoutAnchor {
 impl MobjectFamily {
     /// Observe only this family's layout and ordered semantic leaves.
     pub fn layout(&self) -> Result<FamilyLayout, String> {
-        let leaves = semantic_family_leaf_ids(&self.store().borrow(), self.node_id())?;
+        self.validate()?;
+        let leaves = self
+            .store()
+            .borrow()
+            .ordered_leaf_nodes(self.node_id())
+            .map_err(|e| e.to_string())?;
         let mut bounds: Option<Bounds2D64> = None;
         for &leaf in &leaves {
             let Some(next) = Mobject::from_node(Rc::clone(self.store()), leaf)?.layout_bounds()?
@@ -158,7 +171,7 @@ impl MobjectFamily {
         })
     }
 
-    /// Shift all ordered leaf occurrences without querying their geometry.
+    /// Shift each semantic leaf once without querying its geometry.
     pub fn shift(&self, x: f64, y: f64) -> Result<(), String> {
         let translation = FamilyTranslation::begin(&self.store().borrow(), self.node_id(), x, y)?;
         translation.apply(&mut self.store().borrow_mut())

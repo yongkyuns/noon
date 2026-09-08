@@ -1,7 +1,7 @@
 //! Family observations and placement through the existing live publication lane.
 use super::*;
 use crate::{
-    family_authoring::{semantic_family_leaf_ids, FamilyTranslation},
+    family_authoring::FamilyTranslation,
     family_layout::{bounds_critical_point, RelativePlacement},
     semantic_mobject::{authoring_xy_f64, ManimNextToArgs},
 };
@@ -38,8 +38,11 @@ impl LiveSession<'_> {
     ) -> Result<(Vec<noon_core::SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
-        let leaves = semantic_family_leaf_ids(&self.store.borrow(), family.node_id())
-            .map_err(LiveSessionError::Mobject)?;
+        let leaves = self
+            .store
+            .borrow()
+            .ordered_leaf_nodes(family.node_id())
+            .map_err(|e| LiveSessionError::Mobject(e.to_string()))?;
         let mut bounds: Option<Bounds2D64> = None;
         for &leaf in &leaves {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
@@ -57,7 +60,7 @@ impl LiveSession<'_> {
         Ok((leaves, bounds))
     }
 
-    fn family_member_bounds(
+    pub(super) fn family_member_bounds(
         &self,
         mobject: &Mobject,
     ) -> Result<Option<Bounds2D64>, LiveSessionError> {
