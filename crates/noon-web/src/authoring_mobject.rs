@@ -179,14 +179,6 @@ mod wasm {
         semantics: SharedSemanticStore,
     }
 
-    /// Content-agnostic semantic identity for authoring objects whose mutable
-    /// presentation state is owned by another retained/resource-specific handle.
-    #[wasm_bindgen]
-    pub struct WasmAuthoringFamilyMemberHandle {
-        semantics: SharedSemanticStore,
-        id: SemanticNodeId,
-    }
-
     #[wasm_bindgen]
     impl WasmAuthoringStore {
         #[wasm_bindgen(constructor)]
@@ -309,16 +301,6 @@ mod wasm {
                 .map_err(|error| js_error(error.to_string()))
         }
 
-        /// Allocate stable semantic identity for a non-geometry authoring object.
-        #[wasm_bindgen(js_name = createFamilyMember)]
-        pub fn create_family_member(&self) -> WasmAuthoringFamilyMemberHandle {
-            let id = self.semantics.borrow_mut().insert_authoring_object();
-            WasmAuthoringFamilyMemberHandle {
-                semantics: Rc::clone(&self.semantics),
-                id,
-            }
-        }
-
         #[wasm_bindgen(js_name = createFamily)]
         pub fn create_family(&self) -> WasmAuthoringFamilyHandle {
             let id = self.semantics.borrow_mut().insert_family();
@@ -326,19 +308,6 @@ mod wasm {
                 semantics: Rc::clone(&self.semantics),
                 id,
             }
-        }
-    }
-
-    #[wasm_bindgen]
-    impl WasmAuthoringFamilyMemberHandle {
-        #[wasm_bindgen(getter, js_name = semanticSlot)]
-        pub fn semantic_slot(&self) -> u32 {
-            self.id.slot()
-        }
-
-        #[wasm_bindgen(getter, js_name = semanticGeneration)]
-        pub fn semantic_generation(&self) -> u32 {
-            self.id.generation()
         }
     }
 
@@ -888,18 +857,6 @@ mod wasm {
             member.id_in_store(&self.semantics, "family target editor")
         }
 
-        fn identity_member_id(
-            &self,
-            member: &WasmAuthoringFamilyMemberHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(&self.semantics, &member.semantics) {
-                return Err(JsValue::from_str(
-                    "family target editor and member belong to different authoring stores",
-                ));
-            }
-            Ok(member.id)
-        }
-
         fn family_member_id(
             &self,
             member: &WasmAuthoringFamilyHandle,
@@ -923,19 +880,6 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let source_id = self.mobject_member_id(source)?;
             let target_id = self.mobject_member_id(target)?;
-            self.editor
-                .accept_member(source_id, target_id)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = acceptMember)]
-        pub fn accept_member_identity(
-            &mut self,
-            source: &WasmAuthoringFamilyMemberHandle,
-            target: &WasmAuthoringFamilyMemberHandle,
-        ) -> Result<(), JsValue> {
-            let source_id = self.identity_member_id(source)?;
-            let target_id = self.identity_member_id(target)?;
             self.editor
                 .accept_member(source_id, target_id)
                 .map_err(js_error)
@@ -983,18 +927,6 @@ mod wasm {
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<SemanticNodeId, JsValue> {
             member.id_in_store(&self.semantics, "family")
-        }
-
-        fn identity_member_id(
-            &self,
-            member: &WasmAuthoringFamilyMemberHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(&self.semantics, &member.semantics) {
-                return Err(JsValue::from_str(
-                    "family and member belong to different authoring stores",
-                ));
-            }
-            Ok(member.id)
         }
 
         fn family_member_id(
@@ -1148,15 +1080,6 @@ mod wasm {
             self.add_id(id)
         }
 
-        #[wasm_bindgen(js_name = addMember)]
-        pub fn add_member_identity(
-            &mut self,
-            member: &WasmAuthoringFamilyMemberHandle,
-        ) -> Result<bool, JsValue> {
-            let id = self.identity_member_id(member)?;
-            self.add_id(id)
-        }
-
         #[wasm_bindgen(js_name = addFamily)]
         pub fn add_family(&mut self, member: &WasmAuthoringFamilyHandle) -> Result<bool, JsValue> {
             let id = self.family_member_id(member)?;
@@ -1169,15 +1092,6 @@ mod wasm {
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<bool, JsValue> {
             let id = self.object_member_id(member)?;
-            self.remove_id(id)
-        }
-
-        #[wasm_bindgen(js_name = removeMember)]
-        pub fn remove_member_identity(
-            &mut self,
-            member: &WasmAuthoringFamilyMemberHandle,
-        ) -> Result<bool, JsValue> {
-            let id = self.identity_member_id(member)?;
             self.remove_id(id)
         }
 
