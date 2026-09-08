@@ -1,4 +1,4 @@
-name: Mobile review qualification (temporary)
+name: Mobile capture trace (temporary)
 on:
   push:
     branches: [codex/mobile-review-iteration]
@@ -10,47 +10,35 @@ concurrency:
   cancel-in-progress: true
 jobs:
   qualify:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 12
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v7
+      - name: Preserve diagnostic instrumentation
+        run: cp mobile-capture-trace.py "$RUNNER_TEMP/mobile-capture-trace.py"
       - uses: actions/checkout@v7
         with:
           ref: d857c51dcd79f12f221daa3daeca7608165154a4
-      - name: Validate immutable runtime provenance and rebuild Python assets
+      - name: Use immutable integrated runtime
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          mkdir -p mobile-review-evidence
-          git rev-parse HEAD > mobile-review-evidence/source-sha.txt
-          git archive HEAD | gzip > mobile-review-evidence/source.tar.gz
-          git fetch --depth=1 origin 1ca4c7b4de994ebea317577fa245ead25647c04d
-          git diff --exit-code 1ca4c7b4de994ebea317577fa245ead25647c04d HEAD -- crates Cargo.toml Cargo.lock
           gh run download 34175323387 --repo yongkyuns/noon --name playground-cross-browser-web-runtime --dir "$RUNNER_TEMP/runtime"
           mkdir -p web/pkg
           cp -a "$RUNNER_TEMP/runtime/pkg/." web/pkg/
           node scripts/build-python-worker.mjs
-          python3 -m unittest discover -s web/python -p 'test_*.py'
-          node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs
+          python3 "$RUNNER_TEMP/mobile-capture-trace.py"
       - name: Install pinned WebKit
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps webkit
-      - name: Mobile default, forced main, no-JSPI and source behavior
+      - name: Preserve exact intermediate and final captures before assertions
         env:
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-review-evidence/first
-        run: node scripts/playground-main-thread-mobile-smoke.mjs
-      - name: Independent repeat in fresh browser contexts
-        env:
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-review-evidence/repeat
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-review-evidence
         run: node scripts/playground-main-thread-mobile-smoke.mjs
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mobile-review-${{ matrix.os }}
+          name: mobile-capture-trace
           path: mobile-review-evidence
           retention-days: 7
