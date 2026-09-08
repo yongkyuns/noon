@@ -82,35 +82,6 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
                 def memberCount(self):
                     return len(self.members)
 
-                def _add(self, member):
-                    key = member.identity
-                    if key in self.members:
-                        return False
-                    self.members.append(key)
-                    return True
-
-                def addMobject(self, member):
-                    assert member.store is self.store
-                    return self._add(member)
-
-                def addFamily(self, member):
-                    assert member.store is self.store
-                    return self._add(member)
-
-                def _remove(self, member):
-                    key = member.identity
-                    if key not in self.members:
-                        return False
-                    self.members.remove(key)
-                    return True
-
-                def removeMobject(self, member):
-                    return self._remove(member)
-
-                def removeFamily(self, member):
-                    return self._remove(member)
-
-
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
@@ -131,7 +102,8 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             store = FakeStore()
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, store.createMobject)
-            handles._create_family_handle = store.createFamily
+            import _typed_family_test_support as _family_test
+            _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
             handles.install()
 
             from noon import Circle, Square, VGroup
@@ -154,6 +126,15 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             family.remove(first)
             assert list(family) == [second]
             assert family._semantic_family_handle.memberCount == 1
+
+            family._semantic_family_handle.reject_membership = True
+            try:
+                family.add(first, second)
+                raise AssertionError("expected shared rejection")
+            except RuntimeError:
+                pass
+            assert list(family) == [second]
+            family._semantic_family_handle.reject_membership = False
 
             nested = VGroup(first)
             outer = VGroup(nested, second)

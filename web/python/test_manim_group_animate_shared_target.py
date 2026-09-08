@@ -132,37 +132,14 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                 def memberCount(self):
                     return len(self.members)
 
-                def addMobject(self, member):
-                    identity = member.identity()
-                    if identity in self.members:
-                        return False
-                    self.members.append(identity)
-                    return True
-
-                def addFamily(self, member):
-                    identity = member.identity()
-                    if identity in self.members:
-                        return False
-                    self.members.append(identity)
-                    return True
-
-                def removeMobject(self, member):
-                    identity = member.identity()
-                    if identity not in self.members:
-                        return False
-                    self.members.remove(identity)
-                    return True
-
-                def removeFamily(self, member):
-                    return self.removeMobject(member)
-
                 def targetEditor(self):
                     return FakeFamilyTargetEditor(self)
 
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, FakeHandle)
-            fake_js.noonCreateAuthoringFamilyHandle = FakeFamilyHandle
+            import _typed_family_test_support as _family_test
+            _family_test.install_bridge(fake_js, FakeFamilyHandle, FakeFamilyHandle, FakeHandle, js=True)
             sys.modules["js"] = fake_js
 
             import _manim_compat

@@ -35,6 +35,25 @@ struct SceneMembershipBatch {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl SceneMembershipBatch {
+    fn create_family(
+        &self,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    ) -> Result<noon::MobjectFamily, String> {
+        if self.kind != SceneMembershipBatchKind::Add {
+            return Err("family creation requires an add batch".into());
+        }
+        noon::MobjectFamily::create(store, &self.family_members()?)
+    }
+
+    fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, String> {
+        let members = self.family_members()?;
+        match self.kind {
+            SceneMembershipBatchKind::Add => family.add_many(&members),
+            SceneMembershipBatchKind::Remove => family.remove_many(&members),
+            _ => Err("family membership requires add or remove".into()),
+        }
+    }
+
     fn family_members(&self) -> Result<Vec<noon::MobjectFamilyMember<'_>>, String> {
         if !self.bindings.is_empty() {
             return Err("family membership does not accept scene binding reservations".into());
@@ -3083,6 +3102,22 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmSceneMembershipBatch {
         inner: SceneMembershipBatch,
+    }
+
+    impl WasmSceneMembershipBatch {
+        pub(crate) fn create_family(
+            &self,
+            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Result<noon::MobjectFamily, String> {
+            self.inner.create_family(store)
+        }
+
+        pub(crate) fn edit_family(
+            &self,
+            family: &noon::MobjectFamily,
+        ) -> Result<Vec<bool>, String> {
+            self.inner.edit_family(family)
+        }
     }
 
     #[wasm_bindgen]
@@ -6491,6 +6526,20 @@ mod tests {
             bindings: Vec::new(),
         };
         assert_eq!(batch.family_members().unwrap().len(), 1);
+        let family = batch
+            .create_family(std::rc::Rc::clone(scene.store()))
+            .unwrap();
+        let committed = scene.store().borrow().scene_revision();
+        assert_eq!(committed, revision.checked_next().unwrap());
+        assert_eq!(batch.edit_family(&family).unwrap(), vec![false]);
+        batch.kind = SceneMembershipBatchKind::Remove;
+        assert!(batch
+            .create_family(std::rc::Rc::clone(scene.store()))
+            .is_err());
+        assert_eq!(batch.edit_family(&family).unwrap(), vec![true]);
+        batch.kind = SceneMembershipBatchKind::Clear;
+        let revision = scene.store().borrow().scene_revision();
+        assert!(batch.edit_family(&family).is_err());
         batch.bindings.push((ObjectId::new(1), object.clone()));
         assert!(batch.family_members().is_err());
         batch.bindings.clear();

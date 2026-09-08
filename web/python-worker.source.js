@@ -2,6 +2,7 @@ import initNoonWeb, {
   WasmAuthoringStore,
   WasmAuthoringVectorPath,
   WasmManimGeometryOptions,
+  WasmSceneMembershipBatch,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
@@ -133,7 +134,8 @@ async function initializePyodide() {
     authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
-  self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
+  self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
+  self.noonCreateAuthoringFamilyHandle = (batch) => authoringStore.createFamily(batch);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;

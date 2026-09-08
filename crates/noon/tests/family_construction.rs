@@ -134,3 +134,48 @@ fn live_member_batch_rejects_a_late_cycle_without_partial_publication() {
     }
     assert_eq!(execution.frame().objects.len(), 2);
 }
+
+#[test]
+fn authored_member_batches_roll_back_cycles_and_late_invalid_handles() {
+    let scene = Scene::new();
+    let first = scene.circle(0.2).unwrap();
+    let second = scene.square(0.4).unwrap();
+    let nested = scene.family(&[(&first).into()]).unwrap();
+    let outer = scene.family(&[(&nested).into()]).unwrap();
+    let revision = scene.store().borrow().scene_revision();
+    assert!(nested
+        .add_many(&[(&second).into(), (&outer).into()])
+        .is_err());
+    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(
+        semantic_family_leaf_ids(&scene.store().borrow(), nested.node_id()).unwrap(),
+        vec![first.node_id()]
+    );
+    let other = Scene::new();
+    let foreign = other.circle(0.2).unwrap();
+    assert!(nested
+        .remove_many(&[(&first).into(), (&foreign).into()])
+        .is_err());
+    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(
+        nested
+            .add_many(&[(&second).into(), (&second).into()])
+            .unwrap(),
+        vec![true, false]
+    );
+    assert_eq!(
+        scene.store().borrow().scene_revision(),
+        revision.checked_next().unwrap()
+    );
+    assert_eq!(
+        nested
+            .remove_many(&[(&first).into(), (&second).into(), (&first).into()])
+            .unwrap(),
+        vec![true, true, false]
+    );
+    assert!(
+        semantic_family_leaf_ids(&scene.store().borrow(), nested.node_id())
+            .unwrap()
+            .is_empty()
+    );
+}
