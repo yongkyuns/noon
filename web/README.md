@@ -96,6 +96,10 @@ Run the same builder in a native window with `cargo run --example analytic_profi
 
 The frame profiler emits schema 2. Its measurements must not be compared with the removed JSON scene/delta profiler; the aggregate benchmark name also distinguishes the direct Rust path.
 
+`node scripts/retained-dynamic-stress-perf.mjs` runs the unchanged five-second Dynamic Load Stress gallery source through shared execution. Each loop authors a fresh source session and reports all ten authored phases, with 626 final visible objects. Defaults are 60 Hz and two loops for each worker transport (`transferable` and `shared`). Set `NOON_RETAINED_STRESS_BACKEND=webgl` for WebGL2; `NOON_RETAINED_STRESS_SAMPLE_HZ`, `NOON_RETAINED_STRESS_WORKER_LOOPS`, and `NOON_RETAINED_STRESS_TRANSPORTS` select explicitly labeled qualification subsets.
+
+This stress report measures the source/worker/runtime/render round trip. Its schema 2 does not establish isolated CPU/GPU budgets, warm replay, or the removed exported-scene profiler's morph activation thresholds. A lower sampling rate qualifies execution coverage, not 60 Hz performance.
+
 ## Vector paths
 
 Generic paths are semantic command streams and remain distinct from analytic circle/rectangle/line fast paths. The Rust and Python APIs support move, line, quadratic, cubic, and close commands:

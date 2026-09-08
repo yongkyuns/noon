@@ -8,9 +8,14 @@ const sourcePath = parameters.get("source") ?? "./python/demo_scene.py";
 if (!sourcePath.startsWith("./python/") || !sourcePath.endsWith(".py")) {
   throw new Error("scene performance source must be a local ./python/*.py file");
 }
-const warmupFrames = positiveInteger("warmup", 30);
+const warmupFrames = positiveInteger("warmup", 30, 0);
 const measuredFrames = positiveInteger("frames", 180);
 const targetHz = positiveNumber("targetHz", 60);
+const transportMode = parameters.get("transportMode") ?? "transferable";
+if (!["transferable", "shared"].includes(transportMode)) throw new Error("unsupported transportMode");
+const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
+  ? positiveInteger("sharedSlotCapacity") : undefined;
+const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
@@ -58,7 +63,8 @@ try {
     continuation = isContinuation;
     const ready = await execution.startSemanticExecution(descriptor, {
       authoringClient: client,
-      transportMode: "transferable",
+      transportMode,
+      ...(sharedSlotCapacity === undefined ? {} : { sharedSlotCapacity }),
       ...(continuation ? { pacing: "external_samples" } : { initiallyPaused: true }),
     });
     resolveAttached(ready);
@@ -96,7 +102,9 @@ try {
     const started = performance.now();
     await advanceSample((warmupFrames + frame + 1) / targetHz);
     firstMeasuredTime ??= lastSampleTime;
-    cadence.record(timestamp, performance.now() - started);
+    const advanceRoundTripMs = performance.now() - started;
+    cadence.record(timestamp, advanceRoundTripMs);
+    samples?.push({ sceneTime: lastSampleTime, advanceRoundTripMs });
   }
   const measurementEnd = performance.now();
   jank.stop();
@@ -105,6 +113,7 @@ try {
   const frame = cadence.summary();
   const report = {
     schemaVersion: 2,
+    ...(samples === null ? {} : { samples }),
     benchmark: "Noon shared authored scene profile",
     generatedAt: new Date().toISOString(),
     scene: { source: sourcePath, context, objects: metrics.objectCount, camera: "authored" },
@@ -194,11 +203,11 @@ function nextAnimationFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
-function positiveInteger(name, fallback) {
+function positiveInteger(name, fallback, minimum = 1) {
   const value = parameters.get(name);
   if (value === null) return fallback;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) throw new Error(`${name} must be an integer >= ${minimum}`);
   return parsed;
 }
 
