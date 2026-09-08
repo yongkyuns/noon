@@ -76,15 +76,17 @@ async function assertApplied(page, expectedId) {
   assert.equal(result.selectedExampleId, expectedId);
 }
 
-function visiblePixels(bytes) {
+function changedPixels(bytes, backgroundBytes) {
   const image = PNG.sync.read(bytes);
-  const background = image.data.subarray(0, 3);
+  const background = PNG.sync.read(backgroundBytes);
+  assert.equal(image.width, background.width, "canvas capture width changed");
+  assert.equal(image.height, background.height, "canvas capture height changed");
   let count = 0;
   for (let i = 0; i < image.data.length; i += 4) {
     if (image.data[i + 3] && Math.max(
-      Math.abs(image.data[i] - background[0]),
-      Math.abs(image.data[i + 1] - background[1]),
-      Math.abs(image.data[i + 2] - background[2]),
+      Math.abs(image.data[i] - background.data[i]),
+      Math.abs(image.data[i + 1] - background.data[i + 1]),
+      Math.abs(image.data[i + 2] - background.data[i + 2]),
     ) > 12) count += 1;
   }
   return count;
@@ -135,6 +137,11 @@ try {
     await waitForIdle(page);
 
     await page.locator("#scene").scrollIntoViewIfNeeded();
+    // Capture the empty canvas at the same bounds. Fractional CSS clipping can
+    // include an edge pixel of the surrounding pane; it is not the clear color.
+    // Compare every pixel against this empty surface, not against its corner.
+    const background = await page.locator("#scene").screenshot();
+    await writeFile(path.join(artifactDir, `${variant.name}-background.png`), background);
 
     // Observe the first execution, not a metrics call blocked by retirement of a
     // previous Python context. Context retirement is serialized behind an active
@@ -174,16 +181,16 @@ try {
     await writeFile(path.join(artifactDir, `${variant.name}-samples.json`), JSON.stringify(samples, null, 2));
     assert.ok(observation, "mobile source did not publish its intermediate transformation");
     const intermediate = await page.locator("#scene").screenshot();
-    assert.ok(visiblePixels(intermediate) > 20, "mobile intermediate frame is blank");
+    await writeFile(path.join(artifactDir, `${variant.name}-intermediate.png`), intermediate);
+    assert.ok(changedPixels(intermediate, background) > 20, "mobile intermediate frame is blank");
     await page.evaluate(() => window.__mobileRun);
     await assertApplied(page, "parity-square-to-circle");
     const final = await page.locator("#scene").screenshot();
+    await writeFile(path.join(artifactDir, `${variant.name}-final.png`), final);
     metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
     assert.equal(metrics?.metrics?.objectCount, 0, "FadeOut did not remove the object");
     assert.ok(Math.abs(metrics.metrics.time - 3) < 1e-6, "source did not complete at its authored time");
-    assert.equal(visiblePixels(final), 0, "mobile final FadeOut frame retained visible geometry");
-    await writeFile(path.join(artifactDir, `${variant.name}-intermediate.png`), intermediate);
-    await writeFile(path.join(artifactDir, `${variant.name}-final.png`), final);
+    assert.equal(changedPixels(final, background), 0, "mobile final FadeOut frame retained visible geometry");
 
     await page.evaluate(() => window.__noonExampleGallery.select("parity-create-circle"));
     await assertApplied(page, "parity-create-circle");
