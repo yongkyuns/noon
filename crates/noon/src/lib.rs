@@ -35,6 +35,7 @@ mod rounded_rectangle_authoring;
 mod scalar_authoring;
 mod sector_authoring;
 pub mod semantic_mobject;
+#[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
 
 pub use animation_authoring::DeclaredAnimation;
@@ -63,6 +64,7 @@ mod scene;
 mod scene_membership;
 pub use scene::Scene;
 pub use scene_membership::SceneMembershipRequest;
+#[cfg(any(feature = "native-text", feature = "typst"))]
 pub use text_authoring::*;
 
 /// Common imports for direct typed semantic authoring.
