@@ -1,0 +1,59 @@
+name: Callback scalar performance (temporary)
+on:
+  push:
+    branches: [codex/gallery-callback-performance]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fc565e7f6a658e83eed93c8f78a2c83a892a0398
+          path: candidate
+      - uses: actions/checkout@v7
+        with:
+          ref: 183bf3d39d158f68b53767ed99e7ca337326777b
+          path: baseline
+      - name: Reuse identical engine and regenerate each Python host
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          for source in baseline candidate; do
+            git -C "$source" rev-parse HEAD > "evidence/$source-sha.txt"
+            git -C "$source" fetch --depth=1 origin e81476c3c3b3be11ff7d3aa74972bef2c1a36813
+            git -C "$source" diff --exit-code e81476c3c3b3be11ff7d3aa74972bef2c1a36813 HEAD -- crates Cargo.toml Cargo.lock
+            gh run download 34224490113 --repo yongkyuns/noon --name gallery-web-runtime --dir "$source/web"
+            (cd "$source" && node scripts/build-python-worker.mjs)
+            sha256sum "$source"/web/pkg/* > "evidence/$source-engine-sha256.txt"
+          done
+      - run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Two paired MovingDots measurements with reversed order
+        env:
+          NOON_PRODUCT_EXAMPLE: parity-moving-dots
+        run: |
+          set -euo pipefail
+          for repetition in 1 2; do
+            order='baseline candidate'
+            if test "$repetition" = 2; then order='candidate baseline'; fi
+            for source in $order; do
+              NOON_PRODUCT_SITE_ROOT="$GITHUB_WORKSPACE/$source" \
+              NOON_PRODUCT_LABEL="$source" \
+              NOON_PRODUCT_ARTIFACT_DIR="$GITHUB_WORKSPACE/evidence/$repetition/$source" \
+              node candidate/scripts/playground-product-e2e.mjs
+            done
+            node candidate/scripts/playground-product-compare.mjs "evidence/$repetition/baseline" "evidence/$repetition/candidate"
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: callback-scalar-performance
+          path: evidence
+          retention-days: 7
