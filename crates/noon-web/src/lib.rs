@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-mod authoring_facade;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
 mod authoring_mobject;
@@ -42,7 +41,6 @@ mod retained_text_family_transport;
 mod retained_typst_canvas;
 mod semantic_execution_player;
 
-pub use authoring_facade::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_geometry::*;
 pub use authoring_mobject::*;

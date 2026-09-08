@@ -4,32 +4,12 @@
     "crates/noon-web/examples/manim_elbow_oracle.rs": {
       "noon::legacy::Elbow": 1,
       "noon::legacy::IntoSnapshot": 1
-    },
-    "crates/noon-web/src/authoring_facade.rs": {
-      "noon::legacy::Animate": 1,
-      "noon::legacy::Animation": 1,
-      "noon::legacy::Circle": 1,
-      "noon::legacy::Create": 1,
-      "noon::legacy::FadeIn": 1,
-      "noon::legacy::FadeOut": 1,
-      "noon::legacy::IntoSnapshot": 1,
-      "noon::legacy::Line": 1,
-      "noon::legacy::Mobject": 1,
-      "noon::legacy::Rectangle": 1,
-      "noon::legacy::Rotate": 1,
-      "noon::legacy::Scene": 1,
-      "noon::legacy::Square": 1,
-      "noon::legacy::Transform": 1
     }
   },
   "token_budgets": {
     "crates/noon/src/legacy/semantic_snapshot.rs": {
       "ObjectSnapshot": 6,
       "from_legacy": 5
-    },
-    "crates/noon-web/src/authoring_facade.rs": {
-      "ObjectSnapshot": 3,
-      "noon::legacy": 2
     },
     "crates/noon-web/src/authoring_mobject.rs": {
       "ObjectSnapshot": 3,

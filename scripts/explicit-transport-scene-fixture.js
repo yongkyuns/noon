@@ -1,24 +1,14 @@
-// These browser smokes exercise explicit serialized scene entry points, including
-// a real worker boundary. Build their codec fixture through the current semantic
-// authoring facade instead of restoring a production demo/export API.
-export function createExplicitTransportSceneJson(wasm) {
-  const scene = new wasm.AuthoringSceneCore();
-  const circle = scene.add(wasm.authoringCircle(0.65));
-  const rectangle = scene.add(wasm.authoringRectangle(1.5, 0.9));
-  const line = scene.add(wasm.authoringLine(-1.2, 0, 1.2, 0));
-  const square = scene.add(wasm.authoringSquare(0.8));
+// Fixed inputs for the existing scene codec, worker transport and recovery tests.
+// Captured from the former fixture producer at c7d708c7; semantic authoring is
+// qualified by paired live programs. #959 deletes these with the old codec.
+const fixtures = fetch(new URL("../web/fixtures/execution-transport.json", import.meta.url))
+  .then((response) => {
+    if (!response.ok) throw new Error(`transport fixtures: HTTP ${response.status}`);
+    return response.json();
+  });
 
-  scene.moveTo(circle, -2.0, 0.6);
-  scene.moveTo(rectangle, 2.0, 0.6);
-  scene.moveTo(line, -1.5, -1.4);
-  scene.moveTo(square, 1.5, -1.4);
-
-  // These worker fixtures assert active playback and repeated presentation, so
-  // give the otherwise static transport scene a real authored semantic track.
-  const animation = scene.animate(circle);
-  animation.moveTo(-0.4, 0.6);
-  const batch = scene.createPlayBatch();
-  scene.appendAnimate(batch, animation);
-  scene.playBatch(batch, 4.0, "linear");
-  return scene.sceneJson();
+export async function loadExecutionTransportFixture(name) {
+  const corpus = await fixtures;
+  if (!Object.hasOwn(corpus, name)) throw new Error(`unknown transport fixture: ${name}`);
+  return JSON.stringify(corpus[name]);
 }
