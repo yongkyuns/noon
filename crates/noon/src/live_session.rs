@@ -7,6 +7,7 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 use crate::{
+    family_authoring::FamilyArrangePlan,
     semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
@@ -16,8 +17,8 @@ use crate::{
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
-    FamilyArrangePlan, FamilyTranslation, ManimBecomeOptions, ManimLineEndpoints, Mobject,
-    MobjectFamily, MobjectFamilyMember, SceneMembershipRequest, ValueTracker,
+    ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectFamilyMember,
+    SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -1926,21 +1927,14 @@ impl<'a> LiveSession<'a> {
             )
         })
         .map_err(LiveSessionError::Mobject)?;
-        let shifts = plan
-            .finish(direction_x, direction_y, buff, center)
-            .map_err(LiveSessionError::Mobject)?
-            .into_iter()
-            .flat_map(FamilyTranslation::into_shifts)
-            .collect::<Vec<_>>();
-        let mut transaction = SemanticMutationTransaction::new();
-        for (leaf, x, y) in shifts {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
-            let mut translation = self.authored(&mobject)?.transform.translation;
-            translation.x += x;
-            translation.y += y;
-            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
-        }
+        let transaction = plan
+            .transaction(direction_x, direction_y, buff, center, |leaf| {
+                let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
+                self.authored(&mobject)
+                    .map(|state| state.transform.translation)
+                    .map_err(|error| error.to_string())
+            })
+            .map_err(LiveSessionError::Mobject)?;
         self.apply(transaction)
     }
 
@@ -4579,6 +4573,60 @@ mod recursive_composition_tests {
         );
         assert!((second_center.0 - first_center.0 - 0.6).abs() < 1e-6);
         assert!((first_center.0 + second_center.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn live_family_arrange_accumulates_aliases_for_detached_and_reachable_members() {
+        for mounted in [false, true] {
+            let mut scene = Scene::new();
+            let first = scene.circle(0.2).unwrap();
+            let mut second = scene.circle(0.2).unwrap();
+            second.shift(2.0, 0.0).unwrap();
+            let unrelated = scene.square(1.0).unwrap();
+            let nested = scene.family(&[&first, &second]).unwrap();
+            let outer = scene.family(&[&first]).unwrap();
+            scene
+                .store()
+                .borrow_mut()
+                .add_member(outer.node_id(), nested.node_id())
+                .unwrap();
+            scene.add(&unrelated).unwrap();
+            if mounted {
+                scene.add(&first).unwrap();
+                scene.add(&second).unwrap();
+            }
+            let mut session = scene.execution_session().unwrap();
+            let mut live = scene.live(&mut session);
+            let before = live.session.publication_context();
+            let unrelated_before = live.effective(&unrelated).unwrap();
+
+            assert!(live
+                .arrange_family(&outer, 1.0, 0.0, f64::NAN, true)
+                .is_err());
+            assert_eq!(live.session.publication_context(), before);
+            assert_eq!(first.center().unwrap(), (0.0, 0.0));
+            assert_eq!(second.center().unwrap(), (2.0, 0.0));
+
+            live.arrange_family(&outer, 1.0, 0.0, 0.2, true).unwrap();
+            assert_eq!(
+                live.session.publication_context().scene_revision(),
+                before.scene_revision().checked_next().unwrap()
+            );
+            assert!((first.center().unwrap().0 + 2.0).abs() < 1e-6);
+            assert!((second.center().unwrap().0 - 1.3).abs() < 1e-6);
+            let unrelated_after = live.effective(&unrelated).unwrap();
+            assert_eq!(unrelated_after.transform, unrelated_before.transform);
+            assert_eq!(unrelated_after.style, unrelated_before.style);
+            assert_eq!(unrelated_after.appearance, unrelated_before.appearance);
+            if mounted {
+                assert!(
+                    (live.effective(&first).unwrap().transform.translation.x + 2.0).abs() < 1e-6
+                );
+                assert!(
+                    (live.effective(&second).unwrap().transform.translation.x - 1.3).abs() < 1e-6
+                );
+            }
+        }
     }
 
     #[test]

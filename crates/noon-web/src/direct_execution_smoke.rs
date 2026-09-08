@@ -359,6 +359,15 @@ pub async fn create_direct_family_transform_indicate_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for shared static/live family arrangement with aliased members.
+#[wasm_bindgen(js_name = createDirectFamilyArrangementSmokeRenderer)]
+pub async fn create_direct_family_arrangement_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::family_arrangement::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct host for shared ordinary-vector Write / DrawBorderThenFill semantics.
 #[wasm_bindgen(js_name = createDirectDrawBorderThenFillSmokeRenderer)]
 pub async fn create_direct_draw_border_then_fill_smoke_renderer(

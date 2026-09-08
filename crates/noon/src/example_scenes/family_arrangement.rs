@@ -1,0 +1,69 @@
+//! Shared nested-family arrangement before and after a logical wait boundary.
+use std::rc::Rc;
+
+use crate::{
+    Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
+    Scene,
+};
+
+pub struct FamilyArrangement {
+    family: MobjectFamily,
+    stage: u8,
+}
+
+impl LiveContinuation for FamilyArrangement {
+    type Error = String;
+
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+        match self.stage {
+            0 => {
+                self.stage = 1;
+                live.wait_segment(0.5)
+                    .map(ContinuationStep::Await)
+                    .map_err(|e| e.to_string())
+            }
+            1 => {
+                live.arrange_family(&self.family, 0.0, 1.0, 0.3, false)
+                    .map_err(|e| e.to_string())?;
+                self.stage = 2;
+                live.wait_segment(0.5)
+                    .map(ContinuationStep::Await)
+                    .map_err(|e| e.to_string())
+            }
+            2 => {
+                self.stage = 3;
+                Ok(ContinuationStep::Finished)
+            }
+            _ => Err("family arrangement resumed after completion".into()),
+        }
+    }
+}
+
+pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
+    let mut scene = Scene::new();
+    let mut first = Mobject::manim_circle(Rc::clone(scene.store()), 0.2)?;
+    let mut second = Mobject::manim_circle(Rc::clone(scene.store()), 0.2)?;
+    for (object, color) in [(&mut first, Color::BLUE), (&mut second, Color::YELLOW)] {
+        object.set_fill(
+            f64::from(color.red),
+            f64::from(color.green),
+            f64::from(color.blue),
+            1.0,
+        )?;
+        object.set_stroke_width(0.0)?;
+    }
+    second.shift(2.0, 0.0)?;
+    let nested = scene.family(&[&first, &second])?;
+    let family = scene.family(&[&first])?;
+    scene
+        .store()
+        .borrow_mut()
+        .add_member(family.node_id(), nested.node_id())
+        .map_err(|e| e.to_string())?;
+    family.arrange(1.0, 0.0, 0.2, true)?;
+    scene.add(&first)?;
+    scene.add(&second)?;
+    scene
+        .into_live_program(FamilyArrangement { family, stage: 0 })
+        .map_err(|e| e.to_string())
+}

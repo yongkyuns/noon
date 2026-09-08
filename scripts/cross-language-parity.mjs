@@ -13,7 +13,7 @@ execFileSync("cargo", ["build", "--quiet", "--workspace", "--all-features", "--e
   { cwd: repoRoot, stdio: "inherit" });
 const binary = path.resolve(repoRoot, process.env.CARGO_TARGET_DIR ?? "target", "debug/examples/cross_language_parity");
 const corpus = execFileSync(binary, [], { cwd: repoRoot, encoding: "utf8" }).trim().split("\n").map(JSON.parse);
-assert.equal(corpus.length, 9, "paired live program inventory changed");
+assert.equal(corpus.length, 10, "paired live program inventory changed");
 const artifacts = path.resolve(repoRoot, process.env.NOON_PARITY_ARTIFACTS ?? "browser-smoke-artifacts/cross-language");
 await mkdir(artifacts, { recursive: true });
 await writeFile(path.join(artifacts, "rust.json"), `${JSON.stringify(corpus, null, 2)}\n`);
