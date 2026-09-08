@@ -203,52 +203,11 @@ async function renderManimReferences() {
   return results;
 }
 
-function noonSourceFor(fixture, { semantic = false } = {}) {
+function noonSourceFor(fixture) {
   const adapted = fixtureSourceFor(fixture).replace("from manim import *", "from noon import *");
-  if (semantic) {
-    // Leave construction to the normal async authoring runner. Class metadata
-    // selects the fixture without rewriting its construct method or callbacks.
-    return `${adapted}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${fixture.scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
-  }
-  // The export harness constructs explicitly so it can retain the exact selected
-  // Scene object. Mirror execute_construct's authoring-scope ownership around that
-  // lifecycle: once the first canonical play creates a retained session, subsequent
-  // constructors and edits must publish through that same owner rather than mutate
-  // detached semantic handles outside its revision context.
-  return `${adapted}\n\nimport _manim_reactive as _noon_reactive\nresult = ${fixture.scene}()\n_noon_authoring_token = _noon_reactive._enter_authoring_scene(result)\ntry:\n    result.setup()\n    try:\n        result.construct()\n    finally:\n        result.tear_down()\nfinally:\n    _noon_reactive._leave_authoring_scene(_noon_authoring_token)\n`;
-}
-
-async function authorNoonScenes() {
-  const browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: ["--disable-dev-shm-usage"],
-  });
-  try {
-    const page = await browser.newPage();
-    await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
-    await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
-    await page.evaluate(() => window.noonManimCompat.ready());
-    const scenes = new Map();
-    for (const fixture of manifest.fixtures) {
-      const result = await page.evaluate(
-        (source) => window.noonManimCompat.run(source),
-        noonSourceFor(fixture),
-      );
-      assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
-      assert.ok(result.document.objects.length > 0, `${fixture.id}: Noon scene has no objects`);
-      assert.equal(result.duration, fixture.expected_duration, `${fixture.id}: authored Noon duration`);
-      scenes.set(fixture.id, {
-        document: result.document,
-        duration: Number(result.duration),
-        hasCallbacks: result.callbacks !== null,
-        hasSemanticCamera: Number.isInteger(result.document.camera_object),
-      });
-    }
-    return scenes;
-  } finally {
-    await browser.close();
-  }
+  // Selection is host bootstrap. The normal source runner owns construct and
+  // continuation; authored semantics and callbacks remain unchanged.
+  return `${adapted}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${fixture.scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
 }
 
 function browserArgs(backend) {
@@ -278,153 +237,82 @@ function browserArgs(backend) {
   ];
 }
 
-async function createDeterministicCapturePage(browser, expectedBackend, backend) {
-  const page = await browser.newPage({
-    viewport: { width: reference.pixel_width + 40, height: reference.pixel_height + 40 },
-  });
-  await page.goto(`${baseUrl}/web/browser-smoke.html`, { waitUntil: "load" });
-  await page.waitForFunction(() => window.noonSmoke?.state.ready === true, null, {
-    timeout: 30_000,
-  });
-  const initial = await page.evaluate(() => window.noonSmoke.metrics());
-  assert.equal(initial.rendererBackend, expectedBackend, `${backend}: selected renderer backend`);
-  return page;
-}
-
-async function createHostCapturePage(browser) {
-  const page = await browser.newPage({
-    viewport: { width: reference.pixel_width + 40, height: reference.pixel_height + 40 },
-  });
+async function prepareHostCapturePage(page) {
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
   await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonHostRaster.ready());
-  return page;
 }
 
-async function captureDeterministicFixture(
-  page,
-  fixture,
-  authored,
-  referenceResult,
-  fixtureDir,
-) {
+async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend) {
   const loaded = await page.evaluate(
-    (json) => window.noonSmoke.loadScene(json),
-    JSON.stringify(authored.document),
+    ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
+    { source: noonSourceFor(fixture), loopDuration: Math.max(1, fixture.expected_duration + 1) },
   );
-  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: loaded object count`);
-  const captures = [];
-  for (const sample of referenceResult.samples) {
-    const metrics = await page.evaluate(
-      (time) => window.noonSmoke.renderAt(time),
-      sample.time,
-    );
-    assert.equal(metrics.error, null, `${fixture.id}: Noon render error at ${sample.time}`);
-    assert.equal(metrics.presented, true, `${fixture.id}: frame was not presented at ${sample.time}`);
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
-    const outputPath = path.join(fixtureDir, `${sample.label}.png`);
-    await page.locator("#scene").screenshot({ path: outputPath });
-    captures.push({ ...sample, noonPath: outputPath, metrics });
-  }
-  return {
-    duration: authored.duration,
-    objectCount: authored.document.objects.length,
-    captures,
-  };
-}
+  assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: shared source execution`);
+  assert.equal(loaded.rendererBackend, expectedBackend, `${fixture.id}: host renderer backend`);
 
-async function captureHostFixture(
-  page,
-  fixture,
-  authored,
-  referenceResult,
-  fixtureDir,
-  expectedBackend,
-  backend,
-) {
-  const loaded = await page.evaluate(
-    ({ source, loopDuration, mode }) => window.noonHostRaster.load(source, loopDuration, { mode }),
-    {
-      source: noonSourceFor(fixture, { semantic: authored.hasCallbacks }),
-      loopDuration: Math.max(1, fixture.expected_duration + 1),
-      mode: authored.hasCallbacks ? "semantic" : "document",
-    },
-  );
-  if (authored.hasCallbacks) {
-    assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: canonical callback execution`);
-  } else {
-    assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
-  }
-  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);
-  assert.equal(loaded.rendererBackend, expectedBackend, `${backend}: host renderer backend`);
-
+  // Manim's final materialized frame may precede its logical endpoint. Sample
+  // those exact frame times, then complete the normal source continuation to
+  // verify duration/lifecycle without changing any reference screenshot.
+  const frameTimes = [...referenceResult.frameTimes, fixture.expected_duration];
   const captures = [];
   for (const sample of referenceResult.samples) {
     const metrics = await page.evaluate(
       ({ frameIndex, frameTimes }) => window.noonHostRaster.renderThrough(frameIndex, frameTimes),
-      { frameIndex: sample.frameIndex, frameTimes: referenceResult.frameTimes },
+      { frameIndex: sample.frameIndex, frameTimes },
     );
     assert.equal(metrics.error, null, `${fixture.id}: host render error at frame ${sample.frameIndex}`);
     assert.equal(metrics.presented, true, `${fixture.id}: host frame ${sample.frameIndex} not presented`);
     assert.equal(metrics.frameIndex, sample.frameIndex, `${fixture.id}: host frame index`);
-    assert.ok(
-      Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
-      `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`,
-    );
-    // Match the deterministic capture path: rendering/present submits GPU work,
-    // while the browser compositor owns when that surface becomes screenshot-visible.
-    // Waiting one paint prevents callback-heavy scenes from being captured mid-present.
+    assert.ok(Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
+      `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`);
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     const outputPath = path.join(fixtureDir, `${sample.label}.png`);
     await page.locator("#scene").screenshot({ path: outputPath });
-    captures.push({ ...sample, noonPath: outputPath, metrics });
+    const debugFrame = await page.evaluate(() => window.noonHostRaster.debugFrame());
+    assert.equal(debugFrame.time, metrics.time, `${fixture.id}: diagnostic/raster time`);
+    captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
   }
-  return {
-    duration: authored.duration,
-    objectCount: authored.document.objects.length,
-    captures,
-  };
+  const completed = await page.evaluate((times) =>
+    window.noonHostRaster.renderThrough(times.length - 1, times), frameTimes);
+  assert.equal(completed.authoredDuration, fixture.expected_duration,
+    `${fixture.id}: shared source duration`);
+  return { duration: completed.authoredDuration, objectCount: completed.objectCount, captures };
 }
 
-async function captureNoonBackend(backend, authoredScenes, references) {
-  const browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: browserArgs(backend),
-  });
+async function captureNoonBackend(backend, references) {
+  const browser = await chromium.launch({ channel: "chromium", headless: true, args: browserArgs(backend) });
   const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
   try {
+    // Share the browser cache, while each source gets a fresh page and workers.
+    const context = await browser.newContext({
+      viewport: { width: reference.pixel_width + 40, height: reference.pixel_height + 40 },
+    });
     const output = new Map();
     for (const fixture of manifest.fixtures) {
       let page = null;
+      let deadline;
       try {
-        const authored = authoredScenes.get(fixture.id);
-        const referenceResult = references.get(fixture.id);
         const fixtureDir = path.join(artifactRoot, backend, fixture.id);
         await mkdir(fixtureDir, { recursive: true });
-
-        if (authored.hasCallbacks || authored.hasSemanticCamera) {
-          page = await createHostCapturePage(browser);
-          output.set(
-            fixture.id,
-            await captureHostFixture(
-              page,
-              fixture,
-              authored,
-              referenceResult,
-              fixtureDir,
-              expectedBackend,
-              backend,
-            ),
-          );
-        } else {
-          page = await createDeterministicCapturePage(browser, expectedBackend, backend);
-          output.set(
-            fixture.id,
-            await captureDeterministicFixture(page, fixture, authored, referenceResult, fixtureDir),
-          );
-        }
+        page = await context.newPage();
+        const result = await Promise.race([
+          (async () => {
+            await prepareHostCapturePage(page);
+            return captureHostFixture(page, fixture, references.get(fixture.id), fixtureDir, expectedBackend);
+          })(),
+          new Promise((_, reject) => {
+            deadline = setTimeout(() => reject(new Error("shared fixture exceeded 60 seconds")), 60_000);
+          }),
+        ]);
+        output.set(fixture.id, result);
+        console.log(`[PASS] ${fixture.id}/${backend}: shared execution completed`);
+      } catch (error) {
+        const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+        output.set(fixture.id, { error: detail });
+        console.error(`[FAIL] ${fixture.id}/${backend}: ${detail}`);
       } finally {
+        clearTimeout(deadline);
         await page?.close();
       }
     }
@@ -555,12 +443,18 @@ async function compareAll(references, backendResults) {
     fixtures: [],
   };
   const enforcementFailures = [];
+  const executionFailures = [];
 
   for (const fixture of manifest.fixtures) {
     const referenceResult = references.get(fixture.id);
     const backendEntries = {};
     for (const backend of backends) {
       const actualResult = backendResults.get(backend).get(fixture.id);
+      if (actualResult.error) {
+        backendEntries[backend] = { error: actualResult.error };
+        executionFailures.push(`${fixture.id}/${backend}: ${actualResult.error}`);
+        continue;
+      }
       const timingDelta = actualResult.duration - referenceResult.frames.duration;
       const samples = [];
       for (const capture of actualResult.captures) {
@@ -582,6 +476,7 @@ async function compareAll(references, backendResults) {
           time: capture.time,
           reference: referenceStats,
           noon: noonStats,
+          debugFrame: capture.debugFrame,
           boundsDelta: bboxDelta(referenceStats, noonStats),
           diff: {
             differingPixels: diff.differingPixels,
@@ -620,6 +515,7 @@ async function compareAll(references, backendResults) {
   for (const fixture of report.fixtures) {
     for (const backend of backends) {
       const entry = fixture.backends[backend];
+      if (entry.error) continue;
       const categories = [...new Set(entry.samples.flatMap((sample) => sample.categories))];
       const worstRatio = Math.max(...entry.samples.map((sample) => sample.diff.differingRatio));
       console.log(
@@ -628,6 +524,9 @@ async function compareAll(references, backendResults) {
           `categories=${categories.join("|") || "none"}`,
       );
     }
+  }
+  if (executionFailures.length > 0) {
+    throw new Error(`Shared raster execution failures (report: ${reportPath}):\n${executionFailures.join("\n")}`);
   }
   if (enforcementFailures.length > 0) {
     throw new Error(`Manim raster parity failures:\n${enforcementFailures.join("\n")}`);
@@ -662,10 +561,9 @@ async function waitForServer() {
 try {
   const references = await renderManimReferences();
   await waitForServer();
-  const authoredScenes = await authorNoonScenes();
   const backendResults = new Map();
   for (const backend of backends) {
-    backendResults.set(backend, await captureNoonBackend(backend, authoredScenes, references));
+    backendResults.set(backend, await captureNoonBackend(backend, references));
   }
   const reportPath = await compareAll(references, backendResults);
   console.log(`ManimCE raster differential report: ${reportPath}`);

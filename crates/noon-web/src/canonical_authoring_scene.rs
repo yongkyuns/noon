@@ -5232,6 +5232,15 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Read the returned owner's current frame without creating or advancing a player.
+        #[wasm_bindgen(js_name = liveDebugFrameJson)]
+        pub fn live_debug_frame_json(&mut self) -> Result<String, JsValue> {
+            self.inner
+                .active_live_player()
+                .map(|player| player.debug_frame_json())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveHandoffDuration)]
         pub fn live_handoff_duration(&self) -> Option<f64> {
             self.inner.live_handoff_duration()

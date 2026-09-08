@@ -2375,6 +2375,12 @@ impl SemanticExecutionPlayer {
             .ok_or_else(|| "initial snapshot missing".into())
     }
 
+    /// Explicit read-only diagnostics; never used to drive or reconstruct execution.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = debugFrameJson))]
+    pub fn debug_frame_json(&self) -> String {
+        crate::semantic_snapshot::execution_frame_value(&self.session).to_string()
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = resourceBundleBytes))]
     pub fn resource_bundle_bytes(&self) -> Vec<u8> {
         self.resource_bundle.clone()

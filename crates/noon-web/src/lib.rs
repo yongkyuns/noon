@@ -77,4 +77,3 @@ pub use retained_text_family_transport::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_typst_canvas::*;
 pub use semantic_execution_player::*;
-pub use semantic_snapshot::*;

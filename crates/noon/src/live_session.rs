@@ -3799,6 +3799,122 @@ mod tests {
     }
 
     #[test]
+    fn raster_lagged_fades_of_late_detached_family_members() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(0.3).unwrap();
+        scene.add(&anchor).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let wait = live.wait_segment(1.0).unwrap();
+        live.advance_segment_to(wait, 1.0).unwrap();
+        live.complete_segment(wait).unwrap();
+        let first = live
+            .create_manim_geometry(crate::ManimGeometryOptions::square(0.7).unwrap())
+            .unwrap();
+        let second = live
+            .create_manim_geometry(crate::ManimGeometryOptions::square(0.7).unwrap())
+            .unwrap();
+        let _family = live
+            .family(&[
+                MobjectFamilyMember::Mobject(&first),
+                MobjectFamilyMember::Mobject(&second),
+            ])
+            .unwrap();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new()
+                .run_time(2.2)
+                .rate_func(RateFunction::Linear)
+                .lag_ratio(0.1),
+            children: [&first, &second]
+                .into_iter()
+                .map(|target| AnimationCompositionRequest::Fade {
+                    target,
+                    direction: SemanticFadeDirection::In,
+                    endpoint: FadeEndpoint::default(),
+                    options: AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                })
+                .collect(),
+        };
+        let segment = live
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .unwrap();
+        for index in 30..=96 {
+            live.advance_segment_to(segment, f64::from(index) / 30.0)
+                .unwrap();
+        }
+        live.complete_segment(segment).unwrap();
+        assert_eq!(live.effective(&first).unwrap().appearance, 1.0);
+        assert_eq!(live.effective(&second).unwrap().appearance, 1.0);
+    }
+
+    #[test]
+    fn fade_in_accepts_detached_family_members_but_rejects_reachable_targets() {
+        for nested_family in [false, true] {
+            let scene = Scene::new();
+            let shape = scene.circle(0.5).unwrap();
+            let family = scene.family(&[&shape]).unwrap();
+            let mut session = scene.execution_session().unwrap();
+            let mut live = scene.live(&mut session);
+            let outer = live
+                .family(&[MobjectFamilyMember::Family(&family)])
+                .unwrap();
+            let segment = if nested_family {
+                live.declare_and_activate_family_fade(
+                    &family,
+                    SemanticFadeDirection::In,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear)
+                        .introducer(true),
+                )
+            } else {
+                live.declare_and_activate_fade(
+                    &shape,
+                    SemanticFadeDirection::In,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+            }
+            .unwrap();
+            live.advance_segment_to(segment, segment.end_time())
+                .unwrap();
+            live.complete_segment(segment).unwrap();
+            assert_eq!(live.effective(&shape).unwrap().appearance, 1.0);
+            assert!(!scene
+                .store()
+                .borrow()
+                .semantic_family_members_checked(scene.root())
+                .unwrap()
+                .contains(&outer.node_id()));
+            let before = live.session.publication_context();
+            let rejected = if nested_family {
+                live.declare_and_activate_family_fade(
+                    &family,
+                    SemanticFadeDirection::In,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear)
+                        .introducer(true),
+                )
+            } else {
+                live.declare_and_activate_fade(
+                    &shape,
+                    SemanticFadeDirection::In,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+            };
+            assert!(rejected.is_err());
+            assert_eq!(live.session.publication_context(), before);
+        }
+    }
+
+    #[test]
     fn single_leaf_fade_enters_exits_and_readds_the_same_handle_locally() {
         let mut scene = Scene::new();
         let anchor = scene.circle(0.5).unwrap();
