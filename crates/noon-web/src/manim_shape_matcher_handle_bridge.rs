@@ -82,14 +82,9 @@ impl WasmAuthoringFamilyLayout {
         buff_y: f64,
         corner_radius: f64,
     ) -> Result<WasmManimGeometryOptions, JsValue> {
-        ManimGeometryOptions::surrounding_rectangle(
-            self.completed_bounds()?,
-            buff_x,
-            buff_y,
-            corner_radius,
-        )
-        .map(WasmManimGeometryOptions::from_options)
-        .map_err(js_error)
+        ManimGeometryOptions::surrounding_rectangle(self.bounds(), buff_x, buff_y, corner_radius)
+            .map(WasmManimGeometryOptions::from_options)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = beginBackgroundRectangle)]
@@ -101,7 +96,7 @@ impl WasmAuthoringFamilyLayout {
         fill_opacity: f64,
     ) -> Result<WasmManimGeometryOptions, JsValue> {
         ManimGeometryOptions::background_rectangle(
-            self.completed_bounds()?,
+            self.bounds(),
             buff_x,
             buff_y,
             corner_radius,

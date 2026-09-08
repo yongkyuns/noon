@@ -60,6 +60,10 @@ pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
         .borrow_mut()
         .add_member(family.node_id(), nested.node_id())
         .map_err(|e| e.to_string())?;
+    let bounds = family.layout_bounds()?.ok_or("family bounds are empty")?;
+    if (bounds.width() - 2.4).abs() > 1e-6 || (bounds.height() - 0.4).abs() > 1e-6 {
+        return Err("shared family bounds differ from its authored members".into());
+    }
     family.arrange(1.0, 0.0, 0.2, true)?;
     scene.add(&first)?;
     scene.add(&second)?;

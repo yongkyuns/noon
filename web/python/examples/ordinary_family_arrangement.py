@@ -8,6 +8,8 @@ class OrdinaryFamilyArrangement(Scene):
         second.shift(2 * RIGHT)
         # One semantic leaf participates in both a direct and a nested member.
         family = VGroup(first, VGroup(first, second))
+        assert abs(family.width - 2.4) < 1e-6
+        assert abs(family.height - 0.4) < 1e-6
         family.arrange(RIGHT, buff=0.2)
         self.add(first, second)
         self.wait(0.5)

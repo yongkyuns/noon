@@ -1661,11 +1661,11 @@ def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
     return resolver(value)
 
 
-def _shared_family_layout_session(value: object, *, mutation: bool = False):
+def _shared_family_layout(value: object, *, mutation: bool = False):
     if not isinstance(value, _compat.Group):
         return None
     family_handle = getattr(value, "_semantic_family_handle", None)
-    if family_handle is None or not hasattr(family_handle, "layoutSession"):
+    if family_handle is None or not hasattr(family_handle, "layout"):
         return None
     leaves = _compat._leaf_mobjects(value)
     leaf_handles = [
@@ -1673,11 +1673,7 @@ def _shared_family_layout_session(value: object, *, mutation: bool = False):
     ]
     if not all(handle is not None for handle in leaf_handles):
         return None
-    session = family_handle.layoutSession()
-    for handle in leaf_handles:
-        assert handle is not None
-        session.includeMobject(handle)
-    return session, leaves, leaf_handles
+    return family_handle.layout(), leaves, leaf_handles
 
 
 def _apply_family_translation(
@@ -1686,10 +1682,9 @@ def _apply_family_translation(
     leaves: list[_base.Mobject],
     leaf_handles: list[object],
 ) -> _compat.Group:
+    translation.apply()
     for member, handle in zip(leaves, leaf_handles):
-        translation.applyMobject(handle)
         _sync_bound_transform(member, handle)
-    translation.finish()
     return self
 
 
@@ -1702,7 +1697,7 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
         except Exception as error:
             raise ValueError(str(error)) from None
         return self
-    shared = _shared_family_layout_session(self, mutation=True)
+    shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_SHIFT(self, direction)
     session, leaves, leaf_handles = shared
@@ -1719,7 +1714,7 @@ def _group_move_to(
     aligned_edge: object = _base.ORIGIN,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _compat.Group:
-    shared = _shared_family_layout_session(self, mutation=True)
+    shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
     session, leaves, leaf_handles = shared
@@ -1728,7 +1723,7 @@ def _group_move_to(
 
     translation = None
     if isinstance(point_or_mobject, _compat.Group):
-        target_shared = _shared_family_layout_session(point_or_mobject)
+        target_shared = _shared_family_layout(point_or_mobject)
         if target_shared is not None and hasattr(session, "moveToFamily"):
             target_session = target_shared[0]
             translation = session.moveToFamily(
@@ -1776,7 +1771,7 @@ def _group_next_to(
             coor_mask,
         )
 
-    shared = _shared_family_layout_session(self, mutation=True)
+    shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_NEXT_TO(
             self,
@@ -1795,7 +1790,7 @@ def _group_next_to(
 
     translation = None
     if isinstance(mobject_or_point, _compat.Group):
-        target_shared = _shared_family_layout_session(mobject_or_point)
+        target_shared = _shared_family_layout(mobject_or_point)
         if target_shared is not None and hasattr(session, "nextToFamily"):
             translation = session.nextToFamily(
                 target_shared[0],
@@ -1853,7 +1848,7 @@ def _group_align_to(
     mobject_or_point: object,
     direction: object = _base.ORIGIN,
 ) -> _compat.Group:
-    shared = _shared_family_layout_session(self, mutation=True)
+    shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
     session, leaves, leaf_handles = shared
@@ -1861,7 +1856,7 @@ def _group_align_to(
 
     translation = None
     if isinstance(mobject_or_point, _compat.Group):
-        target_shared = _shared_family_layout_session(mobject_or_point)
+        target_shared = _shared_family_layout(mobject_or_point)
         if target_shared is not None and hasattr(session, "alignToFamily"):
             translation = session.alignToFamily(target_shared[0], axis.x, axis.y)
     elif _alignment_is_mobject(mobject_or_point):
@@ -1931,11 +1926,10 @@ def _group_arrange(
 def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     leaves = _compat._leaf_mobjects(value)
 
-    # Group/VGroup wrapper traversal remains host-language metadata, but the shared
-    # family graph independently derives the expected recursive leaf sequence and
-    # rejects any wrapper divergence. Rust owns the actual aggregate bounds math.
+    # Rust observes the complete semantic family directly. The wrapper list only
+    # selects whether this caller is eligible for the shared query.
     if isinstance(value, _compat.Group):
-        shared = _shared_family_layout_session(value)
+        shared = _shared_family_layout(value)
         if shared is not None:
             session = shared[0]
             return (

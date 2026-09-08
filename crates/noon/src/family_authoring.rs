@@ -18,12 +18,11 @@ use std::{
 ///
 /// Frontends may retain wrapper trees for language-level identity, but the shared
 /// semantic family decides which leaves are mutated and in what order. The delta is
-/// validated once in Rust and then applied directly to each shared leaf handle.
+/// validated once in Rust; all affected leaves are then committed atomically.
 #[derive(Clone, Debug)]
 #[doc(hidden)]
 pub struct FamilyTranslation {
     source_members: Vec<SemanticNodeId>,
-    next_index: usize,
     delta: (f64, f64),
 }
 
@@ -46,49 +45,22 @@ impl FamilyTranslation {
         let delta = semantic_xy_f64(delta_x, delta_y)?;
         Ok(Self {
             source_members,
-            next_index: 0,
             delta: (delta.x, delta.y),
         })
     }
 
-    /// Apply one ordered leaf edit through a typed caller operation.
-    pub fn apply_with<F>(&mut self, source_member: SemanticNodeId, apply: F) -> Result<(), String>
-    where
-        F: FnOnce((f64, f64)) -> Result<(), String>,
-    {
-        let expected = self
-            .source_members
-            .get(self.next_index)
-            .copied()
-            .ok_or_else(|| "family translation has no remaining leaves".to_owned())?;
-        if source_member != expected {
-            return Err(format!(
-                "family translation leaf mismatch at index {}: expected {expected:?}, got {source_member:?}",
-                self.next_index
-            ));
-        }
-        apply(self.delta)?;
-        self.next_index += 1;
-        Ok(())
-    }
-
-    pub fn apply(
-        &mut self,
-        source_member: SemanticNodeId,
-        member: &mut Mobject,
-    ) -> Result<(), String> {
-        self.apply_with(source_member, |delta| member.shift(delta.0, delta.1))
-    }
-
-    pub fn finish(&self) -> Result<(), String> {
-        if self.next_index != self.source_members.len() {
-            return Err(format!(
-                "family translation is incomplete: applied {} of {} leaves",
-                self.next_index,
-                self.source_members.len()
-            ));
-        }
-        Ok(())
+    /// Apply every observed leaf occurrence in one semantic transaction.
+    pub fn apply(self, store: &mut SemanticStore) -> Result<(), String> {
+        let transaction = translation_transaction(self.into_shifts(), |leaf| {
+            store
+                .semantic_object_state_checked(leaf)
+                .map(|state| state.transform.translation)
+                .map_err(|error| error.to_string())
+        })?;
+        transaction
+            .apply(store)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     pub fn into_shifts(self) -> Vec<(SemanticNodeId, f64, f64)> {
@@ -99,12 +71,37 @@ impl FamilyTranslation {
     }
 }
 
+fn translation_transaction<F>(
+    shifts: impl IntoIterator<Item = (SemanticNodeId, f64, f64)>,
+    mut authored_translation: F,
+) -> Result<SemanticMutationTransaction, String>
+where
+    F: FnMut(SemanticNodeId) -> Result<SemanticVec3, String>,
+{
+    // A leaf may occur under several direct members. Accumulate those
+    // ordered translations before publishing one final property per identity.
+    let mut translations = BTreeMap::new();
+    for (leaf, x, y) in shifts {
+        let translation = match translations.entry(leaf) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(authored_translation(leaf)?),
+        };
+        translation.x += x;
+        translation.y += y;
+    }
+    let mut transaction = SemanticMutationTransaction::new();
+    for (leaf, translation) in translations {
+        transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+    }
+    Ok(transaction)
+}
+
 /// Shared Manim family arrangement over authoritative direct-member identity.
 ///
 /// The semantic store snapshots direct membership/order and recursively resolves the
-/// leaf identities each direct member owns. Frontends only feed live shared bounds
-/// for those members in the validated order; all sequencing, buffer math, optional
-/// recentering, and resulting per-member translations are computed here.
+/// leaf identities each direct member owns. Authored and live Rust callers supply
+/// their corresponding bounds; sequencing, buffer math, recentering, and atomic
+/// translation construction remain shared here.
 #[derive(Clone, Debug)]
 #[doc(hidden)]
 pub(crate) struct FamilyArrangePlan {
@@ -226,7 +223,7 @@ impl FamilyArrangePlan {
         direction_y: f64,
         buff: f64,
         center: bool,
-        mut authored_translation: F,
+        authored_translation: F,
     ) -> Result<SemanticMutationTransaction, String>
     where
         F: FnMut(SemanticNodeId) -> Result<SemanticVec3, String>,
@@ -235,22 +232,7 @@ impl FamilyArrangePlan {
             .finish(direction_x, direction_y, buff, center)?
             .into_iter()
             .flat_map(FamilyTranslation::into_shifts);
-        // A leaf may occur under several direct members. Accumulate those
-        // ordered translations before publishing one final property per identity.
-        let mut translations = BTreeMap::new();
-        for (leaf, x, y) in shifts {
-            let translation = match translations.entry(leaf) {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => entry.insert(authored_translation(leaf)?),
-            };
-            translation.x += x;
-            translation.y += y;
-        }
-        let mut transaction = SemanticMutationTransaction::new();
-        for (leaf, translation) in translations {
-            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
-        }
-        Ok(transaction)
+        translation_transaction(shifts, authored_translation)
     }
 
     pub fn finish(
