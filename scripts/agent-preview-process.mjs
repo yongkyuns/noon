@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import { addAbortListener } from "node:events";
+import { performance } from "node:perf_hooks";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const DEFAULT_KILL_GRACE_MS = 1_000;
+const DEFAULT_CLEANUP_TIMEOUT_MS = 1_000;
 const SAFE_ENV_KEYS = ["HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"];
 
 export function buildScrubbedEnvironment(extra = {}) {
@@ -21,6 +24,7 @@ export function buildScrubbedEnvironment(extra = {}) {
     if (typeof value !== "string") {
       throw new TypeError(`environment value for ${key} must be a string`);
     }
+    if (value.includes("\0")) throw new TypeError(`environment value for ${key} contains NUL`);
     environment[key] = value;
   }
   return Object.freeze(environment);
@@ -32,31 +36,31 @@ function validatePositiveInteger(name, value) {
   }
 }
 
-function terminateProcessTree(child, signal) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch (error) {
-      if (error?.code !== "ESRCH") throw error;
-    }
-  }
-  try {
-    child.kill(signal);
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
-  }
-}
-
+/**
+ * Linux process-group lifecycle only, NOT a sandbox or orphan reaper. Descendants
+ * that change session/group can escape. The caller must translate close,
+ * disconnect and graceful shutdown into an AbortSignal and await this promise;
+ * abrupt supervisor death is outside this boundary.
+ *
+ * timeoutMs bounds execution before cleanup. Cleanup adds at most killGraceMs
+ * plus cleanupTimeoutMs (subject to event-loop/OS scheduling). Output is capped
+ * per stream. Cancellation returns diagnostics rather than rejecting.
+ *
+ * cleanup.outcome is deliberately evidence-qualified: group_absent means ESRCH
+ * was observed, sigkill_sent means only that the kernel accepted the group kill
+ * (zombies may remain), and incomplete means signaling or stdio drainage failed.
+ * None of these outcomes proves containment of escaped-session descendants.
+ */
 export async function runBoundedChild({
   command,
   args = [],
   cwd,
   env = {},
+  signal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
   killGraceMs = DEFAULT_KILL_GRACE_MS,
+  cleanupTimeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
 }) {
   if (typeof command !== "string" || command.length === 0) {
     throw new TypeError("command must be a non-empty string");
@@ -70,71 +74,134 @@ export async function runBoundedChild({
   validatePositiveInteger("timeoutMs", timeoutMs);
   validatePositiveInteger("maxOutputBytes", maxOutputBytes);
   validatePositiveInteger("killGraceMs", killGraceMs);
+  validatePositiveInteger("cleanupTimeoutMs", cleanupTimeoutMs);
+  if (signal !== undefined && !(signal instanceof AbortSignal)) {
+    throw new TypeError("signal must be an AbortSignal");
+  }
+  const environment = buildScrubbedEnvironment(env);
+  // No Windows direct-child fallback masquerading as descendant ownership.
+  if (process.platform !== "linux") {
+    throw new Error("process-group supervisor currently supports Linux only");
+  }
 
-  const startedAt = Date.now();
-  const child = spawn(command, args, {
-    cwd,
-    env: buildScrubbedEnvironment(env),
-    detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
-
+  const startedAt = performance.now();
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
+  let exitCode = null;
+  let exitSignal = null;
   let terminationReason = null;
   let forcedKill = false;
-  let graceTimer = null;
+  let leaderExited = false;
+  let stdioClosed = false;
+  const errors = [];
+  const result = (outcome) => Object.freeze({
+    exitCode, signal: exitSignal, terminationReason, forcedKill,
+    durationMs: performance.now() - startedAt,
+    stdout: stdout.toString("utf8"), stderr: stderr.toString("utf8"),
+    cleanup: Object.freeze({
+      scope: "linux_process_group", outcome, leaderExited, stdioClosed,
+      errors: Object.freeze(errors.map((error) => Object.freeze(error))),
+    }),
+  });
+  if (signal?.aborted) {
+    terminationReason = "canceled";
+    stdioClosed = true;
+    return result("not_started");
+  }
 
+  const child = spawn(command, args, {
+    cwd, env: environment, detached: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  const timers = new Set();
+  const after = (ms) => new Promise((resolve) => {
+    const timer = setTimeout(() => { timers.delete(timer); resolve(); }, ms);
+    timers.add(timer);
+  });
+  let requestStop;
+  const stopped = new Promise((resolve) => {
+    requestStop = (reason) => { terminationReason ??= reason; resolve(); };
+  });
+  let processError;
+  const leaderDone = new Promise((resolve) => {
+    child.once("exit", (code, receivedSignal) => {
+      leaderExited = true;
+      exitCode = code;
+      exitSignal = receivedSignal;
+      resolve();
+    });
+    child.once("error", (error) => { processError = error; resolve(); });
+  });
+  const closed = new Promise((resolve) => {
+    child.once("close", () => { stdioClosed = true; resolve(true); });
+  });
   const append = (streamName, chunk) => {
     const current = streamName === "stdout" ? stdout : stderr;
-    const nextLength = current.length + chunk.length;
-    if (nextLength > maxOutputBytes) {
-      terminationReason ??= "output_limit";
-      terminateProcessTree(child, "SIGTERM");
-      if (graceTimer === null) {
-        graceTimer = setTimeout(() => {
-          if (child.exitCode === null && child.signalCode === null) {
-            forcedKill = true;
-            terminateProcessTree(child, "SIGKILL");
-          }
-        }, killGraceMs);
-      }
-      return;
-    }
-    if (streamName === "stdout") stdout = Buffer.concat([stdout, chunk]);
-    else stderr = Buffer.concat([stderr, chunk]);
+    const remaining = maxOutputBytes - current.length;
+    const next = Buffer.concat([current, chunk.subarray(0, remaining)]);
+    if (streamName === "stdout") stdout = next;
+    else stderr = next;
+    if (chunk.length > remaining) requestStop("output_limit");
   };
-
   child.stdout.on("data", (chunk) => append("stdout", chunk));
   child.stderr.on("data", (chunk) => append("stderr", chunk));
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.once("error", (error) => {
+      errors.push({ operation: "stdio", code: error.code ?? "UNKNOWN" });
+      requestStop("io_error");
+    });
+  }
 
-  const timeout = setTimeout(() => {
-    terminationReason ??= "timeout";
-    terminateProcessTree(child, "SIGTERM");
-    graceTimer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        forcedKill = true;
-        terminateProcessTree(child, "SIGKILL");
-      }
-    }, killGraceMs);
-  }, timeoutMs);
-
+  // Group identity, never the direct child's exitCode, controls termination.
+  const signalGroup = (requestedSignal) => {
+    if (!child.pid) return "not_started";
+    try {
+      process.kill(-child.pid, requestedSignal);
+      return "sent";
+    } catch (error) {
+      if (error.code === "ESRCH") return "group_absent";
+      errors.push({ operation: requestedSignal, code: error.code ?? "UNKNOWN" });
+      return "incomplete";
+    }
+  };
+  let abortSubscription;
+  const deadline = setTimeout(() => requestStop("timeout"), timeoutMs);
   try {
-    const result = await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (exitCode, signal) => resolve({ exitCode, signal }));
-    });
-    return Object.freeze({
-      ...result,
-      terminationReason,
-      forcedKill,
-      durationMs: Date.now() - startedAt,
-      stdout: stdout.toString("utf8"),
-      stderr: stderr.toString("utf8"),
-    });
+    if (signal) abortSubscription = addAbortListener(signal, () => requestStop("canceled"));
+    // Exit and close are distinct: inherited pipes may outlive the leader,
+    // while independent pipes may close with a descendant still executing.
+    await Promise.race([leaderDone, stopped]);
+    clearTimeout(deadline);
+    let outcome = signalGroup("SIGTERM");
+    if (outcome === "sent" || outcome === "incomplete") {
+      terminationReason ??= "descendant_cleanup";
+      // One non-resettable grace window. Neither a flood, another cancellation,
+      // nor direct-child close is allowed to cancel or postpone escalation.
+      await after(killGraceMs);
+      outcome = signalGroup("SIGKILL");
+      if (outcome === "sent") {
+        forcedKill = true;
+        outcome = "sigkill_sent";
+      }
+    }
+    const drained = await Promise.race([closed, after(cleanupTimeoutMs).then(() => false)]);
+    if (!drained || errors.length > 0) {
+      if (!drained) terminationReason ??= "cleanup_timeout";
+      outcome = "incomplete";
+    }
+    const report = result(outcome);
+    if (processError) {
+      processError.cleanup = report.cleanup;
+      throw processError;
+    }
+    return report;
   } finally {
-    clearTimeout(timeout);
-    if (graceTimer !== null) clearTimeout(graceTimer);
+    clearTimeout(deadline);
+    for (const timer of timers) clearTimeout(timer);
+    abortSubscription?.[Symbol.dispose]();
+    // An escaped pipe owner or unkillable child must not retain local resources
+    // forever. Failure is explicit above; unref/destroy is not a containment win.
+    child.stdout.destroy();
+    child.stderr.destroy();
+    child.unref();
   }
 }
