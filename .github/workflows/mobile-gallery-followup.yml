@@ -1,0 +1,27 @@
+name: Mobile gallery follow-up (temporary)
+on:
+  push:
+    branches: [codex/mobile-gallery-followup-validation]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 77e5e2dcbab75b424756e5925c60953c463f8466
+      - name: Capture immutable source and current public revision
+        run: |
+          set -euo pipefail
+          mkdir -p gallery-followup
+          git archive HEAD | gzip > gallery-followup/source.tar.gz
+          git rev-parse HEAD > gallery-followup/source-sha.txt
+          curl --fail --silent --show-error -H 'Cache-Control: no-cache' "https://yongkyuns.github.io/noon/build-info.json?t=$(date +%s)" > gallery-followup/public-build-info.json
+          cat gallery-followup/public-build-info.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gallery-followup-source
+          path: gallery-followup
+          retention-days: 3
