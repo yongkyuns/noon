@@ -1,129 +1,50 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-
-import {
-  STRESS_PHASES,
-  STRESS_REACTIVATION_TIMES,
-  STRESS_FINAL_VISIBLE_OBJECT_COUNT,
-  STRESS_SOURCE_SHA256,
-  assertSteadyStressTelemetry,
-  assertRetainedMorphReactivation,
-  assertFirstMorphActivationLatency,
-  classifyStressPhase,
-  fixedStressSampleTimes,
-  summarizeStressPhases,
-} from "./retained-dynamic-stress-perf-lib.mjs";
-
-test("fixed stress samples cover the complete authored five-second loop", () => {
-  const samples = fixedStressSampleTimes();
-  assert.equal(samples.length, 301);
-  assert.equal(samples[0], 0);
-  assert.equal(samples.at(-1), 5);
-  assert.match(STRESS_SOURCE_SHA256, /^[0-9a-f]{64}$/u);
-  assert.equal(STRESS_FINAL_VISIBLE_OBJECT_COUNT, 626);
-  assert.equal(STRESS_PHASES[0].start, 0);
-  assert.equal(STRESS_PHASES.at(-1).end, 5);
-  for (let index = 1; index < STRESS_PHASES.length; index += 1) {
-    assert.equal(STRESS_PHASES[index - 1].end, STRESS_PHASES[index].start);
-  }
-  assert.equal(classifyStressPhase(0.9), "morph-a");
-  assert.equal(classifyStressPhase(4.3), "lifecycle-churn");
-  assert.equal(classifyStressPhase(4.7), "final-wave");
+import { fixedStressSampleTimes, classifyStressPhase, validateStressReport } from "./retained-dynamic-stress-perf-lib.mjs";
+const options = { transportMode: "shared", rendererBackend: "WebGPU", sampleHz: 60 };
+function complete() {
+  return { schemaVersion: 2, setup: { warmupFrames: 0 }, scene: { objects: 626 },
+    environment: { rendererBackend: "WebGPU", targetHz: 60 },
+    execution: { mode: "semantic", transportMode: "shared", sourceContinuation: true,
+      sourceCompleted: true, authoredDuration: 5, firstMeasuredTime: 1 / 60, lastMeasuredTime: 5 },
+    cadence: { frames: 300 },
+    samples: fixedStressSampleTimes().slice(1).map(sceneTime => ({ sceneTime, advanceRoundTripMs: 3 })) };
+}
+test("complete fixed samples preserve all ten authored phases and measured timings", () => {
+  const phases = validateStressReport(complete(), options);
+  assert.equal(phases.length, 10);
+  assert.equal(phases.reduce((count, phase) => count + phase.samples, 0), 300);
+  assert.ok(phases.every(phase => phase.advanceRoundTripMs.p95 === 3));
+  assert.equal(classifyStressPhase(0.35), "create-grid");
   assert.equal(classifyStressPhase(5), "final-wave");
+  assert.equal(classifyStressPhase(5.01), null);
 });
-
-test("morph resources remain installed when a completed loop is reactivated", () => {
-  const rows = STRESS_REACTIVATION_TIMES.map((sceneTime) => ({
-    sceneTime,
-    dirty: true,
-    geometryCacheMisses: 0,
-    inlineRenderGeometryCount: 0,
-    renderGeometryResourceCount:
-      (sceneTime >= 0.9 && sceneTime < 1.45) || (sceneTime >= 2.17 && sceneTime < 2.72)
-        ? 600
-        : 0,
-    uploadBytes: 64,
-  }));
-  const retained = assertRetainedMorphReactivation(rows);
-  assert.deepEqual(retained.morphs.map((phase) => phase.samples), [3, 3]);
-
-  const regressed = structuredClone(rows);
-  regressed.find((sample) => sample.sceneTime === 2.4).geometryCacheMisses = 1;
-  assert.throws(
-    () => assertRetainedMorphReactivation(regressed),
-    /morph-b reactivation must retain installed geometry resources/u,
-  );
-
-  const redundantlyUploaded = structuredClone(rows);
-  redundantlyUploaded.find((sample) => sample.sceneTime === 1.1).uploadBytes = 13_281_024;
-  assert.throws(
-    () => assertRetainedMorphReactivation(redundantlyUploaded),
-    /morph-a reactivation must upload compact dynamic state/u,
-  );
-
-  const repackedOnEntry = structuredClone(rows);
-  repackedOnEntry.find((sample) => sample.sceneTime === 0.92).uploadBytes = 13_281_024;
-  assert.throws(
-    () => assertRetainedMorphReactivation(repackedOnEntry),
-    /morph-a reactivation must upload compact dynamic state/u,
-  );
+test("reject truncated, misrouted, incomplete, malformed and cheaper workloads", () => {
+  const mutations = [
+    report => report.samples.pop(),
+    report => report.samples[20].sceneTime = 4,
+    report => report.samples[20].advanceRoundTripMs = NaN,
+    report => report.samples[20].advanceRoundTripMs = -1,
+    report => report.execution.sourceCompleted = false,
+    report => report.execution.sourceContinuation = false,
+    report => report.execution.authoredDuration = 4,
+    report => report.execution.lastMeasuredTime = 4,
+    report => report.execution.mode = "legacy",
+    report => report.execution.transportMode = "transferable",
+    report => report.environment.rendererBackend = "WebGL2",
+    report => report.scene.objects = 10,
+    report => report.setup.warmupFrames = 30,
+  ];
+  for (const mutate of mutations) {
+    const report = complete(); mutate(report);
+    assert.throws(() => validateStressReport(report, options));
+  }
 });
-
-test("phase summaries and steady telemetry preserve the dynamic workload", () => {
-  const rows = fixedStressSampleTimes().map((sceneTime) => ({
-    sceneTime,
-    dirty: sceneTime <= 5,
-    engineMs: 1,
-    transportApplyMs: 2,
-    rendererRenderMs: 3,
-    totalMs: 6,
-    deltaBytes: 10,
-    uploadBytes: 64,
-    geometryCacheMisses: 0,
-    inlineRenderGeometryCount: 0,
-    renderGeometryResourceCount:
-      (sceneTime >= 0.9 && sceneTime < 1.45) || (sceneTime >= 2.17 && sceneTime < 2.72)
-        ? 600
-        : 0,
-  }));
-  const summarize = (values) => ({ count: values.length, max: Math.max(...values) });
-  const phases = summarizeStressPhases(rows, summarize);
-  assert.equal(phases.length, STRESS_PHASES.length);
-  assert.equal(phases.reduce((sum, phase) => sum + phase.samples, 0), rows.length);
-  assert.ok(phases.find((phase) => phase.id === "morph-b").dirtySamples > 0);
-
-  const steady = assertSteadyStressTelemetry(rows);
-  assert.equal(steady.morphs.length, 2);
-  assert.ok(steady.morphs.every((phase) => phase.samples >= 20));
-  assert.ok(steady.morphs.every((phase) => phase.maximumInlineRenderGeometryCount === 0));
-  assert.ok(steady.finalWave.samples >= 20);
-  assert.equal(steady.finalWave.maximumGeometryCacheMisses, 0);
-  assert.equal(steady.finalWave.minimumUploadBytes, 64);
-
-  const coldMorphRegression = structuredClone(rows);
-  coldMorphRegression.find((sample) => sample.sceneTime === 0.9166666666666666).uploadBytes =
-    13_281_024;
-  assert.throws(
-    () => assertSteadyStressTelemetry(coldMorphRegression),
-    /morph-a must upload compact dynamic state/u,
-  );
-});
-
-test("WebGPU first morph activation cannot hide a preload regression", () => {
-  const rows = fixedStressSampleTimes().map((sceneTime) => ({
-    sceneTime,
-    rendererRenderMs: 2,
-    totalMs: 12,
-  }));
-  const accepted = assertFirstMorphActivationLatency(rows, "WebGPU");
-  assert.equal(accepted.enforced, true);
-  assert.equal(accepted.activations.length, 2);
-  assert.equal(assertFirstMorphActivationLatency(rows, "WebGL2").enforced, false);
-
-  rows.find((sample) => sample.sceneTime === 0.9166666666666666).rendererRenderMs = 113;
-  rows.find((sample) => sample.sceneTime === 0.9166666666666666).totalMs = 126;
-  assert.throws(
-    () => assertFirstMorphActivationLatency(rows, "WebGPU"),
-    /morph-a first WebGPU activation must render within 25ms/u,
-  );
+test("coarse runs must still measure every authored phase", () => {
+  const report = complete();
+  report.environment.targetHz = 1;
+  report.execution.firstMeasuredTime = 1;
+  report.cadence.frames = 5;
+  report.samples = fixedStressSampleTimes(5, 1).slice(1).map(sceneTime => ({ sceneTime, advanceRoundTripMs: 1 }));
+  assert.throws(() => validateStressReport(report, { ...options, sampleHz: 1 }), /must be sampled/);
 });
