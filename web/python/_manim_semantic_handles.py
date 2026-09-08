@@ -1771,15 +1771,20 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
 
 
 def _group_live_layout_context(value: _compat.Group):
+    # Callback registration does not invalidate the coherent live publication.
+    # Family observations inside an ordered overlay need shared phase-local
+    # aggregation; neither the authored state nor the last publication suffices.
+    from _manim_updaters import _canonical_phase_context
+
+    leaves = _compat._leaf_mobjects(value)
+    if any(_canonical_phase_context(leaf) is not None for leaf in leaves):
+        raise NotImplementedError("family layout is unsupported during an active callback phase")
     context = _group_target_context(value)
     if context is None:
         return None
-    # Callback overlays and explicit legacy timelines keep their own qualified
-    # read path until #70/#959 migration. Ordinary layout comes from live Rust.
-    for leaf in _compat._leaf_mobjects(value):
+    for leaf in leaves:
         if (not bool(getattr(leaf, "_semantic_handle_fresh", False))
                 or getattr(leaf, "_semantic_handle", None) is None
-                or hasattr(leaf, "_noon_updaters")
                 or getattr(getattr(leaf, "_scene", None), "_legacy_geometry_materialized", False)):
             return None
     return context

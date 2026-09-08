@@ -1058,6 +1058,7 @@ pub fn ordinary_succession_program() -> Result<LiveProgram<OrdinarySuccession>, 
 /// two ordered host callbacks at every required phase.
 pub struct OrdinaryCallbackContinuation {
     circle: Mobject,
+    family: crate::MobjectFamily,
     target: Mobject,
     stage: u8,
 }
@@ -1083,6 +1084,13 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 .map_err(|error| error.to_string())
             }
             1 => {
+                let layout = live
+                    .effective_family_layout(&self.family)
+                    .map_err(|error| error.to_string())?;
+                assert!((layout.center.0 - 2.0).abs() < 1e-6);
+                assert!((layout.center.1 - 1.0).abs() < 1e-6);
+                assert!((layout.width - 0.8).abs() < 1e-6);
+                assert!((layout.height - 0.8).abs() < 1e-6);
                 self.stage = 2;
                 Ok(crate::ContinuationStep::Finished)
             }
@@ -1110,6 +1118,9 @@ pub fn ordinary_callback_continuation_program() -> Result<
         .set_fill(0.0, 0.4, 1.0, 1.0)
         .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&circle).into()])
+        .map_err(|error| error.to_string())?;
 
     let callbacks = ordered_affine_callbacks().map_err(|error| error.to_string())?;
     {
@@ -1132,6 +1143,7 @@ pub fn ordinary_callback_continuation_program() -> Result<
     let program = scene
         .into_live_program(OrdinaryCallbackContinuation {
             circle,
+            family,
             target,
             stage: 0,
         })
