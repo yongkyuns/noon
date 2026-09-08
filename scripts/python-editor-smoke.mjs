@@ -136,21 +136,13 @@ try {
     true,
     `playground failed before loading editor source: ${JSON.stringify(startup)}\n${errors.join("\n")}`,
   );
-  assert.equal(startup.runtimeStartup, "deferred", "page load must not start the execution runtime");
-  assert.equal(
-    await page.locator(".python-code-editor").count(),
-    0,
-    "CodeMirror/Ruff must remain unloaded until the source editor is focused",
-  );
-
-  await page.locator("#python-scene-source").focus();
   await page.waitForSelector(".python-code-editor[data-editor-ready='true'] .cm-editor", {
     timeout: 30_000,
   });
   assert.equal(
     await page.locator(".python-code-editor[data-editor-ready='true']").count(),
     1,
-    "only the visible Python source textarea should be enhanced after focus",
+    "only the visible Python source textarea should be enhanced by bootstrap",
   );
   assert.equal(
     await page.locator("#patch-editor-panel .python-code-editor").count(),
@@ -167,8 +159,7 @@ try {
     "Ruff WASM must stay unloaded while the user only inspects highlighted source",
   );
 
-  await page.locator("#replace-scene").click();
-  await waitForRuntime(page, errors, "enhanced editor");
+  await waitForRuntime(page, errors, "automatic enhanced-editor startup");
   await waitForAppliedScene(page, errors, "enhanced editor");
 
   const layout = await page.evaluate(() => {
@@ -215,7 +206,7 @@ try {
   );
 
   await page.locator("#scene-editor-panel .cm-content").fill(
-    "import os\n\ndef broken():\n    return missing_name\n",
+    "import os\nfrom noon import Circle, Scene, Square\n\ndef broken():\n    return missing_name\n\nclass LintScene(Scene):\n    def construct(self):\n        self.add(Circle(), Square())\n",
   );
   await page.waitForSelector("#scene-editor-panel .cm-lintRange-warning", {
     timeout: 30_000,
@@ -223,6 +214,8 @@ try {
   const lintRanges = await page.locator("#scene-editor-panel .cm-lintRange-warning").count();
   assert.ok(lintRanges >= 1, "Ruff should report inline Python diagnostics after real editor input");
   assert.ok(ruffRequests.length >= 1, "the first real editor input should load Ruff on demand");
+
+  await waitForAppliedScene(page, errors, "live edit with lint diagnostics", "2 objects");
 
   assert.deepEqual(errors, [], `browser errors while loading Python editor:\n${errors.join("\n")}`);
   await page.close();
@@ -244,6 +237,12 @@ try {
     }
   });
 
+  const enhancementWarning = fallbackPage.waitForEvent("console", {
+    predicate: (message) =>
+      message.type() === "warning" &&
+      message.text().includes("Enhanced Python editor unavailable; using textarea fallback"),
+    timeout: 30_000,
+  });
   await fallbackPage.goto(`${baseUrl}/web/index.html?example=parity-create-circle`, {
     waitUntil: "load",
   });
@@ -252,12 +251,6 @@ try {
     null,
     { timeout: 30_000 },
   );
-  const enhancementWarning = fallbackPage.waitForEvent("console", {
-    predicate: (message) =>
-      message.type() === "warning" &&
-      message.text().includes("Enhanced Python editor unavailable; using textarea fallback"),
-    timeout: 30_000,
-  });
   await fallbackPage.locator("#python-scene-source").focus();
   await enhancementWarning;
 
@@ -273,10 +266,8 @@ try {
   assert.equal(fallback.textareaHidden, false, "CDN failure must keep the native textarea visible");
   assert.equal(fallback.editorCount, 0, "failed enhancement must not leave partial editor hosts");
   assert.match(fallback.source, /from noon import \*/);
-  assert.equal(fallback.runtimeStartup, "deferred", "editor fallback must not start the runtime");
 
-  await fallbackPage.locator("#replace-scene").click();
-  await waitForRuntime(fallbackPage, fallbackErrors, "textarea fallback");
+  await waitForRuntime(fallbackPage, fallbackErrors, "automatic textarea fallback startup");
   await waitForAppliedScene(fallbackPage, fallbackErrors, "textarea fallback");
   assert.equal(
     await fallbackPage.locator("#status").getAttribute("data-renderer-backend"),
@@ -305,7 +296,7 @@ try {
   await fallbackContext.close();
 
   console.log(
-    `Python editor smoke passed: deferred startup + one visible CodeMirror + deferred Ruff (${lintRanges} diagnostic(s)) + CDN-blocked textarea fallback with a fresh two-object render.`,
+    `Python editor smoke passed: automatic startup + one visible CodeMirror + live edits with deferred Ruff (${lintRanges} diagnostic(s)) + CDN-blocked textarea fallback with a fresh two-object render.`,
   );
 } finally {
   await browser?.close();

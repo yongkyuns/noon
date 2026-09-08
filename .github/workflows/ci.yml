@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - master
+  # Exercise producer/consumer wiring before CI-infrastructure changes reach master.
+  pull_request:
+    paths:
+      - ".github/actions/dev-wasm-build/**"
+      - ".github/ci/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/compiler-cache-seed.yml"
+      - ".github/workflows/pr-fast.yml"
   workflow_dispatch:
 
 permissions:
@@ -72,46 +80,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Use stable Rust
-        run: |
-          rustup default stable
-          rustup target add wasm32-unknown-unknown
-
-      - name: Cache Cargo sources
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-sources-
-
-      - name: Restore WASM compiler cache
-        uses: actions/cache/restore@v6
-        with:
-          path: /home/runner/.cache/noon-sccache-wasm
-          key: ${{ runner.os }}-sccache-wasm-v1-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-sccache-wasm-v1-
-
-      - name: Use sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
+      - name: Test CI cache and artifact contracts
+        run: node --test .github/ci/*.test.mjs
 
       - name: Build and validate browser package
-        env:
-          NOON_SKIP_PLAYGROUND_TEST: "1"
-          NOON_WASM_PROFILE: "dev"
-          NOON_WASM_SKIP_OPT: "1"
-        run: bash scripts/build-web-demo.sh
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: "true"
 
       - name: Upload browser package
         uses: actions/upload-artifact@v7
@@ -121,6 +96,8 @@ jobs:
             web/pkg
             web/python-worker.js
             web/python/compat-bundle.*.json
+            web/ci-artifact.json
+            web/ci-Cargo.lock
           if-no-files-found: error
           retention-days: 1
 
@@ -136,6 +113,8 @@ jobs:
         with:
           name: web-pkg
           path: web
+      - name: Verify source and browser artifact provenance
+        run: node .github/ci/wasm-build.mjs verify
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
@@ -168,6 +147,8 @@ jobs:
         with:
           name: web-pkg
           path: web
+      - name: Verify source and browser artifact provenance
+        run: node .github/ci/wasm-build.mjs verify
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
@@ -216,6 +197,8 @@ jobs:
         with:
           name: web-pkg
           path: web
+      - name: Verify source and browser artifact provenance
+        run: node .github/ci/wasm-build.mjs verify
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:

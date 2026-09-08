@@ -1,0 +1,50 @@
+name: CI measurements
+
+on:
+  pull_request:
+    paths:
+      - ".github/ci/run-report*"
+      - ".github/workflows/ci-measurements.yml"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Completed run:attempt pairs, separated by commas (maximum 20)"
+        required: true
+        type: string
+        default: "34251123265:1,34258854671:1,34251062699:1,34258854689:1"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-measurements-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Collect historical CI measurements (not product qualification)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout reporter source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test attempt accounting
+        run: node --test .github/ci/run-report.test.mjs
+      - name: Collect completed attempt evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # PRs exercise the collector against the issue's fixed historical samples.
+          # These are not current-head qualification or a controlled before/after trial.
+          TIMING_RUNS: ${{ inputs.runs || '34251123265:1,34258854671:1,34251062699:1,34258854689:1' }}
+        run: node .github/ci/run-report.mjs collect "$GITHUB_REPOSITORY" "$TIMING_RUNS"
+      - name: Upload measurement evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-attempt-measurements-${{ github.run_attempt }}
+          path: ci-artifacts/run-timing
+          if-no-files-found: warn
+          retention-days: 30
