@@ -1,18 +1,12 @@
-import initNoonWeb, {
-  EngineScenePlayer,
-  ExecutionCanvasRenderer,
-} from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 
 const canvas = document.querySelector("#scene");
 const client = new PythonAuthoringClient();
-const readyPromise = Promise.all([initNoonWeb(), client.ready()]);
+const readyPromise = client.ready();
 
-let engine = null;
 let execution = null;
 let sourceFailure = null;
-let renderer = null;
 let currentFrameIndex = -1;
 let currentLogicalTime = 0;
 let activeFrameTimes = null;
@@ -24,22 +18,7 @@ function waitForPaint() {
   });
 }
 
-async function presentDelta(deltaJson) {
-  if (deltaJson === undefined || deltaJson === null) return false;
-  const applied = renderer.applyDeltaJson(deltaJson);
-  if (!applied) return false;
-  let presented = false;
-  for (let attempt = 0; attempt < 4 && !presented; attempt += 1) {
-    presented = renderer.render();
-  }
-  if (!presented) {
-    throw new Error("host raster renderer could not present an applied execution delta");
-  }
-  await waitForPaint();
-  return true;
-}
-
-async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
+async function load(source, loopDurationSeconds) {
   await readyPromise;
   if (typeof source !== "string" || source.trim() === "") {
     throw new TypeError("host raster source must be non-empty");
@@ -48,96 +27,60 @@ async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
   if (!Number.isFinite(loopDuration) || loopDuration <= 0) {
     throw new RangeError("host raster loop duration must be positive and finite");
   }
-  if (renderer !== null || engine !== null || execution !== null) {
+  if (execution !== null) {
     throw new Error("host raster page supports one authored scene per page");
   }
 
-  if (mode === "semantic") {
-    let resolveAttached;
-    let rejectAttached;
-    const attached = new Promise((resolve, reject) => {
-      resolveAttached = resolve;
-      rejectAttached = reject;
-    });
-    const sourceRun = client.run(source, {}, {
-      async onSemanticContinuation(registration) {
-        if (execution !== null) throw new Error("raster source registered a second execution context");
-        execution = new AuthoringExecutionClient(canvas);
-        await execution.startSemanticExecution(registration.semanticExecution, {
-          authoringClient: client,
-          loopDurationSeconds: loopDuration,
-          transportMode: "transferable",
-          pacing: "external_samples",
-        });
-        resolveAttached();
-      },
-    });
-    sourceRun.then((result) => {
-      authoredDuration = result.duration;
-      if (execution === null) rejectAttached(new Error("raster source produced no continuation"));
-    }, (error) => {
-      sourceFailure = error;
-      rejectAttached(error);
-    });
-    await attached;
-    await execution.sampleToAuthoredTime(0);
-    const metrics = (await execution.metrics()).metrics;
-    return {
-      kind: "semantic_execution",
-      duration: authoredDuration,
-      objectCount: metrics.objectCount,
-      rendererBackend: metrics.backend,
-    };
-  }
-  if (mode !== "document") throw new Error(`unsupported raster mode ${mode}`);
-
-  // This #959-owned codec/renderer diagnostic explicitly consumes a scene
-  // document. Canonical callback execution is qualified by the shared-authoring
-  // and direct Rust/WASM proofs without this legacy document adapter.
-  const result = await client.run(source, {}, { exportDocument: true });
-  if (result.kind !== "scene_document") {
-    throw new Error("host raster harness requires a scene document");
-  }
-
-  const sceneJson = JSON.stringify(result.document);
-  engine = new EngineScenePlayer(sceneJson, loopDuration, 1);
-  if (result.callbacks !== null) {
-    throw new Error("document raster fixtures cannot execute host callbacks");
-  }
-  authoredDuration = Number(result.duration);
-
-  // The initial execution delta already carries either the scene's semantic camera
-  // state or the shared default camera. Do not overwrite it with a harness-local
-  // fixed camera; moving-camera fixtures must exercise the production camera role.
-  const initialDelta = engine.initialDeltaJson();
-  renderer = await ExecutionCanvasRenderer.create(canvas.transferControlToOffscreen(), initialDelta);
-  renderer.resize(canvas.width, canvas.height);
-  let presented = false;
-  for (let attempt = 0; attempt < 4 && !presented; attempt += 1) {
-    presented = renderer.render();
-  }
-  if (!presented) {
-    throw new Error("host raster renderer could not present its initial snapshot");
-  }
-  await waitForPaint();
-
+  let resolveAttached;
+  let rejectAttached;
+  const attached = new Promise((resolve, reject) => {
+    resolveAttached = resolve;
+    rejectAttached = reject;
+  });
+  const sourceRun = client.run(source, {}, {
+    async onSemanticContinuation(registration) {
+      if (execution !== null) throw new Error("raster source registered a second execution context");
+      execution = new AuthoringExecutionClient(canvas);
+      await execution.startSemanticExecution(registration.semanticExecution, {
+        authoringClient: client,
+        loopDurationSeconds: loopDuration,
+        transportMode: "transferable",
+        pacing: "external_samples",
+      });
+      resolveAttached();
+    },
+  });
+  sourceRun.then((result) => {
+    authoredDuration = result.duration;
+    if (execution === null) rejectAttached(new Error("raster source produced no continuation"));
+  }, (error) => {
+    sourceFailure = error;
+    rejectAttached(error);
+    execution?.terminate();
+  });
+  await attached;
+  await sampleSharedSource(0);
+  const metrics = (await execution.metrics()).metrics;
   return {
-    kind: result.kind,
+    kind: "semantic_execution",
     duration: authoredDuration,
-    objectCount: result.document.objects.length,
-    rendererBackend: renderer.rendererBackend(),
+    objectCount: metrics.objectCount,
+    rendererBackend: metrics.backend,
   };
 }
 
-async function advanceOneFrame(frameIndex, time) {
+async function sampleSharedSource(time) {
   if (sourceFailure !== null) throw sourceFailure;
-  if (execution !== null) {
-    const sampled = await execution.sampleToAuthoredTime(time);
-    currentLogicalTime = sampled.time;
-  } else {
-    await presentDelta(engine.tickDeltaJson(time * 1000));
-    currentLogicalTime = time;
+  try {
+    return await execution.sampleToAuthoredTime(time);
+  } catch (error) {
+    throw sourceFailure ?? error;
   }
+}
+
+async function advanceOneFrame(frameIndex, time) {
+  const sampled = await sampleSharedSource(time);
+  currentLogicalTime = sampled.time;
   currentFrameIndex = frameIndex;
 }
 
@@ -159,7 +102,7 @@ function normalizeFrameTimes(frameTimes, targetFrame) {
 }
 
 async function renderThrough(frameIndex, frameTimes) {
-  if (execution === null && (renderer === null || engine === null)) {
+  if (execution === null) {
     throw new Error("host raster scene has not been loaded");
   }
   const targetFrame = Number(frameIndex);
@@ -188,35 +131,14 @@ async function renderThrough(frameIndex, frameTimes) {
   }
   await waitForPaint();
 
-  if (execution !== null) {
-    const metrics = (await execution.metrics()).metrics;
-    return {
-      error: null,
-      presented: true,
-      time: currentLogicalTime,
-      objectCount: metrics.objectCount,
-      rendererBackend: metrics.backend,
-      drawCalls: metrics.drawCalls,
-      authoredDuration,
-      frameIndex: currentFrameIndex,
-    };
-  }
-
+  const metrics = (await execution.metrics()).metrics;
   return {
     error: null,
     presented: true,
-    // Logical scene time advances every reference frame even when the execution
-    // transport correctly emits no visual delta (for example a zero-dt updater
-    // activation boundary). Keep the renderer's last-delta time separately for
-    // diagnostics instead of treating it as the authoritative playhead.
     time: currentLogicalTime,
-    rendererTime: renderer.time(),
-    objectCount: renderer.objectCount(),
-    rendererBackend: renderer.rendererBackend(),
-    drawCalls: renderer.lastDrawCalls(),
-    instances: renderer.lastInstancesDrawn(),
-    uploadBytes: renderer.lastBytesUploaded(),
-    geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+    objectCount: metrics.objectCount,
+    rendererBackend: metrics.backend,
+    drawCalls: metrics.drawCalls,
     authoredDuration,
     frameIndex: currentFrameIndex,
   };

@@ -1140,6 +1140,9 @@ impl RetainedFramePreparer {
         allow_geometry_only: bool,
         visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        // Mixed preparation indexes a compact scratch frame. Its child order
+        // cannot receive a source-frame range until that index domain is reset.
+        let reset_geometry_order = self.geometry_only_classification != Some(true);
         if changes.is_all() || changes.is_structural() {
             self.geometry_only_classification = None;
         }
@@ -1151,6 +1154,7 @@ impl RetainedFramePreparer {
                         changes,
                         metrics,
                         visible_object_indices,
+                        reset_geometry_order,
                     );
                 }
                 Some(false) => {}
@@ -1162,6 +1166,7 @@ impl RetainedFramePreparer {
                         changes,
                         metrics,
                         visible_object_indices,
+                        reset_geometry_order,
                     );
                 }
                 None => self.geometry_only_classification = Some(false),
@@ -1452,9 +1457,10 @@ impl RetainedFramePreparer {
         changes: &FrameChanges,
         metrics: TextDeviceMetrics,
         visible_object_indices: Option<&[usize]>,
+        reset_order: bool,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepared_generation_ready = false;
-        if changes.is_all() {
+        if changes.is_all() || reset_order {
             self.geometry
                 .set_painter_order(frame, &self.painter_order_indices);
         } else if let Some(range) = changes.painter_order_range() {
@@ -3580,6 +3586,39 @@ mod tests {
             prepared.observe_object(0, ObjectId::new(1)),
             Err(RetainedPreparedObjectOutcome::MegaPathMappingUnavailable)
         ));
+    }
+
+    #[test]
+    fn geometry_reentry_resets_compact_painter_order_before_partial_updates() {
+        let mut frame = geometry_only_mega_path_frame();
+        frame.presences[1] = false;
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        preparer.set_painter_order(&[0]);
+        assert!(!preparer.prepare_with_changes(
+            &device, &queue, &frame, &FrameChanges::all(),
+            &texts, &fonts, &geometries, metrics,
+        ).unwrap().geometry_only);
+
+        frame.presences[1] = true;
+        preparer.set_painter_order_range(&[0, 1], 1..2);
+        let changes = FrameChanges::structural(vec![1], vec![]).with_painter_order(1..2);
+        assert!(preparer.prepare_with_changes(
+            &device, &queue, &frame, &changes,
+            &texts, &fonts, &geometries, metrics,
+        ).unwrap().geometry_only);
+        assert_eq!(preparer.geometry.painter_order_indices, [0, 1]);
+
+        preparer.set_painter_order_range(&[1, 0], 0..2);
+        preparer.prepare_with_changes(
+            &device, &queue, &frame, &FrameChanges::painter_order(0..2),
+            &texts, &fonts, &geometries, metrics,
+        ).unwrap();
+        assert_eq!(preparer.geometry.painter_order_indices, [1, 0]);
     }
 
     #[test]

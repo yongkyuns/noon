@@ -2527,10 +2527,7 @@ impl ExecutionSession {
             .expect("validated semantic object has a live node");
         match direction {
             SemanticFadeDirection::In => {
-                if node.is_scene_owned()
-                    || !node.parents().is_empty()
-                    || self.reachability.is_object_reachable(target)
-                {
+                if node.is_scene_owned() || self.reachability.is_object_reachable(target) {
                     return Err(ExecutionSessionAnimationError::FadeTarget {
                         target,
                         error: ExecutionSessionFadeError::TargetIsNotDetached,
@@ -2737,10 +2734,7 @@ impl ExecutionSession {
         }
         match direction {
             SemanticFadeDirection::In => {
-                if node.is_scene_owned()
-                    || !node.parents().is_empty()
-                    || self.reachability.is_reachable(target)
-                {
+                if node.is_scene_owned() || self.reachability.is_reachable(target) {
                     return Err(ExecutionSessionAnimationError::FadeTarget {
                         target,
                         error: ExecutionSessionFadeError::TargetIsNotDetached,

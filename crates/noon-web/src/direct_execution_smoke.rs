@@ -597,3 +597,12 @@ pub async fn create_direct_rotating_smoke_renderer(
     let program = noon::example_scenes::ordinary_rotating::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
+
+/// Shared play-begin scaling through the normal direct Rust host.
+#[wasm_bindgen(js_name = createDirectScaleInPlaceSmokeRenderer)]
+pub async fn create_direct_scale_in_place_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::scale_in_place::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}

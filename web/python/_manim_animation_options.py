@@ -104,91 +104,19 @@ def resolve(
     )
 
 
-def _scale_in_place_builder(
-    mobject: object,
-    scale_factor: float,
-    animation_kwargs: dict[str, Any],
-) -> object:
-    """Lower Manim's ApplyMethod-based scale helpers to a deferred target builder.
+class ScaleInPlace:
+    """Defer shared target construction until play begins, like Manim ApplyMethod."""
 
-    ManimCE v0.21 implements ``ScaleInPlace`` as ``ApplyMethod(mobject.scale, factor)``.
-    ``ApplyMethod.create_target``
-    runs from ``Transform.begin()``, so the target must be copied from the mobject state
-    that exists when ``Scene.play`` begins rather than when the animation is constructed.
-    For a single 2D leaf, Noon's authored scene state plus the ordinary target-state
-    Transform path represents the same endpoint/interpolation without a new playback path.
-    """
-
-    if not isinstance(mobject, (_base.Mobject, _compat.Group)):
-        raise TypeError("ScaleInPlace target must be a Mobject or Group")
-
-    factor = float(scale_factor)
-    if not math.isfinite(factor):
-        raise ValueError("scale factor must be finite")
-
-    # Import lazily to avoid a cycle: this adapter is imported by _manim_animate.
-    # Calls happen only after the animation module has finished installing its aligned
-    # builder. Subclassing that builder keeps implicit binding, rollback, shared option
-    # resolution, and shared Transform lowering unchanged while deferring only target
-    # materialization to the point where the scheduler asks for ``animation.target``.
-    import _manim_animate as _animate
-
-    builder_base = (
-        _animate._AlignedGroupAnimationBuilder
-        if isinstance(mobject, _compat.Group)
-        else _animate._AlignedAnimationBuilder
-    )
-
-    class _DeferredScaleBuilder(builder_base):
-        def __init__(self) -> None:
-            # Do not call _AlignedAnimationBuilder.__init__: its normal .animate path
-            # eagerly copies the source because chained methods are authored immediately.
-            # ApplyMethod-family wrappers instead copy at Transform.begin/play time.
-            self.source = mobject
-            self.mobject = mobject
-            self.scale_factor = factor
-            self.anim_args = dict(animation_kwargs)
-            self.cannot_pass_args = True
-            self.is_chaining = False
-
-        @property
-        def target(self) -> object:
-            source = self.source
-            if isinstance(source, _compat.Group):
-                target = source._copy_for_animate_target()
-                target.scale(self.scale_factor)
-                return target
-            if (
-                getattr(source, "_semantic_handle", None) is not None
-                and getattr(source, "_semantic_handle_fresh", False)
-                and getattr(getattr(source, "_scene", None), "_canonical_authoring_context", None)
-                is not None
-            ):
-                target = source._copy_for_animate_target()
-                target.scale(self.scale_factor)
-                return target
-            scene = source._scene
-            obj = source._object
-            if scene is not None and obj is not None:
-                # _aligned_scene_play binds method-animation sources before expanding
-                # them. The cursor is therefore the Manim-compatible play-begin time and
-                # the snapshot includes all earlier authored animations.
-                snapshot = scene._snapshot_for_object_at(obj, scene._cursor)
-                target = _animate._snapshot_mobject(snapshot)
-            else:
-                # This fallback is mainly useful for introspection outside Scene.play;
-                # normal scheduling reaches the bound snapshot branch above.
-                target = source.copy()
-            target.scale(self.scale_factor)
-            return target
-
-    return _DeferredScaleBuilder()
-
-
-def ScaleInPlace(mobject: object, scale_factor: float, **kwargs: Any) -> object:
-    """Scale one detached or bound 2D leaf in place using Manim timing options."""
-
-    return _scale_in_place_builder(mobject, scale_factor, kwargs)
+    def __init__(self, mobject: object, scale_factor: float, **kwargs: Any) -> None:
+        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+            raise TypeError("ScaleInPlace target must be a Mobject or Group")
+        factor = float(scale_factor)
+        if not math.isfinite(factor):
+            raise ValueError("scale factor must be finite")
+        self.source = mobject
+        self.mobject = mobject
+        self.scale_factor = factor
+        self.anim_args = dict(kwargs)
 
 
 class ShrinkToCenter:
