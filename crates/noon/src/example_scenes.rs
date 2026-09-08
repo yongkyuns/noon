@@ -3002,3 +3002,5 @@ mod line_callback_tests {
 pub mod ordinary_focus_on;
 
 pub mod ordinary_rotating;
+
+pub mod scale_in_place;

@@ -116,6 +116,12 @@ impl FramePreparer {
         self.painter_order_installed = true;
     }
 
+    /// Return to storage order when a parent switches to compact scratch rows.
+    pub(crate) fn clear_painter_order(&mut self) {
+        self.painter_order_indices.clear();
+        self.painter_order_installed = false;
+    }
+
     /// Update only the changed portion of the runtime-derived painter permutation.
     pub fn set_painter_order_range(
         &mut self,

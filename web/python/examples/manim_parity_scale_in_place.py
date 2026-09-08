@@ -6,12 +6,12 @@
 
 from noon import *
 
-scene = Scene()
-square = Square(
-    side_length=1.5,
-    fill_color=BLUE,
-    fill_opacity=1.0,
-    stroke_opacity=0.0,
-).shift(LEFT * 1.25)
-scene.play(ScaleInPlace(square, 1.75))
-result = scene
+class ScaleInPlaceSquare(Scene):
+    def construct(self):
+        square = Square(
+            side_length=1.5,
+            fill_color=BLUE,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).shift(LEFT * 1.25)
+        self.play(ScaleInPlace(square, 1.75))
