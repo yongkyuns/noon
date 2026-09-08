@@ -29,6 +29,15 @@ pub async fn create_direct_exact_property_tracks_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Shared native family placement reaches the direct browser renderer unchanged.
+#[wasm_bindgen(js_name = createDirectFamilyPlacementSmokeRenderer)]
+pub async fn create_direct_family_placement_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_placement::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Native and direct WASM share these specialized semantic constructors.
 #[wasm_bindgen(js_name = createDirectSpecializedGeometrySmokeRenderer)]
 pub async fn create_direct_specialized_geometry_smoke_renderer(

@@ -59,42 +59,35 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                     pass
 
 
-            class FakeTranslation:
-                def __init__(self, store, members, dx, dy):
-                    self.store = store
-                    self.members = list(members)
-                    self.dx = float(dx)
-                    self.dy = float(dy)
-
-                def apply(self):
-                    for member in self.members:
-                        member.shift(self.dx, self.dy)
-                        self.store.applied.append(member.identity)
-                    self.store.finishes += 1
-
-
             class FakeLayoutObservation:
                 def __init__(self, store, members):
                     self.store = store
                     self.members = list(members)
 
+                def _apply(self, dx, dy):
+                    for member in self.members:
+                        member.shift(float(dx), float(dy))
+                        self.store.applied.append(member.identity)
+                    self.store.finishes += 1
+
+
                 def nextToPoint(self, *args):
                     self.store.next_to_point.append(tuple(float(value) for value in args))
-                    return FakeTranslation(self.store, self.members, 2.0, -1.0)
+                    return self._apply(2.0, -1.0)
 
                 def nextToFamily(self, target, *args):
                     self.store.next_to_family.append(tuple(float(value) for value in args))
                     assert len(target.members) == 1
-                    return FakeTranslation(self.store, self.members, 3.0, 0.5)
+                    return self._apply(3.0, 0.5)
 
                 def alignToPoint(self, *args):
                     self.store.align_to_point.append(tuple(float(value) for value in args))
-                    return FakeTranslation(self.store, self.members, 0.0, 4.0)
+                    return self._apply(0.0, 4.0)
 
                 def alignToFamily(self, target, *args):
                     self.store.align_to_family.append(tuple(float(value) for value in args))
                     assert len(target.members) == 1
-                    return FakeTranslation(self.store, self.members, -2.0, 0.0)
+                    return self._apply(-2.0, 0.0)
 
                 def criticalX(self, direction_x, direction_y):
                     raise AssertionError("Python must not derive family relative-placement deltas")

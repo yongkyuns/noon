@@ -3,7 +3,6 @@
 use crate::semantic_mobject::{
     authoring_render_f64 as render_f64, authoring_xy_f64 as semantic_xy_f64,
 };
-use crate::Mobject;
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
     SemanticObjectProperty, SemanticStore, SemanticVec3,
@@ -21,7 +20,7 @@ use std::{
 /// validated once in Rust; all affected leaves are then committed atomically.
 #[derive(Clone, Debug)]
 #[doc(hidden)]
-pub struct FamilyTranslation {
+pub(crate) struct FamilyTranslation {
     source_members: Vec<SemanticNodeId>,
     delta: (f64, f64),
 }
@@ -450,22 +449,7 @@ impl MobjectFamily {
 
     /// Aggregate the current layout bounds of this family's authoritative leaves.
     pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, String> {
-        let leaves = semantic_family_leaf_ids(&self.store.borrow(), self.node)?;
-        let mut bounds: Option<Bounds2D64> = None;
-        for leaf in leaves {
-            let Some(leaf_bounds) =
-                Mobject::from_node(Rc::clone(&self.store), leaf)?.layout_bounds()?
-            else {
-                continue;
-            };
-            if let Some(bounds) = &mut bounds {
-                bounds.include(leaf_bounds.min_x, leaf_bounds.min_y);
-                bounds.include(leaf_bounds.max_x, leaf_bounds.max_y);
-            } else {
-                bounds = Some(leaf_bounds);
-            }
-        }
-        Ok(bounds)
+        Ok(self.layout()?.bounds())
     }
 
     /// Arrange direct family members from authored layout bounds and publish all
