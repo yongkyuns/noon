@@ -41,7 +41,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/execution-worker-host-smoke.mjs
   node --check scripts/retained-execution-worker-smoke.mjs
   node --check scripts/authoring-execution-router-smoke.mjs
-  node --check scripts/authoring-execution-lifecycle-smoke.mjs
   node --check scripts/browser-smoke.mjs
   node --check scripts/browser-backend-visual-parity.mjs
   node --check scripts/browser-visual-parity-lib.mjs
