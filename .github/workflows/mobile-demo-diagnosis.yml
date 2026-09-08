@@ -4,6 +4,7 @@ on:
     branches: [codex/mobile-demo-diagnosis]
 permissions:
   contents: write
+  actions: read
 jobs:
   qualify:
     runs-on: ubuntu-latest
@@ -32,17 +33,20 @@ jobs:
           python3 -m unittest discover -s web/python -p 'test_*.py'
           node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs
           node scripts/build-python-worker.mjs
-      - name: Obtain the unchanged exact-baseline release WASM
+      - name: Obtain immutable exact-baseline release WASM
         env:
           BASE: 16d0a45eef9ec0328e59deb58802cc4ed31dac31
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          base=https://yongkyuns.github.io/noon
-          curl -fLsS "$base/build-info.json?verify=$BASE" > "$RUNNER_TEMP/mobile-repair-evidence/build-info.json"
+          gh run download 34170342894 --repo yongkyuns/noon --name github-pages --dir "$RUNNER_TEMP/saved-pages"
+          mkdir -p "$RUNNER_TEMP/saved-pages/site"
+          tar -xf "$RUNNER_TEMP/saved-pages/artifact.tar" -C "$RUNNER_TEMP/saved-pages/site"
+          cp "$RUNNER_TEMP/saved-pages/site/build-info.json" "$RUNNER_TEMP/mobile-repair-evidence/build-info.json"
           python3 -c 'import json,os; assert json.load(open(os.environ["RUNNER_TEMP"]+"/mobile-repair-evidence/build-info.json"))["commit"] == os.environ["BASE"]'
           mkdir -p web/pkg
-          curl -fLsS "$base/pkg/noon_web.js" -o web/pkg/noon_web.js
-          curl -fLsS "$base/pkg/noon_web_bg.wasm" -o web/pkg/noon_web_bg.wasm
+          cp "$RUNNER_TEMP/saved-pages/site/pkg/noon_web.js" web/pkg/
+          cp "$RUNNER_TEMP/saved-pages/site/pkg/noon_web_bg.wasm" web/pkg/
           sha256sum web/pkg/* > "$RUNNER_TEMP/mobile-repair-evidence/wasm-sha256.txt"
       - name: Install pinned browser harness
         run: |
