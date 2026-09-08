@@ -682,6 +682,40 @@ async def await_source_barrier(method, /, *args, **kwargs):
     return pending
 
 
+async def await_module_source_barrier(method, /, *args, **kwargs):
+    """Adapt a module-level call without replay or changes to arbitrary callables."""
+    if not inspect.ismethod(method):
+        return method(*args, **kwargs)
+    scene = method.__self__
+    invocation = current_source_invocation()
+    from _manim_source_execution import has_portable_scene_methods
+
+    if (invocation is None or invocation.export_document
+            or not isinstance(scene, _base.Scene)
+            or getattr(method, "__func__", None) not in (_play, _canonical_wait)
+            or not has_portable_scene_methods(
+                scene, play=_play, wait=_canonical_wait,
+                add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
+            )
+            or (_create_context is None
+                and getattr(scene, "_canonical_authoring_context", None) is None)):
+        return method(*args, **kwargs)
+    if not _async_continuation_active(scene):
+        if _synchronous_continuation_active(scene):
+            # Never switch a source stack that already entered synchronous execution.
+            return method(*args, **kwargs)
+        _begin_async_continuation_construct(scene)
+        setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
+        invocation.cleanup.callback(_finish_async_continuation_construct, scene)
+        invocation.cleanup.callback(setattr, scene, _PORTABLE_CONSTRUCT_MODE, False)
+        invocation.cleanup.callback(setattr, scene, _PORTABLE_BARRIER_CALL, False)
+    token = _reactive._enter_authoring_scene(scene)
+    try:
+        return await await_source_barrier(method, *args, **kwargs)
+    finally:
+        _reactive._leave_authoring_scene(token)
+
+
 class _SemanticContinuationAwaitable:
     """One consumed Python await over the worker-owned semantic endpoint lease."""
 

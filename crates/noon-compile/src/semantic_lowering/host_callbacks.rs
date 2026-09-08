@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use noon_core::{
-    HostCallbackId, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticUpdaterRegistration,
+    HostCallbackId, PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeId,
+    SemanticNodeKind, SemanticStore, SemanticUpdaterRegistration,
 };
 
 /// One semantic registration occurrence in deterministic authoring order.
@@ -81,6 +82,95 @@ impl SemanticHostCallbackPlan {
     pub fn is_empty(&self) -> bool {
         self.occurrences.is_empty()
     }
+
+    /// Relower only callback history, not scene geometry, at a live publication.
+    /// The first live subset retains target preorder from initial lowering and
+    /// therefore admits registration edits only on already indexed targets.
+    pub(super) fn prepare_registration_revision(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+        current_time: f64,
+    ) -> Result<Option<Self>, super::SemanticPublicationLoweringError> {
+        use super::SemanticPublicationLoweringError as Error;
+        let mut changed = HashSet::new();
+        for (index, mutation) in prepared.mutations().iter().enumerate() {
+            let (target, boundary) = match mutation {
+                SemanticMutation::AddUpdater {
+                    target,
+                    active_from,
+                    ..
+                } => (*target, *active_from),
+                SemanticMutation::RemoveUpdater {
+                    target,
+                    inactive_from,
+                    ..
+                }
+                | SemanticMutation::ClearUpdaters {
+                    target,
+                    inactive_from,
+                } => (*target, *inactive_from),
+                _ => return Err(Error::UnsupportedMutation { index }),
+            };
+            if boundary < current_time {
+                return Err(Error::RetroactiveUpdaterMutation { index });
+            }
+            // Exact no-ops must not rebuild the callback index or invalidate an
+            // already accepted phase. Staged registrations are semantic-owned.
+            let target = target
+                .existing()
+                .ok_or(Error::UnsupportedMutation { index })?;
+            if let Some(staged) = prepared.proposed_updater_registrations(target) {
+                if staged
+                    != prepared
+                        .store()
+                        .node(target)
+                        .expect("validated target")
+                        .host_updaters()
+                {
+                    changed.insert(target);
+                }
+            }
+        }
+        if changed.is_empty() {
+            return Ok(None);
+        }
+        let indexed = self
+            .occurrences
+            .iter()
+            .map(|item| item.target)
+            .collect::<HashSet<_>>();
+        for &target in &changed {
+            if !indexed.contains(&target) {
+                return Err(Error::UpdaterTargetNotIndexed { target });
+            }
+        }
+        let mut replacements = HashMap::new();
+        for target in changed {
+            replacements.insert(
+                target,
+                prepared
+                    .proposed_updater_registrations(target)
+                    .expect("changed target has staged registrations"),
+            );
+        }
+        let mut emitted = HashSet::new();
+        let mut occurrences = Vec::new();
+        for occurrence in &self.occurrences {
+            if let Some(registrations) = replacements.get(&occurrence.target) {
+                if emitted.insert(occurrence.target) {
+                    occurrences.extend(registrations.iter().copied().map(|activation| {
+                        SemanticHostCallbackOccurrence {
+                            target: occurrence.target,
+                            activation,
+                        }
+                    }));
+                }
+            } else {
+                occurrences.push(*occurrence);
+            }
+        }
+        Ok(Some(index_callback_occurrences(occurrences)))
+    }
 }
 
 pub(super) fn lower_semantic_host_callbacks(
@@ -108,6 +198,12 @@ pub(super) fn lower_semantic_host_callbacks(
         }
     }
 
+    index_callback_occurrences(occurrences)
+}
+
+fn index_callback_occurrences(
+    occurrences: Vec<SemanticHostCallbackOccurrence>,
+) -> SemanticHostCallbackPlan {
     let mut events = Vec::with_capacity(occurrences.len().saturating_mul(2));
     for (occurrence_index, occurrence) in occurrences.iter().enumerate() {
         let activation = occurrence.activation();
@@ -287,5 +383,49 @@ mod tests {
         let lowered =
             crate::lower_semantic_execution(&store, &mut SemanticExecutionIndex::new()).unwrap();
         assert!(lowered.host_callbacks().is_empty());
+    }
+    #[test]
+    fn staged_updater_revision_uses_semantic_order_and_does_not_publish_early() {
+        let mut store = SemanticStore::new();
+        let first = object(&mut store, 1.0);
+        let second = object(&mut store, 2.0);
+        store.attach_to_scene(first).unwrap();
+        store.attach_to_scene(second).unwrap();
+        add_updater(&mut store, first, 7, 0.0);
+        add_updater(&mut store, second, 8, 0.0);
+        let original = lower_semantic_host_callbacks(&store, &[first, second]);
+        let before = store.scene_revision();
+        let mut tx = SemanticMutationTransaction::new();
+        tx.remove_updater(first, HostCallbackId::new(7), 2.0);
+        tx.add_updater(first, HostCallbackId::new(9), 2.0, None);
+        let prepared = tx.prepare(&mut store).unwrap();
+        let revised = original
+            .prepare_registration_revision(&prepared, 2.0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.store().scene_revision(), before);
+        assert_eq!(
+            prepared
+                .store()
+                .semantic_updater_registrations(first)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            revised
+                .occurrences()
+                .iter()
+                .map(|item| (item.target(), item.callback_id()))
+                .collect::<Vec<_>>(),
+            vec![
+                (first, HostCallbackId::new(7)),
+                (first, HostCallbackId::new(9)),
+                (second, HostCallbackId::new(8))
+            ]
+        );
+        drop(prepared);
+        assert_eq!(store.scene_revision(), before);
+        assert_eq!(original.occurrences().len(), 2);
     }
 }
