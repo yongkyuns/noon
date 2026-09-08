@@ -8,6 +8,8 @@ use crate::{
 
 pub struct FamilyArrangement {
     family: MobjectFamily,
+    first: Mobject,
+    nested: MobjectFamily,
     stage: u8,
 }
 
@@ -23,6 +25,13 @@ impl LiveContinuation for FamilyArrangement {
                     .map_err(|e| e.to_string())
             }
             1 => {
+                self.family = live
+                    .family(&[(&self.first).into(), (&self.nested).into()])
+                    .map_err(|e| e.to_string())?;
+                live.remove_family_members(&self.family, &[(&self.nested).into()])
+                    .map_err(|e| e.to_string())?;
+                live.add_family_members(&self.family, &[(&self.nested).into()])
+                    .map_err(|e| e.to_string())?;
                 live.arrange_family(&self.family, 0.0, 1.0, 0.3, false)
                     .map_err(|e| e.to_string())?;
                 self.stage = 2;
@@ -53,13 +62,8 @@ pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
         object.set_stroke_width(0.0)?;
     }
     second.shift(2.0, 0.0)?;
-    let nested = scene.family(&[&first, &second])?;
-    let family = scene.family(&[&first])?;
-    scene
-        .store()
-        .borrow_mut()
-        .add_member(family.node_id(), nested.node_id())
-        .map_err(|e| e.to_string())?;
+    let nested = scene.family(&[(&first).into(), (&second).into()])?;
+    let family = scene.family(&[(&first).into(), (&nested).into()])?;
     let bounds = family.layout_bounds()?.ok_or("family bounds are empty")?;
     if (bounds.width() - 2.4).abs() > 1e-6 || (bounds.height() - 0.4).abs() > 1e-6 {
         return Err("shared family bounds differ from its authored members".into());
@@ -68,6 +72,11 @@ pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
     scene.add(&first)?;
     scene.add(&second)?;
     scene
-        .into_live_program(FamilyArrangement { family, stage: 0 })
+        .into_live_program(FamilyArrangement {
+            family,
+            first,
+            nested,
+            stage: 0,
+        })
         .map_err(|e| e.to_string())
 }

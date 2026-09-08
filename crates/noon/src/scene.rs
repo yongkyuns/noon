@@ -119,25 +119,8 @@ impl Scene {
     }
 
     /// Create one detached semantic family with authoritative ordered members.
-    pub fn family(&self, members: &[&Mobject]) -> Result<MobjectFamily, String> {
-        if members.is_empty() {
-            return Err("semantic family requires at least one member".into());
-        }
-        for member in members {
-            self.require_object(member)?;
-        }
-        let mut transaction = SemanticMutationTransaction::new();
-        let family = transaction.create_node(SemanticNodeCreation::family());
-        for member in members {
-            transaction.add_member(family, member.node_id());
-        }
-        let result = transaction
-            .apply(&mut self.store.borrow_mut())
-            .map_err(|error| error.to_string())?;
-        let node = result
-            .resolve(family)
-            .expect("committed family token resolves to one semantic identity");
-        MobjectFamily::from_node(Rc::clone(&self.store), node)
+    pub fn family(&self, members: &[MobjectFamilyMember<'_>]) -> Result<MobjectFamily, String> {
+        MobjectFamily::create(Rc::clone(&self.store), members)
     }
     pub fn remove(&mut self, object: &Mobject) -> Result<(), String> {
         self.edit_membership(SceneMembershipRequest::Remove(&[

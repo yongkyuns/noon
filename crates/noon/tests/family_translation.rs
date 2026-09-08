@@ -5,13 +5,8 @@ fn nested_family() -> (Scene, MobjectFamily, [Mobject; 3]) {
     let first = scene.square(1.0).unwrap();
     let second = scene.square(1.0).unwrap();
     let third = scene.square(1.0).unwrap();
-    let nested = scene.family(&[&second, &third]).unwrap();
-    let root = scene.family(&[&first]).unwrap();
-    scene
-        .store()
-        .borrow_mut()
-        .add_member(root.node_id(), nested.node_id())
-        .unwrap();
+    let nested = scene.family(&[(&second).into(), (&third).into()]).unwrap();
+    let root = scene.family(&[(&first).into(), (&nested).into()]).unwrap();
     (scene, root, [first, second, third])
 }
 

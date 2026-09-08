@@ -89,7 +89,7 @@ pub fn program() -> Result<LiveProgram<OrdinaryMembership>, String> {
     blue.set_translation(0.5, 0.0)?;
     let mut green = scene.square(2.0)?;
     green.set_fill(0.0, 1.0, 0.0, 1.0)?;
-    let family = scene.family(&[&red, &blue])?;
+    let family = scene.family(&[(&red).into(), (&blue).into()])?;
     let continuation = OrdinaryMembership {
         red,
         blue,

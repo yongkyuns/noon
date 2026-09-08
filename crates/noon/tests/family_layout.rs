@@ -6,10 +6,10 @@ fn placement_shares_object_family_and_point_targets_with_masks_and_nonunit_direc
     let first = scene.square(1.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
     second.shift(2.0, 0.0).unwrap();
-    let family = scene.family(&[&first, &second]).unwrap();
+    let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
     let mut target = scene.square(2.0).unwrap();
     target.shift(6.0, 5.0).unwrap();
-    let target_family = scene.family(&[&target]).unwrap();
+    let target_family = scene.family(&[(&target).into()]).unwrap();
     let observed = family.layout().unwrap();
     assert_eq!(observed.center(), (1.0, 0.0));
     assert_eq!((observed.width(), observed.height()), (3.0, 1.0));
@@ -51,10 +51,14 @@ fn placement_shares_object_family_and_point_targets_with_masks_and_nonunit_direc
 fn invalid_or_foreign_placement_targets_do_not_publish() {
     let scene = Scene::new();
     let object = scene.square(1.0).unwrap();
-    let family = scene.family(&[&object]).unwrap();
+    let family = scene.family(&[(&object).into()]).unwrap();
     let other_scene = Scene::new();
     let foreign = other_scene.square(1.0).unwrap();
-    let foreign_family = other_scene.family(&[&foreign]).unwrap().layout().unwrap();
+    let foreign_family = other_scene
+        .family(&[(&foreign).into()])
+        .unwrap()
+        .layout()
+        .unwrap();
     let observation = family.layout().unwrap();
     let before = scene.store().borrow().scene_revision();
     for target in [
@@ -82,8 +86,7 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
 #[test]
 fn empty_family_observation_has_origin_bounds_without_scene_changes() {
     let scene = Scene::new();
-    let empty = scene.store().borrow_mut().insert_family();
-    let family = noon::MobjectFamily::from_node(std::rc::Rc::clone(scene.store()), empty).unwrap();
+    let family = scene.family(&[]).unwrap();
     let before = scene.store().borrow().scene_revision();
     let observation = family.layout().unwrap();
     assert_eq!(observation.bounds(), None);

@@ -208,7 +208,7 @@ pub fn program() -> Result<LiveProgram<LiveGeometryConstruction>, String> {
     let path = Mobject::from_manim_geometry(Rc::clone(scene.store()), options)?;
     let bounds = path.layout_bounds()?.ok_or("path has no bounds")?;
     let family_bounds = scene
-        .family(&[&path])?
+        .family(&[(&path).into()])?
         .layout_bounds()?
         .ok_or("path family has no bounds")?;
     let outline = Mobject::from_manim_geometry(

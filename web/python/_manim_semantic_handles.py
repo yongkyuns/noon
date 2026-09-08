@@ -2009,14 +2009,51 @@ def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) 
             raise ValueError("Group cannot contain itself")
 
 
+def _family_membership_batch(context: object, kind: str, mobjects: tuple[object, ...]):
+    batch = context.beginMembershipBatch(kind)
+    for value in mobjects:
+        member_kind, handle = _family_member_handle(value)
+        if handle is None:
+            raise RuntimeError("family member has no shared semantic identity")
+        if member_kind == "family":
+            batch.appendFamily(handle)
+        else:
+            batch.appendMobject("", handle)
+    return batch
+
+
 def _group_init(self: _compat.Group, *mobjects: object) -> None:
-    self._semantic_family_handle = _create_family_handle()
-    _ORIGINAL_GROUP_INIT(self, *mobjects)
+    _validate_group_members(self, mobjects)
+    context = _live_constructor_context("family")
+    if context is None:
+        self._semantic_family_handle = _create_family_handle()
+        _ORIGINAL_GROUP_INIT(self, *mobjects)
+        return
+    batch = _family_membership_batch(context, "add", mobjects)
+    family = context.liveCreateFamily(batch)
+    # Rust selects the authoritative ordered members; this map retains Python identity.
+    wrappers = {}
+    for value in mobjects:
+        _, handle = _family_member_handle(value)
+        key = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+        wrappers.setdefault(key, value)
+    self._semantic_family_handle = family
+    self.submobjects = [wrappers[str(key)] for key in family.memberKeys()]
 
 
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
+    if not mobjects:
+        return self
     family_handle = self._semantic_family_handle
+    context = _live_constructor_context("family")
+    if context is not None:
+        batch = _family_membership_batch(context, "add", mobjects)
+        changed = context.liveEditFamilyMembership(family_handle, batch)
+        for value, accepted in zip(mobjects, changed):
+            if accepted:
+                _ORIGINAL_GROUP_ADD(self, value)
+        return self
     for mobject in mobjects:
         if _family_add_handle(family_handle, mobject):
             _ORIGINAL_GROUP_ADD(self, mobject)
@@ -2024,7 +2061,17 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
 
 
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    if not mobjects:
+        return self
     family_handle = self._semantic_family_handle
+    context = _live_constructor_context("family")
+    if context is not None:
+        batch = _family_membership_batch(context, "remove", mobjects)
+        changed = context.liveEditFamilyMembership(family_handle, batch)
+        for value, accepted in zip(mobjects, changed):
+            if accepted:
+                _ORIGINAL_GROUP_REMOVE(self, value)
+        return self
     for mobject in mobjects:
         if _family_remove_handle(family_handle, mobject):
             _ORIGINAL_GROUP_REMOVE(self, mobject)
@@ -2138,9 +2185,14 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
     # Constructor-based delegates may already have created a family handle. The
     # browser geometry delegate uses object.__new__ and therefore needs one here.
     if getattr(clone, "_semantic_family_handle", None) is None:
-        clone._semantic_family_handle = _create_family_handle()
-        for member in clone.submobjects:
-            _family_add_handle(clone._semantic_family_handle, member)
+        context = _live_constructor_context("family")
+        if context is not None:
+            batch = _family_membership_batch(context, "add", tuple(clone.submobjects))
+            clone._semantic_family_handle = context.liveCreateFamily(batch)
+        else:
+            clone._semantic_family_handle = _create_family_handle()
+            for member in clone.submobjects:
+                _family_add_handle(clone._semantic_family_handle, member)
     return clone
 
 

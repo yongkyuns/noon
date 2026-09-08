@@ -1298,6 +1298,30 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_edit_family_members(
+        &mut self,
+        family: &noon::MobjectFamily,
+        members: &[noon::MobjectFamilyMember<'_>],
+        adding: bool,
+    ) -> Result<Vec<bool>, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let mut live = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root.expect("live root exists"),
+            &mut self.session,
+        );
+        if adding {
+            live.add_family_members(family, members)
+        } else {
+            live.remove_family_members(family, members)
+        }
+        .map_err(|e| e.to_string())
+    }
+
     /// Create one detached family through the retained session so its node and
     /// ordered edges share the current semantic/runtime publication.
     #[cfg(any(target_arch = "wasm32", test))]

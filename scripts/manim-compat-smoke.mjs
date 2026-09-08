@@ -185,6 +185,16 @@ class AnimateParity(Scene):
             Circle(radius=0.15, color=GREEN),
             Square(side_length=0.3, color=RED),
         ).arrange(RIGHT, buff=0.15)
+        spare = Circle(radius=0.1)
+        cycle = VGroup(pair)
+        before_members = list(pair.submobjects)
+        try:
+            pair.add(spare, cycle)
+        except Exception:
+            pass
+        else:
+            raise AssertionError("cyclic live family batch must fail")
+        assert pair.submobjects == before_members
         for member in pair:
             self.live_execution().add(member)
         self.play(pair.animate(run_time=1.2, lag_ratio=0.5).shift(UP))

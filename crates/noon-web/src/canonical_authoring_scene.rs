@@ -34,6 +34,29 @@ struct SceneMembershipBatch {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
+impl SceneMembershipBatch {
+    fn family_members(&self) -> Result<Vec<noon::MobjectFamilyMember<'_>>, String> {
+        if !self.bindings.is_empty() {
+            return Err("family membership does not accept scene binding reservations".into());
+        }
+        self.members
+            .iter()
+            .map(|member| match member {
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle,
+                } => Ok(handle.into()),
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: Some(_),
+                    ..
+                } => Err("family membership does not accept wrapper binding IDs".into()),
+                OwnedSceneMembershipMember::Family(family) => Ok(family.into()),
+            })
+            .collect()
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone)]
 enum OrdinaryCompositionChild {
     FocusOn {
@@ -6217,6 +6240,44 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Create a complete detached family through the current live publication.
+        #[wasm_bindgen(js_name = liveCreateFamily)]
+        pub fn live_create_family(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            if batch.inner.kind != SceneMembershipBatchKind::Add {
+                return Err(js_error("family creation requires an add batch"));
+            }
+            let members = batch.inner.family_members().map_err(js_error)?;
+            self.inner
+                .live_family(&members)
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(js_error)
+        }
+
+        /// Commit all requested direct-member edits before returning wrapper decisions.
+        #[wasm_bindgen(js_name = liveEditFamilyMembership)]
+        pub fn live_edit_family_membership(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<Vec<u8>, JsValue> {
+            let adding = match batch.inner.kind {
+                SceneMembershipBatchKind::Add => true,
+                SceneMembershipBatchKind::Remove => false,
+                _ => return Err(js_error("family membership requires add or remove")),
+            };
+            let family = handle.semantic_family()?;
+            let members = batch.inner.family_members().map_err(js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_edit_family_members(&family, &members, adding)
+                .map(|changed| changed.into_iter().map(u8::from).collect())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveShiftFamily)]
         pub fn live_shift_family(
             &mut self,
@@ -6417,6 +6478,28 @@ mod tests {
     }
 
     #[test]
+    fn family_argument_batches_reject_scene_binding_metadata() {
+        let scene = noon::Scene::new();
+        let object = scene.circle(0.2).unwrap();
+        let revision = scene.store().borrow().scene_revision();
+        let mut batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: object.clone(),
+            }],
+            bindings: Vec::new(),
+        };
+        assert_eq!(batch.family_members().unwrap().len(), 1);
+        batch.bindings.push((ObjectId::new(1), object.clone()));
+        assert!(batch.family_members().is_err());
+        batch.bindings.clear();
+        batch.members = vec![membership_mobject(1, &object)];
+        assert!(batch.family_members().is_err());
+        assert_eq!(scene.store().borrow().scene_revision(), revision);
+    }
+
+    #[test]
     fn canonical_membership_batch_commits_bindings_only_after_atomic_shared_edit() {
         let mut context = CanonicalAuthoringScene::default();
         let first = context.scene.circle(0.5).unwrap();
@@ -6597,7 +6680,10 @@ mod tests {
 
         let left = context.scene.circle(0.5).unwrap();
         let right = context.scene.square(0.5).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
@@ -6642,7 +6728,7 @@ mod tests {
     fn checkpoint_restore_keeps_a_binding_reachable_through_a_retained_alias() {
         let mut context = CanonicalAuthoringScene::default();
         let shared = context.scene.circle(0.5).unwrap();
-        let retained = context.scene.family(&[&shared]).unwrap();
+        let retained = context.scene.family(&[(&shared).into()]).unwrap();
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
@@ -6653,7 +6739,10 @@ mod tests {
         let checkpoint = context.checkpoint();
 
         let temporary = context.scene.square(0.5).unwrap();
-        let alias = context.scene.family(&[&shared, &temporary]).unwrap();
+        let alias = context
+            .scene
+            .family(&[(&shared).into(), (&temporary).into()])
+            .unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_member(context.scene.root(), alias.node_id());
         transaction
@@ -6836,7 +6925,10 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.circle(0.5).unwrap();
         let right = context.scene.square(0.5).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
@@ -7187,12 +7279,39 @@ mod tests {
         let right = context
             .live_create_manim_geometry(noon::ManimGeometryOptions::square(0.3).unwrap())
             .unwrap();
+        let batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            members: vec![
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: left.clone(),
+                },
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: right.clone(),
+                },
+            ],
+            bindings: Vec::new(),
+        };
         let pair = context
-            .live_family(&[
-                noon::MobjectFamilyMember::Mobject(&left),
-                noon::MobjectFamilyMember::Mobject(&right),
-            ])
+            .live_family(&batch.family_members().unwrap())
             .unwrap();
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_edit_family_members(&pair, &[(&right).into()], false)
+                .unwrap(),
+            vec![true]
+        );
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_edit_family_members(&pair, &[(&right).into(), (&right).into()], true)
+                .unwrap(),
+            vec![true, false]
+        );
         context
             .live_arrange_family(&pair, 1.0, 0.0, 0.15, true)
             .unwrap();
@@ -7616,7 +7735,10 @@ mod tests {
         let leaf = context.scene.circle(0.3).unwrap();
         let left = context.scene.square(0.5).unwrap();
         let right = context.scene.circle(0.25).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         let outline = noon::DrawBorderThenFillOptions::new(0.04, Some(noon_core::YELLOW))
             .with_phase_rate_function(RateFunction::Linear);
         let options = AnimationOptions::new()
@@ -7802,7 +7924,10 @@ mod tests {
         let left = context.scene.text(noon::Text::new("LEFT")).unwrap();
         let right = context.scene.text(noon::Text::new("RIGHT")).unwrap();
         let writing = context.scene.text(noon::Text::new("WRITE")).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         let family_options = AnimationOptions::new()
             .run_time(2.0)
             .rate_func(RateFunction::Linear)
@@ -7874,7 +7999,10 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.text(noon::Text::new("LEFT")).unwrap();
         let right = context.scene.text(noon::Text::new("RIGHT")).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         let write = [OrdinaryCompositionChild::FamilyTextWrite {
             target: family.clone(),
             entering: vec![
@@ -7937,7 +8065,10 @@ mod tests {
         let single = context.scene.text(noon::Text::new("SINGLE")).unwrap();
         let text = context.scene.text(noon::Text::new("GROUP")).unwrap();
         let circle = context.scene.circle(0.25).unwrap();
-        let family = context.scene.family(&[&text, &circle]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&text).into(), (&circle).into()])
+            .unwrap();
         let create_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Smooth)
@@ -8019,7 +8150,10 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
         let right = context.scene.circle(0.25).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         context.prepare_family_subset_display(&family).unwrap();
         let options = AnimationOptions::new()
             .run_time(2.0)
@@ -8075,7 +8209,10 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
         let right = context.scene.circle(0.25).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
 
         context.begin_ordinary_wait(1.0).unwrap();
         let mut player = context.take_execution_player(2.0, 17).unwrap();
@@ -8206,16 +8343,19 @@ mod tests {
         let right = context.scene.circle(0.4).unwrap();
         context.bind_mobject(ObjectId::new(0), &left).unwrap();
         context.bind_mobject(ObjectId::new(1), &right).unwrap();
-        let source = context.scene.family(&[&left, &right]).unwrap();
+        let source = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         let mut left_target = left.target_editor().unwrap();
         left_target.set_translation(-2.0, 1.0).unwrap();
         let mut right_target = right.target_editor().unwrap();
         right_target.set_translation(2.0, -1.0).unwrap();
         let target = context
             .scene
-            .family(&[&left_target, &right_target])
+            .family(&[(&left_target).into(), (&right_target).into()])
             .unwrap();
-        let invalid_target = context.scene.family(&[&left_target]).unwrap();
+        let invalid_target = context.scene.family(&[(&left_target).into()]).unwrap();
         let transform_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear)
