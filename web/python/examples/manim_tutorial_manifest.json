@@ -113,6 +113,8 @@
     },
     {
       "id": "manim-dot-example",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 3,
       "title": "DotExample",
       "summary": "ManimCE v0.21 Dot reference example, unchanged except for the import module.",
       "status": "ready",
@@ -131,6 +133,8 @@
     },
     {
       "id": "manim-ellipse-example",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 2,
       "title": "EllipseExample",
       "summary": "ManimCE v0.21 Ellipse reference example, unchanged except for the import module.",
       "status": "ready",
@@ -388,6 +392,8 @@
     },
     {
       "id": "manim-lagged-start-map",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 36,
       "title": "LaggedStartMapExample",
       "summary": "ManimCE v0.21 LaggedStartMap reference example, unchanged except for the import module. Text raster qualification remains separate.",
       "status": "ready",
@@ -508,6 +514,8 @@
     },
     {
       "id": "manim-example1-text",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 1,
       "title": "Example1Text",
       "summary": "ManimCE v0.21 Text reference example, unchanged except for the import module, rendered through Noon's retained native Text resources.",
       "status": "ready",
@@ -526,6 +534,8 @@
     },
     {
       "id": "manim-typst-text-reference",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 1,
       "title": "TypstTextReferenceExample",
       "summary": "ManimCE v0.21 Typst reference example, unchanged except for the import module, rendered through Noon's retained Typst resources.",
       "status": "ready",
@@ -544,6 +554,8 @@
     },
     {
       "id": "manim-math-typst-reference",
+      "qualification_mode": "shared-live",
+      "expected_object_count": 1,
       "title": "MathTypstReferenceExample",
       "summary": "ManimCE v0.21 MathTypst reference example, unchanged except for the import module, rendered through Noon's retained Typst math resources.",
       "status": "ready",

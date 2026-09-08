@@ -11,6 +11,22 @@ use web_sys::OffscreenCanvas;
 
 use crate::WasmExecutionCanvasRenderer;
 
+/// Direct analytic profiling uses the same typed workload as the native Rust example.
+#[wasm_bindgen(js_name = createDirectAnalyticProfileRenderer)]
+pub async fn create_direct_analytic_profile_renderer(
+    canvas: OffscreenCanvas,
+    count: u32,
+    layout: &str,
+    aspect: f64,
+    duration: f64,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let layout = layout.parse().map_err(js_error)?;
+    let session =
+        noon::example_scenes::analytic_profile::session(count as usize, layout, aspect, duration)
+            .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// The native membership example runs unchanged inside the direct WASM engine.
 #[wasm_bindgen(js_name = createDirectOrdinaryMembershipSmokeRenderer)]
 pub async fn create_direct_ordinary_membership_smoke_renderer(

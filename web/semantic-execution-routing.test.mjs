@@ -6,13 +6,17 @@ class FakeCanvas {
   clientHeight = 360;
   width = 640;
   height = 360;
+  transferred = false;
+  replacement = null;
   transferControlToOffscreen() {
+    if (this.transferred) throw new Error("canvas transferred twice");
+    this.transferred = true;
     return { width: this.width, height: this.height };
   }
   cloneNode() {
     return new FakeCanvas();
   }
-  replaceWith() {}
+  replaceWith(canvas) { this.replacement = canvas; }
 }
 
 class FakePort {
@@ -78,6 +82,16 @@ class FakeWorker {
     }
   }
 }
+
+class FakeResizeObserver {
+  static instances = [];
+  active = false;
+  constructor(callback) { this.callback = callback; FakeResizeObserver.instances.push(this); }
+  observe(canvas) { this.canvas = canvas; this.active = true; }
+  disconnect() { this.active = false; }
+  deliver() { this.callback(); }
+}
+globalThis.ResizeObserver = FakeResizeObserver;
 
 globalThis.HTMLCanvasElement = FakeCanvas;
 globalThis.MessageChannel = FakeMessageChannel;
@@ -376,182 +390,6 @@ test("a replacement source continuation keeps its generation and starts despite 
   client.terminate();
 });
 
-test("semantic to legacy switches to the ordinary renderer and retires the context", async () => {
-  FakeWorker.instances.length = 0;
-  const authoring = new FakeSemanticAuthoringClient();
-  const client = new AuthoringExecutionClient(new FakeCanvas());
-  const render = await prepare(client);
-  const initial = client.startSemanticExecution(
-    { contextId: "semantic-3" },
-    { authoringClient: authoring },
-  );
-  await Promise.resolve();
-  replyRender(render, "start_engine", "engine_started", { mode: "legacy" });
-  await initial;
-
-  const sceneJson = JSON.stringify({ version: 1, objects: [], tracks: [] });
-  const switched = client.reconcileScene(sceneJson);
-  const engine = FakeWorker.instances.findLast((worker) => worker.name === "noon-engine");
-  assert.ok(engine);
-  engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
-  const renderSwitch = await waitForRequest(render, "switch_engine");
-  render.emitMessage(
-    envelope("noon.render", "mode_switched", {
-      requestId: renderSwitch.requestId,
-      mode: "legacy",
-      transportMode: "transferable",
-      backend: "WebGL2",
-    }),
-  );
-  const stateRequest = await waitForRequest(engine, "state");
-  engine.emitMessage(
-    envelope("noon.engine", "state", {
-      requestId: stateRequest.requestId,
-      time: 0,
-      playing: true,
-      nextPatchSequence: "0",
-      sceneJson,
-    }),
-  );
-  await switched;
-  await Promise.resolve();
-  assert.equal(client.mode, "legacy");
-  assert.equal(render.terminated, false);
-  assert.deepEqual(authoring.stoppedContexts, ["semantic-3"]);
-  assert.deepEqual(authoring.releasedContexts, ["semantic-3"]);
-  assert.equal(FakeWorker.instances.filter(({ name }) => name === "noon-render").length, 1);
-  client.terminate();
-});
-
-test("legacy to semantic switches to the shared retained renderer", async () => {
-  FakeWorker.instances.length = 0;
-  const authoring = new FakeSemanticAuthoringClient();
-  const client = new AuthoringExecutionClient(new FakeCanvas());
-  const sceneJson = JSON.stringify({ version: 1, objects: [], tracks: [] });
-  const initial = client.start(sceneJson, { transportMode: "transferable" });
-  const engine = FakeWorker.instances.findLast((worker) => worker.name === "noon-engine");
-  const render = renderWorker();
-  engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
-  render.emitMessage(
-    envelope("noon.render", "ready", {
-      transportMode: "transferable",
-      backend: "WebGL2",
-    }),
-  );
-  await initial;
-
-  const switched = client.reconcileSemanticExecution(
-    { contextId: "semantic-4" },
-    { authoringClient: authoring },
-  );
-  const renderSwitch = await waitForRequest(render, "switch_engine");
-  assert.equal(renderSwitch.mode, "retained");
-  render.emitMessage(
-    envelope("noon.render", "mode_switched", {
-      requestId: renderSwitch.requestId,
-      mode: "retained",
-      transportMode: "transferable",
-      backend: "WebGL2",
-      retained: true,
-    }),
-  );
-  await switched;
-  assert.equal(client.mode, AUTHORING_EXECUTION_SEMANTIC);
-  assert.equal(render.terminated, false);
-  assert.equal(engine.terminated, true);
-  assert.equal(FakeWorker.instances.filter(({ name }) => name === "noon-render").length, 1);
-  client.terminate();
-});
-
-test("retained and semantic transitions rebuild only their shared retained renderer", async () => {
-  FakeWorker.instances.length = 0;
-  const authoring = new FakeSemanticAuthoringClient();
-  const client = new AuthoringExecutionClient(new FakeCanvas());
-  const sceneJson = JSON.stringify({ version: 1, objects: [], tracks: [] });
-  const sceneSpecJson = JSON.stringify({ version: 1, objects: [], tracks: [] });
-  const retainedStart = client.startRetainedCanonical(sceneSpecJson, {
-    transportMode: "transferable",
-  });
-  let retainedEngine = FakeWorker.instances.findLast(
-    (worker) => worker.name === "noon-mixed-retained-engine",
-  );
-  const render = renderWorker();
-  retainedEngine.emitMessage(
-    envelope("noon.engine", "ready", { transportMode: "transferable", retained: true }),
-  );
-  render.emitMessage(
-    envelope("noon.render", "ready", {
-      transportMode: "transferable",
-      backend: "WebGL2",
-      retained: true,
-    }),
-  );
-  await retainedStart;
-
-  const toSemantic = client.reconcileSemanticExecution(
-    { contextId: "semantic-5" },
-    { authoringClient: authoring },
-  );
-  let renderRebuild = await waitForRequest(render, "rebuild_engine");
-  assert.equal(renderRebuild.mode, "retained");
-  render.emitMessage(
-    envelope("noon.render", "engine_rebuilt", {
-      requestId: renderRebuild.requestId,
-      mode: "retained",
-      transportMode: "transferable",
-      backend: "WebGL2",
-      retained: true,
-    }),
-  );
-  await toSemantic;
-  assert.equal(client.mode, AUTHORING_EXECUTION_SEMANTIC);
-
-  const backToRetained = client.reconcileScene(sceneJson, { sceneSpecJson });
-  retainedEngine = FakeWorker.instances.findLast(
-    (worker) => worker.name === "noon-mixed-retained-engine",
-  );
-  retainedEngine.emitMessage(
-    envelope("noon.engine", "ready", { transportMode: "transferable", retained: true }),
-  );
-  const priorRebuildCount = render.messages.filter(
-    ({ message }) => message.type === "rebuild_engine",
-  ).length;
-  for (;;) {
-    const rebuilds = render.messages.filter(({ message }) => message.type === "rebuild_engine");
-    if (rebuilds.length > priorRebuildCount) {
-      renderRebuild = rebuilds.at(-1).message;
-      break;
-    }
-    await Promise.resolve();
-  }
-  assert.equal(renderRebuild.mode, "retained");
-  render.emitMessage(
-    envelope("noon.render", "engine_rebuilt", {
-      requestId: renderRebuild.requestId,
-      mode: "retained",
-      transportMode: "transferable",
-      backend: "WebGL2",
-      retained: true,
-    }),
-  );
-  const stateRequest = await waitForRequest(retainedEngine, "state");
-  retainedEngine.emitMessage(
-    envelope("noon.engine", "state", {
-      requestId: stateRequest.requestId,
-      time: 0,
-      playing: true,
-      nextPatchSequence: "0",
-    }),
-  );
-  await backToRetained;
-  await Promise.resolve();
-  assert.equal(client.mode, "retained");
-  assert.deepEqual(authoring.stoppedContexts, ["semantic-5"]);
-  assert.deepEqual(authoring.releasedContexts, ["semantic-5"]);
-  assert.equal(render.terminated, false);
-  client.terminate();
-});
-
 test("semantic renderer recovery reattaches the same token with a fresh session", async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
@@ -619,29 +457,131 @@ test("terminating a semantic rerun retires both endpoints without restoring old 
   await assert.rejects(client.state(), /has not been started/);
 });
 
-test("terminating semantic to legacy transition retires the hidden old endpoint", async () => {
+test("prepared shared startup inherits slot capacity and remains unpublished until attachment", async () => {
   FakeWorker.instances.length = 0;
-  const authoring = new FakeSemanticAuthoringClient();
   const client = new AuthoringExecutionClient(new FakeCanvas());
-  const render = await prepare(client);
-  const initial = client.startSemanticExecution(
-    { contextId: "semantic-9" },
-    { authoringClient: authoring },
-  );
-  await Promise.resolve();
-  replyRender(render, "start_engine", "engine_started", { mode: "legacy" });
-  await initial;
-
-  const sceneJson = JSON.stringify({ version: 1, objects: [], tracks: [] });
-  const transition = client.reconcileScene(sceneJson);
-  const engine = FakeWorker.instances.findLast((worker) => worker.name === "noon-engine");
-  engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
-  await waitForRequest(render, "switch_engine");
-  client.terminate();
-  await assert.rejects(transition, /terminated during an asynchronous operation/);
-  await Promise.resolve();
-  assert.deepEqual(authoring.stoppedContexts, ["semantic-9"]);
-  assert.deepEqual(authoring.releasedContexts, ["semantic-9"]);
-  assert.equal(engine.terminated, true);
+  const authoring = new FakeSemanticAuthoringClient();
+  const sharedSlotCapacity = 2 * 1024 * 1024;
+  const preparing = client.prepare({ transportMode: "transferable", sharedSlotCapacity });
+  const render = renderWorker();
+  replyRender(render, "prepare", "prepared");
+  await preparing;
+  const starting = client.startSemanticExecution({ contextId: "prepared-shared" }, { authoringClient: authoring });
+  await waitForRequest(render, "start_engine");
+  assert.equal(client.mode, null);
   await assert.rejects(client.state(), /has not been started/);
+  assert.equal(authoring.attachments[0].options.sharedSlotCapacity, sharedSlotCapacity);
+  assert.equal(FakeWorker.instances.length, 1, "only the prepared render worker is needed");
+  replyRender(render, "start_engine", "engine_started", { mode: "retained" });
+  await starting;
+  assert.equal(client.mode, AUTHORING_EXECUTION_SEMANTIC);
+  client.terminate();
+});
+
+test("terminating preparation cancels the unpublished shared candidate and replaces its transferred canvas", async () => {
+  FakeWorker.instances.length = 0;
+  const original = new FakeCanvas();
+  const client = new AuthoringExecutionClient(original);
+  const preparing = client.prepare({ transportMode: "transferable" });
+  const render = renderWorker();
+  client.terminate();
+  await assert.rejects(preparing, /terminated during an asynchronous operation/);
+  assert.equal(render.terminated, true);
+  assert.equal(original.transferred, true);
+  assert.equal(original.replacement, client.canvas);
+  assert.notEqual(client.canvas, original);
+  assert.equal(client.canvas.transferred, false);
+  assert.equal(client.mode, null);
+  await assert.rejects(client.state(), /has not been started/);
+});
+
+test("failed shared startup adopts a usable canvas and can retry", async () => {
+  FakeWorker.instances.length = 0;
+  const original = new FakeCanvas();
+  const client = new AuthoringExecutionClient(original);
+  const authoring = new FakeSemanticAuthoringClient();
+  authoring.failContext = "rejected-start";
+  const firstRender = await prepare(client);
+  await assert.rejects(
+    client.startSemanticExecution({ contextId: "rejected-start" }, { authoringClient: authoring }),
+    /semantic context rejected/,
+  );
+  assert.equal(firstRender.terminated, true);
+  assert.equal(client.mode, null);
+  assert.notEqual(client.canvas, original);
+  assert.equal(client.canvas.transferred, false);
+  const render = await prepare(client);
+  const started = client.startSemanticExecution({ contextId: "retry-start" }, { authoringClient: authoring });
+  await waitForRequest(render, "start_engine");
+  replyRender(render, "start_engine", "engine_started", { mode: "retained" });
+  await started;
+  assert.equal(client.mode, AUTHORING_EXECUTION_SEMANTIC);
+  client.terminate();
+});
+
+test("shared recovery remains retryable after a transient render startup error", async () => {
+  FakeWorker.instances.length = 0;
+  const client = new AuthoringExecutionClient(new FakeCanvas());
+  const authoring = new FakeSemanticAuthoringClient();
+  const render = await prepare(client);
+  const initial = client.startSemanticExecution({ contextId: "restart-retry" }, { authoringClient: authoring });
+  await waitForRequest(render, "start_engine");
+  replyRender(render, "start_engine", "engine_started", { mode: "retained" });
+  await initial;
+  const observer = FakeResizeObserver.instances.at(-1);
+  const restarting = client.restart();
+  assert.equal(observer.active, false);
+  assert.doesNotThrow(() => observer.deliver(), "queued resize must wait for recovery");
+  assert.doesNotThrow(() => client.resize(800, 450), "explicit resize must wait for recovery");
+  const rejected = assert.rejects(restarting, /transient render error/);
+  for (let attempt = 0; attempt < 20 && renderWorker() === render; attempt += 1) await Promise.resolve();
+  const failed = renderWorker();
+  replyRender(failed, "prepare", "error", { message: "transient render error" });
+  await rejected;
+  assert.equal(observer.active, false, "failed recovery must not resume automatic resize");
+  const retry = client.restart();
+  for (let attempt = 0; attempt < 20 && renderWorker() === failed; attempt += 1) await Promise.resolve();
+  const recovered = renderWorker();
+  replyRender(recovered, "prepare", "prepared");
+  await waitForRequest(recovered, "start_engine");
+  replyRender(recovered, "start_engine", "engine_started", { mode: "retained" });
+  await retry;
+  assert.equal(client.mode, AUTHORING_EXECUTION_SEMANTIC);
+  assert.equal(recovered.terminated, false);
+  const nextObserver = FakeResizeObserver.instances.at(-1);
+  assert.equal(nextObserver.active, true);
+  assert.equal(nextObserver.canvas, client.canvas);
+  assert.doesNotThrow(() => nextObserver.deliver());
+  assert.equal(request(recovered, "resize").width, 640);
+  client.terminate();
+});
+
+test("cancelled shared preparation cannot roll back a replacement startup generation", async () => {
+  const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const capture = promise => promise.catch(error => error);
+  const firstPrepare = capture(client.prepare({ transportMode: "transferable" }));
+  const firstStart = capture(client.startSemanticExecution("first", authoring));
+  client.terminate();
+  const nextPrepare = capture(client.prepare({ transportMode: "transferable" }));
+  const replacement = renderWorker();
+  const nextStart = capture(client.startSemanticExecution("replacement", authoring));
+  try {
+    for (const error of await Promise.all([firstPrepare, firstStart])) {
+      assert.match(error.message, /terminated/);
+    }
+    assert.equal(replacement.terminated, false, "stale failure must not destroy the new renderer");
+    await assert.rejects(client.startSemanticExecution("overlapping", authoring), /already started/);
+    replyRender(replacement, "prepare", "prepared");
+    await nextPrepare;
+    await waitForRequest(replacement, "start_engine");
+    replyRender(replacement, "start_engine", "engine_started");
+    const ready = await nextStart;
+    assert.equal(ready.engine.semantic, true);
+    assert.deepEqual(authoring.attachments.map(entry => entry.contextId), ["replacement"]);
+  } finally {
+    client.terminate();
+    await Promise.all([nextPrepare, nextStart]);
+  }
 });

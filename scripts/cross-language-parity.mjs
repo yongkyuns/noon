@@ -13,7 +13,13 @@ execFileSync("cargo", ["build", "--quiet", "--workspace", "--all-features", "--e
   { cwd: repoRoot, stdio: "inherit" });
 const binary = path.resolve(repoRoot, process.env.CARGO_TARGET_DIR ?? "target", "debug/examples/cross_language_parity");
 const corpus = execFileSync(binary, [], { cwd: repoRoot, encoding: "utf8" }).trim().split("\n").map(JSON.parse);
-assert.equal(corpus.length, 11, "paired live program inventory changed");
+assert.equal(corpus.length, 14, "paired live program inventory changed");
+const requestedCases = process.env.NOON_PARITY_CASES?.split(",").filter(Boolean);
+if (requestedCases) {
+  for (const name of requestedCases) assert.ok(corpus.some((item) => item.name === name), `unknown parity case: ${name}`);
+}
+const fixtures = requestedCases ? corpus.filter((item) => requestedCases.includes(item.name)) : corpus;
+assert.ok(fixtures.length > 0, "parity selection must not be empty");
 const artifacts = path.resolve(repoRoot, process.env.NOON_PARITY_ARTIFACTS ?? "browser-smoke-artifacts/cross-language");
 await mkdir(artifacts, { recursive: true });
 await writeFile(path.join(artifacts, "rust.json"), `${JSON.stringify(corpus, null, 2)}\n`);
@@ -32,7 +38,7 @@ let browser;
 const report = [];
 try {
   browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgpu") });
-  for (const fixture of corpus) {
+  for (const fixture of fixtures) {
     const page = await browser.newPage();
     const frames = [];
     const identities = new Map();
@@ -45,9 +51,9 @@ try {
         await page.goto(`${server.baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
         await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
         await page.evaluate(() => window.noonHostRaster.ready());
-        const source = await readFile(path.join(repoRoot, "web/python/examples", `${fixture.name}.py`), "utf8");
-        const loaded = await page.evaluate(({ source, duration }) => window.noonHostRaster.load(source, duration),
-          { source, duration: fixture.times.at(-1) + 1 });
+        const source = await readFile(path.join(repoRoot, "web/python/examples", `${fixture.source ?? fixture.name}.py`), "utf8");
+        const loaded = await page.evaluate(({ source, duration, context }) => window.noonHostRaster.load(source, duration, context),
+          { source, duration: fixture.times.at(-1) + 1, context: fixture.context ?? {} });
         assert.equal(loaded.kind, "semantic_execution");
         assert.equal(loaded.rendererBackend, "WebGPU");
         let maximumAbsoluteError = 0;

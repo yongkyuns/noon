@@ -15,20 +15,20 @@ const pagesWorkflow = await readFile(
   "utf8",
 );
 
-const hostErrorBranch = executionClient.match(
-  /if \(message\.type === "host_callback_error"\) \{([\s\S]*?)\n\s*\}/,
+const recoverableErrorBranch = executionClient.match(
+  /if \(message\.type === "recoverable_error"\) \{([\s\S]*?)\n\s*\}/,
 )?.[1];
 
-assert.ok(hostErrorBranch, "execution client must handle host callback errors explicitly");
+assert.ok(recoverableErrorBranch, "execution client must handle recoverable scene errors explicitly");
 assert.match(
-  hostErrorBranch,
+  recoverableErrorBranch,
   /#notifyRecoverableError\(/,
-  "host callback errors must use the recoverable scene-error boundary",
+  "recoverable scene errors must use the recoverable scene-error boundary",
 );
 assert.doesNotMatch(
-  hostErrorBranch,
+  recoverableErrorBranch,
   /#notifyError\(/,
-  "host callback errors must never enter the fatal worker-error boundary",
+  "recoverable scene errors must never enter the fatal worker-error boundary",
 );
 assert.match(
   executionClient,
@@ -52,18 +52,13 @@ assert.doesNotMatch(
 );
 assert.match(
   authoringExecutionClient,
-  /player\.switchToRetainedCanonical\(/,
-  "legacy to retained authoring must switch the persistent execution owner in place using canonical SceneSpec",
+  /this\.#player\.switchToSemanticExecution\(/,
+  "authoring reruns must attach shared sessions through the persistent execution owner",
 );
-assert.match(
+assert.doesNotMatch(
   authoringExecutionClient,
-  /player\.rebuildRetainedCanonical\(/,
-  "retained authoring edits must rebuild on the persistent execution owner using canonical SceneSpec",
-);
-assert.match(
-  authoringExecutionClient,
-  /player\.switchToLegacy\(/,
-  "retained to legacy authoring must switch the persistent execution owner in place",
+  /switchToLegacy|switchToRetainedCanonical|rebuildRetainedCanonical/,
+  "shared authoring must not regain migration engine dispatch",
 );
 
 assert.match(

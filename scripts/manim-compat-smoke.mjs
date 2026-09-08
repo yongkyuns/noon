@@ -78,11 +78,17 @@ class Demo(Scene):
             run_time=0.75,
             rate_func=linear,
         )
-        # Masked target edits remain explicit export coverage during #959 migration.
         self.play(circle.animate.set_y(1.5), run_time=0.4, rate_func=linear)
         self.play(FadeIn(Circle(radius=0.2, color=GREEN)), run_time=0.25)
 
-        # Group fades remain explicit export coverage until shared lifecycle migration (#959).
+`;
+
+// Ordinary groups use the same shared family lifecycle as Text families.
+const groupFadeSource = `
+from noon import *
+
+class GroupFadeLive(Scene):
+    def construct(self):
         intro = VGroup(
             Circle(radius=0.18, color=BLUE),
             Square(side_length=0.36, color=PINK),
@@ -370,6 +376,29 @@ try {
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonManimCompat.ready());
 
+  const sceneOnlyAuthoring = await page.evaluate(async () => {
+    const { PythonAuthoringClient } = await import("./authoring-client.js");
+    const client = new PythonAuthoringClient();
+    try {
+      await client.ready();
+      let patchError = null;
+      try {
+        await client.run("result = {'version': 1, 'sequence': 0, 'patches': []}");
+      } catch (error) {
+        patchError = String(error);
+      }
+      const result = await client.run(
+        "import noon\nassert not hasattr(noon, 'PatchBatch')\nresult = noon.Scene()",
+      );
+      return { patchError, sharedScene: Boolean(result.semanticExecution), terminated: client.terminated };
+    } finally {
+      client.terminate();
+    }
+  });
+  assert.match(sceneOnlyAuthoring.patchError, /Python authoring result must be a noon.Scene/);
+  assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
+  assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");
+
   // #958/#61 prerequisite: every geometry wrapper has store-scoped identity,
   // including independent copies/targets after the JS store wrapper is released.
   const handleOwnership = await page.evaluate(async () => {
@@ -433,24 +462,21 @@ try {
   assert.equal(handleOwnership.memberCount, 3, "failed cross-store operations leave membership intact");
 
   const foundation = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     foundationSource,
   );
-  assert.equal(foundation.kind, "scene_document");
-  assert.equal(foundation.document.objects.length, 5, "introducer animations should auto-bind objects");
+  assert.ok(Math.abs(foundation.duration - 2.65) < 1e-9);
+  assert.equal(foundation.metrics.objectCount, 3, "introducer animations bind objects through shared membership");
+  assert.ok(foundation.metrics.presentedFrames > 0);
+  assert.ok(Math.abs(foundation.frame.objects[0].center[1] - 1.5) < 1e-6);
+  assert.ok(foundation.frame.objects.slice(0, 2).every(object => object.reveal === 1));
 
-  const foundationProperties = foundation.document.tracks.map((track) => track.property);
-  assert.equal(foundationProperties.filter((property) => property === "presence").length, 7);
-  assert.equal(foundationProperties.filter((property) => property === "reveal").length, 2);
-  assert.ok(foundationProperties.includes("transform"), "animate.shift should lower to transform");
-
-  const revealTracks = foundation.document.tracks.filter((track) => track.property === "reveal");
-  assert.ok(
-    revealTracks.every((track) => track.timing.easing === "smooth"),
-    "rate_func=smooth should lower to the shared smooth semantic ID",
+  const groupFades = await page.evaluate(
+    pythonSource => window.noonManimCompat.runLive(pythonSource), groupFadeSource,
   );
-  const transform = foundation.document.tracks.find((track) => track.property === "transform");
-  assert.equal(transform.timing.easing, "linear");
+  assert.equal(groupFades.metrics.objectCount, 0, "family FadeOut detaches the shared root");
+  assert.ok(groupFades.metrics.presentedFrames > 0);
+  assert.equal(groupFades.duration, 0.5);
 
   const uncreate = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
@@ -469,12 +495,12 @@ try {
   assert.ok(phaseB.metrics.presentedFrames > 0, "shared group membership must render");
 
   const defaultVmobjectStyle = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     defaultVmobjectStyleSource,
   );
-  assert.equal(defaultVmobjectStyle.kind, "scene_document");
-  assert.equal(defaultVmobjectStyle.document.objects.length, 3);
-  const defaultStyle = defaultVmobjectStyle.document.objects[0].style;
+  assert.equal(defaultVmobjectStyle.metrics.objectCount, 3);
+  assert.ok(defaultVmobjectStyle.metrics.presentedFrames > 0);
+  const defaultStyle = defaultVmobjectStyle.frame.objects[0];
   assert.equal(defaultStyle.fill.alpha, 0);
   assert.equal(defaultStyle.stroke.alpha, 1);
   assert.ok(Math.abs(defaultStyle.stroke_width - 0.04) < 1e-7);
@@ -490,24 +516,37 @@ try {
   assert.ok(animateParity.metrics.presentedFrames > 0, "shared family animate must render");
 
   const queryTransforms = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     queryTransformSource,
   );
-  assert.equal(queryTransforms.kind, "scene_document");
-  assert.equal(queryTransforms.document.objects.length, 3);
+  assert.equal(queryTransforms.metrics.objectCount, 3);
+  assert.ok(queryTransforms.metrics.presentedFrames > 0);
+  assert.ok(queryTransforms.frame.objects.every(object => object.bounds.width > 0 && object.bounds.height > 0));
 
-  const sharedRates = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
-    rateFunctionSource,
-  );
-  const rateTracks = sharedRates.document.tracks.filter(
-    (track) => track.property === "transform",
-  );
-  assert.deepEqual(
-    rateTracks.map((track) => track.timing.easing),
-    ["smooth", "rush_into", "rush_from", "there_and_back"],
-    "known Python callables should lower directly to shared Rust semantic IDs",
-  );
+  // Runtime samples qualify both easing interiors and the returning endpoint.
+  const ratePage = await browser.newPage();
+  ratePage.on("pageerror", error => errors.push(String(error)));
+  const times = [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.65, 0.7, 0.75, 0.8];
+  await ratePage.goto(`${baseUrl}/web/manim-raster-host.html`);
+  const sharedRates = await ratePage.evaluate(async ({ source, times }) => {
+    await window.noonHostRaster.ready();
+    await window.noonHostRaster.load(source, 1);
+    const samples = [];
+    for (let index = 0; index < times.length; index += 1) {
+      const metrics = await window.noonHostRaster.renderThrough(index, times);
+      samples.push({ metrics, frame: await window.noonHostRaster.debugFrame() });
+    }
+    return samples;
+  }, { source: rateFunctionSource, times });
+  const expectedX = [0.070103716545108, 0.5, 0.929896283454892, 1,
+    0.859792566910216, 0.859792566910216, 0.5, 0, 0.5, 1];
+  for (const [index, { frame, metrics }] of sharedRates.entries()) {
+    assert.ok(Math.abs(frame.objects[0].center[0] - expectedX[index]) < 1e-5,
+      `shared rate function at ${times[index]}s: ${frame.objects[0].center[0]} != ${expectedX[index]}`);
+    assert.ok(metrics.presented && metrics.drawCalls > 0);
+    assert.ok(Math.abs(metrics.time - times[index]) < 1e-9);
+  }
+  await ratePage.close();
 
   let overlapError = null;
   try {
@@ -554,7 +593,7 @@ try {
   let zError = null;
   try {
     await page.evaluate(
-      (pythonSource) => window.noonManimCompat.run(pythonSource),
+      (pythonSource) => window.noonManimCompat.runLive(pythonSource),
       `from noon import *\nresult = Scene()\nLine((0, 0, 1), (1, 0, 0))`,
     );
   } catch (error) {

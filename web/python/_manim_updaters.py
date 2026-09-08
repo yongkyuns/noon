@@ -1,14 +1,12 @@
 """Manim-style callback ergonomics over the canonical callback-phase contract.
 
 Python owns callable identity and invocation. Rust owns semantic registration,
-activation ordering, the staged effective snapshot, and publication. The legacy
-patch codec below remains only for its explicit migration consumer; canonical
-callbacks return one property-only effective batch to their existing session.
+activation ordering, the staged effective snapshot, and publication. Callbacks
+return one property-only effective batch to their existing session.
 """
 
 from __future__ import annotations
 
-import copy
 import inspect
 import json
 import math
@@ -16,13 +14,11 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 
-import _noon_ir as _ir
 import noon as _base
 
 _INSTALLED = False
 _NEXT_SESSION_ID = 0
 _TRACKED_MOBJECTS: list[_base.Mobject] = []
-_SESSIONS: dict[int, "_UpdaterSession"] = {}
 _CANONICAL_SESSIONS: dict[int, "_CanonicalCallbackSession"] = {}
 _ACTIVE_CONTEXTS: dict[int, Any] = {}
 _ACTIVE_CANONICAL_CONTEXT: ContextVar["_CanonicalCallbackContext | None"] = ContextVar(
@@ -375,25 +371,6 @@ def has_updaters(self: _base.Mobject) -> bool:
     return bool(_updaters(self))
 
 
-def _current_raw(self: _base.Mobject) -> _ir.Mobject:
-    scene = self._scene
-    if scene is not None and self._object is not None:
-        context = _ACTIVE_CONTEXTS.get(id(scene))
-        if context is not None:
-            return context.current_raw(self)
-    return _ORIGINAL_CURRENT_RAW(self)
-
-
-def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
-    scene = self._scene
-    if scene is not None and self._object is not None:
-        context = _ACTIVE_CONTEXTS.get(id(scene))
-        if context is not None:
-            context.replace_raw(self, raw)
-            return self
-    return _ORIGINAL_APPLY(self, raw)
-
-
 def _invoke(callback: Callable[..., Any], mobject: _base.Mobject, dt: float) -> None:
     try:
         signature = inspect.signature(callback)
@@ -415,99 +392,6 @@ def _invoke(callback: Callable[..., Any], mobject: _base.Mobject, dt: float) -> 
         callback(mobject, dt)
     else:
         callback(mobject)
-
-
-@dataclass(slots=True)
-class _UpdaterSession:
-    scene: _base.Scene
-    registrations: dict[int, _UpdaterRegistration]
-
-
-class _CallbackContext:
-    def __init__(self, scene: _base.Scene, frame: dict[str, Any]) -> None:
-        self.scene = scene
-        self.delta_time = float(frame["delta_time"])
-        self._frame_items = {
-            int(item["object"]): item
-            for item in frame["objects"]
-        }
-        self._baseline: dict[int, _ir.Mobject] = {}
-        self._current: dict[int, _ir.Mobject] = {}
-
-    def _materialize(self, object_id: int) -> _ir.Mobject:
-        existing = self._current.get(object_id)
-        if existing is not None:
-            return existing
-        try:
-            item = self._frame_items[object_id]
-        except KeyError as error:
-            raise RuntimeError(
-                f"host callback snapshot does not contain object {object_id}"
-            ) from error
-        authored = self.scene._objects[object_id]
-        raw = _ir.Mobject(
-            geometry=copy.deepcopy(authored["geometry"]),
-            transform=copy.deepcopy(item["transform"]),
-            style=copy.deepcopy(item["style"]),
-        )
-        self._baseline[object_id] = raw
-        current = copy.deepcopy(raw)
-        self._current[object_id] = current
-        return current
-
-    def current_raw(self, mobject: _base.Mobject | int) -> _ir.Mobject:
-        if isinstance(mobject, int):
-            return self._materialize(mobject)
-        obj = mobject._object
-        if obj is None:
-            raise RuntimeError("legacy callback target has no object identity")
-        return self._materialize(obj.id)
-
-    def replace_raw(self, mobject: _base.Mobject | int, raw: _ir.Mobject) -> None:
-        if isinstance(mobject, int):
-            object_id = mobject
-        else:
-            obj = mobject._object
-            if obj is None:
-                raise RuntimeError("legacy callback target has no object identity")
-            object_id = obj.id
-        self._materialize(object_id)
-        self._current[object_id] = _ir.Mobject(
-            geometry=copy.deepcopy(raw.geometry),
-            transform=copy.deepcopy(raw.transform),
-            style=copy.deepcopy(raw.style),
-        )
-
-    def patch_batch(self, sequence: int) -> _ir.PatchBatch:
-        batch = _ir.PatchBatch(sequence)
-        for object_id in sorted(self._current):
-            before = self._baseline[object_id]
-            after = self._current[object_id]
-            if before.geometry != after.geometry:
-                batch.set_geometry(object_id, after.geometry)
-            if before.transform != after.transform:
-                translation = after.transform["translation"]
-                scale = after.transform["scale"]
-                batch.set_transform(
-                    object_id,
-                    translation=(translation["x"], translation["y"]),
-                    rotation=after.transform["rotation"],
-                    scale=(scale["x"], scale["y"]),
-                )
-            if before.style != after.style:
-                batch.set_style(
-                    object_id,
-                    fill=_color(after.style["fill"]),
-                    stroke=_color(after.style["stroke"]),
-                    stroke_width=after.style["stroke_width"],
-                    stroke_width_mode=after.style.get(
-                        "stroke_width_mode", _DEFAULT_STROKE_WIDTH_MODE
-                    ),
-                    stroke_join=after.style["stroke_join"],
-                    stroke_cap=after.style["stroke_cap"],
-                    opacity=after.style["opacity"],
-                )
-        return batch
 
 
 @dataclass(frozen=True, slots=True)
@@ -1064,7 +948,7 @@ def _canonical_current_raw(self: _base.Mobject):
         raise NotImplementedError(
             "canonical callback raw geometry access is not supported; use property operations"
         )
-    return _current_raw(self)
+    return _ORIGINAL_CURRENT_RAW(self)
 
 
 def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
@@ -1072,7 +956,7 @@ def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
         raise NotImplementedError(
             "canonical callbacks support property operations only; raw replacement is unsupported"
         )
-    return _apply(self, raw)  # type: ignore[arg-type]
+    return _ORIGINAL_APPLY(self, raw)
 
 
 def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
@@ -1094,10 +978,12 @@ def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     return self
 
 
-def _canonical_move_to(self: _base.Mobject, point: object) -> _base.Mobject:
+def _canonical_move_to(self: _base.Mobject, point: object, *args: object, **kwargs: object) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_MOVE_TO(self, point)
+        return _ORIGINAL_MOVE_TO(self, point, *args, **kwargs)
+    if args or kwargs:
+        raise NotImplementedError("callback move_to currently supports center point placement only")
     _, _, row = value
     return _canonical_shift(self, _base._as_vec2(point) - row.center())
 
@@ -1295,104 +1181,6 @@ def _canonical_vmobject_set_opacity(
     return _ORIGINAL_VMOBJECT_SET_OPACITY(self, opacity, family=family)
 
 
-def _color(value: dict[str, float] | None) -> _ir.Color | None:
-    if value is None:
-        return None
-    return _ir.Color(
-        value["red"],
-        value["green"],
-        value["blue"],
-        value.get("alpha", 1.0),
-    )
-
-
-def register_scene(scene: _base.Scene) -> dict[str, Any] | None:
-    global _NEXT_SESSION_ID
-
-    history: list[_UpdaterRegistration] = []
-    for mobject in _TRACKED_MOBJECTS:
-        if mobject._scene is not scene or mobject._object is None:
-            continue
-        history.extend(_registration_history(mobject))
-    if not history:
-        return None
-
-    # Detached mobjects commonly receive updaters before Scene.add at authored time
-    # zero. Resolve that pending start once the object is known to belong to this
-    # scene; removals recorded after binding retain their exact scene-time endpoint.
-    for registration in history:
-        if registration.active_after is None:
-            registration.active_after = 0.0
-
-    session_id = _NEXT_SESSION_ID
-    _NEXT_SESSION_ID += 1
-    registrations = {slot_id: registration for slot_id, registration in enumerate(history)}
-    _SESSIONS[session_id] = _UpdaterSession(scene=scene, registrations=registrations)
-
-    # Arbitrary Python closures may read any bound mobject. Every scheduled slot
-    # observes the same complete semantic table; the Rust runtime deduplicates that
-    # table once per phase and owns which callback slots are active at the frame time.
-    object_ids = [int(obj["id"]) for obj in scene._objects]
-    slots = []
-    for slot_id, registration in registrations.items():
-        slot = {
-            "id": slot_id,
-            "objects": object_ids,
-            "active_after": registration.active_after,
-        }
-        if registration.active_through is not None:
-            slot["active_through"] = registration.active_through
-        slots.append(slot)
-    return {
-        "session_id": session_id,
-        "slots": slots,
-    }
-
-
-def run_callback_phase(
-    session_id: int,
-    frame: dict[str, Any],
-    sequence: int,
-) -> str:
-    try:
-        session = _SESSIONS[int(session_id)]
-    except KeyError as error:
-        raise ValueError(f"unknown Noon updater session {session_id}") from error
-
-    invocations = frame.get("invocations", [])
-    context = _CallbackContext(session.scene, frame)
-    scene_key = id(session.scene)
-    if scene_key in _ACTIVE_CONTEXTS:
-        raise RuntimeError("nested Noon host callback phases are not supported")
-    _ACTIVE_CONTEXTS[scene_key] = context
-
-    # Keep the updater adapter usable by native Python tests and non-reactive scenes:
-    # importing the reactive facade eagerly would require Pyodide's `js` bridge even
-    # when this callback phase has no signals. Only enter the ValueTracker signal
-    # context when the runtime actually supplied signal values.
-    reactive = None
-    if frame.get("signals"):
-        import _manim_reactive as reactive
-
-        reactive._enter_callback_signal_values(frame)
-    try:
-        for invocation in invocations:
-            slot_id = int(invocation["callback"])
-            try:
-                registration = session.registrations[slot_id]
-            except KeyError as error:
-                raise RuntimeError(
-                    f"updater session received unknown callback slot {slot_id}"
-                ) from error
-            _invoke(registration.callback, registration.mobject, context.delta_time)
-    finally:
-        if reactive is not None:
-            reactive._leave_callback_signal_values()
-        _ACTIVE_CONTEXTS.pop(scene_key, None)
-
-    return context.patch_batch(int(sequence)).to_json()
-
-
 async def prepare_canonical_callback_phase(session_id: int, frame: dict[str, Any]):
     """Prepare bounded capture reads before executing this callback phase once."""
     session = _CANONICAL_SESSIONS[int(session_id)]
@@ -1481,7 +1269,6 @@ def _json_phase(value: object) -> str:
 
 
 def release_session(session_id: int) -> None:
-    _SESSIONS.pop(int(session_id), None)
     _CANONICAL_SESSIONS.pop(int(session_id), None)
 
 

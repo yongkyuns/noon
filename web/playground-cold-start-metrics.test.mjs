@@ -244,7 +244,6 @@ test("worker classification covers current authoring, engine, and render entry p
   assert.equal(classifyWorkerUrl("blob:https://localhost/durable-worker"), "other");
   assert.equal(classifyWorkerUrl("http://localhost/web/python-worker.js"), "authoring");
   assert.equal(classifyWorkerUrl("http://localhost/web/execution-engine-worker.js"), "engine");
-  assert.equal(classifyWorkerUrl("http://localhost/web/retained-execution-engine-worker.js"), "engine");
   assert.equal(classifyWorkerUrl("http://localhost/web/execution-render-worker.js"), "render");
   assert.equal(classifyWorkerUrl("http://localhost/web/retained-execution-render-worker.js"), "render");
   assert.equal(classifyWorkerUrl("http://localhost/web/authoring-render-worker.js"), "render");

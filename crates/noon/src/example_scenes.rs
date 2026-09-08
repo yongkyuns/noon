@@ -1,6 +1,7 @@
 //! Target-neutral scene builders shared by executable Rust examples.
 
 pub mod affine_fade;
+pub mod analytic_profile;
 pub mod automatic_wait_text;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;

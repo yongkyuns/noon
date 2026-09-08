@@ -80,41 +80,6 @@ export class PythonAuthoringClient {
     return result;
   }
 
-  async runCallbackPhase(sessionId, frame, sequence) {
-    if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
-      throw new TypeError("callback session ID must be a non-negative safe integer");
-    }
-    if (!isRecord(frame)) {
-      throw new TypeError("callback frame must be an object");
-    }
-    if (!Number.isSafeInteger(sequence) || sequence < 0) {
-      throw new TypeError("callback patch sequence must be a non-negative safe integer");
-    }
-    await this.ready();
-    const requestId = this.#beginRequest();
-    const result = this.#resultFor(requestId);
-    this.#worker.postMessage(
-      envelope("callback_phase", {
-        requestId,
-        sessionId,
-        frame,
-        sequence,
-      }),
-    );
-    return result;
-  }
-
-  async attachEnginePort(port) {
-    if (!(port instanceof MessagePort)) {
-      throw new TypeError("engine host attachment requires a MessagePort");
-    }
-    await this.ready();
-    const requestId = this.#beginRequest();
-    const result = this.#resultFor(requestId);
-    this.#worker.postMessage(envelope("attach_engine_port", { requestId, port }), [port]);
-    return result;
-  }
-
   async attachSemanticExecution(
     contextId,
     controlPort,
@@ -128,9 +93,11 @@ export class PythonAuthoringClient {
       continuationGeneration = null,
       initiallyPaused = false,
       pacing = "realtime",
+      replaceExistingEndpoint = false,
     },
   ) {
     validateSemanticExecutionContextId(contextId);
+    if (typeof replaceExistingEndpoint !== "boolean") throw new TypeError("replaceExistingEndpoint must be a boolean");
     if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
       throw new TypeError("semantic execution attachment requires control and render MessagePorts");
     }
@@ -183,6 +150,7 @@ export class PythonAuthoringClient {
       session,
       initiallyPaused,
       pacing,
+      replaceExistingEndpoint,
     };
     if (callbackSessionId !== null) payload.callbackSessionId = callbackSessionId;
     if (continuationGeneration !== null) {
@@ -309,18 +277,6 @@ export class PythonAuthoringClient {
 
       if (message.type === "semantic_continuation_registered") {
         this.#handleSemanticContinuation(message);
-        return;
-      }
-
-      if (message.type === "callback_result") {
-        this.#settle(message.requestId, ({ resolve }) => {
-          resolve(parsePatchBatchJson(message.patchBatchJson));
-        });
-        return;
-      }
-
-      if (message.type === "host_port_attached") {
-        this.#settle(message.requestId, ({ resolve }) => resolve(message));
         return;
       }
 
@@ -463,12 +419,6 @@ export function parseAuthoringResult(resultJson) {
       duration: validateSceneDuration(result.duration),
     };
   }
-  if (result.kind === "patch_batch") {
-    return {
-      kind: result.kind,
-      document: validatePatchBatch(result.document),
-    };
-  }
   if (result.kind === "scene_document") {
     const document = validateSceneDocument(result.document);
     const sceneSpec = validateSceneSpec(result.scene_spec);
@@ -481,7 +431,6 @@ export function parseAuthoringResult(resultJson) {
       sceneSpec,
       duration: validateSceneDuration(result.duration),
       identities: validateSceneIdentities(result.identities, document),
-      callbacks: validateCallbackSession(result.callbacks, document),
     };
     return parsed;
   }
@@ -521,35 +470,6 @@ function validateSemanticExecutionContextId(contextId) {
     throw new TypeError("semantic execution context ID must be a non-empty string");
   }
   return contextId;
-}
-
-export function parsePatchBatchJson(json) {
-  if (typeof json !== "string") {
-    throw new Error("Python callback result must be encoded JSON");
-  }
-  let batch;
-  try {
-    batch = JSON.parse(json);
-  } catch (error) {
-    throw new Error(`Python callback returned invalid JSON: ${error.message}`);
-  }
-  return validatePatchBatch(batch);
-}
-
-export function validatePatchBatch(batch) {
-  if (!isRecord(batch)) {
-    throw new Error("Python authoring result is not a PatchBatch object");
-  }
-  if (batch.version !== NOON_IR_VERSION) {
-    throw new Error(`Unsupported Noon IR version ${batch.version}`);
-  }
-  if (!Number.isSafeInteger(batch.sequence) || batch.sequence < 0) {
-    throw new Error("Python PatchBatch sequence must be a non-negative safe integer");
-  }
-  if (!Array.isArray(batch.patches)) {
-    throw new Error("Python PatchBatch patches must be an array");
-  }
-  return batch;
 }
 
 export function validateSceneDocument(scene) {
@@ -624,46 +544,6 @@ export function validateSceneIdentities(identities, scene) {
   validateIdentityEntries("object", identities.objects, scene.objects);
   validateIdentityEntries("track", identities.tracks, scene.tracks);
   return identities;
-}
-
-export function validateCallbackSession(callbacks, scene) {
-  if (callbacks === null || callbacks === undefined) {
-    return null;
-  }
-  if (!isRecord(callbacks)) {
-    throw new Error("Python Scene callback session must be an object");
-  }
-  if (!Number.isSafeInteger(callbacks.session_id) || callbacks.session_id < 0) {
-    throw new Error("Python Scene callback session has an invalid session ID");
-  }
-  if (!Array.isArray(callbacks.slots) || callbacks.slots.length === 0) {
-    throw new Error("Python Scene callback session must contain callback slots");
-  }
-  const objectIds = new Set(scene.objects.map(({ id }) => id));
-  const callbackIds = new Set();
-  for (const slot of callbacks.slots) {
-    if (!isRecord(slot) || !Number.isSafeInteger(slot.id) || slot.id < 0) {
-      throw new Error("Python Scene has an invalid callback slot ID");
-    }
-    if (callbackIds.has(slot.id)) {
-      throw new Error("Python Scene has duplicate callback slot IDs");
-    }
-    callbackIds.add(slot.id);
-    if (!Array.isArray(slot.objects)) {
-      throw new Error("Python Scene callback slot objects must be an array");
-    }
-    const seen = new Set();
-    for (const object of slot.objects) {
-      if (!Number.isSafeInteger(object) || object < 0 || !objectIds.has(object)) {
-        throw new Error("Python Scene callback slot references an invalid object");
-      }
-      if (seen.has(object)) {
-        throw new Error("Python Scene callback slot contains duplicate objects");
-      }
-      seen.add(object);
-    }
-  }
-  return callbacks;
 }
 
 function validateDefinitionIds(kind, definitions) {

@@ -243,25 +243,13 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
-      - name: Check canonical retained execution
+      - name: Check shared mixed execution and recovery
         if: steps.browser-risk.outputs.retained_execution == 'true'
         id: retained-execution
         run: |
           SECONDS=0
           set +e
-          timeout --signal=TERM 60s node scripts/retained-execution-worker-smoke.mjs
-          status=$?
-          set -e
-          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
-          exit "$status"
-
-      - name: Check persistent render mode switching
-        if: steps.browser-risk.outputs.render_mode_switch == 'true'
-        id: render-mode-switch
-        run: |
-          SECONDS=0
-          set +e
-          timeout --signal=TERM 60s node scripts/authoring-render-mode-switch-smoke.mjs
+          timeout --signal=TERM 120s node scripts/retained-execution-worker-smoke.mjs
           status=$?
           set -e
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
@@ -319,8 +307,6 @@ jobs:
           AUTHORING_SECONDS: ${{ steps.manim-authoring.outputs.seconds }}
           RETAINED_REQUIRED: ${{ steps.browser-risk.outputs.retained_execution }}
           RETAINED_SECONDS: ${{ steps.retained-execution.outputs.seconds }}
-          MODE_SWITCH_REQUIRED: ${{ steps.browser-risk.outputs.render_mode_switch }}
-          MODE_SWITCH_SECONDS: ${{ steps.render-mode-switch.outputs.seconds }}
           WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
           WEBGL_SECONDS: ${{ steps.webgl-smoke.outputs.seconds }}
           RENDERER_CRITICAL: ${{ steps.browser-risk.outputs.renderer_critical }}
@@ -350,11 +336,6 @@ jobs:
             retained_duration="$(display_seconds "$RETAINED_SECONDS")"
           fi
 
-          mode_switch_duration="skipped"
-          if [[ "$MODE_SWITCH_REQUIRED" == "true" ]]; then
-            mode_switch_duration="$(display_seconds "$MODE_SWITCH_SECONDS")"
-          fi
-
           webgl_duration="skipped"
           if [[ "$RENDERER_CRITICAL" == "true" ]]; then
             webgl_duration="$(display_seconds "$WEBGL_SECONDS")"
@@ -369,8 +350,7 @@ jobs:
             echo "| Preloaded cold start | $cold_start_duration |"
             echo "| Deterministic replay | $(display_seconds "$REPLAY_SECONDS") |"
             echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
-            echo "| Canonical retained execution | $retained_duration |"
-            echo "| Persistent render mode switching | $mode_switch_duration |"
+            echo "| Shared mixed execution and recovery | $retained_duration |"
             echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
             echo "| WebGL renderer-risk smoke | $webgl_duration |"
             echo "| Host-updater diagnostics | $(display_seconds "$HOST_UPDATER_SECONDS") |"
@@ -378,7 +358,6 @@ jobs:
             echo
             echo "Cold-start benchmark escalation required: ${COLD_START_REQUIRED:-unknown}."
             echo "Retained execution escalation required: ${RETAINED_REQUIRED:-unknown}."
-            echo "Render mode-switch escalation required: ${MODE_SWITCH_REQUIRED:-unknown}."
             echo "Renderer-critical WebGL escalation required: ${RENDERER_CRITICAL:-unknown}."
             if [[ "$RENDERER_CRITICAL" == "true" ]]; then
               echo "Renderer-critical paths: ${RENDERER_CRITICAL_PATHS:-unknown}."

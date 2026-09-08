@@ -18,6 +18,9 @@
     },
     "web/python-worker.source.js": {
       "_manim_canonical_scene": 5
+    },
+    "web/wire-contracts.test.mjs": {
+      "SceneDocument": 3
     }
   },
   "regression_fixtures": {

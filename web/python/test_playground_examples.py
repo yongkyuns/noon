@@ -3,11 +3,9 @@ import math
 import unittest
 from pathlib import Path
 
-from noon import PatchBatch, Scene
+from noon import Scene
 from playground_examples import (
-    PLAYGROUND_PATCH_EXAMPLES,
     PLAYGROUND_SCENE_EXAMPLES,
-    run_patch_example,
     run_scene_example,
 )
 
@@ -27,11 +25,6 @@ class PlaygroundExampleTests(unittest.TestCase):
                     for track in document["tracks"]
                 )
                 self.assertLess(latest_end, 4.0)
-
-    def test_every_registered_patch_executes(self) -> None:
-        for name, relative_path, context in PLAYGROUND_PATCH_EXAMPLES:
-            with self.subTest(name=name):
-                self.assertIsInstance(run_patch_example(relative_path, context), PatchBatch)
 
     def test_scene_catalog_is_curated_without_duplicate_sources(self) -> None:
         names = [name for name, _, _ in PLAYGROUND_SCENE_EXAMPLES]

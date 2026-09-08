@@ -2029,20 +2029,12 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let x = authoring_render_f64("move_to.x", x).map_err(LiveSessionError::Mobject)?;
-        let y = authoring_render_f64("move_to.y", y).map_err(LiveSessionError::Mobject)?;
-        let authored = self.authored(mobject)?;
-        let authored_transform = self.placement_authored_transform(mobject)?;
-        let publication = self.session.publication_context();
-        let layout = self.layout_at_transform(mobject, authored_transform, publication)?;
-        let mut translation = authored.transform.translation;
-        translation.x =
-            authoring_render_f64("move_to translation.x", translation.x + x - layout.center.0)
-                .map_err(LiveSessionError::Mobject)?;
-        translation.y =
-            authoring_render_f64("move_to translation.y", translation.y + y - layout.center.1)
-                .map_err(LiveSessionError::Mobject)?;
-        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+        self.move_to(
+            mobject,
+            LiveLayoutTarget::Point(x, y),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
     }
 
     fn placement_authored_transform(
@@ -2734,6 +2726,66 @@ mod tests {
     }
 
     #[test]
+    fn move_to_uses_shared_edges_masks_and_atomic_detached_target_edits() {
+        let mut scene = Scene::new();
+        let mut source = scene.rectangle(4.0, 2.0).unwrap();
+        source.set_translation(2.0, -1.0).unwrap();
+        let mut reference = scene.rectangle(2.0, 4.0).unwrap();
+        reference.set_translation(-3.0, 3.0).unwrap();
+        scene.add(&source).unwrap();
+        scene.add(&reference).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        live.session.take_frame_changes();
+        let result = live
+            .move_to(
+                &source,
+                LiveLayoutTarget::Point(99.0, 5.0),
+                (0.0, 1.0),
+                (0.0, 1.0),
+            )
+            .unwrap();
+        assert_eq!(result.impacts().len(), 1);
+        assert_eq!(live.effective_layout(&source).unwrap().center, (2.0, 4.0));
+        assert_eq!(
+            live.effective_layout(&reference).unwrap().center,
+            (-3.0, 3.0)
+        );
+        let target = live.target_editor(&source).unwrap();
+        live.session.take_frame_changes();
+        live.move_to(
+            &target,
+            LiveLayoutTarget::Mobject(&reference),
+            (0.0, 1.0),
+            (0.5, 1.0),
+        )
+        .unwrap();
+        assert_eq!(target.center().unwrap(), (-0.5, 4.0));
+        assert_eq!(live.effective_layout(&source).unwrap().center, (2.0, 4.0));
+        assert!(live.session.take_frame_changes().is_empty());
+        let publication = live.session.publication_context();
+        assert!(live
+            .move_to(
+                &target,
+                LiveLayoutTarget::Point(1.0, 2.0),
+                (0.0, 0.0),
+                (f64::NAN, 1.0)
+            )
+            .is_err());
+        let foreign = Scene::new().circle(1.0).unwrap();
+        assert!(live
+            .move_to(
+                &target,
+                LiveLayoutTarget::Mobject(&foreign),
+                (0.0, 0.0),
+                (1.0, 1.0)
+            )
+            .is_err());
+        assert_eq!(live.session.publication_context(), publication);
+        assert_eq!(target.center().unwrap(), (-0.5, 4.0));
+    }
+
+    #[test]
     fn move_to_point_rejects_an_active_affine_driver_before_publication() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
@@ -2864,6 +2916,138 @@ mod tests {
         assert_eq!(
             scene.store().borrow().geometry_resources().len(),
             before_resources
+        );
+    }
+
+    #[test]
+    fn returning_transform_completion_preserves_the_source_across_activation_paths_and_nested_timing(
+    ) {
+        for mode in ["predeclared", "prepared", "mapped"] {
+            let mut scene = Scene::new();
+            let mut source = scene.circle(0.4).unwrap();
+            source.set_translation(1.25, -0.75).unwrap();
+            source.set_fill(0.1, 0.2, 0.3, 0.4).unwrap();
+            let mut target = source.target_editor().unwrap();
+            target.set_translation(3.25, 1.25).unwrap();
+            target.set_fill(0.8, 0.7, 0.6, 0.9).unwrap();
+            scene.add(&source).unwrap();
+            let original = source.state().unwrap();
+            let options = AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::ThereAndBack);
+            let animation = if mode != "predeclared" {
+                None
+            } else {
+                Some(
+                    scene
+                        .declare_transform_to(&source, &target, options)
+                        .unwrap(),
+                )
+            };
+            let mut session = scene.execution_session().unwrap();
+            let mut live = scene.live(&mut session);
+            let segment = if let Some(animation) = animation {
+                live.play_animation(&animation).unwrap()
+            } else if mode == "mapped" {
+                live.declare_and_activate_transform_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    &[TransformToRequest::new(
+                        &source,
+                        &target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )],
+                    options,
+                    AnimationOptions::new(),
+                )
+                .unwrap()
+            } else {
+                live.declare_and_activate_transform_to(&source, &target, options)
+                    .unwrap()
+            };
+            live.advance_segment_to(segment, 0.5).unwrap();
+            assert_eq!(
+                live.effective(&source).unwrap().transform.translation,
+                noon_core::Vec2::new(3.25, 1.25)
+            );
+            live.advance_segment_to(segment, 1.0).unwrap();
+            let before_completion = live.effective(&source).unwrap();
+            live.complete_segment(segment).unwrap();
+            let mut expected = original;
+            if mode == "mapped" {
+                let target_state = target.state().unwrap();
+                expected.transform = target_state.transform;
+                expected.style = target_state.style;
+            }
+            assert_eq!(live.authored(&source).unwrap(), expected);
+            let after_completion = live.effective(&source).unwrap();
+            assert_eq!(after_completion.transform, before_completion.transform);
+            assert_eq!(after_completion.style, before_completion.style);
+            live.set_translation(&source, -2.0, 0.0).unwrap();
+            assert_eq!(
+                live.effective(&source).unwrap().transform.translation.x,
+                -2.0
+            );
+        }
+    }
+
+    #[test]
+    fn returning_sequence_completion_keeps_the_preceding_leaf_endpoint() {
+        let mut scene = Scene::new();
+        let source = scene.circle(0.4).unwrap();
+        let mut first = source.target_editor().unwrap();
+        first.set_translation(2.0, 1.0).unwrap();
+        first.set_fill(0.2, 0.3, 0.4, 0.5).unwrap();
+        let mut second = first.target_editor().unwrap();
+        second.set_translation(4.0, 3.0).unwrap();
+        second.set_fill(0.8, 0.7, 0.6, 0.9).unwrap();
+        scene.add(&source).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &[
+                    TransformToRequest::new(
+                        &source,
+                        &first,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    ),
+                    TransformToRequest::new(
+                        &source,
+                        &second,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::ThereAndBack),
+                    ),
+                ],
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        live.advance_segment_to(segment, 1.5).unwrap();
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation,
+            noon_core::Vec2::new(4.0, 3.0)
+        );
+        live.advance_segment_to(segment, 2.0).unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.authored(&source).unwrap().transform,
+            first.state().unwrap().transform
+        );
+        assert_eq!(
+            live.authored(&source).unwrap().style,
+            first.state().unwrap().style
+        );
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation,
+            noon_core::Vec2::new(2.0, 1.0)
         );
     }
 
@@ -3486,12 +3670,14 @@ mod tests {
     }
 
     #[test]
-    fn prepared_sequence_uses_mapped_boundaries_and_releases_disjoint_style_channels() {
+    fn prepared_sequence_captures_composed_style_targets_at_mapped_boundaries() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let mut fill_target = circle.target_editor().unwrap();
         fill_target.set_fill(1.0, 0.0, 0.0, 0.4).unwrap();
-        let mut opacity_target = circle.target_editor().unwrap();
+        // TransformTo targets are complete snapshots. Carry the first target's
+        // paint into the second target while changing its opacity.
+        let mut opacity_target = fill_target.target_editor().unwrap();
         opacity_target.set_object_opacity(0.5).unwrap();
         scene.add(&circle).unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -3542,6 +3728,56 @@ mod tests {
     }
 
     #[test]
+    fn sequential_transform_targets_capture_previous_effective_endpoints() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut first = circle.target_editor().unwrap();
+        first.set_translation(2.0, 1.0).unwrap();
+        let mut second = circle.target_editor().unwrap();
+        second.set_translation(4.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            TransformToRequest::new(&circle, &first, options),
+            TransformToRequest::new(&circle, &second, options),
+        ];
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        for (time, expected) in [
+            (0.5, noon_core::Vec2::new(1.0, 0.5)),
+            (1.0, noon_core::Vec2::new(2.0, 1.0)),
+            (1.5, noon_core::Vec2::new(3.0, 0.5)),
+            (2.0, noon_core::Vec2::new(4.0, 0.0)),
+        ] {
+            live.advance_segment_to(segment, time).unwrap();
+            assert_eq!(
+                live.effective(&circle).unwrap().transform.translation,
+                expected
+            );
+        }
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.authored(&circle).unwrap().transform.translation,
+            SemanticVec3::new(4.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn duplicate_composition_driver_rolls_back_target_leaf_and_root_declarations() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
@@ -3563,7 +3799,7 @@ mod tests {
         let result = scene
             .live(&mut session)
             .declare_and_activate_transform_composition(
-                SemanticAnimationCompositionKind::Sequence,
+                SemanticAnimationCompositionKind::Parallel,
                 &children,
                 AnimationOptions::new(),
                 AnimationOptions::new().run_time(2.0),

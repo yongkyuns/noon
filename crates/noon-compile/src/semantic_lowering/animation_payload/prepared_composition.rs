@@ -217,7 +217,8 @@ impl std::error::Error for PreparedSemanticAnimationLoweringError {}
 
 /// Lower one prepared animation graph through the canonical schedule and shared payload paths.
 ///
-/// Effective properties are captured at most once per affected execution object. The function
+/// Initial effective properties are captured once per affected object. Deterministic sequential
+/// leaves derive their activation values from prior completed channels. The function
 /// reads only staged animation/object dependencies and does not allocate semantic or execution
 /// identity, mutate the prepared store, or publish runtime state.
 pub fn lower_prepared_semantic_animation_composition<F>(
@@ -238,7 +239,7 @@ where
     let family_animations =
         super::lower_prepared_text_glyph_animations(prepared.store(), &schedule)
             .map_err(PreparedSemanticAnimationLoweringError::TextGlyph)?;
-    let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
+    let mut captures = super::scheduled_captures::ScheduledCaptures::default();
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
     let mut admitted = HashSet::new();
@@ -273,7 +274,45 @@ where
         }
     }
 
-    for leaf in schedule.leaves() {
+    let pending_updaters = prepared
+        .candidate_mutations()
+        .filter_map(|mutation| match mutation {
+            noon_core::SemanticMutation::AddUpdater { target, .. } => Some(*target),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let intervals = super::scheduled_captures::known_intervals(schedule.leaves().iter());
+    let mut leaves: Vec<_> = schedule.leaves().iter().collect();
+    leaves.sort_by(|a, b| {
+        intervals
+            .get(&a.animation)
+            .map_or(start_time, |v| v.0)
+            .total_cmp(&intervals.get(&b.animation).map_or(start_time, |v| v.0))
+    });
+    for leaf in leaves {
+        let has_host_updaters = pending_updaters.contains(&leaf.target)
+            || match leaf.target {
+                SemanticTransactionNodeRef::Existing(node) => prepared
+                    .store()
+                    .semantic_updater_registrations(node)
+                    .is_ok_and(|updaters| !updaters.is_empty()),
+                SemanticTransactionNodeRef::Pending(_) => false,
+            };
+        // Explicit transform targets can consume completed channel endpoints.
+        // Other effects may carry a family center captured during declaration;
+        // keep their dependency rejection until they support later activation.
+        let captures_completed_targets = !has_host_updaters
+            && matches!(
+                leaf.payload,
+                PreparedSemanticScheduledAnimationPayload::TransformTo { .. }
+            );
+        captures.begin_leaf(
+            leaf,
+            &mut driven,
+            &tracks,
+            &intervals,
+            captures_completed_targets,
+        );
         if matches!(
             leaf.payload,
             PreparedSemanticScheduledAnimationPayload::TextGlyph { .. }
@@ -750,13 +789,13 @@ fn capture_effective<F>(
     leaf: &super::super::PreparedSemanticScheduledAnimationLeaf,
     source: &noon_core::SemanticObjectState,
     admitted: bool,
-    captures: &mut HashMap<ObjectId, EffectiveAnimationProperties>,
+    captures: &mut super::scheduled_captures::ScheduledCaptures,
     effective_properties: &mut F,
 ) -> Result<EffectiveAnimationProperties, PreparedSemanticAnimationLoweringError>
 where
     F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
 {
-    if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
+    if let Some(captured) = captures.get(leaf.execution_object_id) {
         return Ok(captured);
     }
     let captured = if let Some(captured) = effective_properties(leaf.execution_object_id) {
@@ -790,7 +829,9 @@ where
         );
     };
     captures.insert(leaf.execution_object_id, captured);
-    Ok(captured)
+    Ok(captures
+        .get(leaf.execution_object_id)
+        .expect("inserted base capture"))
 }
 
 fn push_prepared_channel(
@@ -831,7 +872,7 @@ fn push_prepared_channel(
         target: leaf.target,
         execution_object_id: leaf.execution_object_id,
         property: channel.property,
-        completion: channel.completion,
+        completion: super::affine::completion_at_endpoint(channel.completion, leaf.timing.easing),
         values: channel.values,
         timing: leaf.timing,
         time_map: leaf.time_map.clone(),
@@ -1557,7 +1598,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_prepared_driver_fails_without_semantic_publication() {
+    fn overlapping_prepared_driver_fails_without_semantic_publication() {
         let mut store = noon_core::SemanticStore::new();
         let source = visible_circle(&mut store);
         let mut index = SemanticExecutionIndex::new();
@@ -1577,7 +1618,7 @@ mod tests {
         let second =
             transaction.create_transform_animation(source, second_target, AnimationOptions::new());
         let root = transaction.create_animation_composition(
-            SemanticAnimationCompositionKind::Sequence,
+            SemanticAnimationCompositionKind::Parallel,
             [first, second],
             AnimationOptions::new(),
         );

@@ -1170,10 +1170,10 @@ def _canonical_fade_animation(
     return target, direction
 
 
-def _canonical_text_family_fade_animation(
+def _canonical_family_fade_animation(
     scene: _base.Scene, animation: object
-) -> tuple[_compat.Group, list[_typst.Text], str] | None:
-    """Classify one plain-Text family fade without expanding its leaves."""
+) -> tuple[_compat.Group, list[_base.Mobject], str] | None:
+    """Classify one shared geometry/Text family fade without expanding animations."""
     if type(animation) is _base.FadeIn:
         direction = "in"
     elif type(animation) is _base.FadeOut:
@@ -1185,25 +1185,24 @@ def _canonical_text_family_fade_animation(
         return None
     leaves = _compat._leaf_mobjects(family)
     if not leaves:
-        raise ValueError("canonical Text family Fade requires at least one leaf")
-    if not all(isinstance(member, _typst.Text) for member in leaves):
-        if any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
-            raise NotImplementedError(
-                "canonical family Fade supports plain Text; Typst and MathTypst remain #959"
-            )
-        return None
+        raise ValueError("canonical family Fade requires at least one leaf")
+    if any(isinstance(member, _typst._RetainedTextMobject) and not isinstance(member, _typst.Text)
+           for member in leaves):
+        raise NotImplementedError("canonical family Fade does not yet support Typst or MathTypst")
+    if any(getattr(member, "_semantic_handle", None) is None for member in leaves):
+        raise NotImplementedError("canonical family Fade requires shared semantic leaves")
     if getattr(family, "_semantic_family_handle", None) is None:
-        raise NotImplementedError("canonical Text family Fade requires a shared family handle")
+        raise NotImplementedError("canonical family Fade requires a shared family handle")
     endpoint = _canonical_fade_endpoint(animation)
     if endpoint != (1.0, "shift", 0.0, 0.0):
         raise NotImplementedError(
-            "canonical Text family Fade does not support shift, scale, or target_position"
+            "canonical family Fade does not support shift, scale, or target_position"
         )
     if direction == "in":
         if any(member._scene is not None for member in leaves):
-            raise ValueError("Text family FadeIn requires a detached family")
+            raise ValueError("family FadeIn requires a detached family")
     elif any(member._scene is not scene for member in leaves):
-        raise ValueError("Text family FadeOut requires a family in this Scene")
+        raise ValueError("family FadeOut requires a family in this Scene")
     return family, leaves, direction
 
 
@@ -1854,14 +1853,14 @@ def _build_canonical_composition_candidate(
             if removes:
                 removals.append(target)
             return
-        family_fade = _canonical_text_family_fade_animation(self, animation)
+        family_fade = _canonical_family_fade_animation(self, animation)
         if family_fade is not None:
             family, leaves, direction = family_fade
             child = _canonical_fade_options(
                 animation, child_kwargs, allow_family_lag=True
             )
             if child is None:
-                raise NotImplementedError("unsupported canonical Text family Fade options")
+                raise NotImplementedError("unsupported canonical family Fade options")
             builder.appendFamilyFade(
                 family._semantic_family_handle,
                 direction,

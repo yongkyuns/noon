@@ -191,11 +191,9 @@ jobs:
         run: node scripts/execution-worker-smoke.mjs
       - name: Test mixed retained worker transports
         run: node scripts/retained-execution-worker-smoke.mjs
-      - name: Test Python authoring execution routing
+      - name: Test shared authoring routing, recovery, and termination
         run: node scripts/authoring-execution-router-smoke.mjs
-      - name: Test authoring execution termination races
-        run: node scripts/authoring-execution-lifecycle-smoke.mjs
-      - name: Test slow Python callbacks do not block rendering
+      - name: Test required slow callbacks preserve shared execution order
         run: node scripts/execution-worker-host-smoke.mjs
       - name: Test Python editor highlighting and linting
         run: node scripts/python-editor-smoke.mjs

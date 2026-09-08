@@ -57,7 +57,6 @@ function sceneResultJson(objectId) {
       objects: [{ id: objectId, key: `@object:${objectId}` }],
       tracks: [],
     },
-    callbacks: null,
   });
 }
 

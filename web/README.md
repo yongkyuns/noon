@@ -78,6 +78,8 @@ Sequential `.animate` operations are evaluated at semantic scene time. A later a
 
 Transform semantics are authored in Rust and lowered into renderer-independent execution data. Analytic primitives and fixed path geometry remain distinct execution representations.
 
+`node scripts/manim-typst-authoring-smoke.mjs` qualifies native Text, multiline text, Rust-owned layout, Typst/MathTypst font scaling, and mixed painter order through shared execution and actual glyph rendering. Its optional `NOON_TEXT_AUTHORING_REPORT` contains read-only runtime observations; the harness does not export an authored scene document.
+
 ## Live authoring
 
 Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. A rerun replaces the session; it does not currently qualify incremental hot reload or identity preservation between independently authored scenes. Within a running session, shared Rust semantics own object identity and mutations.
@@ -87,6 +89,18 @@ Python loads lazily in a separate Pyodide worker. The normal playground does not
 The worker loads the pinned Pyodide distribution from jsDelivr, so first-time Python authoring requires network access. The Rust/WASM package remains local under `web/pkg/`.
 
 `node scripts/authoring-perf.mjs` measures cold authoring, unchanged source reruns, one-object source edits, and static seek control round trips through shared sessions. Schema 2 explicitly reports session replacements and unavailable isolated CPU/GPU, incremental-mutation, and camera-uniform timings. It cannot be compared with the removed scene-document profiler. `node scripts/perf-corpus.mjs` measures representative authored scenes, including moving cameras, through shared execution.
+
+## Analytic performance workloads
+
+`node scripts/perf-profile.mjs` runs the target-neutral Rust analytic builder directly in WASM. The `fit`, `fixed`, and `overdraw` layouts author their camera and a single moving circle through the normal shared scene/track APIs. Frames advance in-process through Runtime and Renderer; JavaScript measures browser cadence and host-call durations. GPU timestamp availability is reported separately.
+
+Run the same builder in a native window with `cargo run --example analytic_profile -- 1000 fit`. The equivalent Python scene is `python/examples/analytic_profile.py`, with `object_count`, `layout`, `aspect`, and `duration` context parameters. These examples demonstrate the shared path; they do not establish 100k performance thresholds.
+
+The frame profiler emits schema 2. Its measurements must not be compared with the removed JSON scene/delta profiler; the aggregate benchmark name also distinguishes the direct Rust path.
+
+`node scripts/retained-dynamic-stress-perf.mjs` runs the unchanged five-second Dynamic Load Stress gallery source through shared execution. Each loop authors a fresh source session and reports all ten authored phases, with 626 final visible objects. Defaults are 60 Hz and two loops for each worker transport (`transferable` and `shared`). Set `NOON_RETAINED_STRESS_BACKEND=webgl` for WebGL2; `NOON_RETAINED_STRESS_SAMPLE_HZ`, `NOON_RETAINED_STRESS_WORKER_LOOPS`, and `NOON_RETAINED_STRESS_TRANSPORTS` select explicitly labeled qualification subsets.
+
+This stress report measures the source/worker/runtime/render round trip. Its schema 2 does not establish isolated CPU/GPU budgets, warm replay, or the removed exported-scene profiler's morph activation thresholds. A lower sampling rate qualifies execution coverage, not 60 Hz performance.
 
 ## Vector paths
 

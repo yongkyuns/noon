@@ -456,24 +456,19 @@ mod tests {
 
     use super::*;
     use crate::{
-        CanonicalAuthoringScene, CanonicalRetainedEnginePlayer, RetainedFamilyExecutionObjectState,
-        RetainedFamilyPlanTransport,
+        RetainedFamilyExecutionObjectState, RetainedFamilyPlanTransport, SemanticExecutionPlayer,
     };
 
-    fn engine() -> CanonicalRetainedEnginePlayer {
-        let store = std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let scene = noon::Scene::with_store(std::rc::Rc::clone(&store));
+    fn engine() -> SemanticExecutionPlayer {
+        let mut scene = noon::Scene::new();
         let hello = scene
             .text(noon::Text::new("Hello").with_font_size(64.0))
             .unwrap();
         let world = scene
             .text(noon::Text::new("World").with_font_size(72.0))
             .unwrap();
-        let mut context = CanonicalAuthoringScene::with_store(store);
-        context.bind_mobject(ObjectId::new(8), &hello).unwrap();
-        context.bind_mobject(ObjectId::new(21), &world).unwrap();
-        let exported = context.finalize(Vec::new(), Vec::new(), None).unwrap();
-        CanonicalRetainedEnginePlayer::new(exported, 4.0, 17).unwrap()
+        scene.add_many(&[(&hello).into(), (&world).into()]).unwrap();
+        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
     }
 
     fn family_state(progress: f64) -> FamilyAnimationState {
@@ -507,7 +502,7 @@ mod tests {
     fn snapshot_keeps_wire_identity_but_resolves_renderer_local_text_handles() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let initial = engine.initial_delta_json().unwrap();
         let wire: RetainedExecutionDeltaEnvelope = serde_json::from_str(&initial).unwrap();
@@ -541,7 +536,7 @@ mod tests {
     fn stale_resource_additions_are_dropped_before_duplicate_resource_validation() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let initial = engine.initial_delta_json().unwrap();
         mirror.apply_json(&initial).unwrap();
@@ -549,7 +544,7 @@ mod tests {
         let mut replay: RetainedFamilyExecutionDeltaEnvelope =
             serde_json::from_str(&initial).unwrap();
         replay.resource_additions =
-            Some(RetainedResourceBundle::decode_binary(engine.resource_bundle_bytes()).unwrap());
+            Some(RetainedResourceBundle::decode_binary(&engine.resource_bundle_bytes()).unwrap());
         let (outcome, changes) = mirror.apply_family(replay).unwrap();
         assert_eq!(outcome, RetainedTransportApplyOutcome::DroppedStale);
         assert!(!changes.is_all());
@@ -561,7 +556,7 @@ mod tests {
     fn family_snapshot_installs_local_plan_and_scheduler_state() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let retained: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
@@ -591,7 +586,7 @@ mod tests {
     fn later_family_snapshot_previews_against_live_wire_sequence() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let initial: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
@@ -613,7 +608,7 @@ mod tests {
     fn plain_snapshot_replaces_scene_and_clears_family_sidecar() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let retained: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
@@ -635,7 +630,7 @@ mod tests {
     fn invalid_family_snapshot_does_not_advance_base_mirror() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let retained: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
@@ -662,7 +657,7 @@ mod tests {
     fn invalid_base_incremental_does_not_commit_prepared_family_state() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let initial: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
@@ -710,7 +705,7 @@ mod tests {
     fn incremental_transform_updates_only_state_and_preserves_local_content_handle() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let initial_json = engine.initial_delta_json().unwrap();
         let initial: RetainedExecutionDeltaEnvelope = serde_json::from_str(&initial_json).unwrap();
@@ -743,7 +738,7 @@ mod tests {
     fn snapshot_with_uninstalled_wire_handle_is_rejected_before_mirror_mutation() {
         let mut engine = engine();
         let mut mirror =
-            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&engine.resource_bundle_bytes())
                 .unwrap();
         let mut initial: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
