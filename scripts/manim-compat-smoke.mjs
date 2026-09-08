@@ -383,7 +383,7 @@ try {
       await client.ready();
       let patchError = null;
       try {
-        await client.run("from _noon_ir import PatchBatch\nresult = PatchBatch(0)");
+        await client.run("result = {'version': 1, 'sequence': 0, 'patches': []}");
       } catch (error) {
         patchError = String(error);
       }

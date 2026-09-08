@@ -28,7 +28,6 @@ test("mixed scene results require only canonical SceneSpec at the authoring prot
       scene_spec: sceneSpec,
       duration: 1.5,
       identities: { objects: [{ id: 0, key: "@object:0" }], tracks: [] },
-      callbacks: null,
     }),
   );
 
@@ -47,7 +46,6 @@ test("geometry-only scene results require only canonical SceneSpec", () => {
       scene_spec: sceneSpec,
       duration: 0,
       identities: { objects: [], tracks: [] },
-      callbacks: null,
     }),
   );
 
