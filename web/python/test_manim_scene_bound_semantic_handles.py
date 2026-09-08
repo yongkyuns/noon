@@ -301,11 +301,6 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             assert square.height == 4.0
             assert context.queries == [handle, handle, handle]
 
-            # The explicit legacy materialization boundary keeps its existing raw
-            # fallback rather than consulting an unrelated canonical runtime.
-            scene._legacy_geometry_materialized = True
-            assert square.get_center() == (1.0, 0.0)
-            del scene._legacy_geometry_materialized
             del square._noon_updaters
 
             context.transferred = True

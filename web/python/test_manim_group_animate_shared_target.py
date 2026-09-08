@@ -194,7 +194,6 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             context = FakeCanonicalContext()
             scene = types.SimpleNamespace(
                 _canonical_authoring_context=context,
-                _legacy_geometry_materialized=False,
                 _tracks=[],
             )
             first._scene = scene

@@ -1,8 +1,8 @@
 """Bind geometry handles directly into the shared Rust Scene.
 
 Static geometry lowers to one ExecutionSession in the authoring worker. Python
-keeps identity metadata; geometry values are projected only for explicit exports
-or the remaining legacy geometry adapter owned for deletion by #959.
+keeps derived identity metadata; geometry values are projected only for explicit
+diagnostic exports. Binding never materializes a Python-owned scene.
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ _INSTALLED = False
 _CHECKPOINT_TAG = object()
 _ORIGINAL_AUTHORING_CHECKPOINT = _ir.Scene._authoring_checkpoint
 _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
-_ORIGINAL_BIND = _base.Mobject._bind_to_scene
 _ORIGINAL_BIND_POSITION = _base.Scene.bind_position
 _ORIGINAL_BIND_ROTATION = _base.Scene.bind_rotation
 _ORIGINAL_BIND_OPACITY = _base.Scene.bind_opacity
@@ -85,7 +84,6 @@ def _context(scene: _ir.Scene):
 class _TypedBindingReservation:
     object: _ir.Object
     key: str
-    legacy_snapshot: dict[str, Any] | None
     reuse_existing_identity: bool = False
 
 
@@ -115,7 +113,7 @@ def _reserve_typed_binding(
             if key is not None and _ir._authoring_key("key", key, prior_key) != prior_key:
                 raise ValueError("a re-added canonical Mobject keeps its existing key")
             return _TypedBindingReservation(
-                prior, prior_key, None, reuse_existing_identity=True
+                prior, prior_key, reuse_existing_identity=True
             )
 
     object_id = scene._next_object_id if object_id is None else object_id
@@ -125,14 +123,8 @@ def _reserve_typed_binding(
     if authoring_key in scene._object_key_ids:
         raise ValueError(f"duplicate object key: {authoring_key}")
 
-    legacy_snapshot = None
-    if getattr(scene, "_legacy_geometry_materialized", False) and not isinstance(
-        mobject, _typst._RetainedTextMobject
-    ):
-        legacy_snapshot = json.loads(str(handle.snapshotJson()))
-        legacy_snapshot["id"] = object_id
     return _TypedBindingReservation(
-        _ir.Object(object_id, scene._owner), authoring_key, legacy_snapshot
+        _ir.Object(object_id, scene._owner), authoring_key
     )
 
 
@@ -151,15 +143,14 @@ def _commit_typed_binding(
     scene._object_key_ids[reservation.key] = obj.id
     scene._next_object_id = obj.id + 1
     scene._next_painter_order += 1
-    _record_mobject_binding(mobject, scene, obj, handle, reservation.legacy_snapshot)
+    _record_mobject_binding(mobject, scene, obj, handle)
     return obj
 
 
 def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     handle = getattr(self, "_semantic_handle", None)
     if handle is None:
-        materialize_legacy_geometry(scene)
-        return _ORIGINAL_BIND(self, scene, key=key)
+        raise NotImplementedError("shared Scene binding requires a typed semantic Mobject")
     reservation = _reserve_typed_binding(self, scene, handle, key)
     context = _context(scene)
     if reservation.reuse_existing_identity:
@@ -390,16 +381,12 @@ def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object
     """Bind one context-created semantic camera without constructing Python geometry state."""
     if getattr(mobject, "_scene", None) is not None:
         raise ValueError("camera frame is already bound")
-    if getattr(scene, "_legacy_geometry_materialized", False):
-        raise NotImplementedError(
-            "moving camera construction cannot follow legacy geometry materialization"
-        )
     object_id = scene._next_object_id
     authoring_key = _ir._authoring_key("key", None, f"@object:{object_id}")
     if object_id in scene._object_keys or authoring_key in scene._object_key_ids:
         raise ValueError("camera frame wrapper identity is already bound")
     reservation = _TypedBindingReservation(
-        _ir.Object(object_id, scene._owner), authoring_key, None
+        _ir.Object(object_id, scene._owner), authoring_key
     )
     handle = _context(scene).createCameraFrame(str(object_id))
     _semantic_handles._attach_shared_handle(mobject, handle)
@@ -411,7 +398,6 @@ def _record_mobject_binding(
     scene: _base.Scene,
     obj: _ir.Object,
     handle: object,
-    legacy_snapshot: dict[str, Any] | None = None,
 ) -> None:
     scene._object_positions[obj.id] = len(scene._objects)
     # The compatibility table retains identity only on the shared path.
@@ -425,20 +411,7 @@ def _record_mobject_binding(
         if handles is None:
             handles = scene._semantic_geometry_handles = {}
     handles[obj.id] = handle
-    if legacy_snapshot is not None:
-        scene._objects[-1] = legacy_snapshot
     mobject._bind(scene, obj)
-
-
-def materialize_legacy_geometry(scene):
-    """Enter the explicit legacy animation/export adapter once (#959)."""
-    if getattr(scene, "_legacy_geometry_materialized", False):
-        return
-    for object_id, handle in getattr(scene, "_semantic_geometry_handles", {}).items():
-        snapshot = json.loads(str(handle.snapshotJson()))
-        snapshot["id"] = object_id
-        scene._objects[scene._object_positions[object_id]] = snapshot
-    scene._legacy_geometry_materialized = True
 
 
 def _canonical_tracker_builder(builder: object) -> bool:
@@ -2097,10 +2070,6 @@ def _play_canonical_composition(
     removals: list[_base.Mobject],
     tracker_associations: list[_reactive.ValueTracker],
 ) -> _base.Scene | _SemanticContinuationAwaitable:
-    if getattr(self, "_legacy_geometry_materialized", False):
-        raise NotImplementedError(
-            "canonical ordinary composition cannot follow legacy geometry materialization"
-        )
     if _legacy_authored_time(self) != 0.0:
         raise NotImplementedError(
             "canonical ordinary composition cannot follow legacy Scene timing"
@@ -2144,9 +2113,6 @@ def _play_canonical_composition(
 
 def _play(self, *args, **kwargs):
     _require_portable_barrier_admission(self)
-    if getattr(self, "_legacy_geometry_materialized", False):
-        raise NotImplementedError("shared Scene.play cannot follow legacy geometry materialization")
-
     group = args[0] if len(args) == 1 and isinstance(args[0], _composition.AnimationGroup) else None
     kind = "sequence" if isinstance(group, _composition.Succession) else "parallel"
     animations = tuple(group.animations) if group is not None else args
@@ -2157,10 +2123,6 @@ def _play(self, *args, **kwargs):
 
 
 def _canonical_value_tracker(self: _base.Scene, value: float = 0.0) -> _reactive.ValueTracker:
-    if getattr(self, "_legacy_geometry_materialized", False):
-        raise RuntimeError(
-            "canonical ValueTracker cannot be authored after legacy geometry materialization"
-        )
     context = _context(self)
     return _reactive.ValueTracker._from_canonical(
         self, context, context.createValueTracker(float(value))
@@ -2168,10 +2130,6 @@ def _canonical_value_tracker(self: _base.Scene, value: float = 0.0) -> _reactive
 
 
 def _canonical_native_context(scene: _base.Scene) -> object:
-    if getattr(scene, "_legacy_geometry_materialized", False):
-        raise RuntimeError(
-            "canonical native input cannot be authored after legacy geometry materialization"
-        )
     return _context(scene)
 
 
@@ -2462,14 +2420,13 @@ def _canonical_bind_position(
 
 def _to_document(self):
     # Explicit export may project values; it does not provide execution input on
-    # the shared path. Legacy animation retains this adapter until #959.
+    # the shared path. #959 owns the remaining geometry diagnostic codec.
     document = _ORIGINAL_TO_DOCUMENT(self)
     objects = document["objects"]
-    if not getattr(self, "_legacy_geometry_materialized", False):
-        for object_id, handle in getattr(self, "_semantic_geometry_handles", {}).items():
-            snapshot = json.loads(str(handle.snapshotJson()))
-            snapshot["id"] = object_id
-            objects[self._object_positions[object_id]] = snapshot
+    for object_id, handle in getattr(self, "_semantic_geometry_handles", {}).items():
+        snapshot = json.loads(str(handle.snapshotJson()))
+        snapshot["id"] = object_id
+        objects[self._object_positions[object_id]] = snapshot
     # Native/Typst Text has no geometry projection. The legacy document remains
     # an explicit geometry-only diagnostic, so omit identity-only text rows
     # and their legacy tracks here.
@@ -2505,8 +2462,6 @@ def _identity_document(self: _ir.Scene) -> dict[str, list[dict[str, Any]]]:
 def execution_context(scene, callbacks=None):
     """Select typed geometry/native-Text execution; unsupported contracts stay explicit."""
     del callbacks  # Callback declarations now lower through the canonical context.
-    if getattr(scene, "_legacy_geometry_materialized", False):
-        return None
     # The canonical static context does not yet lower the legacy reactive/native
     # declarations.  Reject them here rather than silently constructing a live
     # session that omits their drivers; #61 owns their shared-semantic migration.

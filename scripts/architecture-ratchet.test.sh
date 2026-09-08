@@ -99,6 +99,7 @@ expect_rejected() {
 
 reset_to_base() {
   git reset -q --hard "$BASE"
+  mkdir -p web
   rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs src/scene_player_spread_probe.rs src/deleted_legacy_web_probe.rs src/duplicate_clock_probe.rs src/legacy_clock_probe.rs
   rm -f web/browser-smoke.js crates/noon-web/src/duplicate_clock.rs crates/noon-web/src/legacy/clock.rs
   rm -f crates/noon/src/lib.rs crates/noon-web/src/authoring_mobject.rs
@@ -256,6 +257,18 @@ git add src/scene_player_spread_probe.rs
 git commit -qm "unrelated change after ScenePlayer spread"
 if bash scripts/architecture-ratchet.sh "$SCENE_PLAYER_SPREAD_BASE" >/dev/null 2>&1; then
   echo "architecture ratchet test failed: accepted ScenePlayer consumer outside migration allowlist" >&2
+  exit 1
+fi
+
+# A shared binding must never revive a Python-owned scene, even if the bridge
+# predates the current comparison base.
+reset_to_base
+mkdir -p web/python
+printf 'def materialize_legacy_geometry(scene): pass\n' > web/python/geometry_bridge.py
+git add web/python/geometry_bridge.py
+git commit -qm "model deleted Python scene materialization returning"
+if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted Python scene materialization" >&2
   exit 1
 fi
 
