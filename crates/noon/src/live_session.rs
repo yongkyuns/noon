@@ -713,27 +713,45 @@ impl<'a> LiveSession<'a> {
         &mut self,
         members: &[MobjectFamilyMember<'_>],
     ) -> Result<MobjectFamily, LiveSessionError> {
-        if members.is_empty() {
-            return Err(LiveSessionError::Mobject(
-                "semantic family requires at least one member".into(),
-            ));
-        }
-        for member in members {
-            if !Rc::ptr_eq(self.store, member.store()) {
-                return Err(LiveSessionError::ForeignMobjectStore);
-            }
-            member.validate().map_err(LiveSessionError::Mobject)?;
-        }
-        let mut transaction = SemanticMutationTransaction::new();
-        let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
-        for member in members {
-            transaction.add_member(family, member.node_id());
-        }
+        let (transaction, family) =
+            crate::family_authoring::family_creation_transaction(self.store, members)
+                .map_err(LiveSessionError::Mobject)?;
         let result = self.apply(transaction)?;
         let node = result
             .resolve(family)
             .expect("committed family token resolves to one semantic identity");
         MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::Mobject)
+    }
+
+    /// Publish one atomic batch of direct family additions.
+    pub fn add_family_members(
+        &mut self,
+        family: &MobjectFamily,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Vec<bool>, LiveSessionError> {
+        self.edit_family_members(family, members, true)
+    }
+
+    pub fn remove_family_members(
+        &mut self,
+        family: &MobjectFamily,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Vec<bool>, LiveSessionError> {
+        self.edit_family_members(family, members, false)
+    }
+
+    fn edit_family_members(
+        &mut self,
+        family: &MobjectFamily,
+        members: &[MobjectFamilyMember<'_>],
+        adding: bool,
+    ) -> Result<Vec<bool>, LiveSessionError> {
+        self.require_family(family)?;
+        let (transaction, changed) =
+            crate::family_authoring::family_membership_transaction(family, members, adding)
+                .map_err(LiveSessionError::Mobject)?;
+        self.apply(transaction)?;
+        Ok(changed)
     }
 
     /// Publish one fully validated detached Manim geometry object through this session.
@@ -3844,7 +3862,7 @@ mod tests {
         for nested_family in [false, true] {
             let scene = Scene::new();
             let shape = scene.circle(0.5).unwrap();
-            let family = scene.family(&[&shape]).unwrap();
+            let family = scene.family(&[(&shape).into()]).unwrap();
             let mut session = scene.execution_session().unwrap();
             let mut live = scene.live(&mut session);
             let outer = live
@@ -4527,8 +4545,10 @@ mod recursive_composition_tests {
         let mut second_target = second.target_editor().unwrap();
         first_target.set_translation(3.0, 0.0).unwrap();
         second_target.set_translation(6.0, 0.0).unwrap();
-        let source = scene.family(&[&first, &second]).unwrap();
-        let target = scene.family(&[&first_target, &second_target]).unwrap();
+        let source = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let target = scene
+            .family(&[(&first_target).into(), (&second_target).into()])
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let segment = live
@@ -4556,7 +4576,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let mut live = scene.live(&mut session);
@@ -4583,8 +4603,8 @@ mod recursive_composition_tests {
             let mut second = scene.circle(0.2).unwrap();
             second.shift(2.0, 0.0).unwrap();
             let unrelated = scene.square(1.0).unwrap();
-            let nested = scene.family(&[&first, &second]).unwrap();
-            let outer = scene.family(&[&first]).unwrap();
+            let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+            let outer = scene.family(&[(&first).into()]).unwrap();
             scene
                 .store()
                 .borrow_mut()
@@ -4634,7 +4654,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let label = scene.text(crate::Text::new("Fade")).unwrap();
         let shape = scene.circle(0.25).unwrap();
-        let family = scene.family(&[&label, &shape]).unwrap();
+        let family = scene.family(&[(&label).into(), (&shape).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let fade_in = live
@@ -4697,7 +4717,9 @@ mod recursive_composition_tests {
         let mut scene = Scene::new();
         let fading_text = scene.text(crate::Text::new("old")).unwrap();
         let fading_shape = scene.square(0.5).unwrap();
-        let family = scene.family(&[&fading_text, &fading_shape]).unwrap();
+        let family = scene
+            .family(&[(&fading_text).into(), (&fading_shape).into()])
+            .unwrap();
         scene
             .add_many(&[MobjectFamilyMember::Family(&family)])
             .unwrap();
@@ -4738,7 +4760,7 @@ mod recursive_composition_tests {
     fn family_fade_rejects_overlapping_text_write_before_publication() {
         let mut scene = Scene::new();
         let label = scene.text(crate::Text::new("same")).unwrap();
-        let family = scene.family(&[&label]).unwrap();
+        let family = scene.family(&[(&label).into()]).unwrap();
         scene
             .add_many(&[MobjectFamilyMember::Family(&family)])
             .unwrap();
@@ -4784,7 +4806,7 @@ mod recursive_composition_tests {
         let target = first.target_editor().unwrap();
         scene.add(&first).unwrap();
         scene.add(&second).unwrap();
-        let source = scene.family(&[&first, &second]).unwrap();
+        let source = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let nested = {
             let mut transaction = SemanticMutationTransaction::new();
             let inner = transaction.create_node(noon_core::SemanticNodeCreation::family());
@@ -4850,8 +4872,10 @@ mod recursive_composition_tests {
         let mut second_target = second.target_editor().unwrap();
         first_target.set_translation(2.0, 0.0).unwrap();
         second_target.set_translation(4.0, 0.0).unwrap();
-        let source = scene.family(&[&first, &second]).unwrap();
-        let target = scene.family(&[&first_target, &second_target]).unwrap();
+        let source = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let target = scene
+            .family(&[(&first_target).into(), (&second_target).into()])
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Sequence,
@@ -4891,7 +4915,7 @@ mod recursive_composition_tests {
         let second = scene.square(1.0).unwrap();
         scene.add(&first).unwrap();
         scene.add(&second).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let request = AnimationCompositionRequest::Composition {
@@ -4927,7 +4951,7 @@ mod recursive_composition_tests {
         right.set_translation(2.0, 0.0).unwrap();
         scene.add(&left).unwrap();
         scene.add(&right).unwrap();
-        let family = scene.family(&[&left, &right]).unwrap();
+        let family = scene.family(&[(&left).into(), (&right).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let segment = live
@@ -5015,7 +5039,7 @@ mod recursive_composition_tests {
         let mut first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         first.set_fill_opacity(0.35).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         family.prepare_subset_display().unwrap();
         assert_eq!(first.state().unwrap().style.fill_opacity, 0.0);
         assert_eq!(second.state().unwrap().style.fill_opacity, 0.0);
@@ -5069,7 +5093,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         family.prepare_subset_display().unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
@@ -5113,7 +5137,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         family.prepare_subset_display().unwrap();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
@@ -5160,7 +5184,9 @@ mod recursive_composition_tests {
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let third = scene.square(1.0).unwrap();
-        let family = scene.family(&[&first, &second, &third]).unwrap();
+        let family = scene
+            .family(&[(&first).into(), (&second).into(), (&third).into()])
+            .unwrap();
         family.prepare_subset_display().unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
@@ -5224,7 +5250,7 @@ mod recursive_composition_tests {
         let second = scene.square(1.0).unwrap();
         scene.add(&first).unwrap();
         scene.add(&second).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let result = scene
@@ -5299,7 +5325,7 @@ mod recursive_composition_tests {
         let mut first = scene.square(1.0).unwrap();
         first.set_fill_opacity(1.0).unwrap();
         let nested_member = scene.square(1.0).unwrap();
-        let nested = scene.family(&[&nested_member]).unwrap();
+        let nested = scene.family(&[(&nested_member).into()]).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
         transaction.add_member(outer, first.node_id());
@@ -5336,7 +5362,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let left = scene.text(crate::Text::new("A")).unwrap();
         let right = scene.text(crate::Text::new("BCDE")).unwrap();
-        let family = scene.family(&[&left, &right]).unwrap();
+        let family = scene.family(&[(&left).into(), (&right).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
 
         let conflicting = AnimationCompositionRequest::Composition {

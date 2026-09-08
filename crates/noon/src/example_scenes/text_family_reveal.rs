@@ -209,7 +209,7 @@ pub fn program() -> Result<LiveProgram<TextFamilyReveal>, String> {
     left.set_translation(-3.0, 0.75)?;
     let mut right = scene.text("LONG").map_err(|error| error.to_string())?;
     right.set_translation(0.0, 0.75)?;
-    let family = scene.family(&[&left, &right])?;
+    let family = scene.family(&[(&left).into(), (&right).into()])?;
     let mut solo = scene.text("ONE").map_err(|error| error.to_string())?;
     solo.set_translation(-2.0, -1.25)?;
     let mut moving = scene.square(0.6)?;

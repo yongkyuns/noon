@@ -352,7 +352,7 @@
       "id": "group-family",
       "surface": "Group/VGroup direct family identity, membership, and order",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore::insert_family/add_member/remove_member"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_authoring.rs", "symbol": "MobjectFamily::create/add/remove and family_creation_transaction"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_init/_group_add/_group_remove"}],
       "reason": "The shared semantic store assigns stable object/family identities, owns duplicate suppression and direct-member order, and returns membership decisions that Python mirrors for wrapper identity."
     },

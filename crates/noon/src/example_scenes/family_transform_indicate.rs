@@ -113,12 +113,12 @@ pub fn program() -> Result<LiveProgram<FamilyTransformIndicate>, String> {
     }
     scene.add(&left).map_err(|error| error.to_string())?;
     scene.add(&right).map_err(|error| error.to_string())?;
-    let source = scene.family(&[&left, &right])?;
+    let source = scene.family(&[(&left).into(), (&right).into()])?;
     let mut left_target = left.target_editor()?;
     let mut right_target = right.target_editor()?;
     left_target.shift(1.0, 0.0)?;
     right_target.shift(1.0, 0.0)?;
-    let target = scene.family(&[&left_target, &right_target])?;
+    let target = scene.family(&[(&left_target).into(), (&right_target).into()])?;
     scene
         .into_live_program(FamilyTransformIndicate {
             left,

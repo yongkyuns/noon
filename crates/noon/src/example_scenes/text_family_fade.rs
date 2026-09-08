@@ -131,7 +131,7 @@ pub fn program() -> Result<LiveProgram<TextFamilyFade>, String> {
     right.set_translation(1.0, 0.5)?;
     let mut writing = scene.text("WRITE").map_err(|error| error.to_string())?;
     writing.set_translation(-1.0, -1.0)?;
-    let family = scene.family(&[&left, &right])?;
+    let family = scene.family(&[(&left).into(), (&right).into()])?;
     scene
         .into_live_program(TextFamilyFade {
             left,

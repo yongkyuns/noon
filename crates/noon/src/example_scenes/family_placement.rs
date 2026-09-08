@@ -24,14 +24,13 @@ pub fn session() -> Result<ExecutionSession, String> {
         object.set_stroke_width(0.0)?;
     }
     second.shift(0.8, 0.0)?;
-    let nested = scene.family(&[&second])?;
-    let family = scene.family(&[&first])?;
-    scene
-        .store()
-        .borrow_mut()
-        .add_member(family.node_id(), nested.node_id())
-        .map_err(|e| e.to_string())?;
-    let target = scene.family(&[&anchor])?;
+    let nested = scene.family(&[(&second).into()])?;
+    let family = scene.family(&[])?;
+    family.add((&first).into())?;
+    family.add((&nested).into())?;
+    family.remove((&nested).into())?;
+    family.add((&nested).into())?;
+    let target = scene.family(&[(&anchor).into()])?;
     family.layout()?.next_to(
         Target::Mobject(&anchor),
         ManimNextToArgs {

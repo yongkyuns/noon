@@ -9,7 +9,7 @@ use noon_core::{
 };
 use std::{
     cell::RefCell,
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet},
     rc::Rc,
 };
 
@@ -389,14 +389,33 @@ pub struct MobjectFamily {
     node: SemanticNodeId,
 }
 
-/// One borrowed direct member of a family published through a live session.
+/// One borrowed direct member used by authored and live family operations.
 #[derive(Clone, Copy)]
 pub enum MobjectFamilyMember<'a> {
     Mobject(&'a crate::Mobject),
     Family(&'a MobjectFamily),
 }
 
+impl<'a> From<&'a crate::Mobject> for MobjectFamilyMember<'a> {
+    fn from(value: &'a crate::Mobject) -> Self {
+        Self::Mobject(value)
+    }
+}
+
+impl<'a> From<&'a MobjectFamily> for MobjectFamilyMember<'a> {
+    fn from(value: &'a MobjectFamily) -> Self {
+        Self::Family(value)
+    }
+}
+
 impl MobjectFamilyMember<'_> {
+    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
+        if !Rc::ptr_eq(self.store(), store) {
+            return Err("family members belong to different authoring stores".into());
+        }
+        self.validate()
+    }
+
     pub(crate) fn store(&self) -> &Rc<RefCell<SemanticStore>> {
         match self {
             Self::Mobject(member) => member.store(),
@@ -419,14 +438,119 @@ impl MobjectFamilyMember<'_> {
     }
 }
 
+/// Construct the same pending semantic family for authored and live publication.
+pub(crate) fn family_creation_transaction(
+    store: &Rc<RefCell<SemanticStore>>,
+    members: &[MobjectFamilyMember<'_>],
+) -> Result<
+    (
+        SemanticMutationTransaction,
+        noon_core::SemanticLocalNodeToken,
+    ),
+    String,
+> {
+    for member in members {
+        member.require_store(store)?;
+    }
+    let mut transaction = SemanticMutationTransaction::new();
+    let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
+    let mut seen = BTreeSet::new();
+    for member in members {
+        if seen.insert(member.node_id()) {
+            transaction.add_member(family, member.node_id());
+        }
+    }
+    Ok((transaction, family))
+}
+
+/// Prepare a local direct-member batch, returning one decision per input wrapper.
+pub(crate) fn family_membership_transaction(
+    family: &MobjectFamily,
+    members: &[MobjectFamilyMember<'_>],
+    adding: bool,
+) -> Result<(SemanticMutationTransaction, Vec<bool>), String> {
+    family.validate()?;
+    for member in members {
+        member.require_store(family.store())?;
+    }
+    let store = family.store().borrow();
+    let node = store
+        .semantic_family_checked(family.node_id())
+        .map_err(|e| e.to_string())?;
+    let mut seen = BTreeSet::new();
+    let mut transaction = SemanticMutationTransaction::new();
+    let changed = members
+        .iter()
+        .map(|member| {
+            let id = member.node_id();
+            let changed = seen.insert(id) && node.contains_member(id) != adding;
+            if changed {
+                if adding {
+                    transaction.add_member(family.node_id(), id);
+                } else {
+                    transaction.remove_member(family.node_id(), id);
+                }
+            }
+            changed
+        })
+        .collect();
+    Ok((transaction, changed))
+}
+
 impl MobjectFamily {
+    /// Create a detached family, including empty and nested families, atomically.
+    pub fn create(
+        store: Rc<RefCell<SemanticStore>>,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Self, String> {
+        let (transaction, family) = family_creation_transaction(&store, members)?;
+        let result = transaction
+            .apply(&mut store.borrow_mut())
+            .map_err(|e| e.to_string())?;
+        let node = result
+            .resolve(family)
+            .expect("committed family token resolves");
+        Self::from_node(store, node)
+    }
+
+    /// Add one direct member; repeated additions preserve its existing order.
+    pub fn add(&self, member: MobjectFamilyMember<'_>) -> Result<bool, String> {
+        Ok(self.add_many(&[member])?[0])
+    }
+
+    /// Remove one direct member without changing that member's semantic identity.
+    pub fn remove(&self, member: MobjectFamilyMember<'_>) -> Result<bool, String> {
+        Ok(self.remove_many(&[member])?[0])
+    }
+
+    /// Commit a whole direct-member addition before returning per-input decisions.
+    pub fn add_many(&self, members: &[MobjectFamilyMember<'_>]) -> Result<Vec<bool>, String> {
+        self.edit_members(members, true)
+    }
+
+    pub fn remove_many(&self, members: &[MobjectFamilyMember<'_>]) -> Result<Vec<bool>, String> {
+        self.edit_members(members, false)
+    }
+
+    fn edit_members(
+        &self,
+        members: &[MobjectFamilyMember<'_>],
+        adding: bool,
+    ) -> Result<Vec<bool>, String> {
+        let (transaction, changed) = family_membership_transaction(self, members, adding)?;
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map_err(|e| e.to_string())?;
+        Ok(changed)
+    }
+
     pub fn from_node(
         store: Rc<RefCell<SemanticStore>>,
         node: SemanticNodeId,
     ) -> Result<Self, String> {
         store
             .borrow()
-            .semantic_family_members_checked(node)
+            .semantic_family_checked(node)
             .map_err(|error| error.to_string())?;
         Ok(Self { store, node })
     }
@@ -442,7 +566,7 @@ impl MobjectFamily {
     pub fn validate(&self) -> Result<(), String> {
         self.store
             .borrow()
-            .semantic_family_members_checked(self.node)
+            .semantic_family_checked(self.node)
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
@@ -563,7 +687,7 @@ mod tests {
         let scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let before = scene.store().borrow().scene_revision();
 
         family.arrange(1.0, 0.0, 0.2, true).unwrap();
@@ -586,8 +710,8 @@ mod tests {
         second.shift(2.0, 0.0).unwrap();
         let unrelated = scene.square(1.0).unwrap();
         let unrelated_before = unrelated.state().unwrap();
-        let nested = scene.family(&[&first, &second]).unwrap();
-        let outer = scene.family(&[&first]).unwrap();
+        let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let outer = scene.family(&[(&first).into()]).unwrap();
         scene
             .store()
             .borrow_mut()

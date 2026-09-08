@@ -84,6 +84,7 @@ fn import_ordinary_semantic_scene(
                     ))
                 })
             })
+            .map(|member| member.map(noon::MobjectFamilyMember::Mobject))
             .collect::<Result<Vec<_>, _>>()?;
         let family = scene
             .family(&members)
@@ -834,7 +835,7 @@ mod tests {
         let scene = noon::Scene::new();
         let circle = scene.circle(0.25).unwrap();
         let text = scene.text(noon::Text::new("AB")).unwrap();
-        let family = scene.family(&[&text, &circle]).unwrap();
+        let family = scene.family(&[(&text).into(), (&circle).into()]).unwrap();
         let mut context = CanonicalAuthoringScene::with_store(Rc::clone(scene.store()));
         let circle_id = ObjectId::new(1);
         let text_id = ObjectId::new(1_u64 << 52);

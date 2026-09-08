@@ -261,12 +261,10 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = createFamily)]
-        pub fn create_family(&self) -> WasmAuthoringFamilyHandle {
-            let id = self.semantics.borrow_mut().insert_family();
-            WasmAuthoringFamilyHandle {
-                semantics: Rc::clone(&self.semantics),
-                id,
-            }
+        pub fn create_family(&self) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+            noon::MobjectFamily::create(Rc::clone(&self.semantics), &[])
+                .map(WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(js_error)
         }
     }
 
@@ -591,41 +589,6 @@ mod wasm {
         pub(crate) fn semantic_family(&self) -> Result<noon::MobjectFamily, JsValue> {
             noon::MobjectFamily::from_node(Rc::clone(&self.semantics), self.id).map_err(js_error)
         }
-
-        fn object_member_id(
-            &self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            member.id_in_store(&self.semantics, "family")
-        }
-
-        fn family_member_id(
-            &self,
-            member: &WasmAuthoringFamilyHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(&self.semantics, &member.semantics) {
-                return Err(JsValue::from_str(
-                    "families belong to different authoring stores",
-                ));
-            }
-            Ok(member.id)
-        }
-
-        fn add_id(&mut self, member: SemanticNodeId) -> Result<bool, JsValue> {
-            let before = self.member_count();
-            self.semantics
-                .borrow_mut()
-                .add_member(self.id, member)
-                .map_err(|error| js_error(error.to_string()))?;
-            Ok(self.member_count() != before)
-        }
-
-        fn remove_id(&mut self, member: SemanticNodeId) -> Result<bool, JsValue> {
-            self.semantics
-                .borrow_mut()
-                .remove_member(self.id, member)
-                .map_err(|error| js_error(error.to_string()))
-        }
     }
 
     #[wasm_bindgen]
@@ -684,7 +647,20 @@ mod wasm {
             self.semantics
                 .borrow()
                 .node(self.id)
-                .map_or(0, |node| node.members().len())
+                .map_or(0, |node| node.member_count())
+        }
+
+        /// One bounded observation for mirroring a newly constructed wrapper list.
+        #[wasm_bindgen(js_name = memberKeys)]
+        pub fn member_keys(&self) -> Result<Vec<String>, JsValue> {
+            let store = self.semantics.borrow();
+            let node = store
+                .semantic_family_checked(self.id)
+                .map_err(|e| js_error(e.to_string()))?;
+            Ok(node
+                .members_iter()
+                .map(|id| format!("{}:{}", id.slot(), id.generation()))
+                .collect())
         }
 
         #[wasm_bindgen(js_name = memberSlot)]
@@ -712,14 +688,16 @@ mod wasm {
             &mut self,
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<bool, JsValue> {
-            let id = self.object_member_id(member)?;
-            self.add_id(id)
+            self.semantic_family()?
+                .add((&member.handle).into())
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addFamily)]
         pub fn add_family(&mut self, member: &WasmAuthoringFamilyHandle) -> Result<bool, JsValue> {
-            let id = self.family_member_id(member)?;
-            self.add_id(id)
+            self.semantic_family()?
+                .add((&member.semantic_family()?).into())
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = removeMobject)]
@@ -727,8 +705,9 @@ mod wasm {
             &mut self,
             member: &WasmAuthoringMobjectHandle,
         ) -> Result<bool, JsValue> {
-            let id = self.object_member_id(member)?;
-            self.remove_id(id)
+            self.semantic_family()?
+                .remove((&member.handle).into())
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = removeFamily)]
@@ -736,8 +715,9 @@ mod wasm {
             &mut self,
             member: &WasmAuthoringFamilyHandle,
         ) -> Result<bool, JsValue> {
-            let id = self.family_member_id(member)?;
-            self.remove_id(id)
+            self.semantic_family()?
+                .remove((&member.semantic_family()?).into())
+                .map_err(js_error)
         }
     }
 
