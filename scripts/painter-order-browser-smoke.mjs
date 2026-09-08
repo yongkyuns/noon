@@ -30,13 +30,17 @@ try {
         await wasm.default();
         const renderer = await wasm.createDirectPainterOrderSmokeRenderer(canvas.transferControlToOffscreen());
         window.painterRenderer = renderer;
-        renderer.seekDirect(0.5);
-        let presented = false;
-        for (let attempt = 0; attempt < 60 && !presented; attempt++) {
-          presented = renderer.render();
-          if (!presented) await new Promise(resolve => requestAnimationFrame(resolve));
+        async function presentFrame() {
+          for (let attempt = 0; attempt < 60; attempt++) {
+            if (renderer.render()) return;
+            await new Promise(resolve => requestAnimationFrame(resolve));
+          }
+          throw new Error("direct painter-order frame was not presented");
         }
-        if (!presented) throw new Error("direct painter-order frame was not presented");
+        // Admit the bootstrap publication before requesting another runtime frame.
+        await presentFrame();
+        renderer.seekDirect(0.5);
+        await presentFrame();
         return { objectCount: renderer.objectCount(), drawCalls: renderer.lastDrawCalls(),
           rendererBackend: renderer.rendererBackend(), time: renderer.time() };
       }
