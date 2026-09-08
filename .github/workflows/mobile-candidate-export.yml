@@ -1,43 +1,54 @@
-name: Mobile candidate export (temporary)
+name: Mobile candidate qualification on macOS (temporary)
 on:
   push:
     branches: [codex/mobile-demo-diagnosis]
 permissions:
-  contents: write
+  contents: read
+  actions: read
 jobs:
-  export:
+  qualify:
     runs-on: macos-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - name: Materialize reviewed source-only candidate, not a release
+        with:
+          ref: e6830f9d16ca6c18ec5376f0d4e73431b8251ef8
+      - name: Python and worker contracts
+        run: |
+          python3 -m unittest discover -s web/python -p 'test_*.py'
+          node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs
+          node scripts/build-python-worker.mjs
+      - name: Obtain immutable exact-baseline release WASM
+        env:
+          BASE: 16d0a45eef9ec0328e59deb58802cc4ed31dac31
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/mobile-export"
-          python3 scripts/mobile-patch-transfer.py
-          gzip -dc mobile-repair.patch.gz > "$RUNNER_TEMP/mobile-export/source.patch"
-          cp mobile-followup.patch "$RUNNER_TEMP/mobile-export/followup.patch"
-          git restore mobile-repair.patch.gz
-          git fetch --depth=1 origin 16d0a45eef9ec0328e59deb58802cc4ed31dac31
-          git checkout --detach 16d0a45eef9ec0328e59deb58802cc4ed31dac31
-          git apply --index "$RUNNER_TEMP/mobile-export/source.patch"
-          git apply --index "$RUNNER_TEMP/mobile-export/followup.patch"
-          # Workflow authorization belongs to the connected repository client.
-          # Export only the eight source/test/doc files with the Actions token.
-          git restore --source=HEAD --staged --worktree .github/workflows/playground-cross-browser.yml
-          git diff --cached --check
-          git diff --cached --name-only > "$RUNNER_TEMP/mobile-export/files.txt"
-          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" = 8
-          git config user.name 'Yongkyun Shin'
-          git config user.email 'yongkyuns@gmail.com'
-          git commit -m 'Make ordinary browser Scene barriers portable without JSPI'
-          git rev-parse HEAD | tee "$RUNNER_TEMP/mobile-export/candidate-sha.txt"
-          git rev-parse HEAD^{tree} | tee "$RUNNER_TEMP/mobile-export/candidate-tree.txt"
-          git show --stat --oneline HEAD
-          git push origin HEAD:refs/heads/codex/mobile-portable-source
+          mkdir -p "$RUNNER_TEMP/mobile-evidence" "$RUNNER_TEMP/saved-pages/site"
+          git rev-parse HEAD > "$RUNNER_TEMP/mobile-evidence/source-sha.txt"
+          gh run download 34170342894 --repo yongkyuns/noon --name github-pages --dir "$RUNNER_TEMP/saved-pages"
+          tar -xf "$RUNNER_TEMP/saved-pages/artifact.tar" -C "$RUNNER_TEMP/saved-pages/site"
+          cp "$RUNNER_TEMP/saved-pages/site/build-info.json" "$RUNNER_TEMP/mobile-evidence/runtime-build-info.json"
+          python3 -c 'import json,os; assert json.load(open(os.environ["RUNNER_TEMP"]+"/mobile-evidence/runtime-build-info.json"))["commit"] == os.environ["BASE"]'
+          mkdir -p web/pkg
+          cp "$RUNNER_TEMP/saved-pages/site/pkg/noon_web.js" web/pkg/
+          cp "$RUNNER_TEMP/saved-pages/site/pkg/noon_web_bg.wasm" web/pkg/
+          shasum -a 256 web/pkg/* > "$RUNNER_TEMP/mobile-evidence/wasm-sha256.txt"
+      - name: Install pinned browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install webkit chromium
+      - name: Mobile touch, intermediate frames, no-JSPI, Text and rerun
+        run: node scripts/playground-main-thread-mobile-smoke.mjs
+      - name: Desktop regression
+        run: node scripts/playground-browser-matrix-smoke.mjs
+      - name: Tutorial regression
+        run: node scripts/manim-tutorial-smoke.mjs
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mobile-source-export
-          path: ${{ runner.temp }}/mobile-export
+          name: mobile-macos-qualification
+          path: |
+            ${{ runner.temp }}/mobile-evidence
+            browser-smoke-artifacts
           retention-days: 3
