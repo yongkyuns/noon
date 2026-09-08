@@ -596,6 +596,24 @@ impl CanonicalAuthoringScene {
         )
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_fill_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, String> {
+        self.mobject_observation(handle, noon::Mobject::fill_opacity, |player, handle| {
+            // Reject resource paints before reading their lowered scalar projection.
+            handle.fill_opacity()?;
+            Ok(player.live_effective(handle)?.fill_opacity())
+        })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_stroke_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, String> {
+        self.mobject_observation(handle, noon::Mobject::stroke_opacity, |player, handle| {
+            // Reject resource paints before reading their lowered scalar projection.
+            handle.stroke_opacity()?;
+            Ok(player.live_effective(handle)?.stroke_opacity())
+        })
+    }
+
     /// Inert bounds-dependent construction observes this runtime for bound targets,
     /// while fresh detached targets retain their shared authored layout.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -5020,6 +5038,26 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectFillOpacity)]
+        pub fn query_mobject_fill_opacity(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_fill_opacity(handle.semantic_mobject())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectStrokeOpacity)]
+        pub fn query_mobject_stroke_opacity(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_stroke_opacity(handle.semantic_mobject())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectColor)]
         pub fn query_mobject_color(
             &mut self,
@@ -8495,7 +8533,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_line_and_color_queries_follow_runtime_ownership() {
+    fn ordinary_line_and_paint_queries_follow_runtime_ownership() {
         let mut context = CanonicalAuthoringScene::default();
         let mut line = context.scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         line.set_fill(0.0, 1.0, 0.0, 0.2).unwrap();
@@ -8503,6 +8541,8 @@ mod tests {
         line.set_stroke_opacity(0.8).unwrap();
         line.set_object_opacity(0.3).unwrap();
         assert!(context.mobject_line_endpoints(&line).is_err());
+        assert!(context.mobject_fill_opacity(&line).is_err());
+        assert!(context.mobject_stroke_opacity(&line).is_err());
         context.bind_mobject(ObjectId::new(0), &line).unwrap();
         let mut target = line.target_editor().unwrap();
         target.set_translation(4.0, -2.0).unwrap();
@@ -8534,6 +8574,9 @@ mod tests {
         assert_eq!(observed.start, (1.0, -1.0));
         assert_eq!(observed.end, (3.0, -1.0));
         let color = context.mobject_color(&line).unwrap();
+        assert!((context.mobject_fill_opacity(&line).unwrap() - 0.2).abs() < 1e-6);
+        assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
+        assert_eq!(line.stroke_opacity().unwrap(), 0.8);
         assert!((color.red - 0.5).abs() < 1.0e-6);
         assert!((color.blue - 0.5).abs() < 1.0e-6);
         assert!((color.alpha - 0.6).abs() < 1.0e-6);
@@ -8548,9 +8591,18 @@ mod tests {
             .mobject_color(&line)
             .unwrap_err()
             .contains("running in the semantic engine"));
+        assert!(context
+            .mobject_fill_opacity(&line)
+            .unwrap_err()
+            .contains("running in the semantic engine"));
+        assert!(context
+            .mobject_stroke_opacity(&line)
+            .unwrap_err()
+            .contains("running in the semantic engine"));
         context.return_execution_player(player).unwrap();
         assert_eq!(context.mobject_line_endpoints(&line).unwrap(), observed);
         assert_eq!(context.mobject_color(&line).unwrap(), color);
+        assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
 
         // A stale returned player must not shadow later direct authored edits.
         line.shift(1.0, 2.0).unwrap();
@@ -8564,6 +8616,7 @@ mod tests {
             context.mobject_color(&line).unwrap(),
             Color::rgba(1.0, 1.0, 0.0, 0.7)
         );
+        assert_eq!(context.mobject_stroke_opacity(&line).unwrap(), 0.7);
     }
 
     #[test]

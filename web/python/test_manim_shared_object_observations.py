@@ -42,6 +42,11 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                         raise ValueError("mobject content is not an analytic Line")
                     return SimpleNamespace(startX=1.25, startY=-2.5, endX=4.5, endY=3.75)
 
+                @property
+                def fillOpacity(self): return 0.25
+                @property
+                def strokeOpacity(self): return 0.75
+
                 def manimColor(self):
                     return SimpleNamespace(red=0.1, green=0.2, blue=0.3, alpha=0.4)
 
@@ -66,6 +71,8 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             )
             assert line.get_start() == (1.25, -2.5)
             assert line.get_end() == (4.5, 3.75)
+            assert line.get_fill_opacity() == 0.25
+            assert line.get_stroke_opacity() == 0.75
             authored_color = line.get_color()
             assert (
                 authored_color.red,
@@ -104,6 +111,14 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                         raise RuntimeError("live execution session is running")
                     assert handle is line._semantic_handle
                     return SimpleNamespace(startX=10.0, startY=20.0, endX=30.0, endY=40.0)
+                def queryMobjectFillOpacity(self, handle):
+                    if self.ownership == "transferred":
+                        raise RuntimeError("live execution session is running")
+                    assert handle is line._semantic_handle
+                    return 0.4
+                def queryMobjectStrokeOpacity(self, handle):
+                    assert handle is line._semantic_handle
+                    return 0.6
                 def queryMobjectColor(self, handle):
                     assert handle is line._semantic_handle
                     return SimpleNamespace(red=0.8, green=0.7, blue=0.6, alpha=0.5)
@@ -116,6 +131,9 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             line._object = SimpleNamespace(id="line")
             assert line.get_start() == (10.0, 20.0)
             assert line.get_end() == (30.0, 40.0)
+            line._noon_updaters = [lambda *_: None]
+            assert line.get_fill_opacity() == 0.4
+            assert line.get_stroke_opacity() == 0.6
             effective_color = line.get_color()
             assert (
                 effective_color.red,
@@ -124,7 +142,28 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                 effective_color.alpha,
             ) == (0.8, 0.7, 0.6, 0.5)
 
+            # Callback reads use the current ordered row and never query the
+            # transferred player or authored handle. Reads see prior writes.
+            import _manim_updaters as updaters
+            phase = object.__new__(updaters._CanonicalCallbackContext)
+            row = SimpleNamespace(style=SimpleNamespace(fill=None, stroke=(1, 1, 1, 0.125)))
+            phase.row = lambda value: ((0, 0), row)
+            updaters._ACTIVE_CONTEXTS[id(line._scene)] = phase
+            try:
+                assert line.get_fill_opacity() == 0.0
+                assert line.get_stroke_opacity() == 0.125
+                row.style.fill = (0, 1, 0, 0.375)
+                assert line.get_fill_opacity() == 0.375
+            finally:
+                del updaters._ACTIVE_CONTEXTS[id(line._scene)]
+
             context.ownership = "transferred"
+            try:
+                line.get_fill_opacity()
+            except RuntimeError as error:
+                assert "execution session is running" in str(error)
+            else:
+                raise AssertionError("paint getter bypassed transferred ownership")
             try:
                 _manim_indication.ShowPassingFlash(line)
             except RuntimeError as error:
@@ -133,6 +172,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                 raise AssertionError("ShowPassingFlash bypassed transferred ownership")
             context.ownership = "returned"
 
+            del line._noon_updaters
             calls = []
             original_set_color = handles._set_color
             handles._set_color = lambda target, color: calls.append((target, color)) or target
@@ -143,6 +183,12 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             assert calls == [(line, BLUE)]
 
             line._semantic_handle_fresh = False
+            try:
+                line.get_fill_opacity()
+            except NotImplementedError as error:
+                assert "valid semantic handle" in str(error)
+            else:
+                raise AssertionError("half-typed paint getter fell back to raw geometry")
             try:
                 line.get_start()
             except NotImplementedError as error:

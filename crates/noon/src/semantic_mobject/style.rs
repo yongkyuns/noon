@@ -19,6 +19,19 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
     }
 }
 
+/// Observable paint alpha is the solid color alpha times its authored multiplier.
+/// Object-composite opacity is a separate domain. A resource paint has no single
+/// scalar color alpha and cannot be represented by a Manim opacity getter.
+fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f64, String> {
+    match paint {
+        Some(SemanticPaint::Solid(color)) => Ok(f64::from(color.alpha) * opacity),
+        Some(SemanticPaint::Resource(_)) => {
+            Err("Manim opacity queries do not support resource paints".into())
+        }
+        None => Ok(0.0),
+    }
+}
+
 pub(crate) fn manim_color_from_effective(style: &Style) -> Color {
     style.stroke.or(style.fill).unwrap_or(Color::WHITE)
 }
@@ -316,11 +329,7 @@ impl Mobject {
     }
     pub fn fill_opacity(&self) -> Result<f64, String> {
         let state = self.state()?;
-        Ok(if state.style.fill.is_some() {
-            state.style.fill_opacity
-        } else {
-            0.0
-        })
+        manim_paint_opacity(state.style.fill.as_ref(), state.style.fill_opacity)
     }
     pub fn disable_stroke(&mut self) -> Result<(), String> {
         self.validate()?;
@@ -354,16 +363,28 @@ impl Mobject {
     }
     pub fn stroke_opacity(&self) -> Result<f64, String> {
         let state = self.state()?;
-        Ok(if state.style.stroke.is_some() {
-            state.style.stroke_opacity
-        } else {
-            0.0
-        })
+        manim_paint_opacity(state.style.stroke.as_ref(), state.style.stroke_opacity)
     }
     pub fn set_opacity(&mut self, opacity: f64) -> Result<(), String> {
         self.validate()?;
         let mut state = self.state()?;
         edit_manim_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
+    }
+}
+
+#[cfg(test)]
+mod opacity_tests {
+    use super::*;
+
+    #[test]
+    fn paint_opacity_observes_intrinsic_alpha_and_disabled_paints() {
+        let solid = SemanticPaint::Solid(Color::rgba(0.2, 0.4, 0.8, 0.5));
+        assert_eq!(manim_paint_opacity(Some(&solid), 0.25).unwrap(), 0.125);
+        assert_eq!(manim_paint_opacity(Some(&solid), 1.0).unwrap(), 0.5);
+        assert_eq!(manim_paint_opacity(None, 1.0).unwrap(), 0.0);
+        assert!(manim_paint_opacity(Some(&SemanticPaint::Resource(7)), 0.5)
+            .unwrap_err()
+            .contains("resource paints"));
     }
 }

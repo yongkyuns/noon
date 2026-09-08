@@ -54,6 +54,9 @@ class OrdinaryAffineCallbackContinuation(Scene):
         def reject_raw_projection():
             raise AssertionError("callback family query materialized Python geometry")
         circle._current_raw = reject_raw_projection
+        # Object-composite dimming must not alter observed fill/stroke alpha.
+        assert circle.get_fill_opacity() == 1.0
+        assert circle.get_stroke_opacity() == 1.0
         assert family.get_center() == (2.0, 1.0)
         assert abs(family.width - 0.8) < 1e-6
         assert abs(family.height - 0.8) < 1e-6
