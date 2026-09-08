@@ -528,7 +528,7 @@ export async function attachSemanticEngine(
     }
   }
 
-  async function sampleContinuationToAuthoredTime(targetTime) {
+  async function sampleContinuationToAuthoredTime(targetTime, stopAtSourceCompletion) {
     const phaseTokens = new Set();
     let phaseCount = 0;
     while (!stopped) {
@@ -589,12 +589,12 @@ export async function attachSemanticEngine(
           if (!Number.isFinite(authoredTime) || authoredTime < 0) {
             throw new Error("completed semantic continuation has no valid authored time");
           }
-          if (authoredTime < targetTime) {
+          if (authoredTime < targetTime && !stopAtSourceCompletion) {
             throw new Error(
               `semantic source completed at authored time ${authoredTime} before external sample ${targetTime}`,
             );
           }
-          return;
+          return true;
         }
         if (!await settleContinuationPublication(next.publication)) return;
         // The same absolute request continues against the returned player. Rust
@@ -612,6 +612,7 @@ export async function attachSemanticEngine(
       const message = controls.shift();
       let rendererObservation = null;
       let debugFrame;
+      let sourceCompleted;
       try {
         switch (message.type) {
           case "pause":
@@ -665,7 +666,9 @@ export async function attachSemanticEngine(
           case "sample_to_authored_time": {
             if (callbackFault !== null) throw callbackFault;
             latestTick = null;
-            await sampleContinuationToAuthoredTime(message.time);
+            sourceCompleted = await sampleContinuationToAuthoredTime(
+              message.time, message.stopAtSourceCompletion === true,
+            ) === true;
             break;
           }
           case "native_state_input":
@@ -683,6 +686,7 @@ export async function attachSemanticEngine(
           ...state(message.type),
           ...(rendererObservation === null ? {} : { rendererObservation }),
           ...(debugFrame === undefined ? {} : { debugFrame }),
+          ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
         });
       } catch (error) {
         if (message.type === "sample_to_authored_time" && continuation !== null) {
@@ -811,6 +815,10 @@ export async function attachSemanticEngine(
           );
         }
         if (message.type === "sample_to_authored_time") {
+          if (message.stopAtSourceCompletion !== undefined &&
+              typeof message.stopAtSourceCompletion !== "boolean") {
+            throw new Error("stopAtSourceCompletion must be a boolean");
+          }
           if (pacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES || continuation === null) {
             throw new Error("authored-time sampling requires external sample continuation pacing");
           }
