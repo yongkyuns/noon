@@ -8,7 +8,7 @@
   <body>
     <canvas id="retained-write-smoke" width="640" height="360"></canvas>
     <script type="module">
-      import init, { semanticFrameJson } from "./pkg/noon_web.js";
+      import init from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
 
       const client = new PythonAuthoringClient();
@@ -282,7 +282,6 @@ class RetainedSequentialFamilySmoke(Scene):
         run: runForExport,
         runLive,
         runLiveSources,
-        semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };
     </script>
   </body>

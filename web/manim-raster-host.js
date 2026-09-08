@@ -148,4 +148,5 @@ window.noonHostRaster = {
   ready: () => readyPromise,
   load,
   renderThrough,
+  debugFrame: () => execution.debugFrame(),
 };

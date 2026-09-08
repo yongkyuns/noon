@@ -138,6 +138,8 @@ const expectedJavascriptSurface = [
   "ordinaryWait(",
   "beginOrdinaryWait(",
   "liveExecutionOwnership(",
+  "liveDebugFrameJson(",
+  "debugFrameJson(",
   "liveTargetEditor(",
   "beginLiveFamilyTarget(",
   "finishLiveFamilyTarget(",

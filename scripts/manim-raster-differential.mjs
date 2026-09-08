@@ -269,7 +269,9 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     const outputPath = path.join(fixtureDir, `${sample.label}.png`);
     await page.locator("#scene").screenshot({ path: outputPath });
-    captures.push({ ...sample, noonPath: outputPath, metrics });
+    const debugFrame = await page.evaluate(() => window.noonHostRaster.debugFrame());
+    assert.equal(debugFrame.time, metrics.time, `${fixture.id}: diagnostic/raster time`);
+    captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
   }
   const completed = await page.evaluate((times) =>
     window.noonHostRaster.renderThrough(times.length - 1, times), frameTimes);
@@ -474,6 +476,7 @@ async function compareAll(references, backendResults) {
           time: capture.time,
           reference: referenceStats,
           noon: noonStats,
+          debugFrame: capture.debugFrame,
           boundsDelta: bboxDelta(referenceStats, noonStats),
           diff: {
             differingPixels: diff.differingPixels,

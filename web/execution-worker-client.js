@@ -1049,6 +1049,12 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async debugFrame() {
+    this.#requireSemanticMode("shared execution diagnostics");
+    const result = await this.#requestEngine("debug_frame", {});
+    return result.debugFrame;
+  }
+
   async sampleToAuthoredTime(timeSeconds) {
     this.#requireSemanticMode("external authored-time sampling");
     if (this.#semanticPacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES) {
