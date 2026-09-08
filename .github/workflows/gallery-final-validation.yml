@@ -1,0 +1,60 @@
+name: Final gallery runtime qualification (temporary)
+on:
+  push:
+    branches: [codex/gallery-final-validation]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  gallery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: webkit
+            profile: mobile-dpr2
+          - browser: chromium
+            profile: android
+          - browser: chromium
+            profile: desktop-dpr1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 183bf3d39d158f68b53767ed99e7ca337326777b
+      - name: Assert source and runtime provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p qualification
+          git rev-parse HEAD | tee qualification/source-sha.txt
+          git fetch --depth=1 origin e81476c3c3b3be11ff7d3aa74972bef2c1a36813
+          git diff --exit-code e81476c3c3b3be11ff7d3aa74972bef2c1a36813 HEAD -- crates web Cargo.toml Cargo.lock
+          gh api repos/yongkyuns/noon/actions/runs/34224490113 > qualification/runtime-run.json
+          gh run download 34224490113 --repo yongkyuns/noon --name gallery-web-runtime --dir web
+          sha256sum web/pkg/* web/python-worker.js web/python/compat-bundle.*.json > qualification/asset-sha256.txt
+      - run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: All ready examples with authored duration and no-JSPI controls
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/gallery/first
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Repeat all cases in fresh contexts
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/gallery/repeat
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: final-gallery-${{ matrix.browser }}-${{ matrix.profile }}
+          path: |
+            qualification
+            browser-smoke-artifacts
+          retention-days: 7
