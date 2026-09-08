@@ -4,7 +4,8 @@ The shared semantic-handle layer owns detached family identity. Once canonical
 execution has started, however, creating a family through the raw authoring store
 would advance semantic revision outside the retained execution mutation boundary.
 This adapter routes those late Group/VGroup creations and constructor-free copies
-through the canonical context returned by the current authoring Scene.
+through the canonical context returned by the current authoring Scene. The Rust
+owner remains authoritative for publication order, deduplication, and revisioning.
 """
 
 from __future__ import annotations
