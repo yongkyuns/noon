@@ -1,0 +1,112 @@
+name: Mobile review iteration (temporary)
+on:
+  push:
+    branches: [codex/mobile-review-iteration]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: mobile-review-iteration
+  cancel-in-progress: true
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply source-only review corrections on integrated base
+        run: |
+          set -euo pipefail
+          cp mobile-iteration.patch "$RUNNER_TEMP/mobile-iteration.patch"
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git fetch --depth=100 origin e6830f9d16ca6c18ec5376f0d4e73431b8251ef8 7dc4c659d8ba96441443fac007d4c12b2729ea28
+          git checkout --detach e6830f9d16ca6c18ec5376f0d4e73431b8251ef8
+          git merge --no-edit 7dc4c659d8ba96441443fac007d4c12b2729ea28
+          git apply --index "$RUNNER_TEMP/mobile-iteration.patch"
+          git diff --cached --check
+          python3 -m unittest discover -s web/python -p 'test_*.py'
+          node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs
+          bash scripts/architecture-ratchet.sh 7dc4c659d8ba96441443fac007d4c12b2729ea28
+          git commit -m 'Preserve instance overrides and bypass unnecessary portable source preparation'
+          git push origin HEAD:refs/heads/codex/mobile-reviewed-source
+          mkdir -p mobile-review-evidence
+          git rev-parse HEAD > mobile-review-evidence/source-sha.txt
+          git archive HEAD | gzip > mobile-review-evidence/source.tar.gz
+      - name: Load immutable integrated runtime, rebuild Python assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 34175323387 --repo yongkyuns/noon --name playground-cross-browser-web-runtime --dir "$RUNNER_TEMP/runtime"
+          mkdir -p web/pkg
+          cp -a "$RUNNER_TEMP/runtime/pkg/." web/pkg/
+          node scripts/build-python-worker.mjs
+          sha256sum web/pkg/* > mobile-review-evidence/runtime-sha256.txt
+      - name: Install browsers
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps webkit chromium
+      - name: Trace actual mobile frame observations and public override contract
+        run: |
+          timeout --signal=TERM --kill-after=10s 300s node --input-type=module <<'JS'
+          import {webkit,devices} from 'playwright';
+          import {spawn} from 'node:child_process';
+          import {writeFile} from 'node:fs/promises';
+          import assert from 'node:assert/strict';
+          const server=spawn('python3',['-m','http.server','4196','--bind','127.0.0.1'],{stdio:'ignore'});
+          const browser=await webkit.launch({headless:true});
+          const results=[];
+          try {
+            for(const mode of ['offscreen','visible','visible-no-jspi']){
+              const context=await browser.newContext({...devices['iPhone 13']});
+              if(mode.endsWith('no-jspi')) await context.route('**/python-worker.js',async r=>{
+                const response=await r.fetch();
+                await r.fulfill({response,body:'delete WebAssembly.promising;delete WebAssembly.Suspending;\n'+await response.text()});
+              });
+              const page=await context.newPage();
+              const result={mode,samples:[],errors:[]};
+              page.on('pageerror',e=>result.errors.push(String(e)));
+              page.on('console',m=>{if(m.type()==='error')result.errors.push(m.text())});
+              try {
+                await page.goto('http://127.0.0.1:4196/web/index.html?example=parity-create-circle&renderHost=main-thread');
+                await page.waitForFunction(()=>window.__noonExampleGallery&&!window.__noonExampleGallery.runInFlight);
+                if(mode!=='offscreen') await page.locator('#scene').scrollIntoViewIfNeeded();
+                await page.evaluate(()=>window.__noonExampleGallery.run());
+                await page.evaluate(()=>{window.__traceRun=window.__noonExampleGallery.select('parity-square-to-circle');});
+                const start=Date.now();
+                for(let i=0;i<120;i++){
+                  const before=Date.now();
+                  const sample=await page.evaluate(async()=>{
+                    const gallery=window.__noonExampleGallery;
+                    const r=await gallery.executionMetrics();
+                    return {time:r?.metrics?.time,objects:r?.metrics?.objectCount,frames:r?.metrics?.presentedFrames,inFlight:gallery.runInFlight,selected:gallery.selectedExampleId,patch:{...document.querySelector('#patch-status').dataset},rect:document.querySelector('#scene').getBoundingClientRect().toJSON()};
+                  });
+                  result.samples.push({elapsed:Date.now()-start,requestMs:Date.now()-before,...sample});
+                  if(sample.time>1.15&&sample.time<1.85&&sample.objects===1&&!result.intermediate){
+                    result.intermediate=sample;
+                    await page.locator('#scene').screenshot({path:`mobile-review-evidence/${mode}-intermediate.png`});
+                  }
+                  if(sample.selected==='parity-square-to-circle'&&!sample.inFlight&&sample.patch.state==='applied')break;
+                  await new Promise(r=>setTimeout(r,40));
+                }
+                await page.evaluate(()=>window.__traceRun);
+                await page.locator('#scene').screenshot({path:`mobile-review-evidence/${mode}-final.png`});
+                const source=`from noon import *\nevents = []\nclass InstanceOverride(Scene):\n    def setup(self):\n        self.wait = lambda d: events.append(('wait', d))\n        self.play = lambda x: events.append(('play', x))\n    def construct(self):\n        self.wait(0.5)\n        self.play(2)\n        assert events == [('wait', 0.5), ('play', 2)], events\n        self.add(Circle())\n`;
+                await page.evaluate(source=>{const e=document.querySelector('#python-scene-source');e.value=source;e.dispatchEvent(new Event('input',{bubbles:true}));},source);
+                await page.evaluate(()=>window.__noonExampleGallery.run());
+                result.override=await page.evaluate(()=>({state:document.querySelector('#patch-status').dataset.state,text:document.querySelector('#patch-status').value}));
+                assert.equal(result.override.state,'applied',result.override.text);
+              }catch(e){result.exception=String(e)}
+              results.push(result);
+              await writeFile('mobile-review-evidence/trace.json',JSON.stringify(results,null,2));
+              console.log(JSON.stringify(result));
+              await context.close();
+            }
+          }finally{await browser.close();server.kill('SIGTERM');}
+          JS
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mobile-review-evidence
+          path: mobile-review-evidence
+          retention-days: 7
