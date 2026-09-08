@@ -60,28 +60,28 @@ function lateFamilyFrames() {
   return new Map([0, 30, 63, 96].map((index, i) => [index, {
     sample: { objectCount: index === 0 ? 2 : 4, authoredDuration: index === 96 ? 3.2 : null },
     imageSha256: String(i).repeat(64),
-    foreground: { count: index === 0 || index === 30 ? 0 : 1000 },
+    foreground: { count: index === 0 ? 0 : index === 30 ? 3600 : 8200 },
   }]));
 }
 
 test("late family capture spans the original Succession and subsequent fade", () => {
   verifyLateFamilyConstruction(lateFamilyFrames());
 });
-test("late family evidence cannot omit a sampled phase or blank visible fade state", () => {
+test("late family evidence cannot omit a sampled phase or lose visible composition state", () => {
   for (const index of [0, 30, 63, 96]) {
     const value = lateFamilyFrames(); value.delete(index);
     assert.throws(() => verifyLateFamilyConstruction(value), /missing/);
   }
+  const blankBoundary = lateFamilyFrames(); blankBoundary.get(30).foreground.count = 0;
+  assert.throws(() => verifyLateFamilyConstruction(blankBoundary), /original circles/);
   for (const index of [63, 96]) {
-    const value = lateFamilyFrames(); value.get(index).foreground.count = 0;
-    assert.throws(() => verifyLateFamilyConstruction(value), /visible/);
+    const value = lateFamilyFrames(); value.get(index).foreground.count = 4000;
+    assert.throws(() => verifyLateFamilyConstruction(value), /add visible area/);
   }
 });
 test("late family evidence rejects premature visibility, wrong boundary admission and frozen composition", () => {
   const premature = lateFamilyFrames(); premature.get(0).foreground.count = 100;
   assert.throws(() => verifyLateFamilyConstruction(premature), /initial Wait/);
-  const visibleBoundary = lateFamilyFrames(); visibleBoundary.get(30).foreground.count = 100;
-  assert.throws(() => verifyLateFamilyConstruction(visibleBoundary), /transparent/);
   const wrongMembership = lateFamilyFrames(); wrongMembership.get(30).sample.objectCount = 2;
   assert.throws(() => verifyLateFamilyConstruction(wrongMembership), /admit all four/);
   for (const endpoint of [30, 96]) {
