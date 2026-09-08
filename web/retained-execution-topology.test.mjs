@@ -23,6 +23,7 @@ await assert.rejects(
 );
 
 for (const filename of [
+  "canonical_retained_engine_player.rs",
   "retained_authoring.rs",
   "retained_authoring_scene.rs",
   "retained_authoring_scene_spec.rs",

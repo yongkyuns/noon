@@ -17,7 +17,7 @@ const retainedRuntimeChanges = [
   "web/execution-render-worker.js",
   "web/authoring-render-worker.js",
   "web/execution-transport.js",
-  "crates/noon-web/src/canonical_retained_engine_player.rs",
+  "crates/noon-web/src/semantic_execution_player.rs",
   "crates/noon-web/src/retained_execution_canvas.rs",
   "crates/noon-render-wgpu/src/retained_scene.rs",
   "crates/noon-web/src/lib.rs",

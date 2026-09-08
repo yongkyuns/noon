@@ -1,63 +1,12 @@
 //! Renderer-independent frame snapshots used by deterministic replay tests and tools.
 
 use noon_compile::{CompileError, CompiledScene};
-#[cfg(test)]
-use noon_core::ObjectContentRef;
 use noon_ir::{decode_scene, IrError};
 use noon_runtime::{EvaluationError, FrameState, SlottedSceneInstance};
-#[cfg(test)]
-use serde_json::{json, Value};
 
 fn normalize_playhead(time: f64) -> f64 {
     const SCALE: f64 = 1_000_000_000_000.0;
     (time * SCALE).round() / SCALE
-}
-
-/// Normalize the observable runtime frame into a stable JSON value.
-///
-/// Dense runtime indices and cache state are deliberately omitted. Object order,
-/// semantic IDs, evaluated geometry/properties, presence/reveal/morph state, and
-/// render geometry are retained because they affect user-visible scene behavior.
-/// The f64 playhead is rounded to picosecond precision so mathematically equivalent
-/// timestamp construction paths do not create false mismatches; evaluated scene
-/// properties remain unrounded.
-#[cfg(test)]
-pub(crate) fn normalized_frame_value(frame: &FrameState) -> Value {
-    let objects = frame
-        .objects
-        .iter()
-        .enumerate()
-        .map(|(index, object)| {
-            json!({
-                "id": object.id.get(),
-                "content": match &object.content {
-                    ObjectContentRef::Geometry(geometry) => json!({
-                        "kind": "geometry",
-                        "geometry": geometry,
-                    }),
-                    ObjectContentRef::Text(text) => json!({
-                        "kind": "text",
-                        "text": {
-                            "id": text.id.get(),
-                            "version": text.version,
-                        },
-                    }),
-                },
-                "transform": object.transform,
-                "style": object.style,
-                "appearance": object.appearance,
-                "present": frame.presences[index],
-                "reveal": frame.reveals[index],
-                "morph": frame.morphs[index],
-                "render_geometry": frame.render_geometries[index].as_deref(),
-                "render_transform": frame.render_transforms[index],
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "time": normalize_playhead(frame.time),
-        "objects": objects,
-    })
 }
 
 fn normalized_frames_equal(left: &FrameState, right: &FrameState) -> bool {
