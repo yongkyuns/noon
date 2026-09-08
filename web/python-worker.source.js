@@ -864,8 +864,7 @@ if isinstance(__noon_result, Scene):
         __noon_document = None
         __noon_identities = None
     else:
-        if (not __noon_export_document and
-                getattr(__noon_result, "_canonical_authoring_context", None) is not None):
+        if not __noon_export_document:
             raise RuntimeError(
                 "shared Scene cannot fall back to scene-document execution; "
                 "remove incompatible legacy declarations or request exportDocument explicitly"
@@ -878,7 +877,7 @@ if isinstance(__noon_result, Scene):
             )
         # A native Text timeline/export remains in the canonical context so its
         # temporary #959 codec is derived from the Rust store at finalization.
-        # Geometry-only fallback retains the existing legacy materialization.
+        # Explicit geometry-only export retains the existing materialization.
         if not getattr(__noon_result, "_semantic_text_handles", {}):
             materialize_legacy_geometry(__noon_result)
         __noon_scene_spec = __noon_result.to_scene_spec()
