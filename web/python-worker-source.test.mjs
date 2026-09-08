@@ -6,7 +6,7 @@ const source = await readFile(new URL("./python-worker.source.js", import.meta.u
 
 test("Python authoring worker keeps request validation helper", () => {
   assert.match(source, /function\s+validateRequest\s*\(/);
-  assert.match(source, /function\s+validateHostRequest\s*\(/);
+  assert.doesNotMatch(source, /validateHostRequest|attach_engine_port|runCallbackPhase/);
   assert.match(source, /function\s+isRecord\s*\(value\)\s*\{/);
   assert.match(source, /if\s*\(!isRecord\(request\)\s*\|\|\s*request\.channel\s*!==\s*AUTHORING_CHANNEL\)/);
 });
@@ -98,7 +98,7 @@ test("sparse callback proof keeps scalar and inactive-object reads in its update
 test("worker delegates every Scene construct lifecycle to the canonical adapter", () => {
   const authoring = source.slice(
     source.indexOf("async function runAuthoringSource"),
-    source.indexOf("async function runCallbackPhase"),
+    source.indexOf("async function runCanonicalCallbackPhase"),
   );
   assert.match(
     authoring,
@@ -166,4 +166,33 @@ test("source compilation never replays module effects or changes fixtures", () =
   assert.match(source, /exec\(__noon_code, __noon_namespace\)/);
   assert.doesNotMatch(source, /exec\(__noon_source,|source\.replace/);
   assert.match(source, /__noon_namespace\[BARRIER_GLOBAL\] = await_source_barrier/);
+});
+
+test("explicit endpoint reconnect returns the existing runtime lease before reattaching", async () => {
+  const attachSource = source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
+  const contexts = new Map();
+  const entry = { context: {}, endpoints: new Set(), released: false };
+  contexts.set("scene", entry);
+  let leased = true;
+  const old = { stop() { leased = false; entry.endpoints.delete(old); } };
+  entry.endpoints.add(old);
+  const run = { continuation: null };
+  const attach = new Function("semanticContexts", "activeAuthoringRun", "attachSemanticEngine", `
+    ${attachSource}
+    return attachSemanticExecutionRequest;
+  `)(contexts, run, async () => {
+    if (leased) throw new Error("runtime already leased");
+    leased = true;
+    return { stop() {} };
+  });
+  await assert.rejects(attach({ contextId: "scene" }, false, null), /already leased/);
+  assert.equal(entry.endpoints.has(old), true, "ordinary attachment cannot steal a live runtime");
+  run.continuation = { contextId: "scene", terminal: false };
+  await assert.rejects(attach({ contextId: "scene", replaceExistingEndpoint: true }, false, null), /continuation is active/);
+  assert.equal(entry.endpoints.has(old), true);
+  run.continuation = null;
+  await attach({ contextId: "scene", replaceExistingEndpoint: true }, false, null);
+  assert.equal(entry.endpoints.has(old), false);
+  assert.equal(entry.endpoints.size, 1);
+  assert.equal(leased, true);
 });

@@ -382,25 +382,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_move_to_point(
+    pub(crate) fn live_move_to(
         &mut self,
         mobject: &noon::Mobject,
-        x: f64,
-        y: f64,
+        target: noon::LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
     ) -> Result<(), String> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .move_to_point(mobject, x, y)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        self.with_live_session(|live| live.move_to(mobject, target, edge, mask))
+            .map(|_| ())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2235,18 +2225,6 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = resourceBundleBytes))]
     pub fn resource_bundle_bytes(&self) -> Vec<u8> {
         self.resource_bundle.clone()
-    }
-
-    pub(crate) fn resource_bundle_slice(&self) -> &[u8] {
-        &self.resource_bundle
-    }
-
-    /// Evaluate one absolute authored time for an outer codec-boundary clock.
-    pub(crate) fn evaluate_delta_at(&mut self, time: f64) -> Result<Option<String>, String> {
-        self.session
-            .evaluate(time)
-            .map_err(|error| error.to_string())?;
-        self.encoded_delta(false)
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = tickDeltaJson))]

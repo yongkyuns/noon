@@ -5,28 +5,25 @@ import {
   classifyPrRisk,
   requiresHostUpdaterDiagnostic,
   requiresRendererCriticalWebglSmoke,
-  requiresRenderModeSwitchSmoke,
   requiresRetainedExecutionSmoke,
 } from "./pr-risk-classifier.mjs";
 
 const canonicalRetainedRoutingChange = [
   "web/authoring-execution-client.js",
   "web/execution-worker-client.js",
-  "web/scene-identity.js",
 ];
 
 const retainedRuntimeChanges = [
-  "web/retained-execution-engine-worker.js",
   "web/execution-render-worker.js",
   "web/authoring-render-worker.js",
   "web/execution-transport.js",
-  "crates/noon-web/src/canonical_retained_engine_player.rs",
+  "crates/noon-web/src/semantic_execution_player.rs",
   "crates/noon-web/src/retained_execution_canvas.rs",
   "crates/noon-render-wgpu/src/retained_scene.rs",
   "crates/noon-web/src/lib.rs",
 ];
 
-const renderModeSwitchChanges = [
+const sharedLifecycleChanges = [
   "scripts/pr-risk-classifier.mjs",
   "web/authoring-execution-client.js",
   "web/authoring-render-worker.js",
@@ -35,7 +32,6 @@ const renderModeSwitchChanges = [
   "web/execution-transport.js",
   "web/execution-worker-client.js",
   "web/execution-worker-smoke.html",
-  "web/retained-execution-engine-worker.js",
 ];
 
 const rendererCriticalChanges = [
@@ -72,12 +68,12 @@ test("retained engine, shared render, and Rust ownership boundaries escalate", (
   }
 });
 
-test("render-owner, transition, and risk-policy changes escalate the mode-switch smoke", () => {
-  const risk = classifyPrRisk(renderModeSwitchChanges);
-  assert.equal(risk.renderModeSwitch, true);
-  assert.deepEqual(risk.renderModeSwitchPaths, renderModeSwitchChanges.slice().sort());
-  for (const path of renderModeSwitchChanges) {
-    assert.equal(requiresRenderModeSwitchSmoke(path), true, path);
+test("render-owner, transition, and risk-policy changes escalate the shared lifecycle smoke", () => {
+  const risk = classifyPrRisk(sharedLifecycleChanges);
+  assert.equal(risk.retainedExecution, true);
+  assert.deepEqual(risk.retainedExecutionPaths, sharedLifecycleChanges.slice().sort());
+  for (const path of sharedLifecycleChanges) {
+    assert.equal(requiresRetainedExecutionSmoke(path), true, path);
   }
 });
 
@@ -95,8 +91,6 @@ test("ordinary docs, demo, core, and geometry changes stay on the base fast path
   const risk = classifyPrRisk(ordinaryChanges);
   assert.equal(risk.retainedExecution, false);
   assert.deepEqual(risk.retainedExecutionPaths, []);
-  assert.equal(risk.renderModeSwitch, false);
-  assert.deepEqual(risk.renderModeSwitchPaths, []);
   assert.equal(risk.hostUpdaterDiagnostics, false);
   assert.deepEqual(risk.hostUpdaterDiagnosticPaths, []);
   assert.equal(risk.rendererCritical, false);
@@ -111,7 +105,6 @@ test("classifier normalizes diff-style paths and de-duplicates triggers", () => 
     "",
   ]);
   assert.deepEqual(risk.retainedExecutionPaths, ["web/authoring-render-worker.js"]);
-  assert.deepEqual(risk.renderModeSwitchPaths, ["web/authoring-render-worker.js"]);
   assert.deepEqual(risk.rendererCriticalPaths, ["web/authoring-render-worker.js"]);
 });
 

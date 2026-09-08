@@ -6,8 +6,6 @@ import {
   AUTHORING_PROTOCOL_VERSION,
   PythonAuthoringClient,
   parseAuthoringResult,
-  validateCallbackSession,
-  validatePatchBatch,
   validateSceneDocument,
   validateSceneDuration,
   validateSceneIdentities,
@@ -56,9 +54,18 @@ function sceneResult(overrides = {}) {
     scene_spec: { version: 1, objects: [], tracks: [], camera_object: null },
     duration: 0,
     identities: { objects: [], tracks: [] },
-    callbacks: null,
     ...overrides,
   };
+}
+
+function semanticResult(contextId = "scene") {
+  const { kind, duration } = sceneResult();
+  return { kind, duration, semantic_execution: { context_id: contextId } };
+}
+
+function parsedSemanticResult(contextId = "scene") {
+  const { kind, duration } = semanticResult(contextId);
+  return { kind, duration, semanticExecution: { contextId } };
 }
 
 function deferred() {
@@ -71,33 +78,32 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-test("correlates a Python request with a validated PatchBatch response", async () => {
+test("correlates a Python request with a validated shared Scene response", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const resultPromise = client.run("result = batch", { sequence: 4 });
+  const resultPromise = client.run("result = scene", { example: "scene" });
   await Promise.resolve();
   assert.deepEqual(worker.messages[0], {
     channel: AUTHORING_CHANNEL,
     protocolVersion: AUTHORING_PROTOCOL_VERSION,
     type: "run",
     requestId: 0,
-    source: "result = batch",
-    context: { sequence: 4 },
+    source: "result = scene",
+    context: { example: "scene" },
     exportDocument: false,
   });
 
-  const batch = { version: 1, sequence: 4, patches: [] };
   worker.emit(
     "message",
     workerMessage("result", {
       requestId: 0,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
-  assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
+  assert.deepEqual(await resultPromise, parsedSemanticResult());
 });
 
 test("requests legacy Scene export only through an explicit boolean option", async () => {
@@ -124,7 +130,7 @@ test("requests legacy Scene export only through an explicit boolean option", asy
   );
 });
 
-test("correlates a Python request with callback, mixed content, and duration metadata", async () => {
+test("correlates a Python request with mixed content and duration metadata", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
@@ -134,7 +140,6 @@ test("correlates a Python request with callback, mixed content, and duration met
   await Promise.resolve();
   const scene = { version: 1, objects: [{ id: 0 }], tracks: [] };
   const identities = { objects: [{ id: 0, key: "@object:0" }], tracks: [] };
-  const callbacks = { session_id: 3, slots: [{ id: 0, objects: [0] }] };
   const sceneSpec = {
     version: 1,
     objects: [
@@ -153,7 +158,6 @@ test("correlates a Python request with callback, mixed content, and duration met
         scene_spec: sceneSpec,
         duration: 2.75,
         identities,
-        callbacks,
       }),
     }),
   );
@@ -164,7 +168,6 @@ test("correlates a Python request with callback, mixed content, and duration met
     sceneSpec,
     duration: 2.75,
     identities,
-    callbacks,
   });
 });
 
@@ -178,7 +181,6 @@ test("scene results without canonical SceneSpec are rejected at the current prot
           document: scene,
           duration: 0,
           identities: { objects: [], tracks: [] },
-          callbacks: null,
         }),
       ),
     /must include canonical SceneSpec/,
@@ -469,47 +471,11 @@ test("Scene duration accepts zero and rejects missing, negative, or non-finite v
     document: { version: 1, objects: [], tracks: [] },
     scene_spec: { version: 1, objects: [], tracks: [] },
     identities: { objects: [], tracks: [] },
-    callbacks: null,
   };
   assert.throws(
     () => parseAuthoringResult(JSON.stringify(sceneResult)),
     /duration must be finite and non-negative/,
   );
-});
-
-test("runs one callback phase and validates its PatchBatch", async () => {
-  const worker = new FakeWorker();
-  const client = new PythonAuthoringClient(worker);
-  worker.emit("message", workerMessage("ready"));
-  await client.ready();
-
-  const frame = {
-    time: 0.25,
-    delta_time: 0.25,
-    objects: [],
-    invocations: [{ callback: 0, object_indices: [] }],
-  };
-  const resultPromise = client.runCallbackPhase(2, frame, 7);
-  await Promise.resolve();
-  assert.deepEqual(worker.messages[0], {
-    channel: AUTHORING_CHANNEL,
-    protocolVersion: AUTHORING_PROTOCOL_VERSION,
-    type: "callback_phase",
-    requestId: 0,
-    sessionId: 2,
-    frame,
-    sequence: 7,
-  });
-
-  const batch = { version: 1, sequence: 7, patches: [] };
-  worker.emit(
-    "message",
-    workerMessage("callback_result", {
-      requestId: 0,
-      patchBatchJson: JSON.stringify(batch),
-    }),
-  );
-  assert.deepEqual(await resultPromise, batch);
 });
 
 test("rejects only the request associated with a Python execution error", async () => {
@@ -546,25 +512,23 @@ test("accepts pending Python responses that complete out of order", async () => 
     [0, 1],
   );
 
-  const secondBatch = { version: 1, sequence: 2, patches: [] };
   worker.emit(
     "message",
     workerMessage("result", {
       requestId: 1,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: secondBatch }),
+      resultJson: JSON.stringify(semanticResult("second")),
     }),
   );
-  assert.deepEqual(await second, { kind: "patch_batch", document: secondBatch });
+  assert.deepEqual(await second, parsedSemanticResult("second"));
 
-  const firstBatch = { version: 1, sequence: 1, patches: [] };
   worker.emit(
     "message",
     workerMessage("result", {
       requestId: 0,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: firstBatch }),
+      resultJson: JSON.stringify(semanticResult("first")),
     }),
   );
-  assert.deepEqual(await first, { kind: "patch_batch", document: firstBatch });
+  assert.deepEqual(await first, parsedSemanticResult("first"));
   assert.deepEqual(client.diagnostics, {
     nextRequestId: 2,
     pendingRequests: 0,
@@ -579,15 +543,14 @@ test("drops duplicate responses for already-issued requests without killing the 
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const batch = { version: 1, sequence: 0, patches: [] };
-  const resultPromise = client.run("result = batch");
+  const resultPromise = client.run("result = scene");
   await Promise.resolve();
   const response = workerMessage("result", {
     requestId: 0,
-    resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+    resultJson: JSON.stringify(semanticResult()),
   });
   worker.emit("message", response);
-  assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
+  assert.deepEqual(await resultPromise, parsedSemanticResult());
 
   worker.emit("message", response);
   assert.equal(client.terminated, false);
@@ -600,7 +563,7 @@ test("drops duplicate responses for already-issued requests without killing the 
     "message",
     workerMessage("result", {
       requestId: 1,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
   await retry;
@@ -613,14 +576,13 @@ test("drops malformed stale result payloads before parsing them", async () => {
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const batch = { version: 1, sequence: 0, patches: [] };
-  const resultPromise = client.run("result = batch");
+  const resultPromise = client.run("result = scene");
   await Promise.resolve();
   worker.emit(
     "message",
     workerMessage("result", {
       requestId: 0,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
   await resultPromise;
@@ -642,7 +604,7 @@ test("drops malformed stale result payloads before parsing them", async () => {
     "message",
     workerMessage("result", {
       requestId: 1,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
   await retry;
@@ -655,7 +617,7 @@ test("malformed pending payloads remain fatal and reject the pending request", a
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const resultPromise = client.run("result = batch");
+  const resultPromise = client.run("result = scene");
   await Promise.resolve();
   worker.emit(
     "message",
@@ -672,42 +634,6 @@ test("malformed pending payloads remain fatal and reject the pending request", a
   assert.equal(client.diagnostics.staleResponses, 0);
 });
 
-test("drops malformed stale callback payloads before parsing them", async () => {
-  const worker = new FakeWorker();
-  const client = new PythonAuthoringClient(worker);
-  worker.emit("message", workerMessage("ready"));
-  await client.ready();
-
-  const frame = {
-    time: 0.25,
-    delta_time: 0.25,
-    objects: [],
-    invocations: [{ callback: 0, object_indices: [] }],
-  };
-  const batch = { version: 1, sequence: 7, patches: [] };
-  const callbackPromise = client.runCallbackPhase(2, frame, 7);
-  await Promise.resolve();
-  worker.emit(
-    "message",
-    workerMessage("callback_result", {
-      requestId: 0,
-      patchBatchJson: JSON.stringify(batch),
-    }),
-  );
-  await callbackPromise;
-
-  worker.emit(
-    "message",
-    workerMessage("callback_result", {
-      requestId: 0,
-      patchBatchJson: "{",
-    }),
-  );
-  assert.equal(client.terminated, false);
-  assert.equal(worker.terminated, false);
-  assert.equal(client.diagnostics.staleResponses, 1);
-});
-
 test("treats never-issued future response IDs as fatal protocol corruption", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
@@ -718,10 +644,7 @@ test("treats never-issued future response IDs as fatal protocol corruption", asy
     "message",
     workerMessage("result", {
       requestId: 7,
-      resultJson: JSON.stringify({
-        kind: "patch_batch",
-        document: { version: 1, sequence: 0, patches: [] },
-      }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
 
@@ -751,18 +674,13 @@ test("exposes fatal Python worker termination to recovery owners", async () => {
   await assert.rejects(client.run("result = retry"), /terminated/);
 });
 
-test("rejects malformed PatchBatch documents before they reach Rust", () => {
+test("rejects retired PatchBatch authoring responses", () => {
   assert.throws(
-    () => validatePatchBatch({ version: 99, sequence: 0, patches: [] }),
-    /Unsupported Noon IR version 99/,
-  );
-  assert.throws(
-    () => validatePatchBatch({ version: 1, sequence: -1, patches: [] }),
-    /non-negative safe integer/,
-  );
-  assert.throws(
-    () => validatePatchBatch({ version: 1, sequence: 0, patches: {} }),
-    /must be an array/,
+    () => parseAuthoringResult(JSON.stringify({
+      kind: "patch_batch",
+      document: { version: 1, sequence: 0, patches: [] },
+    })),
+    /Unknown Python authoring result kind: patch_batch/,
   );
 });
 
@@ -797,24 +715,13 @@ test("rejects Scene identities that do not cover the document", () => {
   );
 });
 
-test("rejects callback slots that reference objects outside the scene", () => {
-  assert.throws(
-    () =>
-      validateCallbackSession(
-        { session_id: 0, slots: [{ id: 0, objects: [4] }] },
-        { version: 1, objects: [{ id: 0 }], tracks: [] },
-      ),
-    /references an invalid object/,
-  );
-});
-
 test("terminating the client rejects pending work", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const resultPromise = client.run("result = batch");
+  const resultPromise = client.run("result = scene");
   await Promise.resolve();
   client.terminate();
 

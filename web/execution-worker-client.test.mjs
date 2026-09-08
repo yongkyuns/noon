@@ -448,43 +448,9 @@ test("engine failure reconnects without replacing the render worker or canvas", 
   client.terminate();
 });
 
-test("engine reconnect restores pause mode and callback phase configuration", async () => {
+test("engine reconnect restores pause mode", async () => {
   const errors = [];
   const { client, engine: oldEngine, render } = await startClient(errors);
-  const callbacks = {
-    session_id: 7,
-    slots: [
-      {
-        id: 3,
-        objects: [0],
-        active_after: 0.25,
-        active_through: 1.75,
-      },
-    ],
-  };
-  const authoringClient = {
-    ports: [],
-    async attachEnginePort(port) {
-      this.ports.push(port);
-    },
-  };
-
-  const configurePromise = client.configureHostCallbacks(callbacks, authoringClient);
-  const initialHostAttach = await waitForRequest(oldEngine, "attach_host_port");
-  oldEngine.emitMessage(
-    engineMessage("host_port_attached", { requestId: initialHostAttach.requestId }),
-  );
-  const initialConfigure = await waitForRequest(oldEngine, "configure_callbacks");
-  assert.deepEqual(initialConfigure.callbacks, callbacks);
-  oldEngine.emitMessage(
-    engineMessage("callbacks_configured", {
-      requestId: initialConfigure.requestId,
-      enabled: true,
-      generation: 1,
-    }),
-  );
-  await configurePromise;
-
   const pausePromise = client.pause();
   const initialPause = await waitForRequest(oldEngine, "pause");
   oldEngine.emitMessage(
@@ -527,38 +493,10 @@ test("engine reconnect restores pause mode and callback phase configuration", as
     }),
   );
 
-  const restoredHostAttach = await waitForRequest(newEngine, "attach_host_port");
-  newEngine.emitMessage(
-    engineMessage("host_port_attached", { requestId: restoredHostAttach.requestId }),
-  );
-  const restoredConfigure = await waitForRequest(newEngine, "configure_callbacks");
-  assert.deepEqual(
-    restoredConfigure.callbacks,
-    callbacks,
-    "reconnect must preserve callback activation windows",
-  );
-  newEngine.emitMessage(
-    engineMessage("callbacks_configured", {
-      requestId: restoredConfigure.requestId,
-      enabled: true,
-      generation: 1,
-    }),
-  );
-
-  const phaseRequest = await waitForRequest(newEngine, "request_callback_phase");
-  newEngine.emitMessage(
-    engineMessage("callback_phase_requested", {
-      requestId: phaseRequest.requestId,
-      generation: 1,
-      hostRequestId: 0,
-    }),
-  );
-
   const restarted = await restartPromise;
   assert.equal(restarted.session, 2);
   assert.equal(client.canvas, canvas);
   assert.equal(render.terminated, false);
-  assert.equal(authoringClient.ports.length, 2, "Python host port must be replaced on reconnect");
   assert.deepEqual(errors, ["engine: engine lost"]);
   client.terminate();
 });

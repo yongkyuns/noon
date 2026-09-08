@@ -42,8 +42,23 @@
                 }
               },
             });
+            // Static sources have no continuation registration. Attach their
+            // shared context directly and publish the same normal retained path.
+            if (!result.semanticExecution) throw new Error("shared source did not return its semantic context");
+            if (result.semanticExecution.continuationGeneration === undefined) {
+              if (started) {
+                await execution.reconcileSemanticExecution(result.semanticExecution, { authoringClient: client });
+              } else {
+                await execution.startSemanticExecution(result.semanticExecution, {
+                  authoringClient: client, initiallyPaused: true, transportMode: "transferable",
+                });
+                started = true;
+              }
+              await execution.advanceTo(0);
+            }
             sameCanvas &&= execution.canvas === canvas;
-            results.push({ duration: result.duration, metrics: (await execution.metrics()).metrics });
+            results.push({ duration: result.duration, mode: execution.mode,
+              frame: await execution.debugFrame(), metrics: (await execution.metrics()).metrics });
           }
           return { results, sameCanvas };
         } finally {

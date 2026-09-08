@@ -55,23 +55,13 @@ assert.match(
 );
 assert.match(
   runtimeReadyBody,
-  /await nextPlayer\.startRetainedCanonical\(sceneSpecJson,/,
-  "retained first runs must attach directly from canonical SceneSpec",
+  /await nextPlayer\.startSemanticExecution\(semanticExecution,/,
+  "all first runs must attach their shared semantic execution directly",
 );
 assert.doesNotMatch(
-  runtimeReadyBody,
-  /startRetained\(sceneJson, retainedDocumentJson/,
-  "normal retained startup must not reconstruct the transitional split payload",
-);
-assert.match(
-  runtimeReadyBody,
-  /await nextPlayer\.start\(sceneJson,/,
-  "geometry-only first runs must attach their authored scene directly",
-);
-assert.doesNotMatch(
-  runtimeReadyBody,
-  /\{\\"version\\":1,\\"objects\\":\[\],\\"tracks\\":\[\]\}/,
-  "cold startup must not boot a throwaway empty legacy scene",
+  main,
+  /SceneIdentityMap|sceneIdentities|sceneSpecJson|sceneJson|startRetainedCanonical|\.reconcileScene\(/,
+  "the playground must not regain a frontend identity allocator or legacy document execution branch",
 );
 const inFlightGuard = runtimeReadyBody.indexOf("if (runtimeStartPromise !== null)");
 const livePlayerGuard = runtimeReadyBody.indexOf("if (player !== null)");
@@ -80,11 +70,10 @@ assert.ok(
   "concurrent startup callers must await the in-flight startup before observing the published player",
 );
 const playerPublish = runtimeReadyBody.indexOf("player = nextPlayer;");
-const retainedStart = runtimeReadyBody.indexOf("await nextPlayer.startRetainedCanonical");
-const legacyStart = runtimeReadyBody.indexOf("await nextPlayer.start(sceneJson");
+const semanticStart = runtimeReadyBody.indexOf("await nextPlayer.startSemanticExecution");
 assert.ok(
-  playerPublish > retainedStart && playerPublish > legacyStart,
-  "the execution owner must publish only after the selected engine mode is ready",
+  semanticStart >= 0 && playerPublish > semanticStart,
+  "the execution owner must publish only after shared engine attachment is ready",
 );
 assert.match(
   runtimeReadyBody,
@@ -112,7 +101,7 @@ const preparationCall = runSceneBody.indexOf(
 const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
 const ensureRuntimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");
 const ensureExecutionCall = runSceneBody.indexOf("await ensureExecutionReady();");
-const reconcileCall = runSceneBody.indexOf("await player.reconcileScene(sceneJson,");
+const reconcileCall = runSceneBody.indexOf("await player.reconcileSemanticExecution(semanticExecution,");
 assert.ok(authoringCall >= 0, "Run must author the selected Python source");
 assert.ok(
   preparationCall >= 0 && preparationCall < authoringCall,
@@ -120,7 +109,7 @@ assert.ok(
 );
 assert.ok(
   ensureRuntimeCall > authoringCall,
-  "engine selection and attachment must wait until authoring identifies the required engine mode",
+  "shared engine attachment must wait until authoring supplies its semantic descriptor",
 );
 assert.match(
   runSceneBody,
@@ -133,13 +122,8 @@ assert.ok(
 );
 assert.match(
   runSceneBody,
-  /const startRetained = semanticExecution === null && sceneSpecJson !== null;/,
-  "first-run retained engine selection must derive from canonical SceneSpec availability",
-);
-assert.doesNotMatch(
-  runSceneBody,
-  /authored\.retainedDocument|retainedDocumentJson/,
-  "normal playground routing must not depend on the transitional retained sidecar",
+  /if \(!semanticExecution\) \{\s*throw new Error/,
+  "normal playground authoring must require the shared execution result",
 );
 
 const bootStart = main.indexOf("try {\n  const requested = requestedExampleId();");

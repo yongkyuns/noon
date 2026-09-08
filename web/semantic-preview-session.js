@@ -53,7 +53,7 @@ export class SemanticPreviewSession {
     };
   }
 
-  async open(source, { loopDurationSeconds = 4 } = {}) {
+  async open(source, { loopDurationSeconds = 4, context = {} } = {}) {
     if (this.#state !== "new") throw new Error("preview session opens only once");
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("preview source must be non-empty");
@@ -74,7 +74,7 @@ export class SemanticPreviewSession {
       let resolveAttached;
       const attached = new Promise((resolve) => { resolveAttached = resolve; });
       let registered = false;
-      const run = this.#authoring.run(source, {}, {
+      const run = this.#authoring.run(source, context, {
         onSemanticContinuation: async (registration) => {
           try {
             this.#assertActive();

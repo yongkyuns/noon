@@ -16,7 +16,6 @@ import _noon_ir as _ir
 
 FORMAT_VERSION = _ir.FORMAT_VERSION
 VectorPath = _ir.VectorPath
-PatchBatch = _ir.PatchBatch
 Color = _ir.Color
 
 
@@ -1185,7 +1184,6 @@ __all__ = [
     "PURPLE_C",
     "PURPLE_D",
     "PURPLE_E",
-    "PatchBatch",
     "Path",
     "RED",
     "RED_A",

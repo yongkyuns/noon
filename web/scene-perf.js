@@ -1,168 +1,165 @@
-import init, { EngineScenePlayer, ExecutionCanvasRenderer } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
-import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
-import {
-  drainRendererGpuDiagnostics,
-  formatGpuDiagnostic,
-} from "./render-gpu-diagnostics.js";
+import { FrameMetrics } from "./frame-metrics.js";
 
-const LOOP_DURATION_SECONDS = 4;
 const parameters = new URLSearchParams(location.search);
 const sourcePath = parameters.get("source") ?? "./python/demo_scene.py";
 if (!sourcePath.startsWith("./python/") || !sourcePath.endsWith(".py")) {
   throw new Error("scene performance source must be a local ./python/*.py file");
 }
-const warmupFrames = positiveInteger("warmup", 30);
+const warmupFrames = positiveInteger("warmup", 30, 0);
 const measuredFrames = positiveInteger("frames", 180);
 const targetHz = positiveNumber("targetHz", 60);
-const cameraHeight = positiveNumber("cameraHeight", 6);
+const transportMode = parameters.get("transportMode") ?? "transferable";
+if (!["transferable", "shared"].includes(transportMode)) throw new Error("unsupported transportMode");
+const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
+  ? positiveInteger("sharedSlotCapacity") : undefined;
+const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 const output = document.querySelector("#json");
-const backingWidth = canvas.width;
-const backingHeight = canvas.height;
 
 let client = null;
-let engine = null;
-let renderer = null;
+let execution = null;
+let jank = null;
+let sourceError = null;
+let completedSource = null;
+let continuation = false;
+let sourceCompleted = false;
+let lastSampleTime = 0;
+let firstMeasuredTime = null;
+let rejectSourceFailure;
+const sourceFailure = new Promise((_, reject) => { rejectSourceFailure = reject; });
+// Source and execution are independent asynchronous endpoints. Observe failure
+// even while an execution request is waiting for a continuation that has failed.
+sourceFailure.catch(() => {});
+function failSource(error) {
+  sourceError = error;
+  rejectSourceFailure(error);
+}
 try {
-  await init();
   const source = await loadText(sourcePath);
   const workerStarted = performance.now();
   client = new PythonAuthoringClient();
   await client.ready();
   const workerStartupMs = performance.now() - workerStarted;
-
+  execution = new AuthoringExecutionClient(canvas, {
+    onError: failSource,
+  });
   status.value = `Authoring ${sourcePath}…`;
   const authorStarted = performance.now();
-  const authored = await client.run(source, context);
-  const authoringMs = performance.now() - authorStarted;
-  if (authored.kind !== "scene_document") {
-    throw new Error("performance corpus source did not return a Scene");
+  let resolveAttached, rejectAttached;
+  const attached = new Promise((resolve, reject) => {
+    resolveAttached = resolve;
+    rejectAttached = reject;
+  });
+  let attaching = false;
+  async function attach(descriptor, isContinuation) {
+    if (attaching) return;
+    attaching = true;
+    if (!descriptor) throw new Error("scene profiler requires shared semantic execution");
+    continuation = isContinuation;
+    const ready = await execution.startSemanticExecution(descriptor, {
+      authoringClient: client,
+      transportMode,
+      ...(sharedSlotCapacity === undefined ? {} : { sharedSlotCapacity }),
+      ...(continuation ? { pacing: "external_samples" } : { initiallyPaused: true }),
+    });
+    resolveAttached(ready);
   }
+  // Source execution may remain suspended across play/wait. Attach to its
+  // existing session, then let exact samples advance Rust's continuation lane.
+  void client.run(source, context, {
+    onSemanticContinuation: (registration) => attach(registration.semanticExecution, true),
+  }).then(async (result) => {
+    completedSource = result;
+    await attach(result.semanticExecution, false);
+  }).catch((error) => {
+    failSource(error);
+    rejectAttached(error);
+  });
+  const ready = await Promise.race([attached, sourceFailure]);
+  const initialExecutionReadyMs = performance.now() - authorStarted;
+  await advanceSample(0);
 
-  const jsonStarted = performance.now();
-  const sceneJson = JSON.stringify(authored.document);
-  const serializationMs = performance.now() - jsonStarted;
-  const createStarted = performance.now();
-  engine = new EngineScenePlayer(sceneJson, LOOP_DURATION_SECONDS, 1);
-  const offscreen = canvas.transferControlToOffscreen();
-  renderer = await ExecutionCanvasRenderer.create(offscreen, engine.initialDeltaJson());
-  renderer.resize(backingWidth, backingHeight);
-  renderer.setCamera(0, 0, cameraHeight);
-  if (!presentPending()) {
-    throw new Error("initial corpus frame was not presented");
-  }
-  const playerCreateMs = performance.now() - createStarted;
-
-  for (let frame = 0; frame < warmupFrames; frame += 1) {
+  // Continue forward through warmup: arbitrary host callbacks cannot be
+  // implicitly rewound/replayed to reset a benchmark clock.
+  for (let frame = 0; frame < warmupFrames && !sourceCompleted; frame += 1) {
     status.value = `Warm-up ${frame + 1}/${warmupFrames} · ${sourcePath}…`;
-    advanceFrame(await nextAnimationFrame());
+    await nextAnimationFrame();
+    await advanceSample((frame + 1) / targetHz);
   }
-
-  resetPlayback();
+  const before = (await execution.metrics()).metrics;
   const cadence = new FrameMetrics({ targetHz });
-  const windows = {
-    cpu: new SampleWindow(measuredFrames),
-    runtime: new SampleWindow(measuredFrames),
-    transportApply: new SampleWindow(measuredFrames),
-    rendererRender: new SampleWindow(measuredFrames),
-  };
-  const jank = new BrowserJankMonitor();
+  jank = new BrowserJankMonitor();
   const measurementStart = performance.now();
   jank.start();
-  let dirtyFrames = 0;
-  let cleanFrames = 0;
-  for (let measured = 0; measured < measuredFrames; measured += 1) {
-    status.value = `Measuring ${measured + 1}/${measuredFrames} · ${sourcePath}…`;
+  for (let frame = 0; frame < measuredFrames && !sourceCompleted; frame += 1) {
+    status.value = `Measuring ${frame + 1}/${measuredFrames} · ${sourcePath}…`;
     const timestamp = await nextAnimationFrame();
-    const frameTiming = advanceFrame(timestamp);
-    cadence.record(timestamp, frameTiming.cpuFrameMs);
-    windows.cpu.record(frameTiming.cpuFrameMs);
-    windows.runtime.record(frameTiming.runtimeMs);
-    windows.transportApply.record(frameTiming.transportApplyMs);
-    windows.rendererRender.record(frameTiming.rendererRenderMs);
-    if (frameTiming.dirty) {
-      dirtyFrames += 1;
-    } else {
-      cleanFrames += 1;
-    }
+    const started = performance.now();
+    await advanceSample((warmupFrames + frame + 1) / targetHz);
+    firstMeasuredTime ??= lastSampleTime;
+    const advanceRoundTripMs = performance.now() - started;
+    cadence.record(timestamp, advanceRoundTripMs);
+    samples?.push({ sceneTime: lastSampleTime, advanceRoundTripMs });
   }
   const measurementEnd = performance.now();
   jank.stop();
+  const metrics = (await execution.metrics()).metrics;
+  if (sourceError) throw sourceError;
   const frame = cadence.summary();
-
   const report = {
-    schemaVersion: 1,
-    benchmark: "Noon realistic authored scene profile",
+    schemaVersion: 2,
+    ...(samples === null ? {} : { samples }),
+    benchmark: "Noon shared authored scene profile",
     generatedAt: new Date().toISOString(),
-    scene: {
-      source: sourcePath,
-      context,
-      objects: renderer.objectCount(),
-      cameraHeight,
-    },
+    scene: { source: sourcePath, context, objects: metrics.objectCount, camera: "authored" },
     environment: {
       userAgent: navigator.userAgent,
-      rendererBackend: renderer.rendererBackend(),
+      rendererBackend: execution.rendererBackend,
       devicePixelRatio: window.devicePixelRatio || 1,
-      backingResolution: [backingWidth, backingHeight],
+      viewportCssPixels: [canvas.clientWidth, canvas.clientHeight],
       targetHz,
     },
-    setup: {
-      workerStartupMs,
-      authoringMs,
-      serializationMs,
-      serializedBytes: new TextEncoder().encode(sceneJson).byteLength,
-      playerCreateMs,
-      warmupFrames,
+    setup: { workerStartupMs, initialExecutionReadyMs, warmupFrames },
+    execution: {
+      mode: execution.mode,
+      transportMode: ready.transportMode,
+      sourceContinuation: continuation,
+      sourceCompleted: completedSource !== null,
+      authoredDuration: completedSource?.duration ?? null,
+      firstMeasuredTime,
+      lastMeasuredTime: lastSampleTime,
+      requestedMeasuredFrames: measuredFrames,
+      requestedSampleStepSeconds: 1 / targetHz,
     },
     cadence: {
       frames: frame.frames,
-      dirtyFrames,
-      cleanFrames,
       frameIntervalMs: frame.interval,
       effective: frame.cadence,
-      browserSubmitMs: frame.submission,
     },
-    cpu: {
-      frameMs: windows.cpu.summary(),
-      runtimeMs: windows.runtime.summary(),
-      transportApplyMs: windows.transportApply.summary(),
-      rendererRenderMs: windows.rendererRender.summary(),
-      // The split execution renderer exposes aggregate render-host time rather
-      // than the deleted monolith's internal prepare/upload/encode phase timers.
-      prepareMs: null,
-      uploadMs: null,
-      encodeSubmitMs: null,
+    pipeline: {
+      // This includes worker round trips, callbacks, publication and rendering.
+      // It is deliberately not labeled isolated CPU or GPU execution time.
+      advanceRoundTripMs: frame.submission,
     },
     renderer: {
-      drawCalls: renderer.lastDrawCalls(),
-      instances: renderer.lastInstancesDrawn(),
-      lastUploadBytes: renderer.lastBytesUploaded(),
-      geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+      presentedFrames: metrics.presentedFrames - before.presentedFrames,
+      drawCalls: metrics.drawCalls,
+      instances: metrics.instancesDrawn,
+      lastUploadBytes: metrics.bytesUploaded,
+      geometryCacheMisses: metrics.geometryCacheMisses,
     },
-    browser: {
-      longTasks: jank.summary(measurementStart, measurementEnd),
-    },
-    gpu: {
-      supported: false,
-      p50: null,
-      p95: null,
-      p99: null,
-      unavailableReason:
-        "ExecutionCanvasRenderer does not yet expose WebGPU timestamp-query profiling",
-    },
+    browser: { longTasks: jank.summary(measurementStart, measurementEnd) },
+    unavailableMetrics: ["cpuFrameP95Ms", "gpuP95Ms"],
   };
-
   window.__NOON_SCENE_PERF__ = report;
   output.textContent = JSON.stringify(report, null, 2);
-  status.value =
-    `Complete · ${sourcePath} · ${format(report.cadence.effective?.effectiveFps)} FPS · ` +
-    `p95 ${format(report.cadence.frameIntervalMs?.p95)} ms · ` +
-    `${dirtyFrames}/${measuredFrames} dirty frames`;
+  status.value = `Complete · ${sourcePath} · ${format(report.cadence.effective?.effectiveFps)} FPS · ` +
+    `p95 ${format(report.pipeline.advanceRoundTripMs?.p95)} ms advance round trip`;
   status.dataset.state = "complete";
   console.log("NOON_SCENE_PERF", report);
 } catch (error) {
@@ -170,90 +167,21 @@ try {
   status.value = `Scene profile failed: ${error}`;
   status.dataset.state = "error";
 } finally {
+  jank?.stop();
+  execution?.terminate();
   client?.terminate();
-  renderer?.free?.();
-  engine?.free?.();
 }
 
-function advanceFrame(timestamp) {
-  const frameStarted = performance.now();
-  const runtimeStarted = performance.now();
-  const delta = engine.tickDeltaJson(timestamp);
-  const runtimeMs = performance.now() - runtimeStarted;
-  if (delta === undefined || delta === null) {
-    return {
-      dirty: false,
-      cpuFrameMs: performance.now() - frameStarted,
-      runtimeMs,
-      transportApplyMs: 0,
-      rendererRenderMs: 0,
-    };
-  }
-
-  const applyStarted = performance.now();
-  if (!renderer.applyDeltaJson(delta)) {
-    throw new Error("renderer rejected a non-stale corpus execution delta");
-  }
-  // Corpus fixtures do not author a camera object. Keep the benchmark viewport
-  // explicit after transport applies the engine's default camera state.
-  renderer.setCamera(0, 0, cameraHeight);
-  drainGpuDiagnostics();
-  const transportApplyMs = performance.now() - applyStarted;
-
-  const renderStarted = performance.now();
-  if (!presentPending()) {
-    throw new Error("dirty corpus frame was not presented");
-  }
-  const rendererRenderMs = performance.now() - renderStarted;
-  return {
-    dirty: true,
-    cpuFrameMs: performance.now() - frameStarted,
-    runtimeMs,
-    transportApplyMs,
-    rendererRenderMs,
-  };
-}
-
-function resetPlayback() {
-  const delta = engine.seekDeltaJson(0);
-  if (delta === undefined || delta === null) {
-    return;
-  }
-  if (!renderer.applyDeltaJson(delta)) {
-    throw new Error("renderer rejected corpus playback reset");
-  }
-  renderer.setCamera(0, 0, cameraHeight);
-  drainGpuDiagnostics();
-  if (!presentPending()) {
-    throw new Error("corpus playback reset was not presented");
-  }
-}
-
-function presentPending() {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    drainGpuDiagnostics();
-    const presented = renderer.render();
-    drainGpuDiagnostics();
-    if (presented) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function drainGpuDiagnostics() {
-  let fatal = null;
-  const healthy = drainRendererGpuDiagnostics(renderer, {
-    onRecoverable(diagnostic) {
-      console.warn(formatGpuDiagnostic(diagnostic));
-    },
-    onFatal(diagnostic) {
-      fatal = new Error(formatGpuDiagnostic(diagnostic));
-    },
-  });
-  if (!healthy) {
-    throw fatal ?? new Error("renderer reported a fatal GPU diagnostic");
-  }
+async function advanceSample(time) {
+  if (sourceError) throw sourceError;
+  const request = continuation
+    ? execution.sampleToAuthoredTime(time, { stopAtSourceCompletion: true })
+    : execution.advanceTo(time);
+  const result = await Promise.race([request, sourceFailure]);
+  if (sourceError) throw sourceError;
+  sourceCompleted = result.sourceCompleted === true;
+  lastSampleTime = result.time;
+  return result;
 }
 
 function parseContext(value) {
@@ -275,11 +203,11 @@ function nextAnimationFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
-function positiveInteger(name, fallback) {
+function positiveInteger(name, fallback, minimum = 1) {
   const value = parameters.get(name);
   if (value === null) return fallback;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) throw new Error(`${name} must be an integer >= ${minimum}`);
   return parsed;
 }
 

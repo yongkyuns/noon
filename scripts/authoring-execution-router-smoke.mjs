@@ -55,352 +55,136 @@ await new Promise((resolve, reject) => {
   server.listen(port, "127.0.0.1", resolve);
 });
 
+const geometrySource = `from noon import *
+scene = Scene()
+scene.add(Circle(radius=0.5), Square(side_length=0.7).shift(RIGHT * 1.5))
+result = scene
+`;
 const mixedSource = `from noon import *
-
-class MixedRouterScene(Scene):
-    def construct(self):
-        self.add(Circle(radius=0.4))
-        self.add(Text("middle", font_size=56))
-        self.add(Square(side_length=0.8))
+scene = Scene()
+scene.add(Circle(radius=0.4), Typst("middle", font_size=56), Square(side_length=0.8))
+result = scene
 `;
-
-const legacySource = `from noon import *
-
-class LegacyRouterScene(Scene):
-    def construct(self):
-        self.add(Circle(radius=0.5))
-        self.add(Square(side_length=0.7).shift(RIGHT * 1.5))
-`;
-
-const browserArgs = [
-  "--enable-unsafe-webgpu",
-  "--enable-unsafe-swiftshader",
-  "--use-webgpu-adapter=swiftshader",
-  "--use-gpu-in-tests",
-  "--ignore-gpu-blocklist",
-  "--enable-features=Vulkan",
-  "--use-gl=angle",
-  "--use-angle=swiftshader",
-  "--use-vulkan=swiftshader",
-  "--disable-gpu-sandbox",
-  "--disable-dev-shm-usage",
-];
-
 let browser = null;
+let timer;
 try {
   browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: browserArgs,
+    channel: "chromium", headless: true,
+    args: ["--enable-unsafe-webgpu", "--enable-unsafe-swiftshader", "--use-gpu-in-tests",
+      "--ignore-gpu-blocklist", "--use-gl=angle", "--use-angle=swiftshader", "--disable-gpu-sandbox"],
   });
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
-  const browserErrors = [];
-  page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error}`));
-  page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
-  });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.stack ?? String(error)));
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
+  const result = await Promise.race([
+    page.evaluate(async ({ geometrySource, mixedSource }) => {
+      const { PythonAuthoringClient } = await import("./authoring-client.js");
+      const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+      const authoring = new PythonAuthoringClient();
+      const clients = [];
+      function createExecution() {
+        const canvas = document.createElement("canvas");
+        canvas.width = 640; canvas.height = 360;
+        canvas.style.width = "640px"; canvas.style.height = "360px";
+        document.body.append(canvas);
+        const client = new AuthoringExecutionClient(canvas);
+        clients.push(client);
+        return client;
+      }
+      async function author(source = geometrySource) {
+        const result = await authoring.run(source, {});
+        if (!result.semanticExecution) throw new Error("shared descriptor missing");
+        return result.semanticExecution;
+      }
+      async function start(client) {
+        await client.startSemanticExecution(await author(), {
+          authoringClient: authoring, initiallyPaused: true, transportMode: "transferable",
+        });
+        await client.advanceTo(0);
+      }
+      async function cancel(client, operation) {
+        const pending = operation();
+        client.terminate();
+        let error = null;
+        try { await pending; } catch (failure) { error = String(failure); }
+        let stateError = null;
+        try { await client.state(); } catch (failure) { stateError = String(failure); }
+        return { error, stateError, mode: client.mode, backend: client.rendererBackend };
+      }
+      try {
+        const execution = createExecution();
+        const originalCanvas = execution.canvas;
+        await start(execution);
+        const geometry = (await execution.metrics()).metrics;
+        const mixed = await author(mixedSource);
+        const switching = execution.reconcileSemanticExecution(mixed, { authoringClient: authoring });
+        const racingMetrics = execution.metrics();
+        await switching;
+        await racingMetrics;
+        await execution.pause();
+        await execution.advanceTo(0);
+        const text = (await execution.metrics()).metrics;
+        let invalidContextError = null;
+        try {
+          await execution.reconcileSemanticExecution({ contextId: "unknown-semantic-context" }, { authoringClient: authoring });
+        } catch (error) { invalidContextError = String(error); }
+        const afterFailure = (await execution.metrics()).metrics;
+        await execution.reconcileSemanticExecution(await author(), { authoringClient: authoring });
+        await execution.pause();
+        await execution.advanceTo(0);
+        const rerun = (await execution.metrics()).metrics;
+        const sameCanvas = execution.canvas === originalCanvas;
+        const seek = await execution.seek(0.75);
+        await execution.restart();
+        await execution.pause();
+        await execution.advanceTo(0.75);
+        const recovery = (await execution.metrics()).metrics;
+        const recoveryCanvasChanged = execution.canvas !== originalCanvas;
+        const mode = execution.mode;
+        execution.terminate();
 
-  const result = await page.evaluate(async ({ mixedSource, legacySource }) => {
-    const { PythonAuthoringClient } = await import("./authoring-client.js");
-    const {
-      AuthoringExecutionClient,
-      AUTHORING_EXECUTION_LEGACY,
-      AUTHORING_EXECUTION_RETAINED,
-    } = await import("./authoring-execution-client.js");
-
-    const originalCanvas = document.querySelector("#scene");
-    const errors = [];
-    const authoring = new PythonAuthoringClient();
-    const execution = new AuthoringExecutionClient(originalCanvas, {
-      onError(error, owner) {
-        errors.push(`${owner}: ${error}`);
-      },
-    });
-    const emptySceneJson = '{"version":1,"objects":[],"tracks":[]}';
-    const initialReady = await execution.start(emptySceneJson, {
-      loopDurationSeconds: 4,
-      transportMode: "transferable",
-    });
-    const initialCanvas = execution.canvas;
-
-    const mixed = await authoring.run(mixedSource, {}, { exportDocument: true });
-    const mixedText = mixed.sceneSpec.objects[1];
-    const mixedTextKind = mixedText.content.value.kind;
-    const mixedTextOptionsKind = mixedText.content.value.options.kind;
-    const mixedSceneSpecJson = JSON.stringify(mixed.sceneSpec);
-    const inFlightLegacyMetrics = execution.metrics();
-    const mixedTransition = execution.reconcileScene(JSON.stringify(mixed.document), {
-      sceneSpecJson: mixedSceneSpecJson,
-      loopDurationSeconds: mixed.duration > 0 ? mixed.duration : null,
-    });
-    const mixedTransitionMetrics = execution.metrics();
-    const mixedTransitionState = execution.state();
-    const [preMixedRaceMetrics, mixedResult, mixedRaceMetrics, mixedRaceState] = await Promise.all([
-      inFlightLegacyMetrics,
-      mixedTransition,
-      mixedTransitionMetrics,
-      mixedTransitionState,
-    ]);
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    const mixedMetrics = await execution.metrics();
-    const mixedCanvas = execution.canvas;
-
-    const secondMixed = await execution.reconcileScene(JSON.stringify(mixed.document), {
-      sceneSpecJson: mixedSceneSpecJson,
-      loopDurationSeconds: mixed.duration > 0 ? mixed.duration : null,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const secondMixedMetrics = await execution.metrics();
-    const secondMixedCanvas = execution.canvas;
-
-    const mixedPause = await execution.pause();
-    const mixedPausedCanvas = execution.canvas;
-    const mixedPausedState = await execution.state();
-    await new Promise((resolve) => setTimeout(resolve, 160));
-    const mixedStillPausedState = await execution.state();
-    const mixedSeek = await execution.seek(2.5);
-    const mixedSeekState = await execution.state();
-    const mixedResume = await execution.resume();
-    await new Promise((resolve) => setTimeout(resolve, 160));
-    const mixedResumedState = await execution.state();
-    const mixedPlaybackRestart = await execution.restartPlayback();
-    const mixedPlaybackRestartCanvas = execution.canvas;
-    const mixedPlaybackRestartState = await execution.state();
-
-    const mixedRestartReady = await execution.restart();
-    const mixedRestartCanvas = execution.canvas;
-    const mixedRestartMetrics = await execution.metrics();
-    const mixedRestartState = await execution.state();
-
-    let callbackError = null;
-    try {
-      await execution.reconcileScene(JSON.stringify(mixed.document), {
-        sceneSpecJson: mixedSceneSpecJson,
-        callbacks: { session_id: 1, slots: [{}] },
-        authoringClient: authoring,
-      });
-    } catch (error) {
-      callbackError = String(error);
-    }
-
-    const legacy = await authoring.run(legacySource, {}, { exportDocument: true });
-    const inFlightRetainedMetrics = execution.metrics();
-    const legacyTransition = execution.reconcileScene(JSON.stringify(legacy.document), {
-      callbacks: legacy.callbacks,
-      authoringClient: authoring,
-      loopDurationSeconds: legacy.duration > 0 ? legacy.duration : null,
-    });
-    const legacyTransitionMetrics = execution.metrics();
-    const legacyTransitionState = execution.state();
-    const [retainedRaceMetrics, legacyResult, legacyRaceMetrics, legacyRaceState] = await Promise.all([
-      inFlightRetainedMetrics,
-      legacyTransition,
-      legacyTransitionMetrics,
-      legacyTransitionState,
-    ]);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const legacyMetrics = await execution.metrics();
-    const legacyCanvas = execution.canvas;
-
-    const legacyPause = await execution.pause();
-    const legacyPausedCanvas = execution.canvas;
-    const legacyPausedState = await execution.state();
-    await new Promise((resolve) => setTimeout(resolve, 160));
-    const legacyStillPausedState = await execution.state();
-    const legacySeek = await execution.seek(1.5);
-    const legacySeekState = await execution.state();
-    const legacyResume = await execution.resume();
-    await new Promise((resolve) => setTimeout(resolve, 160));
-    const legacyResumedState = await execution.state();
-    const legacyPlaybackRestart = await execution.restartPlayback();
-    const legacyPlaybackRestartCanvas = execution.canvas;
-    const legacyPlaybackRestartState = await execution.state();
-
-    const secondLegacy = await execution.reconcileScene(JSON.stringify(legacy.document), {
-      callbacks: legacy.callbacks,
-      authoringClient: authoring,
-    });
-    const legacyRestartReady = await execution.restart();
-    const legacyRestartCanvas = execution.canvas;
-    const legacyRestartMetrics = await execution.metrics();
-
-    const state = await execution.state();
-    const mixedRaceSceneSpec = JSON.parse(mixedRaceState.sceneSpecJson);
-    const mixedRestartSceneSpec = JSON.parse(mixedRestartState.sceneSpecJson);
-    const summary = {
-      initialMode: AUTHORING_EXECUTION_LEGACY,
-      retainedMode: AUTHORING_EXECUTION_RETAINED,
-      initialReady,
-      initialCanvasChanged: initialCanvas !== originalCanvas,
-      mixedTextKind,
-      mixedTextOptionsKind,
-      legacyRaceModeBeforeMixed: preMixedRaceMetrics.executionMode,
-      mixedMode: mixedResult.mode,
-      mixedRebuilt: mixedResult.rebuilt,
-      mixedCanvasChanged: mixedCanvas !== initialCanvas,
-      mixedRaceMode: mixedRaceMetrics.executionMode,
-      mixedRaceSceneSpecVersion: mixedRaceSceneSpec.version,
-      mixedRaceSceneSpecObjectCount: mixedRaceSceneSpec.objects.length,
-      mixedMetrics,
-      secondMixedMode: secondMixed.mode,
-      secondMixedRebuilt: secondMixed.rebuilt,
-      secondMixedPreservedCanvas: secondMixedCanvas === mixedCanvas,
-      secondMixedMetrics,
-      mixedPause,
-      mixedPausePreservedCanvas: mixedPausedCanvas === mixedCanvas,
-      mixedPausedState,
-      mixedStillPausedState,
-      mixedSeek,
-      mixedSeekState,
-      mixedResume,
-      mixedResumedState,
-      mixedPlaybackRestart,
-      mixedPlaybackRestartPreservedCanvas: mixedPlaybackRestartCanvas === mixedCanvas,
-      mixedPlaybackRestartState,
-      mixedRestartMode: mixedRestartReady.mode,
-      mixedRestartCanvasChanged: mixedRestartCanvas !== mixedCanvas,
-      mixedRestartObjectCount: mixedRestartMetrics.metrics.objectCount,
-      mixedRestartSceneSpecVersion: mixedRestartSceneSpec.version,
-      mixedRestartSceneSpecObjectCount: mixedRestartSceneSpec.objects.length,
-      callbackError,
-      retainedRaceModeBeforeLegacy: retainedRaceMetrics.executionMode,
-      legacyMode: legacyResult.mode,
-      legacyRebuilt: legacyResult.rebuilt,
-      legacyCanvasChanged: legacyCanvas !== mixedRestartCanvas,
-      legacyRaceMode: legacyRaceMetrics.executionMode,
-      legacyRaceObjectCount: JSON.parse(legacyRaceState.sceneJson).objects.length,
-      legacyMetrics,
-      legacyPause,
-      legacyPausePreservedCanvas: legacyPausedCanvas === legacyCanvas,
-      legacyPausedState,
-      legacyStillPausedState,
-      legacySeek,
-      legacySeekState,
-      legacyResume,
-      legacyResumedState,
-      legacyPlaybackRestart,
-      legacyPlaybackRestartPreservedCanvas: legacyPlaybackRestartCanvas === legacyCanvas,
-      legacyPlaybackRestartState,
-      secondLegacyMode: secondLegacy.mode,
-      secondLegacyRebuilt: secondLegacy.rebuilt,
-      legacyRestartMode: legacyRestartReady.mode,
-      legacyRestartCanvasChanged: legacyRestartCanvas !== legacyCanvas,
-      legacyRestartObjectCount: legacyRestartMetrics.metrics.objectCount,
-      state,
-      transportMode: execution.transportMode,
-      rendererBackend: execution.rendererBackend,
-      clientErrors: errors.slice(),
-    };
-    execution.terminate();
-    authoring.terminate();
-    return summary;
-  }, { mixedSource, legacySource });
-
-  assert.equal(result.initialCanvasChanged, false);
-  assert.equal(result.initialReady.transportMode, "transferable");
-  assert.equal(result.transportMode, "transferable");
-  assert.equal(result.mixedTextKind, "plain");
-  assert.equal(result.mixedTextOptionsKind, "native_plain");
-  assert.ok([result.initialMode, result.retainedMode].includes(result.legacyRaceModeBeforeMixed));
-  assert.equal(result.mixedMode, result.retainedMode);
-  assert.equal(result.mixedRebuilt, true);
-  assert.equal(result.mixedCanvasChanged, false);
-  assert.equal(result.mixedRaceMode, result.retainedMode);
-  assert.equal(result.mixedRaceSceneSpecVersion, 1);
-  assert.equal(result.mixedRaceSceneSpecObjectCount, 3);
-  assert.equal(result.mixedMetrics.executionMode, result.retainedMode);
-  assert.equal(result.mixedMetrics.metrics.ready, true);
-  assert.equal(result.mixedMetrics.metrics.objectCount, 3);
-  assert.ok(result.mixedMetrics.metrics.presentedFrames >= 1);
-  assert.equal(result.mixedMetrics.metrics.modeSwitches, 1);
-  assert.equal(result.mixedMetrics.engineMetrics.resourceBundleTransfers, 1);
-  assert.ok(result.mixedMetrics.engineMetrics.resourceBundleBytes > 0);
-  assert.equal(result.mixedMetrics.engineMetrics.host.enabled, false);
-  assert.equal(result.secondMixedMode, result.retainedMode);
-  assert.equal(result.secondMixedRebuilt, true);
-  assert.equal(result.secondMixedPreservedCanvas, true);
-  assert.equal(result.secondMixedMetrics.metrics.objectCount, 3);
-  assert.equal(result.secondMixedMetrics.metrics.modeSwitches, 1);
-  assert.equal(result.secondMixedMetrics.metrics.rendererRebuilds, 1);
-  assert.ok(
-    result.secondMixedMetrics.metrics.presentedFrames >=
-      result.mixedMetrics.metrics.presentedFrames,
-  );
-  assert.equal(result.mixedPause.operation, "pause");
-  assert.equal(result.mixedPause.playing, false);
-  assert.equal(result.mixedPausePreservedCanvas, true);
-  assert.equal(result.mixedPausedState.playing, false);
-  assert.equal(result.mixedStillPausedState.playing, false);
-  assert.equal(result.mixedStillPausedState.time, result.mixedPausedState.time);
-  assert.equal(result.mixedSeek.operation, "seek");
-  assert.equal(result.mixedSeek.playing, false);
-  assert.equal(result.mixedSeek.time, 2.5);
-  assert.equal(result.mixedSeekState.time, 2.5);
-  assert.equal(result.mixedSeekState.playing, false);
-  assert.equal(result.mixedResume.operation, "resume");
-  assert.equal(result.mixedResume.playing, true);
-  assert.ok(result.mixedResumedState.time > 2.5);
-  assert.equal(result.mixedResumedState.playing, true);
-  assert.equal(result.mixedPlaybackRestart.operation, "restart_playback");
-  assert.equal(result.mixedPlaybackRestart.time, 0);
-  assert.equal(result.mixedPlaybackRestart.playing, true);
-  assert.equal(result.mixedPlaybackRestartPreservedCanvas, true);
-  assert.equal(result.mixedPlaybackRestartState.time, 0);
-  assert.equal(result.mixedPlaybackRestartState.playing, true);
-  assert.equal(result.mixedRestartMode, result.retainedMode);
-  assert.equal(result.mixedRestartCanvasChanged, true);
-  assert.equal(result.mixedRestartObjectCount, 3);
-  assert.equal(result.mixedRestartSceneSpecVersion, 1);
-  assert.equal(result.mixedRestartSceneSpecObjectCount, 3);
-  assert.match(result.callbackError, /retained authoring with Python host callbacks is not supported yet/);
-
-  assert.ok([result.retainedMode, result.initialMode].includes(result.retainedRaceModeBeforeLegacy));
-  assert.equal(result.legacyMode, result.initialMode);
-  assert.equal(result.legacyRebuilt, true);
-  assert.equal(result.legacyCanvasChanged, false);
-  assert.equal(result.legacyRaceMode, result.initialMode);
-  assert.equal(result.legacyRaceObjectCount, 2);
-  assert.equal(result.legacyMetrics.executionMode, result.initialMode);
-  assert.equal(result.legacyMetrics.metrics.objectCount, 2);
-  assert.equal(result.legacyMetrics.metrics.modeSwitches, 1);
-  assert.equal(typeof result.legacyMetrics.engineMetrics.host.enabled, "boolean");
-  assert.equal(result.legacyPause.operation, "pause");
-  assert.equal(result.legacyPause.playing, false);
-  assert.equal(result.legacyPausePreservedCanvas, true);
-  assert.equal(result.legacyPausedState.playing, false);
-  assert.equal(result.legacyStillPausedState.playing, false);
-  assert.equal(result.legacyStillPausedState.time, result.legacyPausedState.time);
-  assert.equal(result.legacySeek.operation, "seek");
-  assert.equal(result.legacySeek.playing, false);
-  assert.equal(result.legacySeek.time, 1.5);
-  assert.equal(result.legacySeekState.time, 1.5);
-  assert.equal(result.legacySeekState.playing, false);
-  assert.equal(result.legacyResume.operation, "resume");
-  assert.equal(result.legacyResume.playing, true);
-  assert.ok(result.legacyResumedState.time > 1.5);
-  assert.equal(result.legacyResumedState.playing, true);
-  assert.equal(result.legacyPlaybackRestart.operation, "restart_playback");
-  assert.equal(result.legacyPlaybackRestart.time, 0);
-  assert.equal(result.legacyPlaybackRestart.playing, true);
-  assert.equal(result.legacyPlaybackRestartPreservedCanvas, true);
-  assert.equal(result.legacyPlaybackRestartState.time, 0);
-  assert.equal(result.legacyPlaybackRestartState.playing, true);
-  assert.equal(result.secondLegacyMode, result.initialMode);
-  assert.equal(result.secondLegacyRebuilt, false);
-  assert.equal(result.legacyRestartMode, result.initialMode);
-  assert.equal(result.legacyRestartCanvasChanged, true);
-  assert.equal(result.legacyRestartObjectCount, 2);
-  assert.equal(JSON.parse(result.state.sceneJson).objects.length, 2);
-  assert.match(result.rendererBackend, /WebGPU|WebGL2/);
-  assert.deepEqual(result.clientErrors, []);
-  assert.deepEqual(browserErrors, []);
-  console.log(
-    `✓ authoring execution router: native retained Text and persistent render ownership across retained/legacy on ${result.rendererBackend}`,
-  );
+        const cold = createExecution();
+        const coldDescriptor = await author();
+        const cancelledStart = await cancel(cold, () => cold.startSemanticExecution(coldDescriptor, { authoringClient: authoring }));
+        const replacing = createExecution();
+        await start(replacing);
+        const replacementDescriptor = await author(mixedSource);
+        const cancelledRerun = await cancel(replacing, () => replacing.reconcileSemanticExecution(replacementDescriptor, { authoringClient: authoring }));
+        const restarting = createExecution();
+        await start(restarting);
+        const cancelledRestart = await cancel(restarting, () => restarting.restart());
+        return {
+          counts: [geometry.objectCount, text.objectCount, afterFailure.objectCount, rerun.objectCount, recovery.objectCount],
+          instances: [geometry.instancesDrawn, text.instancesDrawn, rerun.instancesDrawn, recovery.instancesDrawn],
+          sameCanvas, recoveryCanvasChanged, mode, seekTime: seek.time, invalidContextError,
+          cancellations: [cancelledStart, cancelledRerun, cancelledRestart],
+        };
+      } finally {
+        for (const client of clients) client.terminate();
+        authoring.terminate();
+      }
+    }, { geometrySource, mixedSource }),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("shared authoring qualification timed out")), 120_000); }),
+  ]);
+  assert.deepEqual(result.counts, [2, 3, 3, 2, 2]);
+  assert.ok(result.instances.every((count) => count > 0));
+  assert.equal(result.sameCanvas, true);
+  assert.equal(result.recoveryCanvasChanged, true);
+  assert.equal(result.mode, "semantic");
+  assert.equal(result.seekTime, 0.75);
+  assert.ok(result.invalidContextError);
+  for (const cancellation of result.cancellations) {
+    assert.match(cancellation.error, /terminated during an asynchronous operation/);
+    assert.match(cancellation.stateError, /has not been started/);
+    assert.equal(cancellation.mode, null);
+    assert.equal(cancellation.backend, "");
+  }
+  assert.deepEqual(errors, []);
+  console.log("shared authoring routing/recovery/cancellation ok", JSON.stringify(result));
 } finally {
+  clearTimeout(timer);
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
 }
-
-await import("./playground-race-smoke.mjs");

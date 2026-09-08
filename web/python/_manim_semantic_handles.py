@@ -1088,23 +1088,17 @@ def _move_to(
 
     context = _live_mutation_context(self)
     if context is not None:
-        if _alignment_is_mobject(point_or_mobject):
-            raise NotImplementedError(
-                "canonical live move_to currently supports point targets only"
-            )
         edge = _base._as_vec2(aligned_edge)
         mask = _alignment_mask2(coor_mask)
-        if edge.x != 0.0 or edge.y != 0.0:
-            raise NotImplementedError(
-                "canonical live move_to currently supports center alignment only"
-            )
-        if mask.x != 1.0 or mask.y != 1.0:
-            raise NotImplementedError(
-                "canonical live move_to currently supports the default coordinate mask only"
-            )
-        point = _base._as_vec2(point_or_mobject)
         try:
-            context.liveMoveToPoint(handle, point.x, point.y)
+            if _alignment_is_mobject(point_or_mobject):
+                target_handle = _handle_for(point_or_mobject)
+                if target_handle is None:
+                    raise ValueError("live move_to requires a shared semantic target")
+                context.liveMoveToMobject(handle, target_handle, edge.x, edge.y, mask.x, mask.y)
+            else:
+                point = _base._as_vec2(point_or_mobject)
+                context.liveMoveToPoint(handle, point.x, point.y, edge.x, edge.y, mask.x, mask.y)
         except Exception as error:
             raise ValueError(str(error)) from None
         return self

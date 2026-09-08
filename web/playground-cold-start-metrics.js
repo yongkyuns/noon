@@ -105,8 +105,8 @@ export function classifyWorkerUrl(url) {
   const value = String(url ?? "");
   if (value.endsWith("#noon-render-capability-probe")) return "probe";
   if (/python-worker(?:\.|-)/.test(value)) return "authoring";
-  if (/retained-execution-engine-worker|execution-engine-worker/.test(value)) return "engine";
-  if (/retained-execution-render-worker|execution-render-worker|authoring-render-worker/.test(value)) {
+  if (/(?:^|\/)execution-engine-worker(?:\.|-)/.test(value)) return "engine";
+  if (/execution-render-worker|authoring-render-worker/.test(value)) {
     return "render";
   }
   return "other";

@@ -15,14 +15,11 @@ import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyod
 
 const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 6;
-const HOST_CHANNEL = "noon.host-callback";
-const HOST_PROTOCOL_VERSION = 1;
 const AUTHORING_STARTUP_METRICS_VERSION = 1;
 const moduleGraphReadyAt = performance.now();
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
-let engineHostPort = null;
 const semanticContexts = new Map();
 let nextSemanticContext = 0;
 let nextContinuationGeneration = 1;
@@ -664,26 +661,6 @@ async function handleRequest(request) {
       post("semantic_execution_released", { requestId });
       return;
     }
-    if (request.type === "callback_phase") {
-      const patchBatchJson = await runCallbackPhase(
-        pyodide,
-        request.sessionId,
-        request.frame,
-        request.sequence,
-      );
-      post("callback_result", { requestId, patchBatchJson });
-      return;
-    }
-    if (request.type === "attach_engine_port") {
-      engineHostPort?.close?.();
-      engineHostPort = request.port;
-      engineHostPort.addEventListener("message", (event) => {
-        requestQueue = requestQueue.then(() => handleHostRequest(event.data));
-      });
-      engineHostPort.start();
-      post("host_port_attached", { requestId });
-      return;
-    }
     throw new Error(`Unsupported Python authoring request: ${request.type}`);
   } catch (error) {
     if (request?.type === "attach_semantic_execution") {
@@ -723,6 +700,14 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     : continuationOnly
     ? (frame) => requestContinuationCallback(continuation, frame)
     : (frame) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame);
+  if (request.replaceExistingEndpoint) {
+    if (continuationOnly || (continuation?.contextId === request.contextId && !continuation.terminal)) {
+      throw new Error("cannot replace an endpoint while source continuation is active");
+    }
+    // Reconnect the control/render ports around the same runtime lease. Stop on
+    // this owner before leasing again; cross-port stop messages are not ordered.
+    for (const existing of [...entry.endpoints]) existing.stop();
+  }
   let endpoint;
   endpoint = await attachSemanticEngine(
     entry.context,
@@ -762,21 +747,6 @@ function retireSemanticContext(token, entry) {
   }
 }
 
-async function handleHostRequest(request) {
-  let requestId = null;
-  let generation = null;
-  try {
-    validateHostRequest(request);
-    requestId = request.requestId;
-    generation = request.generation;
-    const pyodide = await pyodidePromise;
-    const patchBatchJson = await runCallbackPhase(pyodide, request.sessionId, request.frame, request.sequence);
-    postHost("callback_result", { requestId, generation, patchBatchJson });
-  } catch (error) {
-    postHost("error", { requestId, generation, message: error instanceof Error ? error.message : String(error) });
-  }
-}
-
 async function runAuthoringSource(pyodide, source, context, exportDocument = false) {
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
@@ -799,7 +769,7 @@ from _manim_canonical_scene import (
 from _manim_source_execution import (
     BARRIER_GLOBAL, compile_authoring_source, authoring_source_scope,
 )
-from noon import PatchBatch, Scene
+from noon import Scene
 
 __noon_namespace = {
     "context": json.loads(__noon_context_json),
@@ -859,7 +829,6 @@ if isinstance(__noon_result, Scene):
         __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
         if __noon_continuation_generation is not None:
             __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
-        __noon_callbacks = None
         __noon_scene_spec = None
         __noon_document = None
         __noon_identities = None
@@ -868,12 +837,6 @@ if isinstance(__noon_result, Scene):
             raise RuntimeError(
                 "shared Scene cannot fall back to scene-document execution; "
                 "remove incompatible legacy declarations or request exportDocument explicitly"
-            )
-        __noon_callbacks = _manim_updaters.register_scene(__noon_result)
-        if __noon_callbacks and getattr(__noon_result, "_semantic_text_handles", {}):
-            raise RuntimeError(
-                "native Text with Python callbacks is not supported by the retained "
-                "renderer path yet; callback lowering must migrate to the shared session"
             )
         # A native Text timeline/export remains in the canonical context so its
         # temporary #959 codec is derived from the Rust store at finalization.
@@ -890,16 +853,8 @@ if isinstance(__noon_result, Scene):
         if __noon_authored_duration is not None
         else float(__noon_result.time)
     )
-elif isinstance(__noon_result, PatchBatch):
-    __noon_semantic = None
-    __noon_kind = "patch_batch"
-    __noon_scene_spec = None
-    __noon_document = __noon_result.to_document()
-    __noon_duration = None
-    __noon_identities = None
-    __noon_callbacks = None
 else:
-    raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")
+    raise TypeError("Python authoring result must be a noon.Scene")
 json.dumps(
     {
         "kind": __noon_kind,
@@ -908,7 +863,6 @@ json.dumps(
         "scene_spec": __noon_scene_spec,
         "duration": __noon_duration,
         "identities": __noon_identities,
-        "callbacks": __noon_callbacks,
     },
     separators=(",", ":"),
     allow_nan=False,
@@ -917,31 +871,6 @@ json.dumps(
       { globals },
     );
     return resultJson;
-  } finally {
-    globals.destroy();
-  }
-}
-
-async function runCallbackPhase(pyodide, sessionId, frame, sequence) {
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_callback_session", sessionId);
-  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
-  globals.set("__noon_callback_sequence", sequence);
-  try {
-    return await pyodide.runPythonAsync(
-      `
-import json
-import _manim_updaters
-_manim_updaters.run_callback_phase(
-    int(__noon_callback_session),
-    json.loads(__noon_callback_frame_json),
-    int(__noon_callback_sequence),
-)
-`,
-      { globals },
-    );
   } finally {
     globals.destroy();
   }
@@ -1013,23 +942,14 @@ function validateRequest(request) {
     }
     return;
   }
-  if (request.type === "callback_phase") {
-    if (!Number.isSafeInteger(request.sessionId) || request.sessionId < 0) {
-      throw new Error("Python callback request has an invalid session ID");
-    }
-    if (!Number.isSafeInteger(request.sequence) || request.sequence < 0) {
-      throw new Error("Python callback request has an invalid patch sequence");
-    }
-    if (!isRecord(request.frame)) {
-      throw new Error("Python callback request must contain a frame object");
-    }
-    return;
-  }
   if (request.type === "release_semantic_execution") {
     if (typeof request.contextId !== "string" || !request.contextId) throw new Error("invalid semantic context token");
     return;
   }
   if (request.type === "attach_semantic_execution") {
+    if (request.replaceExistingEndpoint !== undefined && typeof request.replaceExistingEndpoint !== "boolean") {
+      throw new Error("semantic endpoint replacement must be a boolean");
+    }
     if (typeof request.contextId !== "string" || !request.contextId ||
         !(request.controlPort instanceof MessagePort) || !(request.renderPort instanceof MessagePort)) {
       throw new Error("semantic attachment requires a context and two ports");
@@ -1073,29 +993,7 @@ function validateRequest(request) {
     }
     return;
   }
-  if (request.type === "attach_engine_port") {
-    if (!(request.port instanceof MessagePort)) {
-      throw new Error("Python host attachment requires a MessagePort");
-    }
-    return;
-  }
   throw new Error(`Unsupported Python authoring request: ${request.type}`);
-}
-
-function validateHostRequest(request) {
-  if (!isRecord(request) || request.channel !== HOST_CHANNEL ||
-      request.protocolVersion !== HOST_PROTOCOL_VERSION || request.type !== "callback_phase" ||
-      !Number.isSafeInteger(request.requestId) || request.requestId < 0 ||
-      !Number.isSafeInteger(request.generation) || request.generation < 0 ||
-      !Number.isSafeInteger(request.sessionId) || request.sessionId < 0 ||
-      !Number.isSafeInteger(request.sequence) || request.sequence < 0 || !isRecord(request.frame)) {
-    throw new Error("invalid engine host callback request");
-  }
-}
-
-function postHost(type, payload = {}) {
-  if (engineHostPort === null) return;
-  engineHostPort.postMessage({ channel: HOST_CHANNEL, protocolVersion: HOST_PROTOCOL_VERSION, type, ...payload });
 }
 
 function post(type, payload = {}) {

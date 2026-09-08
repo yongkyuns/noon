@@ -37,6 +37,8 @@ jobs:
         uses: actions/checkout@v7
       - name: Validate raster ratchet policy
         run: node scripts/manim-raster-policy.test.mjs
+      - name: Validate preview session lifecycle and authoring context
+        run: node --test web/semantic-preview-session.test.mjs web/semantic-preview-context.test.mjs
       - name: Validate preview evidence assertions
         run: node --test scripts/semantic-preview-observations.test.mjs
       - name: Set up Python

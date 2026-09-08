@@ -107,6 +107,8 @@ try {
         throw new Error(`${layout}/${objects} failed: ${message}\n${errors.join("\n")}`);
       }
       const report = await page.evaluate(() => window.__NOON_PERF_REPORT__);
+      assert.equal(report.schemaVersion, 2);
+      assert.equal(report.workload.execution, "typed-direct-rust");
       assert.equal(report.workload.objects, objects);
       assert.equal(report.workload.layout, layout);
       assert.equal(report.environment.devicePixelRatio, dpr);
@@ -147,8 +149,8 @@ try {
   }
 
   const artifact = {
-    schemaVersion: 1,
-    benchmark: "Noon canonical browser performance matrix",
+    schemaVersion: 2,
+    benchmark: "Noon direct Rust browser performance matrix",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
     host: {

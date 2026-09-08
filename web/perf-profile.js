@@ -1,11 +1,6 @@
-import init, { EngineScenePlayer, ExecutionCanvasRenderer } from "./pkg/noon_web.js";
+import init, { createDirectAnalyticProfileRenderer } from "./pkg/noon_web.js";
 import { BrowserJankMonitor, estimateUnattributedFrameMs } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
-import {
-  ANALYTIC_LAYOUTS,
-  buildAnalyticScene,
-  installIncrementalPositionDriver,
-} from "./perf-workloads.js";
 import {
   drainRendererGpuDiagnostics,
   formatGpuDiagnostic,
@@ -19,6 +14,8 @@ const targetHz = positiveNumber("targetHz", 60);
 const width = positiveInteger("width", 960);
 const height = positiveInteger("height", 540);
 const layout = parameters.get("layout") ?? "fit";
+const ANALYTIC_LAYOUTS = ["fit", "fixed", "overdraw"];
+if (objectCount > 100_000) throw new Error("objects must not exceed 100000");
 if (!ANALYTIC_LAYOUTS.includes(layout)) {
   throw new Error(`layout must be one of ${ANALYTIC_LAYOUTS.join(", ")}`);
 }
@@ -35,22 +32,17 @@ const driverDurationSeconds = Math.max(
   ((warmupFrames + measuredFrames + 16) / targetHz) * 2,
 );
 const browserJank = new BrowserJankMonitor();
-let engine = null;
 let renderer = null;
-let workload = null;
 
 try {
   await init();
-  workload = buildAnalyticScene({ count: objectCount, layout, aspect: width / height });
-  installIncrementalPositionDriver(workload.document, driverDurationSeconds);
-
-  const sceneJson = JSON.stringify(workload.document);
   const createStarted = performance.now();
-  engine = new EngineScenePlayer(sceneJson, driverDurationSeconds, 1);
   const offscreen = canvas.transferControlToOffscreen();
-  renderer = await ExecutionCanvasRenderer.create(offscreen, engine.initialDeltaJson());
+  renderer = await createDirectAnalyticProfileRenderer(
+    offscreen, objectCount, layout, width / height, driverDurationSeconds,
+  );
   renderer.resize(width, height);
-  renderer.setCamera(0, 0, workload.cameraHeight);
+  renderer.advanceDirectRealtime(0);
   renderer.enableGpuTimestampProfiling(true);
   if (!presentPending()) {
     throw new Error("initial performance frame was not presented");
@@ -65,7 +57,9 @@ try {
 
   // Keep the measurement phase deterministic across devices. Browser rAF owns
   // cadence sampling only; semantic scene time advances by one target-Hz step.
-  presentSceneTime(0);
+  renderer.seekDirect(0);
+  renderer.advanceDirectRealtime(0);
+  presentPending();
   const warmupGpuTimestamps = await settleGpuTimestampMetrics(
     new SampleWindow(warmupFrames + 8),
   );
@@ -79,7 +73,6 @@ try {
   const windows = {
     cpuFrameMs: new SampleWindow(measuredFrames),
     runtimeMs: new SampleWindow(measuredFrames),
-    transportApplyMs: new SampleWindow(measuredFrames),
     rendererRenderMs: new SampleWindow(measuredFrames),
     unattributedFrameMs: new SampleWindow(measuredFrames),
     gpuRenderPassMs: new SampleWindow(measuredFrames),
@@ -97,7 +90,6 @@ try {
     cadence.record(timestamp, timings.cpuFrameMs);
     windows.cpuFrameMs.record(timings.cpuFrameMs);
     windows.runtimeMs.record(timings.runtimeMs);
-    windows.transportApplyMs.record(timings.transportApplyMs);
     windows.rendererRenderMs.record(timings.rendererRenderMs);
     if (previousTimestamp !== null) {
       windows.unattributedFrameMs.record(
@@ -113,15 +105,15 @@ try {
 
   const frame = cadence.summary();
   const report = {
-    schemaVersion: 1,
-    benchmark: "Noon incremental analytic frame profile",
+    schemaVersion: 2,
+    benchmark: "Noon direct Rust analytic frame profile",
     generatedAt: new Date().toISOString(),
     workload: {
-      family: "analytic-incremental",
+      family: "analytic-direct",
       layout,
-      description:
-        `${workload.description}; one object carries a deterministic position track ` +
-        "so each frame crosses the execution-delta boundary without rebuilding the scene",
+      description: "shared Rust analytic workload; one object advances on a linear position track",
+      execution: "typed-direct-rust",
+      camera: "authored",
       objects: objectCount,
       incrementalDriverObjects: 1,
       driverDurationSeconds,
@@ -155,11 +147,10 @@ try {
     },
     cpu: {
       frameMs: windows.cpuFrameMs.summary(),
-      runtimeEvaluationMs: windows.runtimeMs.summary(),
-      transportApplyMs: windows.transportApplyMs.summary(),
+      runtimeAdvanceMs: windows.runtimeMs.summary(),
       rendererRenderMs: windows.rendererRenderMs.summary(),
-      // The split execution renderer currently exposes aggregate render-host
-      // timing rather than the deleted monolith's prepare/upload/encode timers.
+      // Direct advancement and rendering are measured at their typed host calls;
+      // renderer-internal prepare/upload/encode timers are not exposed here.
       framePrepareMs: null,
       uploadMs: null,
       encodeSubmitMs: null,
@@ -198,28 +189,21 @@ try {
 } finally {
   browserJank.stop();
   renderer?.free?.();
-  engine?.free?.();
 }
 
 function presentSceneTime(sceneTime) {
   const frameStarted = performance.now();
 
   const runtimeStarted = performance.now();
-  const delta = engine.seekDeltaJson(sceneTime);
+  const pending = renderer.advanceDirectRealtime(sceneTime * 1000);
   const runtimeMs = performance.now() - runtimeStarted;
-  if (delta === undefined || delta === null) {
-    throw new Error(`incremental performance driver emitted no delta at t=${sceneTime}`);
+  if (Math.abs(renderer.time() - sceneTime) > 1e-6) {
+    throw new Error(`direct runtime did not reach requested sample ${sceneTime}`);
   }
-
-  const applyStarted = performance.now();
-  if (!renderer.applyDeltaJson(delta)) {
-    throw new Error(`renderer rejected incremental performance delta at t=${sceneTime}`);
+  if (!pending) {
+    throw new Error(`analytic driver produced no pending direct frame at t=${sceneTime}`);
   }
-  // This synthetic workload has no authored camera object. Keep the profiling
-  // viewport explicit after each transport delta updates mirror state.
-  renderer.setCamera(0, 0, workload.cameraHeight);
   drainGpuDiagnostics();
-  const transportApplyMs = performance.now() - applyStarted;
 
   const renderStarted = performance.now();
   if (!presentPending()) {
@@ -230,7 +214,6 @@ function presentSceneTime(sceneTime) {
   return {
     cpuFrameMs: performance.now() - frameStarted,
     runtimeMs,
-    transportApplyMs,
     rendererRenderMs,
   };
 }

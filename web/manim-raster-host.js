@@ -20,7 +20,7 @@ function waitForPaint() {
   });
 }
 
-async function load(source, loopDurationSeconds) {
+async function load(source, loopDurationSeconds, context = {}) {
   await readyPromise;
   if (closed) throw new Error("host raster page is closed");
   if (typeof source !== "string" || source.trim() === "") {
@@ -42,7 +42,7 @@ async function load(source, loopDurationSeconds) {
       return execution;
     },
   });
-  const result = await preview.open(source, { loopDurationSeconds: loopDuration });
+  const result = await preview.open(source, { loopDurationSeconds: loopDuration, context });
   return {
     kind: "semantic_execution",
     duration: result.authoredDuration,

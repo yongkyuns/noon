@@ -1,39 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
 
-const { chromium } = playwright;
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const port = 4193;
-const baseUrl = `http://127.0.0.1:${port}`;
-
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/manim-compat-smoke.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`retained family identity smoke server did not start: ${lastError}\n${serverOutput}`);
-}
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const source = `
 from noon import *
@@ -64,41 +36,24 @@ class RetainedFamilyIdentity(Scene):
         assert holder[0] is first
 `;
 
-let browser = null;
+const server = await serveRepository(root, 4193);
+let browser;
 try {
-  await waitForServer();
-  browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: ["--disable-dev-shm-usage"],
-  });
+  browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgpu") });
   const page = await browser.newPage();
   const errors = [];
-  page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console: ${message.text()}`);
-  });
-
-  await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
-  await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
-  await page.evaluate(() => window.noonManimCompat.ready());
-
-  const result = await page.evaluate((python) => window.noonManimCompat.run(python), source);
-  assert.equal(result.kind, "scene_document");
-  assert.equal(
-    result.document.objects.length,
-    0,
-    "detached retained family identity must not synthesize legacy geometry",
-  );
-  assert.deepEqual(
-    errors,
-    [],
-    `browser errors while testing retained Text family identity:\n${errors.join("\n")}`,
-  );
-  console.log(
-    "Retained Text family identity smoke passed: nested VGroup construction, copy, remove, and re-add use shared semantic membership without legacy geometry.",
-  );
-} finally {
-  await browser?.close();
-  server.kill("SIGTERM");
-}
+  page.on("pageerror", error => errors.push(String(error)));
+  page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  await page.goto(`${server.baseUrl}/web/manim-compat-smoke.html`);
+  await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30000 });
+  // runLive owns source attachment; the unrelated animated ready probes need
+  // not run again for this static family qualification.
+  const result = await page.evaluate(source => window.noonManimCompat.runLive(source), source);
+  assert.equal(result.mode, "semantic");
+  assert.equal(result.metrics.objectCount, 0);
+  assert.equal(result.frame.objects.length, 0);
+  assert.equal(result.frame.present_object_count, 0);
+  assert.equal(result.metrics.instancesDrawn, 0, "detached family must not synthesize renderer objects");
+  assert.deepEqual(errors, []);
+  console.log("PASS shared Text family identity: preserved Python assertions and normal retained rendering");
+} finally { await browser?.close(); await server.close(); }

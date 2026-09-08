@@ -1,12 +1,9 @@
 import { ExecutionWorkerClient } from "./execution-worker-client.js";
 
-export const AUTHORING_EXECUTION_LEGACY = "legacy";
-export const AUTHORING_EXECUTION_RETAINED = "retained";
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
 export const SEMANTIC_PACING_REALTIME = "realtime";
 export const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 
-const SCENE_SPEC_VERSION = 1;
 const DEFAULT_LOOP_DURATION_SECONDS = 4;
 const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 const LIFECYCLE_CANCELLED_MESSAGE =
@@ -17,15 +14,9 @@ const EMPTY_HOST_METRICS = Object.freeze({
   droppedLateResults: 0,
 });
 
-/// One browser execution owner for Python authoring output.
-///
-/// The execution client owns one render worker and one transferred OffscreenCanvas
-/// for its lifetime. Geometry-only results keep a legacy engine attached to that
-/// owner. Results with canonical retained SceneSpec output switch only the engine
-/// type and renderer implementation at an authoring boundary; the render worker,
-/// HTML canvas, and OffscreenCanvas ownership remain stable. Retained edits rebuild
-/// engine state at authoring boundaries; playback itself remains retained with no
-/// per-frame Python/source work.
+// Browser lifecycle owner for shared Python-authored execution sessions.
+// Rust owns semantic and execution state; this client owns attachment, canvas
+// lifecycle, controls and recovery across the real worker boundary.
 export class AuthoringExecutionClient {
   #canvas;
   #player = null;
@@ -111,68 +102,6 @@ export class AuthoringExecutionClient {
       }
       throw error;
     }
-  }
-
-  async start(
-    sceneJson,
-    {
-      loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
-      transportMode = undefined,
-      sharedSlotCapacity = undefined,
-      callbacks = null,
-      authoringClient = null,
-    } = {},
-  ) {
-    if (this.#player !== null || this.#transition !== null) {
-      throw new Error("AuthoringExecutionClient is already started");
-    }
-    validateSceneJson(sceneJson);
-    this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
-    this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
-    const options = {
-      loopDurationSeconds: this.#loopDurationSeconds,
-      sharedSlotCapacity: this.#sharedSlotCapacity,
-    };
-    if (transportMode !== undefined) {
-      options.transportMode = transportMode;
-    }
-    const ready = await this.#startMode(AUTHORING_EXECUTION_LEGACY, sceneJson, options);
-    if (callbacks !== null && callbacks !== undefined) {
-      await this.#player.configureHostCallbacks(callbacks, authoringClient);
-    }
-    this.#transportMode = ready.transportMode;
-    return ready;
-  }
-
-  async startRetainedCanonical(
-    sceneSpecJson,
-    {
-      loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
-      transportMode = undefined,
-      sharedSlotCapacity = undefined,
-    } = {},
-  ) {
-    if (this.#player !== null || this.#transition !== null) {
-      throw new Error("AuthoringExecutionClient is already started");
-    }
-    validateSceneSpecJson(sceneSpecJson);
-    this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
-    this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
-    const options = {
-      loopDurationSeconds: this.#loopDurationSeconds,
-      sharedSlotCapacity: this.#sharedSlotCapacity,
-    };
-    if (transportMode !== undefined) {
-      options.transportMode = transportMode;
-    }
-    const ready = await this.#startMode(
-      AUTHORING_EXECUTION_RETAINED,
-      null,
-      options,
-      sceneSpecJson,
-    );
-    this.#transportMode = ready.transportMode;
-    return ready;
   }
 
   async startSemanticExecution(
@@ -282,65 +211,6 @@ export class AuthoringExecutionClient {
     });
   }
 
-  async reconcileScene(
-    sceneJson,
-    {
-      sceneSpecJson = null,
-      retainedDocumentJson = null,
-      callbacks = null,
-      authoringClient = null,
-      loopDurationSeconds = null,
-    } = {},
-  ) {
-    if (this.#transition !== null) {
-      await this.#transition;
-    }
-    this.#requireStarted();
-    validateSceneJson(sceneJson);
-    if (retainedDocumentJson !== null && retainedDocumentJson !== undefined) {
-      throw new Error(
-        "split retained reconciliation is retired; provide canonical sceneSpecJson instead",
-      );
-    }
-    const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
-    if (duration !== null) {
-      this.#loopDurationSeconds = duration;
-    }
-
-    if (sceneSpecJson !== null && sceneSpecJson !== undefined) {
-      validateSceneSpecJson(sceneSpecJson);
-      if (callbacks !== null && callbacks !== undefined) {
-        throw new Error(
-          "retained authoring with Python host callbacks is not supported yet; " +
-            "split the callback work from retained text instead of silently dropping either",
-        );
-      }
-      // Semantic execution already uses the retained mixed renderer. Rebuild
-      // its resource bundle in place rather than asking the renderer to switch
-      // from retained mode to itself.
-      if (
-        this.#mode === AUTHORING_EXECUTION_RETAINED ||
-        this.#mode === AUTHORING_EXECUTION_SEMANTIC
-      ) {
-        return this.#runTransition(() => this.#rebuildRetainedCanonical(sceneSpecJson));
-      }
-      return this.#runTransition(() => this.#switchRetainedCanonical(sceneSpecJson));
-    }
-
-    if (this.#mode === AUTHORING_EXECUTION_LEGACY) {
-      const result = await this.#player.reconcileScene(sceneJson, {
-        callbacks,
-        authoringClient,
-        loopDurationSeconds: duration,
-      });
-      return { ...result, mode: this.#mode, rebuilt: false };
-    }
-
-    return this.#runTransition(() =>
-      this.#switchLegacy(sceneJson, { callbacks, authoringClient }),
-    );
-  }
-
   async state() {
     return this.#withStablePlayer((player) => player.state());
   }
@@ -379,57 +249,30 @@ export class AuthoringExecutionClient {
   }
 
   async advanceTo(timeSeconds) {
-    return this.#withStablePlayer((player, mode) => {
-      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
-        throw new Error("forward authored-time advancement requires semantic execution mode");
-      }
-      return player.advanceTo(timeSeconds);
-    });
+    return this.#withStablePlayer((player) => player.advanceTo(timeSeconds));
   }
 
   async debugFrame() {
-    return this.#withStablePlayer((player, mode) => {
-      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
-        throw new Error("shared execution diagnostics require semantic execution mode");
-      }
-      return player.debugFrame();
-    });
+    return this.#withStablePlayer((player) => player.debugFrame());
   }
 
-  async sampleToAuthoredTime(timeSeconds) {
-    return this.#withStablePlayer((player, mode) => {
-      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
-        throw new Error("external authored-time sampling requires semantic execution mode");
-      }
-      return player.sampleToAuthoredTime(timeSeconds);
-    });
+  // Exact samples are strict by default. stopAtSourceCompletion lets bounded
+  // consumers finish at an earlier source endpoint; the response reports its
+  // actual time and sourceCompleted without replaying any callback.
+  async sampleToAuthoredTime(timeSeconds, options = {}) {
+    return this.#withStablePlayer((player) => player.sampleToAuthoredTime(timeSeconds, options));
   }
 
   async advanceToWithRendererObservation(timeSeconds) {
-    return this.#withStablePlayer((player, mode) => {
-      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
-        throw new Error("callback renderer observation requires semantic execution mode");
-      }
-      return player.advanceToWithRendererObservation(timeSeconds);
-    });
+    return this.#withStablePlayer((player) => player.advanceToWithRendererObservation(timeSeconds));
   }
 
   async setNativeStateInput(source, value) {
-    return this.#withStablePlayer((player, mode) => {
-      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
-        throw new Error("native state input requires semantic execution mode");
-      }
-      return player.setNativeStateInput(source, value);
-    });
+    return this.#withStablePlayer((player) => player.setNativeStateInput(source, value));
   }
 
   async emitNativeEvent(source) {
-    return this.#withStablePlayer((player, mode) => {
-      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
-        throw new Error("native event input requires semantic execution mode");
-      }
-      return player.emitNativeEvent(source);
-    });
+    return this.#withStablePlayer((player) => player.emitNativeEvent(source));
   }
 
   async restartPlayback() {
@@ -437,8 +280,15 @@ export class AuthoringExecutionClient {
   }
 
   async restart() {
-    return this.#withStablePlayer(async (player, mode) => {
+    if (this.#transition !== null) await this.#transition;
+    this.#requireStarted();
+    return this.#runTransition(async () => {
+      const player = this.#player;
+      const mode = this.#mode;
       const generation = this.#lifecycleGeneration;
+      // A replacement canvas can queue ResizeObserver delivery while its
+      // renderer is still being prepared. Resume observation only when ready.
+      this.#resizeObserver?.disconnect();
       try {
         const ready = await player.restart();
         this.#assertLifecycleCurrent(generation);
@@ -453,28 +303,15 @@ export class AuthoringExecutionClient {
         if (generation !== this.#lifecycleGeneration) {
           throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
         }
-        this.#adoptPlayerCanvas(player);
+        this.#canvas = player.canvas;
         throw error;
       }
     });
   }
 
-  async applyPatchBatch(patchBatchJson) {
-    return this.#withStablePlayer((player, mode) => {
-      if (mode !== AUTHORING_EXECUTION_LEGACY) {
-        throw new Error("patch batches are not supported by this execution mode");
-      }
-      return player.applyPatchBatch(patchBatchJson);
-    });
-  }
-
   resize(width, height, devicePixelRatio = 1) {
-    if (this.#player === null) {
-      if (this.#transition !== null) {
-        return;
-      }
-      this.#requireStarted();
-    }
+    if (this.#transition !== null) return;
+    this.#requireStarted();
     this.#player.resize(width, height, devicePixelRatio);
   }
 
@@ -499,43 +336,6 @@ export class AuthoringExecutionClient {
     this.#transportMode = null;
   }
 
-  async #startMode(mode, sceneJson, options, sceneSpecJson = null) {
-    const generation = this.#lifecycleGeneration;
-    const player = this.#preparedPlayer ?? this.#createPlayer();
-    const terminateCandidate = createIdempotentTerminator(player);
-    let published = false;
-    try {
-      const ready =
-        mode === AUTHORING_EXECUTION_RETAINED
-          ? await player.startRetainedCanonical(sceneSpecJson, options)
-          : await player.start(sceneJson, options);
-      this.#assertLifecycleCurrent(generation, terminateCandidate);
-      if (this.#preparedPlayer === player) {
-        this.#preparedPlayer = null;
-      }
-      this.#player = player;
-      published = true;
-      this.#mode = mode;
-      this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
-      return ready;
-    } catch (error) {
-      if (this.#preparedPlayer === player) {
-        this.#preparedPlayer = null;
-      }
-      if (!published || generation === this.#lifecycleGeneration) {
-        terminateCandidate();
-      }
-      if (generation === this.#lifecycleGeneration) {
-        this.#adoptPlayerCanvas(player);
-      }
-      if (generation !== this.#lifecycleGeneration) {
-        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
-      }
-      throw error;
-    }
-  }
-
   #createPlayer() {
     return new ExecutionWorkerClient(this.#canvas, {
       onError: this.#onError,
@@ -550,101 +350,6 @@ export class AuthoringExecutionClient {
     return this.#preparedPlayer === null
       ? DEFAULT_SHARED_SLOT_CAPACITY
       : this.#sharedSlotCapacity;
-  }
-
-  async #switchRetainedCanonical(sceneSpecJson) {
-    const generation = this.#lifecycleGeneration;
-    const player = this.#player;
-    try {
-      const ready = await player.switchToRetainedCanonical(sceneSpecJson, {
-        loopDurationSeconds: this.#loopDurationSeconds,
-      });
-      this.#assertLifecycleCurrent(generation);
-      this.#mode = AUTHORING_EXECUTION_RETAINED;
-      this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
-      const state = await player.state();
-      this.#assertLifecycleCurrent(generation);
-      return {
-        type: "result",
-        operation: "rebuild_retained_scene",
-        incremental: false,
-        rebuilt: true,
-        mode: this.#mode,
-        ready,
-        ...state,
-      };
-    } catch (error) {
-      if (generation !== this.#lifecycleGeneration) {
-        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
-      }
-      this.#adoptPlayerCanvas(player);
-      throw error;
-    }
-  }
-
-  async #rebuildRetainedCanonical(sceneSpecJson) {
-    const generation = this.#lifecycleGeneration;
-    const player = this.#player;
-    try {
-      const ready = await player.rebuildRetainedCanonical(sceneSpecJson, {
-        loopDurationSeconds: this.#loopDurationSeconds,
-      });
-      this.#assertLifecycleCurrent(generation);
-      this.#mode = AUTHORING_EXECUTION_RETAINED;
-      this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
-      const state = await player.state();
-      this.#assertLifecycleCurrent(generation);
-      return {
-        type: "result",
-        operation: "rebuild_retained_scene",
-        incremental: false,
-        rebuilt: true,
-        mode: this.#mode,
-        ready,
-        ...state,
-      };
-    } catch (error) {
-      if (generation !== this.#lifecycleGeneration) {
-        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
-      }
-      this.#adoptPlayerCanvas(player);
-      throw error;
-    }
-  }
-
-  async #switchLegacy(sceneJson, { callbacks, authoringClient }) {
-    const generation = this.#lifecycleGeneration;
-    const player = this.#player;
-    try {
-      const ready = await player.switchToLegacy(sceneJson, {
-        callbacks,
-        authoringClient,
-        loopDurationSeconds: this.#loopDurationSeconds,
-      });
-      this.#assertLifecycleCurrent(generation);
-      this.#mode = AUTHORING_EXECUTION_LEGACY;
-      this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
-      const state = await player.state();
-      this.#assertLifecycleCurrent(generation);
-      return {
-        type: "result",
-        operation: "rebuild_legacy_scene",
-        incremental: false,
-        rebuilt: true,
-        mode: this.#mode,
-        ready,
-        ...state,
-      };
-    } catch (error) {
-      if (generation !== this.#lifecycleGeneration) {
-        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
-      }
-      this.#adoptPlayerCanvas(player);
-      throw error;
-    }
   }
 
   async #runTransition(rebuild) {
@@ -706,7 +411,7 @@ export class AuthoringExecutionClient {
       return;
     }
     this.#resizeObserver = new ResizeObserver(() => {
-      if (this.#player !== null) {
+      if (this.#player !== null && this.#transition === null) {
         this.#resizeCurrentCanvas();
       }
     });
@@ -745,59 +450,6 @@ function createIdempotentTerminator(player) {
     terminated = true;
     player.terminate();
   };
-}
-
-function validateSceneJson(sceneJson) {
-  if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
-    throw new TypeError("scene must be non-empty JSON text");
-  }
-}
-
-function validateSceneSpecJson(sceneSpecJson) {
-  if (typeof sceneSpecJson !== "string" || sceneSpecJson.trim() === "") {
-    throw new TypeError("canonical SceneSpec must be non-empty JSON text");
-  }
-  let sceneSpec;
-  try {
-    sceneSpec = JSON.parse(sceneSpecJson);
-  } catch (error) {
-    throw new TypeError(`canonical SceneSpec must be valid JSON: ${error}`);
-  }
-  if (!sceneSpec || typeof sceneSpec !== "object" || Array.isArray(sceneSpec)) {
-    throw new TypeError("canonical SceneSpec must be an object");
-  }
-  if (sceneSpec.version !== SCENE_SPEC_VERSION) {
-    throw new TypeError(`unsupported canonical SceneSpec version ${sceneSpec.version}`);
-  }
-  if (!Array.isArray(sceneSpec.objects) || !Array.isArray(sceneSpec.tracks)) {
-    throw new TypeError("canonical SceneSpec must contain object and track arrays");
-  }
-  const objectIds = new Set();
-  for (const object of sceneSpec.objects) {
-    if (
-      !object ||
-      typeof object !== "object" ||
-      Array.isArray(object) ||
-      !Number.isSafeInteger(object.id) ||
-      object.id < 0
-    ) {
-      throw new TypeError("canonical SceneSpec object has an invalid object ID");
-    }
-    if (objectIds.has(object.id)) {
-      throw new TypeError("canonical SceneSpec has duplicate object IDs");
-    }
-    objectIds.add(object.id);
-  }
-  if (
-    sceneSpec.camera_object !== null &&
-    sceneSpec.camera_object !== undefined &&
-    (!Number.isSafeInteger(sceneSpec.camera_object) ||
-      sceneSpec.camera_object < 0 ||
-      !objectIds.has(sceneSpec.camera_object))
-  ) {
-    throw new TypeError("canonical SceneSpec has an invalid camera object");
-  }
-  return sceneSpec;
 }
 
 function validateLoopDurationSeconds(loopDurationSeconds) {

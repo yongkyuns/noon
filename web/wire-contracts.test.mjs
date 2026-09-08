@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, NOON_IR_VERSION, parseAuthoringResult, validatePatchBatch, validateSceneDocument } from "./authoring-client.js";
+import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, NOON_IR_VERSION, parseAuthoringResult, validateSceneDocument } from "./authoring-client.js";
 
 async function fixture(path) {
   return JSON.parse(await readFile(new URL(`../compat/wire/${path}`, import.meta.url), "utf8"));
@@ -15,11 +15,9 @@ test("wire manifest and JS constants stay synchronized", async () => {
   assert.equal(manifest.authoring_protocol.version, AUTHORING_PROTOCOL_VERSION);
 });
 
-test("canonical scene, patch, and authoring result fixtures are accepted", async () => {
+test("scene export and authoring result fixtures are accepted", async () => {
   const scene = await fixture("v1/scene-empty.json");
   assert.equal(validateSceneDocument(scene), scene);
-  const patch = await fixture("v1/patch-empty.json");
-  assert.equal(validatePatchBatch(patch), patch);
   const result = await fixture("v1/authoring-result-empty-scene.json");
   const { scene_spec: sceneSpec, ...compatibilityResult } = result;
   assert.deepEqual(parseAuthoringResult(JSON.stringify(result)), {
@@ -31,8 +29,6 @@ test("canonical scene, patch, and authoring result fixtures are accepted", async
 test("future IR fixtures fail with explicit version diagnostics in JS", async () => {
   const scene = await fixture("invalid/future-scene.json");
   assert.throws(() => validateSceneDocument(scene), /Unsupported Noon IR version 2/);
-  const patch = await fixture("invalid/future-patch.json");
-  assert.throws(() => validatePatchBatch(patch), /Unsupported Noon IR version 2/);
 });
 
 test("authoring envelope fixture pins channel and protocol generation", async () => {

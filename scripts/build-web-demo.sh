@@ -41,7 +41,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/execution-worker-host-smoke.mjs
   node --check scripts/retained-execution-worker-smoke.mjs
   node --check scripts/authoring-execution-router-smoke.mjs
-  node --check scripts/authoring-execution-lifecycle-smoke.mjs
   node --check scripts/browser-smoke.mjs
   node --check scripts/browser-backend-visual-parity.mjs
   node --check scripts/browser-visual-parity-lib.mjs
@@ -82,6 +81,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/manim-reference-classification-lock.test.mjs
   node --test scripts/pr-risk-classifier.test.mjs
   node --test scripts/retained-dynamic-stress-perf-lib.test.mjs
+  node --test scripts/perf-corpus-budget.test.mjs
+  node --test scripts/perf-compare.test.mjs
   node --test scripts/retained-typst-workflow-policy.test.mjs
 
   for test_file in web/*.test.mjs; do

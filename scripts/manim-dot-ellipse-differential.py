@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Focused #76 fixtures using the shared Manim differential normalizers/comparator."""
+"""Compare shared Rust Dot/Ellipse semantics using the Manim differential helpers."""
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,11 +20,17 @@ base = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = base
 spec.loader.exec_module(base)
 
-import _manim_phase_b  # noqa: E402,F401 - match browser compatibility stack
-import _manim_geometry  # noqa: E402,F401 - installs Dot/Ellipse public surface
-
-noon = base.noon
 manim = base.manim
+
+
+def noon_observations():
+    subprocess.run(
+        ["cargo", "build", "--quiet", "--workspace", "--all-features", "--example", "manim_dot_ellipse_oracle"],
+        cwd=ROOT, check=True,
+    )
+    binary = ROOT / os.environ.get("CARGO_TARGET_DIR", "target") / "debug/examples/manim_dot_ellipse_oracle"
+    result = subprocess.run([str(binary)], cwd=ROOT, check=True, capture_output=True, text=True)
+    return json.loads(result.stdout)
 
 
 def dot_probe(module):
@@ -46,10 +55,16 @@ def ellipse_probe(module):
     }
 
 
+if manim.__version__ != base.PINNED_MANIM_VERSION:
+    raise SystemExit(
+        f"expected ManimCE {base.PINNED_MANIM_VERSION}, got {manim.__version__}"
+    )
+
+noon = noon_observations()
 fixtures = [
-    base.Fixture("dot_geometry", lambda: dot_probe(noon), lambda: dot_probe(manim)),
+    base.Fixture("dot_geometry", lambda: noon["dot_geometry"], lambda: dot_probe(manim)),
     base.Fixture(
-        "ellipse_geometry", lambda: ellipse_probe(noon), lambda: ellipse_probe(manim)
+        "ellipse_geometry", lambda: noon["ellipse_geometry"], lambda: ellipse_probe(manim)
     ),
 ]
 
