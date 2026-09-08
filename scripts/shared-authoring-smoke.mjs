@@ -1558,6 +1558,52 @@ result = scene
     await stopSampledSource(page);
   }
 
+  const selectedAlignmentSource = `from noon import *
+class SelectedAlignment(Scene):
+    def construct(self):
+        first = Square(1).set_fill(BLUE, opacity=1)
+        second = Square(1).shift(2 * RIGHT)
+        nested = VGroup(second)
+        family = VGroup(first, nested)
+        target = VGroup(Square(2).shift(6 * RIGHT))
+        def reject_python_bounds(*args, **kwargs):
+            raise AssertionError("selected placement evaluated Python critical points")
+        for value in (first, second, nested, family, target, target[0]):
+            value.get_critical_point = reject_python_bounds
+        family.next_to(target, index_of_submobject_to_align=0,
+                       submobject_to_align=second, buff=0.25)
+        assert abs(first.get_center().x - 5.75) < 1e-6
+        assert abs(second.get_center().x - 7.75) < 1e-6
+        self.add(first, second, target)
+        self.wait(0.1)
+        family.next_to(ORIGIN, index_of_submobject_to_align=-1, buff=0.25)
+        assert abs(first.get_center().x + 1.25) < 1e-6
+        assert abs(second.get_center().x - 0.75) < 1e-6
+        try:
+            family.next_to(ORIGIN, index_of_submobject_to_align=-3)
+        except IndexError:
+            pass
+        else:
+            raise AssertionError("invalid family index was accepted")
+        assert abs(first.get_center().x + 1.25) < 1e-6
+        first.next_to(2 * RIGHT, submobject_to_align=second, buff=0.25)
+        assert abs(first.get_center().x - 0.75) < 1e-6
+        assert abs(second.get_center().x - 0.75) < 1e-6
+        self.wait(0.1)
+`;
+  await startSampledSource(page, selectedAlignmentSource, "scene-selected-alignment");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(0.2), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 0.2);
+    assert.equal(result.metrics.objectCount, 3);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const familyTransformIndicateSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_family_transform_indicate.py"), "utf8",
   );

@@ -47,9 +47,11 @@ impl LiveContinuation for FamilyArrangement {
                     (1.0, 0.0),
                 )
                 .map_err(|e| e.to_string())?;
-                live.next_family_to(
-                    &self.nested,
+                let source = crate::LayoutAnchor::from(&self.nested);
+                live.next_layout_to_aligned(
+                    &source,
                     crate::LiveLayoutTarget::Point(0.0, 0.0),
+                    &source.clone().member(-1),
                     crate::semantic_mobject::ManimNextToArgs {
                         direction: (0.0, 2.0),
                         buff: 0.25,

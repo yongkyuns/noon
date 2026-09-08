@@ -12,6 +12,7 @@ pub enum LiveLayoutTarget<'a> {
     Point(f64, f64),
     Mobject(&'a Mobject),
     Family(&'a MobjectFamily),
+    Anchor(&'a crate::LayoutAnchor),
 }
 
 impl LiveSession<'_> {
@@ -108,6 +109,57 @@ impl LiveSession<'_> {
         self.place_family(family, target, RelativePlacement::Align(axis))
     }
 
+    fn anchor_layout_members(
+        &self,
+        anchor: &crate::LayoutAnchor,
+    ) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
+        if !Rc::ptr_eq(self.store, anchor.store()) {
+            return Err(LiveSessionError::Mobject(
+                "layout anchors belong to different authoring stores".into(),
+            ));
+        }
+        self.session.require_published_store(&self.store.borrow())?;
+        let node = anchor.resolve().map_err(LiveSessionError::Mobject)?;
+        if matches!(
+            self.store.borrow().node(node).map(|n| n.kind()),
+            Some(noon_core::SemanticNodeKind::Family)
+        ) {
+            let family = MobjectFamily::from_node(Rc::clone(self.store), node)
+                .map_err(LiveSessionError::Mobject)?;
+            self.family_layout_members(&family)
+        } else {
+            let object = Mobject::from_node(Rc::clone(self.store), node)
+                .map_err(LiveSessionError::Mobject)?;
+            let bounds = self.family_member_bounds(&object)?;
+            let bounds = match bounds {
+                Some(bounds) => Some(bounds),
+                None => {
+                    let (x, y) = if self.session.semantic_object_is_reachable(node) {
+                        self.effective_layout(&object)?.center
+                    } else {
+                        object.center().map_err(LiveSessionError::Mobject)?
+                    };
+                    Some(Bounds2D64::point(x, y))
+                }
+            };
+            Ok((vec![node], bounds))
+        }
+    }
+
+    /// Place an entire object/family from selected effective bounds. All anchor
+    /// resolution and driver validation precede one local mutation transaction.
+    pub fn next_layout_to_aligned(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: LiveLayoutTarget<'_>,
+        aligner: &crate::LayoutAnchor,
+        args: ManimNextToArgs,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let (leaves, _) = self.anchor_layout_members(source)?;
+        let (_, bounds) = self.anchor_layout_members(aligner)?;
+        self.place_layout_members(leaves, bounds, target, RelativePlacement::Next(args))
+    }
+
     fn place_family(
         &mut self,
         family: &MobjectFamily,
@@ -115,6 +167,16 @@ impl LiveSession<'_> {
         placement: RelativePlacement,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         let (leaves, bounds) = self.family_layout_members(family)?;
+        self.place_layout_members(leaves, bounds, target, placement)
+    }
+
+    fn place_layout_members(
+        &mut self,
+        leaves: Vec<SemanticNodeId>,
+        bounds: Option<Bounds2D64>,
+        target: LiveLayoutTarget<'_>,
+        placement: RelativePlacement,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         let delta = placement
             .delta(bounds, |x, y| match target {
                 LiveLayoutTarget::Point(px, py) => {
@@ -134,6 +196,10 @@ impl LiveSession<'_> {
                         None => object.center(),
                     }
                 }
+                LiveLayoutTarget::Anchor(anchor) => self
+                    .anchor_layout_members(anchor)
+                    .map(|(_, bounds)| bounds_critical_point(bounds, x, y))
+                    .map_err(|e| e.to_string()),
                 LiveLayoutTarget::Family(family) => self
                     .family_layout_members(family)
                     .map(|(_, bounds)| bounds_critical_point(bounds, x, y))

@@ -30,8 +30,11 @@ pub fn session() -> Result<ExecutionSession, String> {
     family.remove_many(&[(&first).into(), (&nested).into()])?;
     family.add_many(&[(&first).into(), (&nested).into()])?;
     let target = scene.family(&[(&anchor).into()])?;
-    family.layout()?.next_to(
-        Target::Mobject(&anchor),
+    let source = crate::LayoutAnchor::from(&family);
+    let target_member = crate::LayoutAnchor::from(&target).member(0);
+    source.next_to_aligned(
+        Target::Anchor(&target_member),
+        &source.clone().member(0),
         ManimNextToArgs {
             direction: (2.0, 0.0),
             buff: 0.25,

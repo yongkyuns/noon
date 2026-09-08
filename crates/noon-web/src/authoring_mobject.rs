@@ -196,6 +196,71 @@ mod wasm {
         id: SemanticNodeId,
     }
 
+    /// Inert typed layout intent; identity and member selection stay in Rust.
+    #[wasm_bindgen]
+    pub struct WasmLayoutAnchor {
+        pub(crate) anchor: noon::LayoutAnchor,
+    }
+
+    #[wasm_bindgen]
+    impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = nextTo)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn next_to(
+            &self,
+            target: &WasmLayoutAnchor,
+            aligner: &WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .next_to_aligned(
+                    noon::FamilyLayoutTarget::Anchor(&target.anchor),
+                    &aligner.anchor,
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = nextToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn next_to_point(
+            &self,
+            x: f64,
+            y: f64,
+            aligner: &WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .next_to_aligned(
+                    noon::FamilyLayoutTarget::Point(x, y),
+                    &aligner.anchor,
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+    }
+
     /// Thin browser wrapper over the shared authored family observation.
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyLayout {
@@ -481,6 +546,17 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = layoutAnchor)]
+        pub fn layout_anchor(&self, index: Option<i32>) -> Result<WasmLayoutAnchor, JsValue> {
+            let anchor = noon::LayoutAnchor::from(&self.semantic_family()?);
+            Ok(WasmLayoutAnchor {
+                anchor: match index {
+                    Some(index) => anchor.member(index as isize),
+                    None => anchor,
+                },
+            })
+        }
+
         /// Read an immutable layout observation from the shared semantic family.
         pub fn layout(&self) -> Result<WasmAuthoringFamilyLayout, JsValue> {
             Ok(WasmAuthoringFamilyLayout {
@@ -678,6 +754,17 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = layoutAnchor)]
+        pub fn layout_anchor(&self, index: Option<i32>) -> Result<WasmLayoutAnchor, JsValue> {
+            let anchor = noon::LayoutAnchor::from(&self.handle);
+            Ok(WasmLayoutAnchor {
+                anchor: match index {
+                    Some(index) => anchor.member(index as isize),
+                    None => anchor,
+                },
+            })
+        }
+
         #[wasm_bindgen(js_name = manimLineEndpoints)]
         pub fn manim_line_endpoints(&self) -> Result<WasmManimLineEndpoints, JsValue> {
             self.handle

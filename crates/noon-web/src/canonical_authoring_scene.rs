@@ -4914,6 +4914,71 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveNextLayoutTo)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_layout_to(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            aligner: &crate::authoring_mobject::WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_layout_to_aligned(
+                    &source.anchor,
+                    noon::LiveLayoutTarget::Anchor(&target.anchor),
+                    &aligner.anchor,
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextLayoutToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_layout_to_point(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            x: f64,
+            y: f64,
+            aligner: &crate::authoring_mobject::WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_layout_to_aligned(
+                    &source.anchor,
+                    noon::LiveLayoutTarget::Point(x, y),
+                    &aligner.anchor,
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveNextFamilyToMobject)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_next_family_to_mobject(

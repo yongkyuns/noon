@@ -1357,6 +1357,63 @@ def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
     return _base._critical(value._current_raw(), direction)
 
 
+def _layout_anchor(value, index=None):
+    if isinstance(value, _compat.Group):
+        if any(_handle_for(leaf) is None for leaf in _compat._leaf_mobjects(value)):
+            return None
+        handle = getattr(value, "_semantic_family_handle", None)
+    else:
+        handle = _handle_for(value)
+    if handle is None or not hasattr(handle, "layoutAnchor"):
+        return None
+    if index is not None:
+        import operator
+        index = operator.index(index)
+        if not -(1 << 31) <= index < (1 << 31):
+            raise IndexError("alignment submobject index is unavailable")
+    return handle.layoutAnchor(index)
+
+
+def _selected_next_to(self, target, direction, buff, aligned_edge,
+                      submobject_to_align, index, coor_mask):
+    """Pass selection intent; Rust resolves members, observes bounds and places."""
+    if getattr(getattr(self, "_scene", None), "_legacy_geometry_materialized", False):
+        return False
+    source = _layout_anchor(self)
+    aligner = (_layout_anchor(submobject_to_align) if submobject_to_align is not None
+               else _layout_anchor(self, index))
+    if source is None or aligner is None:
+        return False
+    target_anchor = None
+    if isinstance(target, (_base.Mobject, _compat.Group)):
+        target_anchor = _layout_anchor(target, index)
+        if target_anchor is None:
+            return False
+    vector = _base._as_vec2(direction)
+    edge = _base._as_vec2(aligned_edge)
+    mask = _alignment_mask2(coor_mask)
+    arguments = (vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
+    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+               else _live_mutation_context(self))
+    try:
+        if target_anchor is not None:
+            if context is None:
+                source.nextTo(target_anchor, aligner, *arguments)
+            else:
+                context.liveNextLayoutTo(source, target_anchor, aligner, *arguments)
+        else:
+            point = _base._as_vec2(target)
+            if context is None:
+                source.nextToPoint(point.x, point.y, aligner, *arguments)
+            else:
+                context.liveNextLayoutToPoint(source, point.x, point.y, aligner, *arguments)
+    except Exception as error:
+        if "alignment submobject index" in str(error):
+            raise IndexError(str(error)) from None
+        raise ValueError(str(error)) from None
+    return True
+
+
 def _next_to(
     self: _base.Mobject,
     mobject_or_point: object,
@@ -1367,6 +1424,10 @@ def _next_to(
     index_of_submobject_to_align: int | None = None,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _base.Mobject:
+    if (submobject_to_align is not None or index_of_submobject_to_align is not None):
+        if _selected_next_to(self, mobject_or_point, direction, buff, aligned_edge,
+                             submobject_to_align, index_of_submobject_to_align, coor_mask):
+            return self
     handle = _mutation_handle_for(self)
     if (
         handle is None
@@ -1791,8 +1852,11 @@ def _group_next_to(
     index_of_submobject_to_align: int | None = None,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _compat.Group:
-    # Selecting a specific wrapper/member remains explicit #61 debt until shared
-    # family-member handles expose that selection. Do not silently rederive it here.
+    if (submobject_to_align is not None or index_of_submobject_to_align is not None):
+        if _selected_next_to(self, mobject_or_point, direction, buff, aligned_edge,
+                             submobject_to_align, index_of_submobject_to_align, coor_mask):
+            return self
+    # Explicit codec/fixture wrappers without shared anchors retain #959 fallback.
     if submobject_to_align is not None or index_of_submobject_to_align is not None:
         return _ORIGINAL_GROUP_NEXT_TO(
             self,
