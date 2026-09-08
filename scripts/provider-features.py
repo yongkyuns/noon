@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Qualify one isolated provider configuration and record reproducible build costs.
+"""Qualify one isolated provider configuration; optionally measure cold/warm costs.
 
-A cold build has a fresh target directory; registry/source downloads are prefetched.
-Warm means an identical no-edit rebuild. Both use the same geometry executable,
-Cargo's dev profile with debug info disabled, and no compiler-cache wrapper.
+Correctness runs preserve compiler wrappers and reuse the caller's target directory.
+Explicit --measure runs use fresh compiler output and disable wrappers/incremental
+compilation. Downloads are prefetched; warm means an identical no-edit rebuild.
 """
 from __future__ import annotations
 
@@ -78,6 +78,20 @@ def check_graph(config: str, text: str) -> set[str]:
     return names
 
 
+def build_env(output: Path, *, measure: bool, base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Keep the ordinary cached development path separate from measurements."""
+    env = dict(os.environ if base_env is None else base_env)
+    env.setdefault("CARGO_TARGET_DIR", str(ROOT / "target/provider-consumer"))
+    env.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
+    env.setdefault("CARGO_PROFILE_TEST_DEBUG", "0")
+    if measure:
+        env.pop("RUSTC_WRAPPER", None)
+        env.pop("RUSTC_WORKSPACE_WRAPPER", None)
+        env.update(CARGO_TARGET_DIR=str(output / "target"), CARGO_INCREMENTAL="0",
+                   CARGO_PROFILE_DEV_DEBUG="0", CARGO_PROFILE_TEST_DEBUG="0")
+    return env
+
+
 def run(command: list[str], *, env: dict[str, str], output: Path | None = None) -> float:
     print("+", " ".join(command), flush=True)
     start = time.perf_counter()
@@ -94,15 +108,16 @@ def main() -> None:
     parser.add_argument("--config", choices=CONFIGS, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--baseline", type=Path, help="Compare identical geometry against an unmodified checkout (no provider assertions/tests)")
+    parser.add_argument("--measure", action="store_true", help="Explicit cold/warm measurement with a fresh target and no compiler wrapper")
+    parser.add_argument("--baseline", type=Path, help="With --measure, compare geometry against an unmodified checkout (no provider assertions/tests)")
     args = parser.parse_args()
+    if args.baseline and (not args.measure or args.config != "minimal"):
+        parser.error("--baseline requires --measure and --config minimal")
     output = args.output.resolve()
     # Do not erase user data or accidentally call a cached build cold.
     output.mkdir(parents=True, exist_ok=False)
     manifest = ROOT / "fixtures/provider-consumer/Cargo.toml"
     if args.baseline:
-        if args.config != "minimal":
-            parser.error("--baseline is only valid for --config minimal")
         baseline = args.baseline.resolve()
         if not (baseline / "crates/noon/Cargo.toml").is_file():
             parser.error("baseline must be a Noon checkout")
@@ -117,11 +132,7 @@ def main() -> None:
             '[profile.dev]\ndebug=0\n'
         )
         manifest = fixture / "Cargo.toml"
-    env = dict(os.environ)
-    env.pop("RUSTC_WRAPPER", None)
-    env.pop("RUSTC_WORKSPACE_WRAPPER", None)
-    env.update(CARGO_TARGET_DIR=str(output / "target"), CARGO_INCREMENTAL="0",
-               CARGO_PROFILE_DEV_DEBUG="0", CARGO_PROFILE_TEST_DEBUG="0")
+    env = build_env(output, measure=args.measure)
     common = ["--manifest-path", str(manifest), "--target", args.target, "--no-default-features"]
     if CONFIGS[args.config]:
         common += ["--features", CONFIGS[args.config]]
@@ -137,21 +148,29 @@ def main() -> None:
     else:
         packages = {line.split()[0] for line in graph.splitlines() if line.strip()}
     command = ["cargo", "build", *common, "--bin", "noon-provider-consumer"]
-    cold = run(command, env=env)
-    warm = run(command, env=env)
+    elapsed = run(command, env=env)
+    warm = run(command, env=env) if args.measure else None
     suffix = ".wasm" if args.target.startswith("wasm32") else (".exe" if "windows" in args.target else "")
-    binary = output / "target" / args.target / "debug" / ("noon-provider-consumer" + suffix)
+    target_dir = Path(env["CARGO_TARGET_DIR"])
+    if not target_dir.is_absolute():
+        target_dir = ROOT / target_dir
+    binary = target_dir / args.target / "debug" / ("noon-provider-consumer" + suffix)
     data = binary.read_bytes()
     metrics = {
         "config": args.config, "baseline": bool(args.baseline), "target": args.target,
         "host": platform.platform(), "cpu_count": os.cpu_count(),
-        "cold_seconds": round(cold, 3), "warm_seconds": round(warm, 3),
+        "mode": "measurement" if args.measure else "correctness",
         "binary_bytes": len(data), "gzip_bytes": len(gzip.compress(data, mtime=0)),
-        "active_packages": len(packages), "profile": "dev, debug=0, incremental=0, no compiler wrapper",
+        "active_packages": len(packages),
+        "profile": "dev, debug=0, incremental=0, no compiler wrapper" if args.measure else "dev, caller compiler cache and target preserved",
         "command": command,
     }
-    (output / "measurements.json").write_text(json.dumps(metrics, indent=2) + "\n")
-    shutil.copyfile(manifest.parent / "Cargo.lock", output / "Cargo.lock")
+    if args.measure:
+        metrics.update(cold_seconds=round(elapsed, 3), warm_seconds=round(warm, 3))
+    else:
+        metrics["build_seconds"] = round(elapsed, 3)
+    report = "measurements.json" if args.measure else "qualification.json"
+    (output / report).write_text(json.dumps(metrics, indent=2) + "\n")
     print(json.dumps(metrics, indent=2), flush=True)
     if not args.target.startswith("wasm32"):
         run([str(binary)], env=env)

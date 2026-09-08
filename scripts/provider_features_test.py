@@ -65,5 +65,33 @@ class GraphTests(unittest.TestCase):
         module.check_graph("minimal", tree() + "\nnoon v0.1.0 (/some/path) features= (*)\nserde v1.0.0 features=derive,std")
 
 
+class BuildModeTests(unittest.TestCase):
+    def test_correctness_preserves_caller_cache_and_target(self):
+        original = {"RUSTC_WRAPPER": "sccache", "RUSTC_WORKSPACE_WRAPPER": "custom",
+                    "CARGO_TARGET_DIR": "/cached/target", "CARGO_INCREMENTAL": "1"}
+        env = module.build_env(Path("/evidence"), measure=False, base_env=original)
+        for key, value in original.items():
+            self.assertEqual(env[key], value)
+        self.assertNotIn("CARGO_PROFILE_DEV_DEBUG", original)
+
+    def test_measurement_is_cold_even_with_a_cached_caller(self):
+        original = {"RUSTC_WRAPPER": "sccache", "RUSTC_WORKSPACE_WRAPPER": "custom",
+                    "CARGO_TARGET_DIR": "/cached/target", "CARGO_INCREMENTAL": "1",
+                    "CARGO_PROFILE_DEV_DEBUG": "2"}
+        env = module.build_env(Path("/evidence"), measure=True, base_env=original)
+        self.assertNotIn("RUSTC_WRAPPER", env)
+        self.assertNotIn("RUSTC_WORKSPACE_WRAPPER", env)
+        self.assertEqual(env["CARGO_TARGET_DIR"], "/evidence/target")
+        self.assertEqual(env["CARGO_INCREMENTAL"], "0")
+        self.assertEqual(env["CARGO_PROFILE_DEV_DEBUG"], "0")
+        self.assertEqual(original["CARGO_TARGET_DIR"], "/cached/target")
+
+    def test_correctness_default_target_is_reusable_across_reports(self):
+        first = module.build_env(Path("/first-report"), measure=False, base_env={})
+        second = module.build_env(Path("/second-report"), measure=False, base_env={})
+        self.assertEqual(first["CARGO_TARGET_DIR"], second["CARGO_TARGET_DIR"])
+        self.assertNotIn("CARGO_INCREMENTAL", first)
+
+
 if __name__ == "__main__":
     unittest.main()

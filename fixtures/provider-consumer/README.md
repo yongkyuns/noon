@@ -28,8 +28,11 @@ python3 scripts/provider-features.py --config native-text \
   --target wasm32-unknown-unknown --output /tmp/noon-native-text-wasm
 ```
 
-Use a **new output directory** for every invocation. The runner refuses an
-existing directory instead of quietly reusing compiler output. Native provider
+Use a **new evidence output directory** for every invocation. Ordinary correctness
+runs preserve compiler wrappers and reuse `CARGO_TARGET_DIR` (defaulting to
+`target/provider-consumer`). They do not label cached builds as cold measurements.
+Only explicit `--measure` runs create a fresh target under the evidence directory
+and disable compiler wrappers/incremental compilation. Native provider
 tests use a host-supplied DejaVu Sans font; install `fonts-dejavu-core` on Debian
 or Ubuntu, or supply the corresponding file explicitly. Fonts are test input,
 not dependencies of the external consumer. WASM tests are compiled with
@@ -50,7 +53,8 @@ not text search over the lockfile or `cargo metadata`'s package inventory.
 
 ## Measurement interpretation
 
-The measured command is a dev-profile build with debug info and incremental
+Cold/warm measurement is opt-in with `--measure`; it is not part of routine PR
+correctness. The measured command is a dev-profile build with debug info and incremental
 compilation disabled, a fresh target directory, and no compiler-cache wrapper.
 Registry downloads are prefetched and excluded from build timing. Cold means no
 compiled output; warm means the identical no-edit build. Artifact bytes and gzip
@@ -65,14 +69,18 @@ creates a separate baseline manifest with defaults disabled and copies only the
 unchanged geometry program:
 
 ```sh
-python3 scripts/provider-features.py --config minimal \
+python3 scripts/provider-features.py --measure --config minimal \
   --baseline /path/to/base-checkout --target x86_64-unknown-linux-gnu \
   --output /tmp/noon-baseline-native
 ```
 
-CI runs five small consumer configurations on two compilation targets plus two
-base measurements for relevant PRs. It does **not** multiply the full product
-suite by those combinations. The extra maintenance is the feature table, graph
-expectations, provider-input tests and these ten isolated compile cells. Existing
-all-feature Rust and normal browser/native product checks remain in place. The
-PR's artifacts contain measurements; no fixed speed/size promise is encoded here.
+Relevant PRs run five small consumer configurations on two compilation targets
+using the repository's pinned, read-only shared `sccache`, without forcing fresh
+compiler output. The full product suite is **not** multiplied by those combinations.
+Manual `workflow_dispatch` with `measure=true` runs the cold/warm matrix plus two
+baseline builds against `baseline_ref`; measurement reporting is coordinated with
+#1265 rather than charged to every edit. The extra maintenance is the feature
+table, graph/cache-mode expectations, provider-input tests and ten isolated compile
+cells. Existing all-feature Rust and normal browser/native checks remain in place.
+Artifacts distinguish `qualification.json` from opt-in `measurements.json`; no
+fixed speed/size promise is encoded here.
