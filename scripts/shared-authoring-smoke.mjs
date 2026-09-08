@@ -351,6 +351,7 @@ async function startSampledSource(page, source, canvasId, width = 640, height = 
       async onSemanticContinuation(registration) {
         await execution.startSemanticExecution(registration.semanticExecution, {
           authoringClient: harness.authoring,
+          loopDurationSeconds: Math.max(1, registration.duration),
           transportMode: "transferable",
           pacing: "external_samples",
         });
@@ -1246,6 +1247,26 @@ try {
     assert.equal(duration, 3.5);
     assert.ok(cyan(renderedWorldPixel(await canvas.screenshot(), 2, 2)),
       "shared Rotate lost its signed quarter-turn endpoint");
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const rotatingDefaultsSource = await readFile(
+    path.join(repoRoot, "web/python/examples/manim_parity_rotating_centered.py"), "utf8",
+  );
+  await startSampledSource(page, rotatingDefaultsSource, "scene-shared-rotating-defaults", 960, 540);
+  try {
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.625));
+    const canvas = page.locator("#scene-shared-rotating-defaults");
+    const diagonal = renderedWorldPixel(await canvas.screenshot(), 0.95, 0);
+    assert.ok(diagonal.blue > diagonal.red + 30, "default Rotating did not follow its linear full-turn path");
+    const duration = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(5), authored]);
+      return completed.duration;
+    });
+    assert.equal(duration, 5);
   } finally {
     await stopSampledSource(page);
   }
