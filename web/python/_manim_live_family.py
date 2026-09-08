@@ -67,7 +67,7 @@ def _publish_live_family(
 
 
 def _group_init(self: _compat.Group, *mobjects: object) -> None:
-    context = _live_constructor_context("family")
+    context = _handles._live_constructor_context("family")
     if context is not None:
         _publish_live_family(self, mobjects, context)
         return
@@ -90,7 +90,7 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
             self._semantic_family_handle = family_handle
 
     if getattr(clone, "_semantic_family_handle", None) is None:
-        context = _live_constructor_context("family")
+        context = _handles._live_constructor_context("family")
         if context is not None:
             _publish_live_family(clone, tuple(clone.submobjects), context)
         else:
