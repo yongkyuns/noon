@@ -7,7 +7,7 @@ when the segment has completed and its player lease was returned.
 """
 
 import _manim_updaters
-from noon import Circle, Color, Scene, Transform, VGroup, linear
+from noon import Circle, Color, RIGHT, Scene, Square, Transform, VGroup, linear
 
 
 class OrdinaryAffineCallbackContinuation(Scene):
@@ -15,6 +15,7 @@ class OrdinaryAffineCallbackContinuation(Scene):
         circle = Circle(radius=0.4).set_fill(Color(0.0, 0.4, 1.0), opacity=1.0)
         self.add(circle)
         family = VGroup(circle)
+        probe = Square(0.2)  # Detached before a live context is attached to wrappers.
         phase_counts: dict[float, int] = {}
 
         def lift(mobject, _dt):
@@ -56,3 +57,15 @@ class OrdinaryAffineCallbackContinuation(Scene):
         assert family.get_center() == (2.0, 1.0)
         assert abs(family.width - 0.8) < 1e-6
         assert abs(family.height - 0.8) < 1e-6
+        # A plain live placement can reference the callback's effective bounds.
+        probe.next_to(circle, RIGHT, buff=0.1)
+        assert abs(probe.get_center().x - 2.6) < 1e-6
+        assert abs(probe.get_center().y - 1.0) < 1e-6
+        before = circle.get_center()
+        try:
+            circle.next_to(probe, RIGHT, buff=0.1)
+        except ValueError as error:
+            assert "active effective affine driver" in str(error)
+        else:
+            raise AssertionError("placement bypassed the active affine driver")
+        assert circle.get_center() == before

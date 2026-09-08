@@ -1335,7 +1335,7 @@ async function directFamilyArrangementProof(expectedBackend) {
     await settleDirectPublication(renderer, 0);
     for (const [wallTime, first, second] of [
       [0, [-1, 0], [1, 0]],
-      [500, [-1, 0.7], [1, 0.7]],
+      [500, [0.35, 0.7], [1, 0.7]],
     ]) {
       renderer.advanceDirectRealtime(wallTime);
       await settleDirectPublication(renderer, wallTime);

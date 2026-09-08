@@ -9,6 +9,7 @@ use crate::{
 pub struct FamilyArrangement {
     family: MobjectFamily,
     first: Mobject,
+    second: Mobject,
     nested: MobjectFamily,
     stage: u8,
 }
@@ -71,6 +72,27 @@ impl LiveContinuation for FamilyArrangement {
                     (0.0, 1.0),
                 )
                 .map_err(|e| e.to_string())?;
+                let first = crate::LayoutAnchor::from(&self.first);
+                live.next_layout_to_aligned(
+                    &first,
+                    crate::LiveLayoutTarget::Mobject(&self.second),
+                    &first,
+                    crate::semantic_mobject::ManimNextToArgs {
+                        direction: (-1.0, 0.0),
+                        buff: 0.25,
+                        aligned_edge: (0.0, 0.0),
+                        mask: (1.0, 1.0),
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+                let placed = live
+                    .effective_layout(&self.first)
+                    .map_err(|e| e.to_string())?;
+                if (placed.center.0 - 0.35).abs() > 1e-6 {
+                    return Err(
+                        "plain live object placement missed its shared target bounds".into(),
+                    );
+                }
                 self.stage = 2;
                 live.wait_segment(0.5)
                     .map(ContinuationStep::Await)
@@ -112,6 +134,7 @@ pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
         .into_live_program(FamilyArrangement {
             family,
             first,
+            second,
             nested,
             stage: 0,
         })

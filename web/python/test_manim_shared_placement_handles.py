@@ -59,12 +59,17 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
                     self.calls.append("manimMoveToPoint")
                     self.shift((px - self.criticalX(ex, ey)) * mx,
                                (py - self.criticalY(ex, ey)) * my)
-                def manimNextToHandle(self, other, dx, dy, buff, ex, ey, mx, my):
-                    self.calls.append("manimNextToHandle")
+                def layoutAnchor(self, index=None):
+                    assert index is None
+                    return self
+                def nextTo(self, other, aligner, dx, dy, buff, ex, ey, mx, my):
+                    assert aligner is self
+                    self.calls.append("nextTo")
                     self.shift((other.criticalX(ex + dx, ey + dy) - self.criticalX(ex - dx, ey - dy) + dx * buff) * mx,
                                (other.criticalY(ex + dx, ey + dy) - self.criticalY(ex - dx, ey - dy) + dy * buff) * my)
-                def manimNextToPoint(self, px, py, dx, dy, buff, ex, ey, mx, my):
-                    self.calls.append("manimNextToPoint")
+                def nextToPoint(self, px, py, aligner, dx, dy, buff, ex, ey, mx, my):
+                    assert aligner is self
+                    self.calls.append("nextToPoint")
                     self.shift((px - self.criticalX(ex - dx, ey - dy) + dx * buff) * mx,
                                (py - self.criticalY(ex - dx, ey - dy) + dy * buff) * my)
                 def alignToHandle(self, other, dx, dy):
@@ -93,7 +98,7 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
 
             reference = Square(2.0)
             diagonal = Square(2.0).next_to(reference, UR, buff=0.25)
-            assert diagonal._semantic_handle.calls[-1] == "manimNextToHandle"
+            assert diagonal._semantic_handle.calls[-1] == "nextTo"
             assert abs(diagonal.get_center().x - 2.25) < 1e-12
             assert abs(diagonal.get_center().y - 2.25) < 1e-12
 

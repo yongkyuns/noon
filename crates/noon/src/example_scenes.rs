@@ -1091,6 +1091,44 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 assert!((layout.center.1 - 1.0).abs() < 1e-6);
                 assert!((layout.width - 0.8).abs() < 1e-6);
                 assert!((layout.height - 0.8).abs() < 1e-6);
+                let probe = live
+                    .create_manim_geometry(crate::ManimGeometryOptions::square(0.2)?)
+                    .map_err(|error| error.to_string())?;
+                let source = crate::LayoutAnchor::from(&probe);
+                let args = crate::semantic_mobject::ManimNextToArgs {
+                    direction: (1.0, 0.0),
+                    buff: 0.1,
+                    aligned_edge: (0.0, 0.0),
+                    mask: (1.0, 1.0),
+                };
+                live.next_layout_to_aligned(
+                    &source,
+                    crate::LiveLayoutTarget::Mobject(&self.circle),
+                    &source,
+                    args,
+                )
+                .map_err(|error| error.to_string())?;
+                let center = probe.center()?;
+                assert!((center.0 - 2.6).abs() < 1e-6);
+                assert!((center.1 - 1.0).abs() < 1e-6);
+                let before = live
+                    .effective(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                let source = crate::LayoutAnchor::from(&self.circle);
+                let error = live
+                    .next_layout_to_aligned(
+                        &source,
+                        crate::LiveLayoutTarget::Mobject(&probe),
+                        &source,
+                        args,
+                    )
+                    .unwrap_err();
+                assert!(error.to_string().contains("active effective affine driver"));
+                assert_eq!(
+                    live.effective(&self.circle)
+                        .map_err(|error| error.to_string())?,
+                    before
+                );
                 self.stage = 2;
                 Ok(crate::ContinuationStep::Finished)
             }

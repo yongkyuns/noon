@@ -136,7 +136,7 @@
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "LayoutAnchor::next_to_aligned"},
       "reason": "Typed selected-member placement resolves direct family indices, including negative indices, and target/source bounds in Rust. Authored placement and LiveSession::next_layout_to_aligned reuse the same relative-placement math and atomic local mutation vocabulary. Python passes explicit wrapper references and coerces arguments only; legacy/export query fallbacks remain separately inventoried.",
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_selected_next_to"}]
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_shared_next_to"}]
     },
     {
       "id": "mobject.align",
@@ -167,7 +167,7 @@
       "surface": "Deterministic Group/VGroup next_to/align_to without explicit submobject selection",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "RelativePlacement; FamilyLayout::next_to/align_to"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_next_to/_group_align_to"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_next_to/_group_align_to"}],
       "reason": "Rust resolves family/leaf/point critical points, Manim's unnormalized next_to direction and buffer, align_to axis masking, and the authoritative recursive leaf mutation order. Python only coerces host arguments and selects the target handle kind."
     },
     {
@@ -176,7 +176,7 @@
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "FamilyLayout/LayoutAnchor"},
       "reason": "Family observations, selected anchors and relative-placement math are shared Rust operations. Live placement reads effective bounds and uses the same local mutation transaction. Python passes wrapper references and coerces vector/index arguments; remaining explicit legacy snapshot fallback is separately inventoried.",
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_move_to/_group_next_to/_group_align_to"}]
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_move_to/_next_to/_group_align_to"}]
     },
     {
       "id": "mobject.become-replace",

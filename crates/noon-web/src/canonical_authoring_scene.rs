@@ -4877,39 +4877,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = liveNextFamilyToPoint)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_next_family_to_point(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            x: f64,
-            y: f64,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            edge_x: f64,
-            edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_next_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Point(x, y),
-                    noon::semantic_mobject::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
         #[wasm_bindgen(js_name = liveNextLayoutTo)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_next_layout_to(
@@ -4965,70 +4932,6 @@ mod wasm {
                     &source.anchor,
                     noon::LiveLayoutTarget::Point(x, y),
                     &aligner.anchor,
-                    noon::semantic_mobject::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveNextFamilyToMobject)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_next_family_to_mobject(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            target: &crate::WasmAuthoringMobjectHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            edge_x: f64,
-            edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_next_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
-                    noon::semantic_mobject::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveNextFamilyToFamily)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_next_family_to_family(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            target: &crate::WasmAuthoringFamilyHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            edge_x: f64,
-            edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-            let target = target.semantic_family()?;
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_next_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Family(&target),
                     noon::semantic_mobject::ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
@@ -6909,10 +6812,12 @@ mod tests {
                 (1.0, 1.0),
             )
             .unwrap();
+        let placement = noon::LayoutAnchor::from(&pair);
         player
-            .live_next_family_to(
-                &pair,
+            .live_next_layout_to_aligned(
+                &placement,
                 noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                &placement,
                 noon::semantic_mobject::ManimNextToArgs {
                     direction: (0.0, 0.0),
                     buff: 0.0,

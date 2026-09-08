@@ -723,7 +723,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_next_layout_to_aligned(
         &mut self,
         source: &noon::LayoutAnchor,
@@ -732,17 +732,6 @@ impl SemanticExecutionPlayer {
         args: noon::semantic_mobject::ManimNextToArgs,
     ) -> Result<(), String> {
         self.with_live_session(|live| live.next_layout_to_aligned(source, target, aligner, args))
-            .map(|_| ())
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_next_family_to(
-        &mut self,
-        family: &noon::MobjectFamily,
-        target: noon::LiveLayoutTarget<'_>,
-        args: noon::semantic_mobject::ManimNextToArgs,
-    ) -> Result<(), String> {
-        self.with_live_session(|live| live.next_family_to(family, target, args))
             .map(|_| ())
     }
 
