@@ -287,6 +287,8 @@ def _typed_manim_observation(
     value: object,
     handle_method: str,
     context_method: str,
+    *,
+    handle_property: bool = False,
 ):
     """Read one narrow Manim observation from its current Rust authority.
 
@@ -316,7 +318,8 @@ def _typed_manim_observation(
     handle = _handle_for(value)
     if handle is None:
         raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
-    return getattr(handle, handle_method)()
+    observation = getattr(handle, handle_method)
+    return observation if handle_property else observation()
 
 
 def _manim_line_endpoints_observation(value: object):
@@ -1367,19 +1370,40 @@ def _semantic_member_index(index):
     return index
 
 
+def _layout_reference_handle(value):
+    """Borrow typed identity for placement without granting raw geometry access."""
+    handle = getattr(value, "_semantic_handle", None)
+    if handle is None or not hasattr(handle, "layoutAnchor"):
+        return None
+    scene = getattr(value, "_scene", None)
+    if (not bool(getattr(value, "_semantic_handle_fresh", False))
+            or getattr(scene, "_legacy_geometry_materialized", False)):
+        return None
+    # Only legacy/fixture scenes can have geometry tracks outside the Rust store.
+    if (getattr(scene, "_canonical_authoring_context", None) is None
+            and _has_unmirrored_tracks(value)):
+        return None
+    from _manim_updaters import _canonical_phase_context
+    if _canonical_phase_context(value) is not None:
+        raise NotImplementedError("layout placement is unsupported during an active callback phase")
+    return handle
+
+
 def _layout_anchor(value, index=None):
     if isinstance(value, _compat.Group):
-        if any(_handle_for(leaf) is None for leaf in _compat._leaf_mobjects(value)):
-            return None
         handle = getattr(value, "_semantic_family_handle", None)
+        if handle is None or not hasattr(handle, "layoutAnchor"):
+            return None
+        if any(_layout_reference_handle(leaf) is None for leaf in _compat._leaf_mobjects(value)):
+            return None
     else:
-        handle = _handle_for(value)
-    if handle is None or not hasattr(handle, "layoutAnchor"):
+        handle = _layout_reference_handle(value)
+    if handle is None:
         return None
     return handle.layoutAnchor(_semantic_member_index(index))
 
 
-def _selected_next_to(self, target, direction, buff, aligned_edge,
+def _shared_next_to(self, target, direction, buff, aligned_edge,
                       submobject_to_align, index, coor_mask):
     """Pass selection intent; Rust resolves members, observes bounds and places."""
     if getattr(getattr(self, "_scene", None), "_legacy_geometry_materialized", False):
@@ -1399,7 +1423,7 @@ def _selected_next_to(self, target, direction, buff, aligned_edge,
     mask = _alignment_mask2(coor_mask)
     arguments = (vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
     context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
-               else _live_mutation_context(self))
+               else _live_mutation_context(self) or _live_constructor_context())
     try:
         if target_anchor is not None:
             if context is None:
@@ -1420,7 +1444,7 @@ def _selected_next_to(self, target, direction, buff, aligned_edge,
 
 
 def _next_to(
-    self: _base.Mobject,
+    self: _base.Mobject | _compat.Group,
     mobject_or_point: object,
     direction: object = _base.RIGHT,
     buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
@@ -1428,81 +1452,16 @@ def _next_to(
     submobject_to_align: object | None = None,
     index_of_submobject_to_align: int | None = None,
     coor_mask: object = (1.0, 1.0, 1.0),
-) -> _base.Mobject:
-    if (submobject_to_align is not None or index_of_submobject_to_align is not None):
-        if _selected_next_to(self, mobject_or_point, direction, buff, aligned_edge,
-                             submobject_to_align, index_of_submobject_to_align, coor_mask):
-            return self
-    handle = _mutation_handle_for(self)
-    if (
-        handle is None
-        or submobject_to_align is not None
-        or index_of_submobject_to_align is not None
-    ):
-        return _ORIGINAL_NEXT_TO(
-            self,
-            mobject_or_point,
-            direction,
-            buff,
-            aligned_edge=aligned_edge,
-            submobject_to_align=submobject_to_align,
-            index_of_submobject_to_align=index_of_submobject_to_align,
-            coor_mask=coor_mask,
-        )
-    if _live_mutation_context(self) is not None:
-        raise NotImplementedError(
-            "canonical live affine targets do not support layout placement"
-        )
-
-    vector = _base._as_vec2(direction)
-    edge = _base._as_vec2(aligned_edge)
-    if _alignment_is_mobject(mobject_or_point):
-        target_handle = _handle_for(mobject_or_point)
-        if target_handle is None or not hasattr(handle, "manimNextToHandle"):
-            return _ORIGINAL_NEXT_TO(
-                self,
-                mobject_or_point,
-                direction,
-                buff,
-                aligned_edge=aligned_edge,
-                coor_mask=coor_mask,
-            )
-        mask = _alignment_mask2(coor_mask)
-        handle.manimNextToHandle(
-            target_handle,
-            vector.x,
-            vector.y,
-            float(buff),
-            edge.x,
-            edge.y,
-            mask.x,
-            mask.y,
-        )
-    else:
-        if not hasattr(handle, "manimNextToPoint"):
-            return _ORIGINAL_NEXT_TO(
-                self,
-                mobject_or_point,
-                direction,
-                buff,
-                aligned_edge=aligned_edge,
-                coor_mask=coor_mask,
-            )
-        point = _base._as_vec2(mobject_or_point)
-        mask = _alignment_mask2(coor_mask)
-        handle.manimNextToPoint(
-            point.x,
-            point.y,
-            vector.x,
-            vector.y,
-            float(buff),
-            edge.x,
-            edge.y,
-            mask.x,
-            mask.y,
-        )
-    _sync_bound_transform(self, handle)
-    return self
+) -> _base.Mobject | _compat.Group:
+    if _shared_next_to(self, mobject_or_point, direction, buff, aligned_edge,
+                       submobject_to_align, index_of_submobject_to_align, coor_mask):
+        return self
+    fallback = _ORIGINAL_GROUP_NEXT_TO if isinstance(self, _compat.Group) else _ORIGINAL_NEXT_TO
+    return fallback(
+        self, mobject_or_point, direction, buff,
+        aligned_edge=aligned_edge, submobject_to_align=submobject_to_align,
+        index_of_submobject_to_align=index_of_submobject_to_align, coor_mask=coor_mask,
+    )
 
 
 def _align_to(
@@ -1705,19 +1664,28 @@ def _set_object_opacity(
     return self
 
 
+def _paint_opacity_observation(value: object, layer: str):
+    # The callback row is Rust-published state plus preceding ordered writes.
+    # Reading it is a scalar projection, with no geometry or extra WASM call.
+    from _manim_updaters import _canonical_row
+
+    phase = _canonical_row(value)
+    if phase is not None:
+        paint = getattr(phase[2].style, layer)
+        return 0.0 if paint is None else float(paint[3])
+    return _typed_manim_observation(
+        value, f"{layer}Opacity", f"queryMobject{layer.title()}Opacity", handle_property=True
+    )
+
+
 def _get_fill_opacity(self: _compat.VMobject) -> float:
-    handle = _handle_for(self)
-    if handle is None:
-        return _ORIGINAL_GET_FILL_OPACITY(self)
-    return float(handle.fillOpacity)
+    observed = _paint_opacity_observation(self, "fill")
+    return _ORIGINAL_GET_FILL_OPACITY(self) if observed is None else float(observed)
 
 
 def _get_stroke_opacity(self: _compat.VMobject) -> float:
-    handle = _handle_for(self)
-    if handle is None:
-        return _ORIGINAL_GET_STROKE_OPACITY(self)
-    return float(handle.strokeOpacity)
-
+    observed = _paint_opacity_observation(self, "stroke")
+    return _ORIGINAL_GET_STROKE_OPACITY(self) if observed is None else float(observed)
 
 
 def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
@@ -1771,15 +1739,20 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
 
 
 def _group_live_layout_context(value: _compat.Group):
+    # Callback registration does not invalidate the coherent live publication.
+    # Family observations inside an ordered overlay need shared phase-local
+    # aggregation; neither the authored state nor the last publication suffices.
+    from _manim_updaters import _canonical_phase_context
+
+    leaves = _compat._leaf_mobjects(value)
+    if any(_canonical_phase_context(leaf) is not None for leaf in leaves):
+        raise NotImplementedError("family layout is unsupported during an active callback phase")
     context = _group_target_context(value)
     if context is None:
         return None
-    # Callback overlays and explicit legacy timelines keep their own qualified
-    # read path until #70/#959 migration. Ordinary layout comes from live Rust.
-    for leaf in _compat._leaf_mobjects(value):
+    for leaf in leaves:
         if (not bool(getattr(leaf, "_semantic_handle_fresh", False))
                 or getattr(leaf, "_semantic_handle", None) is None
-                or hasattr(leaf, "_noon_updaters")
                 or getattr(getattr(leaf, "_scene", None), "_legacy_geometry_materialized", False)):
             return None
     return context
@@ -1846,115 +1819,6 @@ def _group_move_to(
     return _sync_family_transforms(self, leaves, leaf_handles)
 
 
-
-def _group_next_to(
-    self: _compat.Group,
-    mobject_or_point: object,
-    direction: object = _base.RIGHT,
-    buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-    aligned_edge: object = _base.ORIGIN,
-    submobject_to_align: object | None = None,
-    index_of_submobject_to_align: int | None = None,
-    coor_mask: object = (1.0, 1.0, 1.0),
-) -> _compat.Group:
-    if (submobject_to_align is not None or index_of_submobject_to_align is not None):
-        if _selected_next_to(self, mobject_or_point, direction, buff, aligned_edge,
-                             submobject_to_align, index_of_submobject_to_align, coor_mask):
-            return self
-    # Explicit codec/fixture wrappers without shared anchors retain #959 fallback.
-    if submobject_to_align is not None or index_of_submobject_to_align is not None:
-        return _ORIGINAL_GROUP_NEXT_TO(
-            self,
-            mobject_or_point,
-            direction,
-            buff,
-            aligned_edge,
-            submobject_to_align,
-            index_of_submobject_to_align,
-            coor_mask,
-        )
-
-    context = _group_live_layout_context(self)
-    if context is not None:
-        vector = _base._as_vec2(direction)
-        edge = _base._as_vec2(aligned_edge)
-        mask = _alignment_mask2(coor_mask)
-        _live_family_placement(context, self._semantic_family_handle, mobject_or_point, "Next",
-                               vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
-        return self
-    shared = _shared_family_layout(self, mutation=True)
-    if shared is None:
-        return _ORIGINAL_GROUP_NEXT_TO(
-            self,
-            mobject_or_point,
-            direction,
-            buff,
-            aligned_edge,
-            submobject_to_align,
-            index_of_submobject_to_align,
-            coor_mask,
-        )
-    session, leaves, leaf_handles = shared
-    vector = _base._as_vec2(direction)
-    edge = _base._as_vec2(aligned_edge)
-    mask = _alignment_mask2(coor_mask)
-
-    applied = False
-    if isinstance(mobject_or_point, _compat.Group):
-        target_shared = _shared_family_layout(mobject_or_point)
-        if target_shared is not None and hasattr(session, "nextToFamily"):
-            session.nextToFamily(
-                target_shared[0],
-                vector.x,
-                vector.y,
-                float(buff),
-                edge.x,
-                edge.y,
-                mask.x,
-                mask.y,
-            )
-            applied = True
-    elif _alignment_is_mobject(mobject_or_point):
-        target_adapter = _family_layout_leaf_adapter(mobject_or_point)
-        if target_adapter is not None and hasattr(session, "nextToMobject"):
-            session.nextToMobject(
-                target_adapter,
-                vector.x,
-                vector.y,
-                float(buff),
-                edge.x,
-                edge.y,
-                mask.x,
-                mask.y,
-            )
-            applied = True
-    elif hasattr(session, "nextToPoint"):
-        point = _base._as_vec2(mobject_or_point)
-        session.nextToPoint(
-            point.x,
-            point.y,
-            vector.x,
-            vector.y,
-            float(buff),
-            edge.x,
-            edge.y,
-            mask.x,
-            mask.y,
-        )
-        applied = True
-
-    if not applied:
-        return _ORIGINAL_GROUP_NEXT_TO(
-            self,
-            mobject_or_point,
-            direction,
-            buff,
-            aligned_edge,
-            submobject_to_align,
-            index_of_submobject_to_align,
-            coor_mask,
-        )
-    return _sync_family_transforms(self, leaves, leaf_handles)
 
 
 def _group_align_to(
@@ -2309,7 +2173,7 @@ def install() -> None:
         _compat.Group.remove = _group_remove
         _compat.Group.shift = _group_shift
         _compat.Group.move_to = _group_move_to
-        _compat.Group.next_to = _group_next_to
+        _compat.Group.next_to = _next_to
         _compat.Group.align_to = _group_align_to
         _compat.Group.arrange = _group_arrange
         _compat.Group.copy = _group_copy

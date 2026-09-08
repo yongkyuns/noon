@@ -24,4 +24,6 @@ class OrdinaryFamilyArrangement(Scene):
         nested.next_to(ORIGIN, direction=2 * UP, buff=0.25, coor_mask=(0, 1, 0),
                        index_of_submobject_to_align=-1)
         nested.align_to(first, UP)
+        first.next_to(second, LEFT, buff=0.25)
+        assert abs(first.get_center().x - 0.35) < 1e-6
         self.wait(0.5)

@@ -596,6 +596,24 @@ impl CanonicalAuthoringScene {
         )
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_fill_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, String> {
+        self.mobject_observation(handle, noon::Mobject::fill_opacity, |player, handle| {
+            // Reject resource paints before reading their lowered scalar projection.
+            handle.fill_opacity()?;
+            Ok(player.live_effective(handle)?.fill_opacity())
+        })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_stroke_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, String> {
+        self.mobject_observation(handle, noon::Mobject::stroke_opacity, |player, handle| {
+            // Reject resource paints before reading their lowered scalar projection.
+            handle.stroke_opacity()?;
+            Ok(player.live_effective(handle)?.stroke_opacity())
+        })
+    }
+
     /// Inert bounds-dependent construction observes this runtime for bound targets,
     /// while fresh detached targets retain their shared authored layout.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -4877,39 +4895,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = liveNextFamilyToPoint)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_next_family_to_point(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            x: f64,
-            y: f64,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            edge_x: f64,
-            edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_next_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Point(x, y),
-                    noon::semantic_mobject::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
         #[wasm_bindgen(js_name = liveNextLayoutTo)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_next_layout_to(
@@ -4965,70 +4950,6 @@ mod wasm {
                     &source.anchor,
                     noon::LiveLayoutTarget::Point(x, y),
                     &aligner.anchor,
-                    noon::semantic_mobject::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveNextFamilyToMobject)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_next_family_to_mobject(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            target: &crate::WasmAuthoringMobjectHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            edge_x: f64,
-            edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_next_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
-                    noon::semantic_mobject::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveNextFamilyToFamily)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_next_family_to_family(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            target: &crate::WasmAuthoringFamilyHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            edge_x: f64,
-            edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-            let target = target.semantic_family()?;
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_next_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Family(&target),
                     noon::semantic_mobject::ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
@@ -5114,6 +5035,26 @@ mod wasm {
             self.inner
                 .mobject_line_endpoints(handle.semantic_mobject())
                 .map(crate::WasmManimLineEndpoints::from_endpoints)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectFillOpacity)]
+        pub fn query_mobject_fill_opacity(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_fill_opacity(handle.semantic_mobject())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectStrokeOpacity)]
+        pub fn query_mobject_stroke_opacity(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_stroke_opacity(handle.semantic_mobject())
                 .map_err(js_error)
         }
 
@@ -6909,10 +6850,12 @@ mod tests {
                 (1.0, 1.0),
             )
             .unwrap();
+        let placement = noon::LayoutAnchor::from(&pair);
         player
-            .live_next_family_to(
-                &pair,
+            .live_next_layout_to_aligned(
+                &placement,
                 noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                &placement,
                 noon::semantic_mobject::ManimNextToArgs {
                     direction: (0.0, 0.0),
                     buff: 0.0,
@@ -8590,7 +8533,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_line_and_color_queries_follow_runtime_ownership() {
+    fn ordinary_line_and_paint_queries_follow_runtime_ownership() {
         let mut context = CanonicalAuthoringScene::default();
         let mut line = context.scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         line.set_fill(0.0, 1.0, 0.0, 0.2).unwrap();
@@ -8598,6 +8541,8 @@ mod tests {
         line.set_stroke_opacity(0.8).unwrap();
         line.set_object_opacity(0.3).unwrap();
         assert!(context.mobject_line_endpoints(&line).is_err());
+        assert!(context.mobject_fill_opacity(&line).is_err());
+        assert!(context.mobject_stroke_opacity(&line).is_err());
         context.bind_mobject(ObjectId::new(0), &line).unwrap();
         let mut target = line.target_editor().unwrap();
         target.set_translation(4.0, -2.0).unwrap();
@@ -8629,6 +8574,9 @@ mod tests {
         assert_eq!(observed.start, (1.0, -1.0));
         assert_eq!(observed.end, (3.0, -1.0));
         let color = context.mobject_color(&line).unwrap();
+        assert!((context.mobject_fill_opacity(&line).unwrap() - 0.2).abs() < 1e-6);
+        assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
+        assert_eq!(line.stroke_opacity().unwrap(), 0.8);
         assert!((color.red - 0.5).abs() < 1.0e-6);
         assert!((color.blue - 0.5).abs() < 1.0e-6);
         assert!((color.alpha - 0.6).abs() < 1.0e-6);
@@ -8643,9 +8591,18 @@ mod tests {
             .mobject_color(&line)
             .unwrap_err()
             .contains("running in the semantic engine"));
+        assert!(context
+            .mobject_fill_opacity(&line)
+            .unwrap_err()
+            .contains("running in the semantic engine"));
+        assert!(context
+            .mobject_stroke_opacity(&line)
+            .unwrap_err()
+            .contains("running in the semantic engine"));
         context.return_execution_player(player).unwrap();
         assert_eq!(context.mobject_line_endpoints(&line).unwrap(), observed);
         assert_eq!(context.mobject_color(&line).unwrap(), color);
+        assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
 
         // A stale returned player must not shadow later direct authored edits.
         line.shift(1.0, 2.0).unwrap();
@@ -8659,6 +8616,7 @@ mod tests {
             context.mobject_color(&line).unwrap(),
             Color::rgba(1.0, 1.0, 0.0, 0.7)
         );
+        assert_eq!(context.mobject_stroke_opacity(&line).unwrap(), 0.7);
     }
 
     #[test]

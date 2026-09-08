@@ -41,7 +41,7 @@ mod wasm {
     use noon_core::Bounds2D64;
     use wasm_bindgen::prelude::*;
 
-    use super::{ManimNextToArgs, Mobject, SemanticNodeId, SemanticStore};
+    use super::{Mobject, SemanticNodeId, SemanticStore};
 
     fn js_error(error: String) -> JsValue {
         JsValue::from_str(&error)
@@ -365,85 +365,6 @@ mod wasm {
                     FamilyLayoutTarget::Family(&target.layout),
                     (aligned_edge_x, aligned_edge_y),
                     (mask_x, mask_y),
-                )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = nextToPoint)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn next_to_point(
-            &self,
-            point_x: f64,
-            point_y: f64,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            aligned_edge_x: f64,
-            aligned_edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            self.layout
-                .next_to(
-                    FamilyLayoutTarget::Point(point_x, point_y),
-                    ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (aligned_edge_x, aligned_edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = nextToMobject)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn next_to_mobject(
-            &self,
-            target: &WasmAuthoringMobjectHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            aligned_edge_x: f64,
-            aligned_edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            self.layout
-                .next_to(
-                    FamilyLayoutTarget::Mobject(&target.handle),
-                    ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (aligned_edge_x, aligned_edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = nextToFamily)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn next_to_family(
-            &self,
-            target: &WasmAuthoringFamilyLayout,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            aligned_edge_x: f64,
-            aligned_edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            self.layout
-                .next_to(
-                    FamilyLayoutTarget::Family(&target.layout),
-                    ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (aligned_edge_x, aligned_edge_y),
-                        mask: (mask_x, mask_y),
-                    },
                 )
                 .map_err(js_error)
         }
@@ -1084,58 +1005,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = manimNextToHandle)]
-        pub fn manim_next_to_handle(
-            &mut self,
-            other: &WasmAuthoringMobjectHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            aligned_edge_x: f64,
-            aligned_edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            self.handle
-                .manim_next_to_handle(
-                    &other.handle,
-                    ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (aligned_edge_x, aligned_edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = manimNextToPoint)]
-        pub fn manim_next_to_point(
-            &mut self,
-            point_x: f64,
-            point_y: f64,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            aligned_edge_x: f64,
-            aligned_edge_y: f64,
-            mask_x: f64,
-            mask_y: f64,
-        ) -> Result<(), JsValue> {
-            self.handle
-                .manim_next_to_point(
-                    point_x,
-                    point_y,
-                    ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (aligned_edge_x, aligned_edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map_err(js_error)
-        }
-
         pub fn scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
             self.handle.scale(x, y).map_err(js_error)
         }
@@ -1281,33 +1150,6 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.handle
                 .replace_handle(&other.handle, dim_to_match, stretch)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = nextToHandle)]
-        pub fn next_to_handle(
-            &mut self,
-            other: &WasmAuthoringMobjectHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-        ) -> Result<(), JsValue> {
-            self.handle
-                .next_to_handle(&other.handle, direction_x, direction_y, buff)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = nextToPoint)]
-        pub fn next_to_point(
-            &mut self,
-            point_x: f64,
-            point_y: f64,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-        ) -> Result<(), JsValue> {
-            self.handle
-                .next_to_point(point_x, point_y, direction_x, direction_y, buff)
                 .map_err(js_error)
         }
 

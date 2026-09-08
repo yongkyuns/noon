@@ -156,18 +156,23 @@ const FILL_AND_COMPOSITE_OPACITY: HostCallbackId = HostCallbackId::new(9);
 const MOVE_MATCH_DOT: HostCallbackId = HostCallbackId::new(10);
 const MATCH_LINE_ENDPOINTS: HostCallbackId = HostCallbackId::new(11);
 
-fn ordered_affine_callbacks() -> Result<RustHostCallbackTable, Box<dyn Error>> {
+fn ordered_affine_callbacks(
+    fill_opacity: Option<f32>,
+) -> Result<RustHostCallbackTable, Box<dyn Error>> {
     let mut callbacks = RustHostCallbackTable::new();
     callbacks.insert(SET_Y, |context| {
         let mut transform = context.target_state().transform;
         transform.translation.y = 1.0;
         context.set_target_transform(transform)
     })?;
-    callbacks.insert(SET_OPACITY, |context| {
+    callbacks.insert(SET_OPACITY, move |context| {
         let prior_y = context.target_state().transform.translation.y;
         let mut style = context.target_state().style;
         // The visible result depends on reading SET_Y from this same phase overlay.
         style.opacity = if prior_y == 1.0 { 0.5 } else { 0.0 };
+        if let (Some(fill), Some(alpha)) = (style.fill.as_mut(), fill_opacity) {
+            fill.alpha = alpha;
+        }
         context.set_target_style(style)
     })?;
     Ok(callbacks)
@@ -202,7 +207,7 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
             .rate_func(RateFunction::Linear),
     )?;
 
-    let mut callbacks = ordered_affine_callbacks()?;
+    let mut callbacks = ordered_affine_callbacks(None)?;
     callbacks.insert(ACCUMULATE_DT, |context| {
         let mut transform = context.target_state().transform;
         transform.translation.y += context.delta_time() as f32;
@@ -242,6 +247,8 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
     source.set_stroke_color(0.9, 0.9, 0.9, 0.75)?;
     source.set_stroke_opacity(0.75)?;
     source.set_stroke_width(0.12)?;
+    assert_eq!(source.fill_opacity()?, 0.25);
+    assert_eq!(source.stroke_opacity()?, 0.75);
     scene.add(&source)?;
 
     let mut target = source.target_editor()?;
@@ -1058,6 +1065,7 @@ pub fn ordinary_succession_program() -> Result<LiveProgram<OrdinarySuccession>, 
 /// two ordered host callbacks at every required phase.
 pub struct OrdinaryCallbackContinuation {
     circle: Mobject,
+    family: crate::MobjectFamily,
     target: Mobject,
     stage: u8,
 }
@@ -1083,6 +1091,75 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 .map_err(|error| error.to_string())
             }
             1 => {
+                let paint = live
+                    .effective(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(paint.fill_opacity(), 0.75);
+                assert_eq!(paint.stroke_opacity(), 1.0);
+                // Captured callback alpha must survive RGB edits; absolute
+                // opacity edits must not multiply its intrinsic alpha again.
+                let copied = live
+                    .target_editor(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                live.set_color(&copied, 1.0, 0.0, 0.0, 1.0)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(copied.fill_opacity()?, 0.75);
+                live.set_fill_opacity(&copied, 0.5)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(copied.fill_opacity()?, 0.5);
+                live.set_stroke_opacity(&copied, 0.25)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(copied.stroke_opacity()?, 0.25);
+                live.set_opacity(&copied, 0.4)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(copied.fill_opacity()?, 0.4);
+                assert_eq!(copied.stroke_opacity()?, 0.4);
+                assert_eq!(copied.state()?.style.object_opacity, 0.5);
+                let layout = live
+                    .effective_family_layout(&self.family)
+                    .map_err(|error| error.to_string())?;
+                assert!((layout.center.0 - 2.0).abs() < 1e-6);
+                assert!((layout.center.1 - 1.0).abs() < 1e-6);
+                assert!((layout.width - 0.8).abs() < 1e-6);
+                assert!((layout.height - 0.8).abs() < 1e-6);
+                let probe = live
+                    .create_manim_geometry(crate::ManimGeometryOptions::square(0.2)?)
+                    .map_err(|error| error.to_string())?;
+                let source = crate::LayoutAnchor::from(&probe);
+                let args = crate::semantic_mobject::ManimNextToArgs {
+                    direction: (1.0, 0.0),
+                    buff: 0.1,
+                    aligned_edge: (0.0, 0.0),
+                    mask: (1.0, 1.0),
+                };
+                live.next_layout_to_aligned(
+                    &source,
+                    crate::LiveLayoutTarget::Mobject(&self.circle),
+                    &source,
+                    args,
+                )
+                .map_err(|error| error.to_string())?;
+                let center = probe.center()?;
+                assert!((center.0 - 2.6).abs() < 1e-6);
+                assert!((center.1 - 1.0).abs() < 1e-6);
+                let before = live
+                    .effective(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                let source = crate::LayoutAnchor::from(&self.circle);
+                let error = live
+                    .next_layout_to_aligned(
+                        &source,
+                        crate::LiveLayoutTarget::Mobject(&probe),
+                        &source,
+                        args,
+                    )
+                    .unwrap_err();
+                assert!(error.to_string().contains("active effective affine driver"));
+                assert_eq!(
+                    live.effective(&self.circle)
+                        .map_err(|error| error.to_string())?,
+                    before
+                );
                 self.stage = 2;
                 Ok(crate::ContinuationStep::Finished)
             }
@@ -1095,7 +1172,7 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
 ///
 /// The blue circle moves to `(2, 0)` over one second. At each compiler-selected
 /// phase, callback A moves the effective row to `y=1`; callback B observes A's
-/// write and sets object opacity to `0.5`. The returned callable table owns only
+/// write, sets fill alpha to `0.75`, and sets object opacity to `0.5`. The returned callable table owns only
 /// opaque Rust functions; the program/session retains schedule and timeline state.
 pub fn ordinary_callback_continuation_program() -> Result<
     (
@@ -1110,8 +1187,11 @@ pub fn ordinary_callback_continuation_program() -> Result<
         .set_fill(0.0, 0.4, 1.0, 1.0)
         .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&circle).into()])
+        .map_err(|error| error.to_string())?;
 
-    let callbacks = ordered_affine_callbacks().map_err(|error| error.to_string())?;
+    let callbacks = ordered_affine_callbacks(Some(0.75)).map_err(|error| error.to_string())?;
     {
         let mut store = scene.store().borrow_mut();
         callbacks
@@ -1132,6 +1212,7 @@ pub fn ordinary_callback_continuation_program() -> Result<
     let program = scene
         .into_live_program(OrdinaryCallbackContinuation {
             circle,
+            family,
             target,
             stage: 0,
         })

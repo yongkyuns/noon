@@ -44,6 +44,20 @@ pub struct EffectiveMobjectState {
     pub publication: PublicationContext,
 }
 
+impl EffectiveMobjectState {
+    /// Current fill alpha, excluding the separate object-composite multiplier.
+    pub fn fill_opacity(&self) -> f64 {
+        self.style.fill.map_or(0.0, |color| f64::from(color.alpha))
+    }
+
+    /// Current stroke alpha, excluding the separate object-composite multiplier.
+    pub fn stroke_opacity(&self) -> f64 {
+        self.style
+            .stroke
+            .map_or(0.0, |color| f64::from(color.alpha))
+    }
+}
+
 /// One object's exact layout observation at a coherent runtime publication.
 ///
 /// These bounds retain authored layout semantics and therefore exclude the
@@ -2414,7 +2428,7 @@ mod tests {
         transform.rotation = 0.25;
         overlay.set_transform(circle.node_id(), transform).unwrap();
         let mut style = overlay.object(circle.node_id()).unwrap().style;
-        style.fill = Some(Color::rgb(1.0, 0.0, 0.0));
+        style.fill = Some(Color::rgba(1.0, 0.0, 0.0, 0.25));
         style.opacity = 0.5;
         overlay.set_style(circle.node_id(), style).unwrap();
         live.session
@@ -2423,6 +2437,9 @@ mod tests {
 
         live.session.take_frame_changes();
         let target = live.target_editor(&circle).unwrap();
+        assert_eq!(live.effective(&circle).unwrap().fill_opacity(), 0.25);
+        assert_eq!(target.fill_opacity().unwrap(), 0.25);
+        assert_eq!(target.stroke_opacity().unwrap(), 1.0);
         let target_state = live.authored(&target).unwrap();
         assert_eq!(
             target_state.transform.translation,
@@ -2571,7 +2588,7 @@ mod tests {
     }
 
     #[test]
-    fn live_line_and_color_queries_observe_active_drivers_without_changing_authored_state() {
+    fn live_line_and_paint_queries_observe_active_drivers_without_changing_authored_state() {
         let mut scene = Scene::new();
         let mut line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         line.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
@@ -2617,6 +2634,10 @@ mod tests {
             live.effective_manim_color(&line).unwrap(),
             Color::rgba(0.5, 0.0, 0.5, 0.5)
         );
+        let effective = live.effective(&line).unwrap();
+        assert_eq!(effective.fill_opacity(), 0.0);
+        assert_eq!(effective.stroke_opacity(), 0.5);
+        assert_eq!(line.stroke_opacity().unwrap(), 0.25);
     }
 
     #[test]
