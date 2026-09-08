@@ -50,16 +50,22 @@ impl FamilyTranslation {
 
     /// Apply every observed leaf occurrence in one semantic transaction.
     pub fn apply(self, store: &mut SemanticStore) -> Result<(), String> {
-        let transaction = translation_transaction(self.into_shifts(), |leaf| {
+        self.transaction(store)?
+            .apply(store)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn transaction(
+        self,
+        store: &SemanticStore,
+    ) -> Result<SemanticMutationTransaction, String> {
+        translation_transaction(self.into_shifts(), |leaf| {
             store
                 .semantic_object_state_checked(leaf)
                 .map(|state| state.transform.translation)
                 .map_err(|error| error.to_string())
-        })?;
-        transaction
-            .apply(store)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        })
     }
 
     pub fn into_shifts(self) -> Vec<(SemanticNodeId, f64, f64)> {

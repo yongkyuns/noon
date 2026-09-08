@@ -152,9 +152,9 @@
       "id": "group-layout-bounds",
       "surface": "Deterministic Group/VGroup aggregate bounds, center, width/height, and critical-point queries",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "MobjectFamily::layout/FamilyLayout"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "MobjectFamily::layout/FamilyLayout; LiveSession::effective_family_layout"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_compat_bounds_for"}],
-      "reason": "Rust reads recursive membership and aggregate bounds from SemanticStore in one query. Python only checks wrapper eligibility; it cannot feed per-leaf bounds or construct a partial observation."
+      "reason": "Rust aggregates semantic family membership using authored bounds or current effective runtime transforms through LiveSession. Python only checks local wrapper eligibility; it cannot feed per-leaf bounds or construct a partial observation."
     },
     {
       "id": "group-translation",
@@ -168,7 +168,7 @@
       "id": "group-relative-placement",
       "surface": "Deterministic Group/VGroup next_to/align_to without explicit submobject selection",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "FamilyLayout::next_to/align_to"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "RelativePlacement; FamilyLayout::next_to/align_to; LiveSession::next_family_to/align_family_to"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_next_to/_group_align_to"}],
       "reason": "Rust resolves family/leaf/point critical points, Manim's unnormalized next_to direction and buffer, align_to axis masking, and the authoritative recursive leaf mutation order. Python only coerces host arguments and selects the target handle kind."
     },

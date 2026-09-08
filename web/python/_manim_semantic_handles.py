@@ -1707,12 +1707,47 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     return _sync_family_transforms(self, leaves, leaf_handles)
 
 
+def _group_live_layout_context(value: _compat.Group):
+    context = _group_target_context(value)
+    if context is None:
+        return None
+    # Callback overlays and explicit legacy timelines keep their own qualified
+    # read path until #70/#959 migration. Ordinary layout comes from live Rust.
+    for leaf in _compat._leaf_mobjects(value):
+        if (not bool(getattr(leaf, "_semantic_handle_fresh", False))
+                or getattr(leaf, "_semantic_handle", None) is None
+                or hasattr(leaf, "_noon_updaters")
+                or getattr(getattr(leaf, "_scene", None), "_legacy_geometry_materialized", False)):
+            return None
+    return context
+
+
+def _live_family_placement(context, family, target, operation, *arguments):
+    if isinstance(target, _compat.Group):
+        method = getattr(context, f"live{operation}FamilyToFamily")
+        method(family, target._semantic_family_handle, *arguments)
+    elif isinstance(target, _base.Mobject):
+        method = getattr(context, f"live{operation}FamilyToMobject")
+        method(family, target._semantic_handle, *arguments)
+    else:
+        point = _base._as_vec2(target)
+        method = getattr(context, f"live{operation}FamilyToPoint")
+        method(family, point.x, point.y, *arguments)
+
+
 def _group_move_to(
     self: _compat.Group,
     point_or_mobject: object,
     aligned_edge: object = _base.ORIGIN,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _compat.Group:
+    context = _group_live_layout_context(self)
+    if context is not None:
+        edge = _base._as_vec2(aligned_edge)
+        mask = _alignment_mask2(coor_mask)
+        _live_family_placement(context, self._semantic_family_handle, point_or_mobject, "Move",
+                               edge.x, edge.y, mask.x, mask.y)
+        return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
@@ -1773,6 +1808,14 @@ def _group_next_to(
             coor_mask,
         )
 
+    context = _group_live_layout_context(self)
+    if context is not None:
+        vector = _base._as_vec2(direction)
+        edge = _base._as_vec2(aligned_edge)
+        mask = _alignment_mask2(coor_mask)
+        _live_family_placement(context, self._semantic_family_handle, mobject_or_point, "Next",
+                               vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
+        return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_NEXT_TO(
@@ -1853,6 +1896,11 @@ def _group_align_to(
     mobject_or_point: object,
     direction: object = _base.ORIGIN,
 ) -> _compat.Group:
+    context = _group_live_layout_context(self)
+    if context is not None:
+        axis = _base._as_vec2(direction)
+        _live_family_placement(context, self._semantic_family_handle, mobject_or_point, "Align", axis.x, axis.y)
+        return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
@@ -1932,6 +1980,14 @@ def _group_arrange(
 
 
 def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
+    if isinstance(value, _compat.Group):
+        context = _group_live_layout_context(value)
+        if context is not None:
+            layout = context.queryFamilyLayout(value._semantic_family_handle)
+            return (
+                _base.Vec2(float(layout.criticalX(-1.0, 0.0)), float(layout.criticalY(0.0, -1.0))),
+                _base.Vec2(float(layout.criticalX(1.0, 0.0)), float(layout.criticalY(0.0, 1.0))),
+            )
     leaves = _compat._leaf_mobjects(value)
 
     # Rust observes the complete semantic family directly. The wrapper list only

@@ -6,6 +6,9 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
+mod family_layout;
+pub use family_layout::LiveLayoutTarget;
+
 use crate::{
     family_authoring::FamilyArrangePlan,
     semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
@@ -1968,6 +1971,24 @@ impl<'a> LiveSession<'a> {
         let x = authoring_render_f64("move_to.x", x).map_err(LiveSessionError::Mobject)?;
         let y = authoring_render_f64("move_to.y", y).map_err(LiveSessionError::Mobject)?;
         let authored = self.authored(mobject)?;
+        let authored_transform = self.placement_authored_transform(mobject)?;
+        let publication = self.session.publication_context();
+        let layout = self.layout_at_transform(mobject, authored_transform, publication)?;
+        let mut translation = authored.transform.translation;
+        translation.x =
+            authoring_render_f64("move_to translation.x", translation.x + x - layout.center.0)
+                .map_err(LiveSessionError::Mobject)?;
+        translation.y =
+            authoring_render_f64("move_to translation.y", translation.y + y - layout.center.1)
+                .map_err(LiveSessionError::Mobject)?;
+        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+    }
+
+    fn placement_authored_transform(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Transform2D, LiveSessionError> {
+        let authored = self.authored(mobject)?;
         let authored_transform = Transform2D {
             translation: authored
                 .transform
@@ -1985,7 +2006,6 @@ impl<'a> LiveSession<'a> {
                 .lower_xy_f32()
                 .map_err(|error| LiveSessionError::Mobject(error.to_string()))?,
         };
-        let publication = self.session.publication_context();
         let store = self.store.borrow();
         match self
             .session
@@ -2005,17 +2025,7 @@ impl<'a> LiveSession<'a> {
             Err(error) => return Err(error.into()),
         }
         drop(store);
-        // A detached target has no execution row. Its authored state was created
-        // through this session, so this is the exact coherent layout basis.
-        let layout = self.layout_at_transform(mobject, authored_transform, publication)?;
-        let mut translation = authored.transform.translation;
-        translation.x =
-            authoring_render_f64("move_to translation.x", translation.x + x - layout.center.0)
-                .map_err(LiveSessionError::Mobject)?;
-        translation.y =
-            authoring_render_f64("move_to translation.y", translation.y + y - layout.center.1)
-                .map_err(LiveSessionError::Mobject)?;
-        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+        Ok(authored_transform)
     }
 
     /// Multiply an object's authored affine scale through the shared live

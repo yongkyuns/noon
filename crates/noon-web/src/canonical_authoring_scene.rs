@@ -5312,6 +5312,267 @@ mod wasm {
             })
         }
 
+        /// Read a family through the same live session that owns its effective leaves.
+        #[wasm_bindgen(js_name = queryFamilyLayout)]
+        pub fn query_family_layout(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<WasmMobjectLayoutObservation, JsValue> {
+            let family = handle.semantic_family()?;
+            let layout = self
+                .inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_family_layout(&family)
+                .map_err(js_error)?;
+            Ok(WasmMobjectLayoutObservation {
+                center_x: layout.center.0,
+                center_y: layout.center.1,
+                width: layout.width,
+                height: layout.height,
+            })
+        }
+
+        #[wasm_bindgen(js_name = liveMoveFamilyToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_move_family_to_point(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Point(x, y),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveMoveFamilyToMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_move_family_to_mobject(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveMoveFamilyToFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_move_family_to_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let target = target.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Family(&target),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextFamilyToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_family_to_point(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Point(x, y),
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextFamilyToMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_family_to_mobject(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextFamilyToFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_family_to_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let target = target.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Family(&target),
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAlignFamilyToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_align_family_to_point(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+            axis_x: f64,
+            axis_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_align_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Point(x, y),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAlignFamilyToMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_align_family_to_mobject(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            axis_x: f64,
+            axis_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_align_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAlignFamilyToFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_align_family_to_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+            axis_x: f64,
+            axis_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let target = target.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_align_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Family(&target),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectLineEndpoints)]
         pub fn query_mobject_line_endpoints(
             &mut self,
@@ -7364,6 +7625,33 @@ mod tests {
         context
             .live_arrange_family(&pair, 1.0, 0.0, 0.15, true)
             .unwrap();
+        let player = context.active_live_player().unwrap();
+        let before = player.live_family_layout(&pair).unwrap();
+        player
+            .live_move_family_to(
+                &pair,
+                noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                (0.0, 0.0),
+                (1.0, 1.0),
+            )
+            .unwrap();
+        player
+            .live_next_family_to(
+                &pair,
+                noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                noon::semantic_mobject::ManimNextToArgs {
+                    direction: (0.0, 0.0),
+                    buff: 0.0,
+                    aligned_edge: (0.0, 0.0),
+                    mask: (1.0, 1.0),
+                },
+            )
+            .unwrap();
+        player
+            .live_align_family_to(&pair, noon::LiveLayoutTarget::Family(&pair), (1.0, 1.0))
+            .unwrap();
+        assert_eq!(player.live_family_layout(&pair).unwrap(), before);
+
         let arranged_left = left.center().unwrap();
         let arranged_right = right.center().unwrap();
         assert!((arranged_right.0 - arranged_left.0 - 0.45).abs() < 1e-6);
