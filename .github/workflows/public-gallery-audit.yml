@@ -1,0 +1,39 @@
+name: Public gallery audit (temporary)
+on:
+  push:
+    branches: [codex/public-gallery-audit-20260908]
+permissions:
+  contents: read
+jobs:
+  audit:
+    name: Public ${{ matrix.profile }} / shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [iphone, android, desktop]
+        shard: [0, 1]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          if [ '${{ matrix.profile }}' = iphone ]; then
+            npx playwright install --with-deps webkit
+          else
+            npx playwright install --with-deps chromium
+          fi
+      - name: Audit all publicly selectable examples and repeat failures
+        env:
+          AUDIT_PROFILE: ${{ matrix.profile }}
+          AUDIT_SHARD: ${{ matrix.shard }}
+          AUDIT_SHARDS: '2'
+        run: timeout --signal=TERM --kill-after=10s 900s node scripts/public-gallery-audit.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: public-gallery-${{ matrix.profile }}-${{ matrix.shard }}
+          path: public-gallery-audit
+          retention-days: 7
+          if-no-files-found: error
