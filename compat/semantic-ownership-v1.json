@@ -152,17 +152,17 @@
       "id": "group-layout-bounds",
       "surface": "Deterministic Group/VGroup aggregate bounds, center, width/height, and critical-point queries",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "semantic_family_leaf_ids/WasmAuthoringFamilyHandle::layout_session/WasmAuthoringFamilyLayout"},
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "noon::MobjectFamily::layout_bounds/WasmAuthoringFamilyHandle::layout"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_compat_bounds_for"}],
-      "reason": "Rust derives recursive leaf order from SemanticStore, validates the Python wrapper mirror against that order, and computes the aggregate bounds; Python only supplies the corresponding live shared leaf handles."
+      "reason": "Rust reads recursive membership and aggregate bounds from SemanticStore in one query. Python only checks wrapper eligibility; it cannot feed per-leaf bounds or construct a partial observation."
     },
     {
       "id": "group-translation",
       "surface": "Deterministic Group/VGroup shift/move_to/center/set_x/set_y translation",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout::shift_by/move_to_*/WasmAuthoringFamilyTranslation::apply_mobject"},
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout::shift_by/move_to_*/WasmAuthoringFamilyTranslation::apply"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_shift/_group_move_to/_apply_family_translation"}],
-      "reason": "Rust computes the family translation delta from authoritative shared bounds, validates recursive leaf order, and mutates each shared leaf handle; Python only coerces host arguments and synchronizes the legacy scene transport mirror."
+      "reason": "Rust computes the translation from shared bounds and commits every observed leaf through one alias-aware semantic transaction. Python only coerces arguments and synchronizes the existing legacy export projection."
     },
     {
       "id": "group-relative-placement",

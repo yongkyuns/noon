@@ -33,6 +33,7 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
                 def __init__(self, store, snapshot_json):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.snapshot = json.loads(snapshot_json)
                     self.shift_calls = []
 
@@ -65,30 +66,22 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
             class FakeTranslation:
                 def __init__(self, store, members, dx, dy):
                     self.store = store
-                    self.expected = [member.identity for member in members]
-                    self.next_index = 0
+                    self.members = list(members)
                     self.dx = float(dx)
                     self.dy = float(dy)
 
-                def applyMobject(self, member):
-                    assert member.identity == self.expected[self.next_index]
-                    self.store.applied.append(member.identity)
-                    member.shift(self.dx, self.dy)
-                    self.next_index += 1
-
-                def finish(self):
-                    assert self.next_index == len(self.expected)
+                def apply(self):
+                    for member in self.members:
+                        member.shift(self.dx, self.dy)
+                        self.store.applied.append(member.identity)
                     self.store.finishes += 1
 
 
-            class FakeLayoutSession:
-                def __init__(self, store):
+            class FakeLayoutObservation:
+                def __init__(self, store, members):
                     self.store = store
-                    self.members = []
-                    store.layout_sessions += 1
-
-                def includeMobject(self, member):
-                    self.members.append(member)
+                    self.members = list(members)
+                    store.layout_queries += 1
 
                 def shiftBy(self, dx, dy):
                     self.store.shift_by.append((float(dx), float(dy)))
@@ -117,10 +110,11 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
                 def __init__(self, store):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.members = []
 
-                def layoutSession(self):
-                    return FakeLayoutSession(self.store)
+                def layout(self):
+                    return FakeLayoutObservation(self.store, [self.store.entities[key] for key in self.members])
 
                 @property
                 def memberCount(self):
@@ -151,7 +145,8 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
-                    self.layout_sessions = 0
+                    self.entities = {}
+                    self.layout_queries = 0
                     self.shift_by = []
                     self.move_to_point = []
                     self.applied = []

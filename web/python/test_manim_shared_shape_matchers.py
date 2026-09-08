@@ -67,6 +67,7 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                 def __init__(self, store, snapshot_json):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.snapshot = json.loads(snapshot_json)
                     self._sync()
 
@@ -183,12 +184,9 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     }
                     self._sync()
 
-            class FakeLayoutSession:
-                def __init__(self):
-                    self.members = []
-
-                def includeMobject(self, member):
-                    self.members.append(member)
+            class FakeLayoutObservation:
+                def __init__(self, members):
+                    self.members = list(members)
 
                 def _bounds(self):
                     min_x = min(member.criticalX(-1.0, 0.0) for member in self.members)
@@ -236,10 +234,11 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                 def __init__(self, store):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.members = []
 
-                def layoutSession(self):
-                    return FakeLayoutSession()
+                def layout(self):
+                    return FakeLayoutObservation([self.store.entities[key] for key in self.members])
 
                 @property
                 def memberCount(self):
@@ -266,6 +265,7 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
+                    self.entities = {}
 
                 def allocate(self):
                     value = self.next_identity

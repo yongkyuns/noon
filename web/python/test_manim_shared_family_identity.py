@@ -55,26 +55,17 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
                         stroke[\"alpha\"] = float(opacity)
 
 
-            class FakeLayoutSession:
+            class FakeLayoutObservation:
                 def __init__(self, store):
                     self.store = store
-                    self.members = []
-                    store.layout_sessions += 1
-
-                def includeMobject(self, member):
-                    self.members.append(member.identity)
-
-                def _complete(self):
-                    assert len(self.members) == 2
+                    store.layout_queries += 1
 
                 def criticalX(self, direction_x, direction_y):
                     del direction_y
-                    self._complete()
                     return -3.0 if direction_x < 0 else (5.0 if direction_x > 0 else 1.0)
 
                 def criticalY(self, direction_x, direction_y):
                     del direction_x
-                    self._complete()
                     return -2.0 if direction_y < 0 else (4.0 if direction_y > 0 else 1.0)
 
 
@@ -84,8 +75,8 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
                     self.identity = store.allocate()
                     self.members = []
 
-                def layoutSession(self):
-                    return FakeLayoutSession(self.store)
+                def layout(self):
+                    return FakeLayoutObservation(self.store)
 
                 @property
                 def memberCount(self):
@@ -123,7 +114,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
-                    self.layout_sessions = 0
+                    self.layout_queries = 0
 
                 def allocate(self):
                     value = self.next_identity
@@ -173,7 +164,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             assert center.x == 1.0 and center.y == 1.0
             assert outer.width == 8.0
             assert outer.height == 6.0
-            assert store.layout_sessions == 3
+            assert store.layout_queries == 3
 
             clone = outer.copy()
             assert clone is not outer
