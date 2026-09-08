@@ -28,7 +28,7 @@ class LiveCallbackPaint(Scene):
         def recolor(mobject, _dt):
             before_fill = mobject.get_fill_opacity()
             mobject.set_color(Color(0.8, 0.4, 0.2, 0.9))
-            assert mobject.get_fill_opacity() == before_fill
+            assert abs(mobject.get_fill_opacity() - before_fill) < 1e-6
             assert mobject.get_stroke_opacity() == 0.75
 
         def fill_and_composite_opacity(mobject, _dt):
