@@ -7,7 +7,6 @@ import {
   PythonAuthoringClient,
   parseAuthoringResult,
   validateCallbackSession,
-  validatePatchBatch,
   validateSceneDocument,
   validateSceneDuration,
   validateSceneIdentities,
@@ -61,6 +60,16 @@ function sceneResult(overrides = {}) {
   };
 }
 
+function semanticResult(contextId = "scene") {
+  const { kind, duration } = sceneResult();
+  return { kind, duration, semantic_execution: { context_id: contextId } };
+}
+
+function parsedSemanticResult(contextId = "scene") {
+  const { kind, duration } = semanticResult(contextId);
+  return { kind, duration, semanticExecution: { contextId } };
+}
+
 function deferred() {
   let resolve;
   let reject;
@@ -71,33 +80,32 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-test("correlates a Python request with a validated PatchBatch response", async () => {
+test("correlates a Python request with a validated shared Scene response", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const resultPromise = client.run("result = batch", { sequence: 4 });
+  const resultPromise = client.run("result = scene", { example: "scene" });
   await Promise.resolve();
   assert.deepEqual(worker.messages[0], {
     channel: AUTHORING_CHANNEL,
     protocolVersion: AUTHORING_PROTOCOL_VERSION,
     type: "run",
     requestId: 0,
-    source: "result = batch",
-    context: { sequence: 4 },
+    source: "result = scene",
+    context: { example: "scene" },
     exportDocument: false,
   });
 
-  const batch = { version: 1, sequence: 4, patches: [] };
   worker.emit(
     "message",
     workerMessage("result", {
       requestId: 0,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
-  assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
+  assert.deepEqual(await resultPromise, parsedSemanticResult());
 });
 
 test("requests legacy Scene export only through an explicit boolean option", async () => {
@@ -511,25 +519,23 @@ test("accepts pending Python responses that complete out of order", async () => 
     [0, 1],
   );
 
-  const secondBatch = { version: 1, sequence: 2, patches: [] };
   worker.emit(
     "message",
     workerMessage("result", {
       requestId: 1,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: secondBatch }),
+      resultJson: JSON.stringify(semanticResult("second")),
     }),
   );
-  assert.deepEqual(await second, { kind: "patch_batch", document: secondBatch });
+  assert.deepEqual(await second, parsedSemanticResult("second"));
 
-  const firstBatch = { version: 1, sequence: 1, patches: [] };
   worker.emit(
     "message",
     workerMessage("result", {
       requestId: 0,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: firstBatch }),
+      resultJson: JSON.stringify(semanticResult("first")),
     }),
   );
-  assert.deepEqual(await first, { kind: "patch_batch", document: firstBatch });
+  assert.deepEqual(await first, parsedSemanticResult("first"));
   assert.deepEqual(client.diagnostics, {
     nextRequestId: 2,
     pendingRequests: 0,
@@ -544,15 +550,14 @@ test("drops duplicate responses for already-issued requests without killing the 
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const batch = { version: 1, sequence: 0, patches: [] };
-  const resultPromise = client.run("result = batch");
+  const resultPromise = client.run("result = scene");
   await Promise.resolve();
   const response = workerMessage("result", {
     requestId: 0,
-    resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+    resultJson: JSON.stringify(semanticResult()),
   });
   worker.emit("message", response);
-  assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
+  assert.deepEqual(await resultPromise, parsedSemanticResult());
 
   worker.emit("message", response);
   assert.equal(client.terminated, false);
@@ -565,7 +570,7 @@ test("drops duplicate responses for already-issued requests without killing the 
     "message",
     workerMessage("result", {
       requestId: 1,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
   await retry;
@@ -578,14 +583,13 @@ test("drops malformed stale result payloads before parsing them", async () => {
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const batch = { version: 1, sequence: 0, patches: [] };
-  const resultPromise = client.run("result = batch");
+  const resultPromise = client.run("result = scene");
   await Promise.resolve();
   worker.emit(
     "message",
     workerMessage("result", {
       requestId: 0,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
   await resultPromise;
@@ -607,7 +611,7 @@ test("drops malformed stale result payloads before parsing them", async () => {
     "message",
     workerMessage("result", {
       requestId: 1,
-      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
   await retry;
@@ -620,7 +624,7 @@ test("malformed pending payloads remain fatal and reject the pending request", a
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const resultPromise = client.run("result = batch");
+  const resultPromise = client.run("result = scene");
   await Promise.resolve();
   worker.emit(
     "message",
@@ -647,10 +651,7 @@ test("treats never-issued future response IDs as fatal protocol corruption", asy
     "message",
     workerMessage("result", {
       requestId: 7,
-      resultJson: JSON.stringify({
-        kind: "patch_batch",
-        document: { version: 1, sequence: 0, patches: [] },
-      }),
+      resultJson: JSON.stringify(semanticResult()),
     }),
   );
 
@@ -680,18 +681,13 @@ test("exposes fatal Python worker termination to recovery owners", async () => {
   await assert.rejects(client.run("result = retry"), /terminated/);
 });
 
-test("rejects malformed PatchBatch documents before they reach Rust", () => {
+test("rejects retired PatchBatch authoring responses", () => {
   assert.throws(
-    () => validatePatchBatch({ version: 99, sequence: 0, patches: [] }),
-    /Unsupported Noon IR version 99/,
-  );
-  assert.throws(
-    () => validatePatchBatch({ version: 1, sequence: -1, patches: [] }),
-    /non-negative safe integer/,
-  );
-  assert.throws(
-    () => validatePatchBatch({ version: 1, sequence: 0, patches: {} }),
-    /must be an array/,
+    () => parseAuthoringResult(JSON.stringify({
+      kind: "patch_batch",
+      document: { version: 1, sequence: 0, patches: [] },
+    })),
+    /Unknown Python authoring result kind: patch_batch/,
   );
 });
 
@@ -743,7 +739,7 @@ test("terminating the client rejects pending work", async () => {
   worker.emit("message", workerMessage("ready"));
   await client.ready();
 
-  const resultPromise = client.run("result = batch");
+  const resultPromise = client.run("result = scene");
   await Promise.resolve();
   client.terminate();
 

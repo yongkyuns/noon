@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from noon import PatchBatch, Scene
+from noon import Scene
 
 WEB_ROOT = Path(__file__).parents[1]
 MORPH_STRESS_NAME = "Morph stress · 1,000"
@@ -24,23 +24,6 @@ PLAYGROUND_SCENE_EXAMPLES = (
     ("Instanced field · 180", "python/examples/instanced_field.py", {}),
     (MORPH_STRESS_NAME, "python/examples/morph_stress_test.py", {"object_count": 1000}),
 )
-
-PLAYGROUND_PATCH_EXAMPLES = (
-    (
-        "Palette swap",
-        "python/demo_patch.py",
-        {
-            "sequence": 0,
-            "palette": {
-                "circle": [1.0, 0.78, 0.22],
-                "rectangle": [0.72, 0.38, 0.96],
-                "line": [0.22, 0.88, 0.96],
-            },
-        },
-    ),
-    ("Transform remix", "python/examples/transform_patch.py", {"sequence": 0}),
-)
-
 
 def scene_examples(*, morph_stress_count: int | None = None):
     if morph_stress_count is not None and morph_stress_count < 12:
@@ -69,16 +52,6 @@ def run_scene_example(relative_path: str, context: dict[str, object]) -> Scene:
     result = _execute_source(relative_path, context)
     if not isinstance(result, Scene):
         raise TypeError(f"{relative_path} returned {type(result).__name__}, expected Scene")
-    result.to_document()
-    return result
-
-
-def run_patch_example(relative_path: str, context: dict[str, object]) -> PatchBatch:
-    result = _execute_source(relative_path, context)
-    if not isinstance(result, PatchBatch):
-        raise TypeError(
-            f"{relative_path} returned {type(result).__name__}, expected PatchBatch"
-        )
     result.to_document()
     return result
 

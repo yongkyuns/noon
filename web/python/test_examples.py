@@ -3,7 +3,7 @@ import runpy
 import unittest
 from pathlib import Path
 
-from noon import PatchBatch, Scene
+from noon import Scene
 
 
 EXAMPLES_DIR = Path(__file__).with_name("examples")
@@ -144,17 +144,6 @@ class PlaygroundExampleTests(unittest.TestCase):
                 }
                 self.assertEqual(len(morph_geometries), 12)
 
-    def test_transform_patch_builds_ordered_patch_batch(self) -> None:
-        namespace = runpy.run_path(
-            EXAMPLES_DIR / "transform_patch.py",
-            init_globals={"context": {"sequence": 8}},
-        )
-        result = namespace.get("result")
-        self.assertIsInstance(result, PatchBatch)
-        document = result.to_document()
-        self.assertEqual(document["version"], 1)
-        self.assertEqual(document["sequence"], 8)
-        self.assertEqual(len(document["patches"]), 3)
 
 
 if __name__ == "__main__":

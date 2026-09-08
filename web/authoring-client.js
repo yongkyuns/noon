@@ -419,12 +419,6 @@ export function parseAuthoringResult(resultJson) {
       duration: validateSceneDuration(result.duration),
     };
   }
-  if (result.kind === "patch_batch") {
-    return {
-      kind: result.kind,
-      document: validatePatchBatch(result.document),
-    };
-  }
   if (result.kind === "scene_document") {
     const document = validateSceneDocument(result.document);
     const sceneSpec = validateSceneSpec(result.scene_spec);
@@ -477,35 +471,6 @@ function validateSemanticExecutionContextId(contextId) {
     throw new TypeError("semantic execution context ID must be a non-empty string");
   }
   return contextId;
-}
-
-export function parsePatchBatchJson(json) {
-  if (typeof json !== "string") {
-    throw new Error("Python callback result must be encoded JSON");
-  }
-  let batch;
-  try {
-    batch = JSON.parse(json);
-  } catch (error) {
-    throw new Error(`Python callback returned invalid JSON: ${error.message}`);
-  }
-  return validatePatchBatch(batch);
-}
-
-export function validatePatchBatch(batch) {
-  if (!isRecord(batch)) {
-    throw new Error("Python authoring result is not a PatchBatch object");
-  }
-  if (batch.version !== NOON_IR_VERSION) {
-    throw new Error(`Unsupported Noon IR version ${batch.version}`);
-  }
-  if (!Number.isSafeInteger(batch.sequence) || batch.sequence < 0) {
-    throw new Error("Python PatchBatch sequence must be a non-negative safe integer");
-  }
-  if (!Array.isArray(batch.patches)) {
-    throw new Error("Python PatchBatch patches must be an array");
-  }
-  return batch;
 }
 
 export function validateSceneDocument(scene) {

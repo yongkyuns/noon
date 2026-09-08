@@ -2,10 +2,11 @@ import json
 import math
 import unittest
 
-from noon import Color, PatchBatch, Path as PathTarget, Scene, Transform, VectorPath
+from _noon_ir import PatchBatch
+from noon import Color, Path as PathTarget, Scene, Transform, VectorPath
 
 
-class PatchBatchTests(unittest.TestCase):
+class DiagnosticPatchCodecTests(unittest.TestCase):
     def test_patch_batch_matches_versioned_noon_ir_shape(self) -> None:
         batch = (
             PatchBatch(7)
