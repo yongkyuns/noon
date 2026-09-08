@@ -1,0 +1,238 @@
+name: Temporary live-family bridge replay
+
+on:
+  push:
+    branches:
+      - codex/noon-preview-session
+    paths:
+      - .github/workflows/temp-replay-live-family-bridge.yml
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/noon-preview-session
+          fetch-depth: 0
+      - name: Replay focused bridge hunks
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"anchor not found in {path}")
+              if text.count(old) != 1:
+                  raise SystemExit(f"anchor not unique in {path}: {text.count(old)}")
+              p.write_text(text.replace(old, new, 1))
+
+          # LiveSession family membership is ordered and unique: validate all operands,
+          # then stage each semantic identity once in first-occurrence order.
+          replace_once(
+              "crates/noon/src/live_session.rs",
+              '''        let mut transaction = SemanticMutationTransaction::new();
+          let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
+          for member in members {
+              transaction.add_member(family, member.node_id());
+          }
+          let result = self.apply(transaction)?;''',
+              '''        let mut transaction = SemanticMutationTransaction::new();
+          let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
+          // Families have ordered, unique direct membership. Validate every operand
+          // above, then stage each identity once in first-occurrence order; repeated
+          // edges in one transaction are correctly rejected by the transaction layer.
+          let mut seen = std::collections::BTreeSet::new();
+          for member in members {
+              if seen.insert(member.node_id()) {
+                  transaction.add_member(family, member.node_id());
+              }
+          }
+          let result = self.apply(transaction)?;'''
+          )
+
+          # Expose the already-owned LiveSession::family operation through the retained player.
+          replace_once(
+              "crates/noon-web/src/semantic_execution_player.rs",
+              '''    #[cfg(any(target_arch = "wasm32", test))]
+          pub(crate) fn live_replace_content(''',
+              '''    /// Create one detached family through the retained session so its node and
+          /// ordered edges share the current semantic/runtime publication.
+          #[cfg(any(target_arch = "wasm32", test))]
+          pub(crate) fn live_family(
+              &mut self,
+              members: &[noon::MobjectFamilyMember<'_>],
+          ) -> Result<noon::MobjectFamily, String> {
+              self.with_live_session(|live| live.family(members))
+          }
+
+          #[cfg(any(target_arch = "wasm32", test))]
+          pub(crate) fn live_replace_content('''
+          )
+
+          # Canonical authoring consumes the existing typed operand batch, without
+          # reserving wrapper IDs or editing root scene membership.
+          replace_once(
+              "crates/noon-web/src/canonical_authoring_scene.rs",
+              '''    #[cfg(any(target_arch = "wasm32", test))]
+          fn live_shift_family(''',
+              '''    #[cfg(any(target_arch = "wasm32", test))]
+          fn live_family(
+              &mut self,
+              members: &[noon::MobjectFamilyMember<'_>],
+          ) -> Result<noon::MobjectFamily, String> {
+              match self.live_execution_ownership() {
+                  "active" | "returned" => self.active_live_player()?.live_family(members),
+                  "none" => Err("live family creation requires an active canonical session".into()),
+                  "transferred" => Err("live execution session is running in the semantic engine".into()),
+                  _ => unreachable!("canonical live ownership has one closed set of states"),
+              }
+          }
+
+          /// Reuse the inert typed membership operands to publish a detached family.
+          /// Wrapper bindings and root-membership edits are not part of construction.
+          #[cfg(any(target_arch = "wasm32", test))]
+          fn create_live_family(
+              &mut self,
+              batch: SceneMembershipBatch,
+          ) -> Result<noon::MobjectFamily, String> {
+              if batch.kind != SceneMembershipBatchKind::Add || !batch.bindings.is_empty() {
+                  return Err("live family construction requires unbound add operands".into());
+              }
+              let members = batch
+                  .members
+                  .iter()
+                  .map(|member| match member {
+                      OwnedSceneMembershipMember::Mobject {
+                          wrapper_id: None,
+                          handle,
+                      } => Ok(noon::MobjectFamilyMember::Mobject(handle)),
+                      OwnedSceneMembershipMember::Family(family) => {
+                          Ok(noon::MobjectFamilyMember::Family(family))
+                      }
+                      _ => Err("live family construction cannot reserve wrapper bindings".to_owned()),
+                  })
+                  .collect::<Result<Vec<_>, String>>()?;
+              self.live_family(&members)
+          }
+
+          #[cfg(any(target_arch = "wasm32", test))]
+          fn live_shift_family('''
+          )
+
+          replace_once(
+              "crates/noon-web/src/canonical_authoring_scene.rs",
+              '''        /// Begin an inert ordered family target. Member targets may be built
+          /// bottom-up before the family node and edges publish through this context.
+          #[wasm_bindgen(js_name = beginLiveFamilyTarget)]''',
+              '''        /// Publish a complete Group/VGroup constructor through the live owner.
+          /// The batch is an operand list, not another semantic family authority.
+          #[wasm_bindgen(js_name = createLiveFamily)]
+          pub fn create_live_family(
+              &mut self,
+              batch: WasmSceneMembershipBatch,
+          ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+              self.inner
+                  .create_live_family(batch.inner)
+                  .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                  .map_err(js_error)
+          }
+
+          /// Begin an inert ordered family target. Member targets may be built
+          /// bottom-up before the family node and edges publish through this context.
+          #[wasm_bindgen(js_name = beginLiveFamilyTarget)]'''
+          )
+
+          # Keep the original regression close to the canonical owner. It proves
+          # invalid batches do not advance revision and duplicates preserve first order.
+          replace_once(
+              "crates/noon-web/src/canonical_authoring_scene.rs",
+              '''    #[test]
+          fn live_created_group_arrange_and_target_preserve_returned_player_after_prior_plays() {''',
+              '''    #[test]
+          fn live_family_constructor_rejects_invalid_operands_without_poisoning_the_owner() {
+              let mut context = CanonicalAuthoringScene::default();
+              let circle = context.scene.circle(0.4).unwrap();
+              context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+              context.live_player(1.0).unwrap();
+              let foreign = noon::Scene::new().circle(0.2).unwrap();
+              let revision = context.scene.store().borrow().scene_revision();
+              for (kind, handle, wrapper_id) in [
+                  (SceneMembershipBatchKind::Remove, circle.clone(), None),
+                  (SceneMembershipBatchKind::Add, foreign, None),
+                  (
+                      SceneMembershipBatchKind::Add,
+                      circle.clone(),
+                      Some(ObjectId::new(2)),
+                  ),
+              ] {
+                  assert!(context
+                      .create_live_family(SceneMembershipBatch {
+                          kind,
+                          members: vec![OwnedSceneMembershipMember::Mobject { wrapper_id, handle }],
+                          bindings: Vec::new(),
+                      })
+                      .is_err());
+                  assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+              }
+              context.live_target_editor(&circle).unwrap();
+          }
+
+          #[test]
+          fn live_family_constructor_preserves_shared_order_and_duplicate_suppression() {
+              let mut context = CanonicalAuthoringScene::default();
+              let circle = context.scene.circle(0.4).unwrap();
+              context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+              context.live_player(1.0).unwrap();
+              let target = context.live_target_editor(&circle).unwrap();
+              let nested = context
+                  .live_family(&[noon::MobjectFamilyMember::Mobject(&target)])
+                  .unwrap();
+              let revision = context.scene.store().borrow().scene_revision();
+              let family = context
+                  .create_live_family(SceneMembershipBatch {
+                      kind: SceneMembershipBatchKind::Add,
+                      members: vec![
+                          OwnedSceneMembershipMember::Family(nested.clone()),
+                          OwnedSceneMembershipMember::Mobject {
+                              wrapper_id: None,
+                              handle: target.clone(),
+                          },
+                          OwnedSceneMembershipMember::Family(nested.clone()),
+                      ],
+                      bindings: Vec::new(),
+                  })
+                  .unwrap();
+              let store = context.scene.store().borrow();
+              assert_eq!(store.scene_revision().get(), revision.get() + 1);
+              assert_eq!(
+                  store
+                      .semantic_family_members_checked(family.node_id())
+                      .unwrap(),
+                  &[nested.node_id(), target.node_id()]
+              );
+              drop(store);
+              context.live_target_editor(&circle).unwrap();
+          }
+
+          #[test]
+          fn live_created_group_arrange_and_target_preserve_returned_player_after_prior_plays() {'''
+          )
+      - name: Format and test focused Rust bridge
+        run: |
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test -p noon live_family --lib
+          cargo test -p noon-web live_family_constructor --lib
+      - name: Commit bridge and remove temporary workflow
+        run: |
+          git config user.name "Noon development agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/temp-replay-live-family-bridge.yml
+          git add crates/noon/src/live_session.rs crates/noon-web/src/semantic_execution_player.rs crates/noon-web/src/canonical_authoring_scene.rs
+          git commit -m "Restore live family publication bridge on current master"
+          git push origin HEAD:codex/noon-preview-session
