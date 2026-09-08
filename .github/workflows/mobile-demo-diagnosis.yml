@@ -21,6 +21,7 @@ jobs:
           cp mobile-repair.patch.gz "$RUNNER_TEMP/mobile-repair-evidence/patch.gz"
           gzip -dc mobile-repair.patch.gz > "$RUNNER_TEMP/mobile-repair.patch"
           echo "d9fee41e861ecdd46968388397d90c4e408f66800998b22a588c11a249513e5c  $RUNNER_TEMP/mobile-repair.patch" | sha256sum -c
+          git restore mobile-repair.patch.gz
           git fetch --depth=1 origin "$BASE"
           git checkout --detach "$BASE"
           git apply --index "$RUNNER_TEMP/mobile-repair.patch"
