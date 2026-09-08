@@ -180,3 +180,51 @@ The same browser test also runs setup-installed overrides, property and dynamic
 lookup, and explicit async source through the public editor and Run path. The
 source compiler's unit tests cover ordering, cancellation, globals/defaults/closure
 preservation, unsupported source rejection and the no-AST fast paths.
+
+
+### Full-gallery continuation follow-up (#1207)
+
+The portable host compiler also admits synchronous lambda and nested callback
+bodies which do not reference the outer scene or hide a play/wait barrier. It
+leaves those bodies unchanged and preserves their ordinary Python closure and
+callable identity. Direct module-level statement-position play/wait calls use
+Python top-level await in the original module namespace. Definitions and module
+effects execute once; arbitrary non-Scene methods and returned awaitables are
+not treated as canonical barriers. Export execution keeps ordinary compilation.
+This remains bounded host-language portability, not a general synchronous
+Python compiler or a second animation scheduler.
+
+Updater removal/replacement after a completed segment is a shared Rust semantic
+transaction. The compiler prepares a revised callback index from semantic
+preflight before the existing session atomically publishes it. Runtime identity,
+current time, and the last effective frame survive the change; removal freezes
+that effective value instead of restoring the authored value. Pending callback
+phases, retroactive edits, mixed structural/registration transactions, and first
+registration on a target absent from the initial callback index are rejected.
+The latter two remain explicitly unsupported; they are not silently replayed.
+
+This first bounded registration publication rebuilds the callback-only index in
+O(R log R) time and O(R) temporary storage, where R is retained callback occurrence
+history. It does not traverse or relower unrelated scene geometry, reset the
+runtime, or add new per-frame work. It is not an O(1) registration edit. More
+incremental callback-index editing remains under the shared live-session work
+owned by #969; no temporary frontend schedule or compatibility authority is added.
+
+The native `ordinary_live_updater_lifecycle` example and the direct Rust/WASM
+pixel probe execute the same sequential remove/reverse/remove program as the
+unchanged Python RotationUpdater gallery example. The full-gallery browser gate
+executes every ready source and explicitly disables JSPI for the four cases
+identified by the public audit. This complements, rather than replaces, the
+canonical raster/timeline qualification and performance gates.
+
+
+For async continuation callbacks, direct captured/default/global ValueTracker
+wrappers are optional sparse-read hints. Their values are fetched asynchronously
+from the same Rust-pinned callback phase before invoking the unchanged callback
+once. The cache expires with that phase; no authored tracker value, callback
+replay, whole-scene snapshot or frontend dependency graph substitutes for Rust.
+Failed speculative reads are deferred until actual use, so an unused invalid
+capture does not introduce a callback failure. Dynamic indirect read misses still
+require the existing suspended-read support. Cost is proportional to active
+callback metadata plus unique captured scalar read hints; this does not claim
+arbitrary callbacks have a complete statically discoverable read set.

@@ -366,40 +366,48 @@ impl CanonicalAuthoringScene {
         active_from: f64,
         position: Option<usize>,
     ) -> Result<(), String> {
-        self.require_pre_execution_updater_target(handle)?;
+        self.require_updater_target(handle)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(handle.node_id(), callback, active_from, position);
-        transaction
-            .apply(&mut self.scene.store().borrow_mut())
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        self.publish_updater_edit(transaction)
     }
 
     /// Close the first open occurrence for this host callback at an exclusive
     /// authored time. The store validates the complete mutation before commit.
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn remove_updater(
         &mut self,
         handle: &noon::Mobject,
         callback: HostCallbackId,
         inactive_from: f64,
     ) -> Result<(), String> {
-        self.require_pre_execution_updater_target(handle)?;
+        self.require_updater_target(handle)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.remove_updater(handle.node_id(), callback, inactive_from);
-        transaction
-            .apply(&mut self.scene.store().borrow_mut())
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        self.publish_updater_edit(transaction)
     }
 
     /// Close every open callback occurrence on this target at an exclusive
-    /// authored time before the canonical execution session exists.
-    #[cfg(target_arch = "wasm32")]
+    /// authored time through the owning live session when execution has begun.
+    #[cfg(any(target_arch = "wasm32", test))]
     fn clear_updaters(&mut self, handle: &noon::Mobject, inactive_from: f64) -> Result<(), String> {
-        self.require_pre_execution_updater_target(handle)?;
+        self.require_updater_target(handle)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.clear_updaters(handle.node_id(), inactive_from);
+        self.publish_updater_edit(transaction)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn publish_updater_edit(
+        &mut self,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<(), String> {
+        if self.live_player_transferred {
+            return Err("return the active execution player before editing updaters".into());
+        }
+        if let Some(player) = self.live_player.as_mut() {
+            return player.live_edit_updaters(transaction);
+        }
         transaction
             .apply(&mut self.scene.store().borrow_mut())
             .map(|_| ())
@@ -407,12 +415,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_pre_execution_updater_target(&self, handle: &noon::Mobject) -> Result<(), String> {
-        if self.live_player.is_some() || self.live_player_transferred {
-            return Err(
-                "callback registrations must be authored before canonical execution begins".into(),
-            );
-        }
+    fn require_updater_target(&self, handle: &noon::Mobject) -> Result<(), String> {
         if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
             return Err("mobject belongs to another authoring store".into());
         }
@@ -9061,7 +9064,7 @@ mod tests {
     }
 
     #[test]
-    fn callback_occurrences_publish_before_session_lowering_and_reject_late_edits() {
+    fn callback_occurrences_publish_through_the_same_live_session() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(1.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
@@ -9081,10 +9084,23 @@ mod tests {
         assert_eq!(registrations[0].active_from(), 0.0);
 
         context.live_player(2.0).unwrap();
-        let error = context
+        context
             .add_updater(&circle, HostCallbackId::new(13), 1.0, None)
-            .unwrap_err();
-        assert!(error.contains("before canonical execution begins"));
+            .unwrap();
+        context
+            .remove_updater(&circle, HostCallbackId::new(12), 0.0)
+            .unwrap();
+        context.clear_updaters(&circle, 1.0).unwrap();
+        let registrations = context
+            .scene
+            .store()
+            .borrow()
+            .semantic_updater_registrations(circle.node_id())
+            .unwrap()
+            .to_vec();
+        assert_eq!(registrations.len(), 2);
+        assert_eq!(registrations[0].inactive_from(), Some(0.0));
+        assert_eq!(registrations[1].inactive_from(), Some(1.0));
     }
 
     #[test]

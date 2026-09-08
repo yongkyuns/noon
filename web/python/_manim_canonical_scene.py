@@ -682,6 +682,40 @@ async def await_source_barrier(method, /, *args, **kwargs):
     return pending
 
 
+async def await_module_source_barrier(method, /, *args, **kwargs):
+    """Adapt a module-level call without replay or changes to arbitrary callables."""
+    if not inspect.ismethod(method):
+        return method(*args, **kwargs)
+    scene = method.__self__
+    invocation = current_source_invocation()
+    from _manim_source_execution import has_portable_scene_methods
+
+    if (invocation is None or invocation.export_document
+            or not isinstance(scene, _base.Scene)
+            or getattr(method, "__func__", None) not in (_play, _canonical_wait)
+            or not has_portable_scene_methods(
+                scene, play=_play, wait=_canonical_wait,
+                add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
+            )
+            or (_create_context is None
+                and getattr(scene, "_canonical_authoring_context", None) is None)):
+        return method(*args, **kwargs)
+    if not _async_continuation_active(scene):
+        if _synchronous_continuation_active(scene):
+            # Never switch a source stack that already entered synchronous execution.
+            return method(*args, **kwargs)
+        _begin_async_continuation_construct(scene)
+        setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
+        invocation.cleanup.callback(_finish_async_continuation_construct, scene)
+        invocation.cleanup.callback(setattr, scene, _PORTABLE_CONSTRUCT_MODE, False)
+        invocation.cleanup.callback(setattr, scene, _PORTABLE_BARRIER_CALL, False)
+    token = _reactive._enter_authoring_scene(scene)
+    try:
+        return await await_source_barrier(method, *args, **kwargs)
+    finally:
+        _reactive._leave_authoring_scene(token)
+
+
 class _SemanticContinuationAwaitable:
     """One consumed Python await over the worker-owned semantic endpoint lease."""
 
@@ -757,7 +791,7 @@ def _continuation_event(event_json: object) -> dict[str, object]:
 
 
 def _service_semantic_continuation_event(
-    scene: _base.Scene, event_json: object
+    scene: _base.Scene, event_json: object, *, prepared_callback=None
 ) -> object | None:
     """Service one Rust-issued callback phase on the suspended source stack.
 
@@ -788,7 +822,9 @@ def _service_semantic_continuation_event(
     context = _context(scene)
     token_json = _json(phase["token"])
     try:
-        batch_json = _manim_updaters.run_canonical_callback_phase(session_id, phase)
+        batch_json = _manim_updaters.run_canonical_callback_phase(
+            session_id, phase, prepared_context=prepared_callback
+        )
     except Exception as error:
         # Failing the exact pending phase latches terminal Rust state. Its
         # returned promise rejects this suspended construct; no retry occurs.
@@ -801,7 +837,24 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
 
     event_json = await noonAwaitSemanticContinuation(_context(scene))
     while True:
-        next_event = _service_semantic_continuation_event(scene, event_json)
+        prepared = None
+        event = _continuation_event(event_json)
+        if event["kind"] == "callback":
+            import _manim_updaters
+            from js import noonFailSemanticContinuationCallback
+
+            try:
+                prepared = await _manim_updaters.prepare_canonical_callback_phase(
+                    _manim_updaters.canonical_callback_session_id(scene), event["phase"]
+                )
+            except Exception as error:
+                event_json = await noonFailSemanticContinuationCallback(
+                    _context(scene), _json(event["phase"]["token"]), str(error)
+                )
+                continue
+        next_event = _service_semantic_continuation_event(
+            scene, event_json, prepared_callback=prepared
+        )
         if next_event is None:
             return
         event_json = await next_event

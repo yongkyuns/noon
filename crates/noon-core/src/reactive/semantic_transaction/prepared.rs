@@ -145,6 +145,19 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .filter_map(|(mutation, changed)| changed.then_some(mutation))
     }
 
+    /// Staged callback registrations computed by the semantic transaction's own
+    /// preflight. Compiler preparation reads these rather than reimplementing
+    /// updater insertion, occurrence identity, or interval-closing semantics.
+    pub fn proposed_updater_registrations(
+        &self,
+        target: SemanticNodeId,
+    ) -> Option<&[SemanticUpdaterRegistration]> {
+        self.preflight
+            .staged_updaters
+            .get(&target.into())
+            .map(Vec::as_slice)
+    }
+
     /// Reserved candidate revision, or the current revision when no candidates exist.
     ///
     /// Commit can retain the current revision if all candidates resolve to no-ops
