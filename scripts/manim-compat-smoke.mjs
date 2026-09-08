@@ -461,6 +461,47 @@ try {
   assert.deepEqual(handleOwnership.centers, [1, 3, 0], "copies/targets retain independent state");
   assert.equal(handleOwnership.memberCount, 3, "failed cross-store operations leave membership intact");
 
+  // #1272 R1: the real WASM consuming boundary must preserve a rejected player,
+  // not just the receiving context. Test foreign stores and roots with equal
+  // transport session numbers, then return each recovered player to its owner.
+  const playerOwnership = await page.evaluate(async () => {
+    const wasm = await import("./pkg/noon_web.js");
+    await wasm.default();
+    const store = new wasm.WasmAuthoringStore();
+    const foreignStore = new wasm.WasmAuthoringStore();
+    const contexts = [store.createSceneContext(), store.createSceneContext(), foreignStore.createSceneContext()];
+    const players = contexts.map(context => context.createExecutionPlayer(1, 41));
+    const phases = () => contexts.map(context => context.liveExecutionOwnership());
+    const before = phases();
+    const messages = [];
+    for (const index of [1, 2]) {
+      let rejected = false;
+      try {
+        contexts[0].returnExecutionPlayer(players[index]);
+      } catch (error) {
+        if (!(error instanceof wasm.WasmExecutionPlayerReturnError)) throw error;
+        messages.push(error.message);
+        players[index] = error.takePlayer();
+        rejected = true;
+      }
+      if (!rejected) throw new Error("foreign execution player return was accepted");
+    }
+    const afterFailures = phases();
+    const snapshots = players.map(player => JSON.parse(player.initialDeltaJson()));
+    contexts.forEach((context, index) => context.returnExecutionPlayer(players[index]));
+    const afterReturns = phases();
+    for (const context of contexts) context.free();
+    store.free();
+    foreignStore.free();
+    return { before, afterFailures, afterReturns, messages, sessions: snapshots.map(snapshot => snapshot.session) };
+  });
+  assert.deepEqual(playerOwnership.before, ["transferred", "transferred", "transferred"]);
+  assert.deepEqual(playerOwnership.afterFailures, playerOwnership.before);
+  assert.deepEqual(playerOwnership.afterReturns, ["returned", "returned", "returned"]);
+  assert.deepEqual(playerOwnership.sessions, [41, 41, 41]);
+  assert.equal(playerOwnership.messages.length, 2);
+  assert.ok(playerOwnership.messages.every(message => message.includes("another authoring scene")));
+
   const foundation = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     foundationSource,

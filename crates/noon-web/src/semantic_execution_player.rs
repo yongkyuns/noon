@@ -151,7 +151,37 @@ impl LiveSegmentReceipt {
     }
 }
 
+/// Existing runtime and transport identities, observed at an ownership handoff.
+/// This is not a new identity allocator, runtime, or continuation state machine.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExecutionPlayerIdentity {
+    runtime: RuntimeIdentity,
+    transport_session: u32,
+}
+
 impl SemanticExecutionPlayer {
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn ownership_identity(&self) -> ExecutionPlayerIdentity {
+        ExecutionPlayerIdentity {
+            runtime: self.session.runtime_identity(),
+            transport_session: self.encoder.session(),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn belongs_to_authoring_scene(
+        &self,
+        store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        root: noon_core::SemanticNodeId,
+    ) -> bool {
+        self.semantic_root == Some(root)
+            && self
+                .semantics
+                .as_ref()
+                .is_some_and(|owned| std::rc::Rc::ptr_eq(owned, store))
+    }
+
     fn playback_clock(session: &ExecutionSession, duration: f64) -> Result<PlaybackClock, String> {
         if session.has_required_callbacks() {
             Ok(PlaybackClock::once())

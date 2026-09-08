@@ -251,6 +251,12 @@ pub struct RetainedExecutionDeltaEncoder {
 }
 
 impl RetainedExecutionDeltaEncoder {
+    /// Observe the current transport incarnation without advancing its sequence.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) const fn session(&self) -> u32 {
+        self.session
+    }
+
     pub const fn new(session: u32) -> Self {
         Self {
             session,
