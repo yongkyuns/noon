@@ -308,9 +308,9 @@
       "id": "animate.group-target-state",
       "surface": "Group.animate target derivation",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendFamilyTargetEditor/WasmAuthoringFamilyHandle::target_editor"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_target_mobject/_group_target_copy"}],
-      "reason": "Rust snapshots authoritative source-family order, validates every source/target wrapper pair, and constructs the target family graph; Python only mirrors wrapper identity while leaf target edits use the shared Mobject target editor."
+      "owner": {"language": "rust", "path": "crates/noon/src/family_copy.rs", "symbol": "MobjectFamily::copy_family"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_copy"}],
+      "reason": "Rust copies the complete semantic family in one transaction, preserving ordered edges and internal aliases. Live copies capture coherent effective leaf state. Python prepares class/attribute metadata and binds the returned typed copies; it does not construct target nodes or edges."
     },
     {
       "id": "scene-bound-deterministic-state",

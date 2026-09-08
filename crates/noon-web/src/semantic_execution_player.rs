@@ -700,6 +700,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_copy_family(
+        &mut self,
+        source: &noon::MobjectFamily,
+        references: &[noon::MobjectFamilyMember<'_>],
+    ) -> Result<noon::FamilyCopy, String> {
+        self.with_live_session(|live| live.copy_family_with_references(source, references))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_family_layout(
         &mut self,
         family: &noon::MobjectFamily,

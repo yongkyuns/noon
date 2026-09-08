@@ -153,6 +153,46 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             assert clone._semantic_family_handle.memberCount == 2
             assert clone[0] is not nested
             assert clone[1] is not second
+
+            aliased = VGroup(first, nested)
+            copied_alias = aliased.copy()
+            assert copied_alias[0] is copied_alias[1][0]
+
+            class Named(VGroup):
+                constructions = 0
+                def __init__(self, child, label):
+                    Named.constructions += 1
+                    super().__init__(child)
+                    self.child = child
+                    self.label = label
+
+            named = Named(first, "label")
+            named_copy = named.copy()
+            assert type(named_copy) is Named
+            assert Named.constructions == 1
+            assert named_copy.child is named_copy[0]
+            assert named_copy.child is not first
+            assert named_copy.label == "label"
+
+            first.save_state()
+            saved_copy = aliased.copy()
+            assert saved_copy[0].saved_state is not first.saved_state
+            named.related = {"state": first.saved_state, "self": named}
+            related_copy = named.copy()
+            assert related_copy.related["state"] is related_copy[0].saved_state
+            assert related_copy.related["self"] is related_copy
+
+            class Uncopyable:
+                def __deepcopy__(self, memo):
+                    raise ValueError("metadata copy refused")
+            named.bad = Uncopyable()
+            before = store.next_identity
+            try:
+                named.copy()
+                raise AssertionError("expected metadata failure")
+            except ValueError:
+                pass
+            assert store.next_identity == before
             """
         )
         completed = subprocess.run(

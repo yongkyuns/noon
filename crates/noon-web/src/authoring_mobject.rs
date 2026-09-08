@@ -3,10 +3,10 @@ use noon::semantic_family_leaf_ids;
 #[cfg(target_arch = "wasm32")]
 use noon::semantic_mobject::authoring_render_f64 as render_f64;
 pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
-use noon_core::{
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
-    SemanticStore,
-};
+#[cfg(target_arch = "wasm32")]
+use noon_core::SemanticNodeId;
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::SemanticStore;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn text_authoring_f32(field: &str, value: f64) -> Result<f32, String> {
@@ -35,86 +35,6 @@ pub(crate) fn manim_text(
         .with_line_spacing(line_spacing))
 }
 
-/// Shared target-family construction used by frontend Group/VGroup animation builders.
-///
-/// The Python/JS wrapper tree is host-language identity metadata only. This editor
-/// snapshots the source family's authoritative ordered membership, validates each
-/// wrapper pair against that order, and constructs the target family in the same
-/// semantic store. Leaf target state is edited through `Mobject`.
-#[derive(Clone, Debug)]
-pub struct FrontendFamilyTargetEditor {
-    source_members: Vec<SemanticNodeId>,
-    target_members: Vec<SemanticNodeId>,
-    next_index: usize,
-}
-
-impl FrontendFamilyTargetEditor {
-    pub fn begin(store: &SemanticStore, source: SemanticNodeId) -> Result<Self, String> {
-        let source_members = {
-            let source_node = store
-                .node(source)
-                .ok_or_else(|| format!("unknown source family semantic node {source:?}"))?;
-            if !matches!(source_node.kind(), SemanticNodeKind::Family) {
-                return Err(format!("source semantic node {source:?} is not a family"));
-            }
-            source_node.members().to_vec()
-        };
-        Ok(Self {
-            source_members,
-            target_members: Vec::new(),
-            next_index: 0,
-        })
-    }
-
-    pub fn accept_member(
-        &mut self,
-        source_member: SemanticNodeId,
-        target_member: SemanticNodeId,
-    ) -> Result<(), String> {
-        let expected = self
-            .source_members
-            .get(self.next_index)
-            .copied()
-            .ok_or_else(|| "family target editor received too many members".to_owned())?;
-        if expected != source_member {
-            return Err(format!(
-                "family target source member mismatch at index {}: expected {expected:?}, got {source_member:?}",
-                self.next_index
-            ));
-        }
-        self.target_members.push(target_member);
-        self.next_index += 1;
-        Ok(())
-    }
-
-    pub fn target_members(&self) -> Result<&[SemanticNodeId], String> {
-        if self.next_index != self.source_members.len() {
-            return Err(format!(
-                "family target editor is incomplete: accepted {} of {} members",
-                self.next_index,
-                self.source_members.len()
-            ));
-        }
-        Ok(&self.target_members)
-    }
-
-    pub fn finish(&self, store: &mut SemanticStore) -> Result<SemanticNodeId, String> {
-        let members = self.target_members()?;
-        let mut transaction = SemanticMutationTransaction::new();
-        let family = transaction.create_node(SemanticNodeCreation::family());
-        for &member in members {
-            transaction.add_member(family, member);
-        }
-        let result = transaction
-            .apply(store)
-            .map_err(|error| error.to_string())?;
-        let node = result
-            .resolve(family)
-            .expect("committed target family token resolves to one semantic identity");
-        Ok(node)
-    }
-}
-
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::{cell::RefCell, rc::Rc};
@@ -123,9 +43,7 @@ mod wasm {
     use noon_core::Bounds2D64;
     use wasm_bindgen::prelude::*;
 
-    use super::{
-        FrontendFamilyTargetEditor, ManimNextToArgs, Mobject, SemanticNodeId, SemanticStore,
-    };
+    use super::{ManimNextToArgs, Mobject, SemanticNodeId, SemanticStore};
 
     fn js_error(error: String) -> JsValue {
         JsValue::from_str(&error)
@@ -507,78 +425,44 @@ mod wasm {
         }
     }
 
+    /// Derived typed lookup used only to reconstruct host wrapper identities.
     #[wasm_bindgen]
-    pub struct WasmAuthoringFamilyTargetEditor {
-        semantics: SharedSemanticStore,
-        editor: FrontendFamilyTargetEditor,
+    pub struct WasmFamilyCopy {
+        copied: noon::FamilyCopy,
     }
 
-    impl WasmAuthoringFamilyTargetEditor {
-        pub(crate) fn store(&self) -> &SharedSemanticStore {
-            &self.semantics
-        }
-
-        pub(crate) fn target_member_ids(&self) -> Result<&[SemanticNodeId], JsValue> {
-            self.editor.target_members().map_err(js_error)
-        }
-
-        fn mobject_member_id(
-            &self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            member.id_in_store(&self.semantics, "family target editor")
-        }
-
-        fn family_member_id(
-            &self,
-            member: &WasmAuthoringFamilyHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(&self.semantics, &member.semantics) {
-                return Err(JsValue::from_str(
-                    "family target editor and family belong to different authoring stores",
-                ));
-            }
-            Ok(member.id)
+    impl WasmFamilyCopy {
+        pub(crate) fn from_copy(copied: noon::FamilyCopy) -> Self {
+            Self { copied }
         }
     }
 
     #[wasm_bindgen]
-    impl WasmAuthoringFamilyTargetEditor {
-        #[wasm_bindgen(js_name = acceptMobject)]
-        pub fn accept_mobject(
-            &mut self,
+    impl WasmFamilyCopy {
+        pub fn root(&self) -> WasmAuthoringFamilyHandle {
+            WasmAuthoringFamilyHandle::from_semantic_family(self.copied.root().clone())
+        }
+
+        #[wasm_bindgen(js_name = mobjectFor)]
+        pub fn mobject_for(
+            &self,
             source: &WasmAuthoringMobjectHandle,
-            target: &WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            let source_id = self.mobject_member_id(source)?;
-            let target_id = self.mobject_member_id(target)?;
-            self.editor
-                .accept_member(source_id, target_id)
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            self.copied
+                .mobject(&source.handle)
+                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = acceptFamily)]
-        pub fn accept_family(
-            &mut self,
+        #[wasm_bindgen(js_name = familyFor)]
+        pub fn family_for(
+            &self,
             source: &WasmAuthoringFamilyHandle,
-            target: &WasmAuthoringFamilyHandle,
-        ) -> Result<(), JsValue> {
-            let source_id = self.family_member_id(source)?;
-            let target_id = self.family_member_id(target)?;
-            self.editor
-                .accept_member(source_id, target_id)
+        ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+            self.copied
+                .family(&source.semantic_family()?)
+                .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
-        }
-
-        pub fn finish(&self) -> Result<WasmAuthoringFamilyHandle, JsValue> {
-            let id = self
-                .editor
-                .finish(&mut self.semantics.borrow_mut())
-                .map_err(js_error)?;
-            Ok(WasmAuthoringFamilyHandle {
-                semantics: Rc::clone(&self.semantics),
-                id,
-            })
         }
     }
 
@@ -617,14 +501,15 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = targetEditor)]
-        pub fn target_editor(&self) -> Result<WasmAuthoringFamilyTargetEditor, JsValue> {
-            let editor = FrontendFamilyTargetEditor::begin(&self.semantics.borrow(), self.id)
-                .map_err(js_error)?;
-            Ok(WasmAuthoringFamilyTargetEditor {
-                semantics: Rc::clone(&self.semantics),
-                editor,
-            })
+        #[wasm_bindgen(js_name = copyFamily)]
+        pub fn copy_family(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            self.semantic_family()?
+                .copy_with_references(&references.copy_references().map_err(js_error)?)
+                .map(WasmFamilyCopy::from_copy)
+                .map_err(js_error)
         }
 
         /// Atomically apply Manim subset-display constructor semantics to every
@@ -1754,70 +1639,6 @@ mod tests {
             semantic_family_leaf_ids(&store, aliased_outer).unwrap(),
             vec![first, first]
         );
-    }
-
-    #[test]
-    fn family_target_editor_builds_target_from_shared_source_order() {
-        let mut store = SemanticStore::new();
-        let source_a = store.insert_semantic_object(noon_core::SemanticObjectState::new(
-            noon_core::StoredGeometry::Circle { radius: 1.0 },
-        ));
-        let source_b = store.insert_semantic_object(noon_core::SemanticObjectState::new(
-            noon_core::StoredGeometry::Circle { radius: 1.0 },
-        ));
-        let source_family = store.insert_family();
-        store.add_member(source_family, source_a).unwrap();
-        store.add_member(source_family, source_b).unwrap();
-
-        let target_a = store.insert_semantic_object(noon_core::SemanticObjectState::new(
-            noon_core::StoredGeometry::Circle { radius: 1.0 },
-        ));
-        let target_b = store.insert_semantic_object(noon_core::SemanticObjectState::new(
-            noon_core::StoredGeometry::Circle { radius: 1.0 },
-        ));
-        let mut editor = FrontendFamilyTargetEditor::begin(&store, source_family).unwrap();
-
-        editor.accept_member(source_a, target_a).unwrap();
-        editor.accept_member(source_b, target_b).unwrap();
-        let target_family = editor.finish(&mut store).unwrap();
-
-        assert_eq!(
-            store.node(source_family).unwrap().members(),
-            &[source_a, source_b]
-        );
-        assert_eq!(
-            store.node(target_family).unwrap().members(),
-            &[target_a, target_b]
-        );
-        assert!(store
-            .node(target_a)
-            .unwrap()
-            .parents()
-            .contains(&target_family));
-        assert!(store
-            .node(target_b)
-            .unwrap()
-            .parents()
-            .contains(&target_family));
-    }
-
-    #[test]
-    fn family_target_editor_rejects_wrapper_reordering_and_incomplete_targets() {
-        let mut store = SemanticStore::new();
-        let source_a = store.insert_authoring_object();
-        let source_b = store.insert_authoring_object();
-        let source_family = store.insert_family();
-        store.add_member(source_family, source_a).unwrap();
-        store.add_member(source_family, source_b).unwrap();
-        let target_a = store.insert_authoring_object();
-
-        let mut editor = FrontendFamilyTargetEditor::begin(&store, source_family).unwrap();
-        let error = editor.accept_member(source_b, target_a).unwrap_err();
-        assert!(error.contains("mismatch at index 0"));
-        assert!(editor
-            .finish(&mut store)
-            .unwrap_err()
-            .contains("accepted 0 of 2"));
     }
 
     #[test]
