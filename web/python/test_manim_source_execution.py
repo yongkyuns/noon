@@ -329,6 +329,32 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
 ''')
         self.assertEqual(pairs, {})
 
+    async def test_module_scene_context_survives_barriers_and_restores_after_failure(self):
+        from contextvars import ContextVar
+        from types import SimpleNamespace
+        import sys
+
+        active = ContextVar("test_authoring_scene", default="outer")
+        reactive = SimpleNamespace(_enter_authoring_scene=active.set, _leave_authoring_scene=active.reset)
+        with patch.dict(sys.modules, {"_manim_reactive": reactive}):
+            with self.assertRaisesRegex(RuntimeError, "source failed"):
+                with authoring_source_scope():
+                    invocation = current_source_invocation()
+                    invocation.select_authoring_scene("first")
+                    await asyncio.sleep(0)
+                    self.assertEqual(active.get(), "first")
+                    invocation.select_authoring_scene("second")
+                    self.assertEqual(active.get(), "second")
+                    with authoring_source_scope():
+                        current_source_invocation().select_authoring_scene("nested")
+                        await asyncio.sleep(0)
+                        self.assertEqual(active.get(), "nested")
+                    self.assertEqual(active.get(), "second")
+                    invocation.select_authoring_scene("first")
+                    self.assertEqual(active.get(), "first")
+                    raise RuntimeError("source failed")
+            self.assertEqual(active.get(), "outer")
+
     async def test_module_barriers_preserve_namespace_definition_effects_and_order(self):
         from _manim_source_execution import MODULE_BARRIER_GLOBAL, execute_authoring_module
         events = []

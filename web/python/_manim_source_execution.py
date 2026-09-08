@@ -33,6 +33,17 @@ MODULE_BARRIER_GLOBAL = "_noon_await_module_barrier"
 class _SourceInvocation:
     export_document: bool
     cleanup: ExitStack
+    authoring_scene_selected: bool = False
+
+    def select_authoring_scene(self, scene):
+        # Module source between barriers needs the same host routing context as
+        # a construct body. Restore the enclosing context once when source exits.
+        from _manim_reactive import _enter_authoring_scene, _leave_authoring_scene
+
+        token = _enter_authoring_scene(scene)
+        if not self.authoring_scene_selected:
+            self.authoring_scene_selected = True
+            self.cleanup.callback(_leave_authoring_scene, token)
 
 
 _SOURCE_INVOCATION: ContextVar[_SourceInvocation | None] = ContextVar(

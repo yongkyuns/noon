@@ -709,11 +709,8 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
         invocation.cleanup.callback(_finish_async_continuation_construct, scene)
         invocation.cleanup.callback(setattr, scene, _PORTABLE_CONSTRUCT_MODE, False)
         invocation.cleanup.callback(setattr, scene, _PORTABLE_BARRIER_CALL, False)
-    token = _reactive._enter_authoring_scene(scene)
-    try:
-        return await await_source_barrier(method, *args, **kwargs)
-    finally:
-        _reactive._leave_authoring_scene(token)
+    invocation.select_authoring_scene(scene)
+    return await await_source_barrier(method, *args, **kwargs)
 
 
 class _SemanticContinuationAwaitable:
