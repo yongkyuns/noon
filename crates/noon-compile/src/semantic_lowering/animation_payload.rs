@@ -1,5 +1,6 @@
 mod affine;
 mod prepared_composition;
+mod scheduled_captures;
 mod text_write;
 mod transform_payload;
 

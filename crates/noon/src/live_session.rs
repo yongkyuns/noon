@@ -3486,12 +3486,14 @@ mod tests {
     }
 
     #[test]
-    fn prepared_sequence_uses_mapped_boundaries_and_releases_disjoint_style_channels() {
+    fn prepared_sequence_captures_composed_style_targets_at_mapped_boundaries() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let mut fill_target = circle.target_editor().unwrap();
         fill_target.set_fill(1.0, 0.0, 0.0, 0.4).unwrap();
-        let mut opacity_target = circle.target_editor().unwrap();
+        // TransformTo targets are complete snapshots. Carry the first target's
+        // paint into the second target while changing its opacity.
+        let mut opacity_target = fill_target.target_editor().unwrap();
         opacity_target.set_object_opacity(0.5).unwrap();
         scene.add(&circle).unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -3542,6 +3544,56 @@ mod tests {
     }
 
     #[test]
+    fn sequential_transform_targets_capture_previous_effective_endpoints() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut first = circle.target_editor().unwrap();
+        first.set_translation(2.0, 1.0).unwrap();
+        let mut second = circle.target_editor().unwrap();
+        second.set_translation(4.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            TransformToRequest::new(&circle, &first, options),
+            TransformToRequest::new(&circle, &second, options),
+        ];
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            live.session.publication_context().scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        for (time, expected) in [
+            (0.5, noon_core::Vec2::new(1.0, 0.5)),
+            (1.0, noon_core::Vec2::new(2.0, 1.0)),
+            (1.5, noon_core::Vec2::new(3.0, 0.5)),
+            (2.0, noon_core::Vec2::new(4.0, 0.0)),
+        ] {
+            live.advance_segment_to(segment, time).unwrap();
+            assert_eq!(
+                live.effective(&circle).unwrap().transform.translation,
+                expected
+            );
+        }
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.authored(&circle).unwrap().transform.translation,
+            SemanticVec3::new(4.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn duplicate_composition_driver_rolls_back_target_leaf_and_root_declarations() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
@@ -3563,7 +3615,7 @@ mod tests {
         let result = scene
             .live(&mut session)
             .declare_and_activate_transform_composition(
-                SemanticAnimationCompositionKind::Sequence,
+                SemanticAnimationCompositionKind::Parallel,
                 &children,
                 AnimationOptions::new(),
                 AnimationOptions::new().run_time(2.0),
