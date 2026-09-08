@@ -1245,11 +1245,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = snapshotJson)]
         pub fn snapshot_json(&self) -> Result<String, JsValue> {
-            self.handle.validate().map_err(js_error)?;
-            serde_json::to_string(
-                &noon::legacy::export_mobject_snapshot(&self.handle).map_err(js_error)?,
-            )
-            .map_err(|error| js_error(error.to_string()))
+            crate::geometry_export::mobject_json(&self.handle).map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = wireTranslationX)]
@@ -1818,16 +1814,7 @@ mod tests {
         assert_eq!(handle.state().unwrap().transform.translation.y, 0.3);
         assert!((handle.critical_point(-1.0, 0.0).unwrap().0 + 0.3).abs() < 1e-12);
         assert!((handle.critical_point(0.0, 1.0).unwrap().1 - 0.8).abs() < 1e-12);
-        assert_ne!(
-            f64::from(
-                noon::legacy::export_mobject_snapshot(&handle)
-                    .unwrap()
-                    .transform
-                    .translation
-                    .x
-            ),
-            0.7
-        );
+        assert_ne!(handle.wire_translation().unwrap().0, 0.7);
 
         handle.scale(1.1, 0.9).unwrap();
         handle.rotate(0.2).unwrap();
@@ -2347,9 +2334,9 @@ mod tests {
     }
 
     #[test]
-    fn wire_projection_matches_lowered_snapshot_after_shared_edits() {
-        let authoring_store =
-            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+    fn wire_projection_matches_typed_runtime_after_shared_edits() {
+        let mut scene = noon::Scene::new();
+        let authoring_store = std::rc::Rc::clone(scene.store());
         let mut options = ManimGeometryOptions::rectangle(2.0, 1.0).unwrap();
         options.set_fill(0.2, 0.3, 0.4, 0.5).unwrap();
         options.set_stroke(0.6, 0.7, 0.8, 0.9).unwrap();
@@ -2362,24 +2349,26 @@ mod tests {
         handle.set_fill_opacity(0.25).unwrap();
         handle.set_stroke_width(3.5).unwrap();
 
-        let snapshot = noon::legacy::export_mobject_snapshot(&handle).unwrap();
+        scene.add(&handle).unwrap();
+        let session = scene.execution_session().unwrap();
+        let effective = &session.frame().objects[0];
         assert_eq!(
             handle.wire_translation().unwrap(),
             (
-                f64::from(snapshot.transform.translation.x),
-                f64::from(snapshot.transform.translation.y),
+                f64::from(effective.transform.translation.x),
+                f64::from(effective.transform.translation.y),
             )
         );
         assert_eq!(
             handle.wire_scale().unwrap(),
             (
-                f64::from(snapshot.transform.scale.x),
-                f64::from(snapshot.transform.scale.y),
+                f64::from(effective.transform.scale.x),
+                f64::from(effective.transform.scale.y),
             )
         );
         assert_eq!(
             handle.wire_rotation().unwrap(),
-            f64::from(snapshot.transform.rotation)
+            f64::from(effective.transform.rotation)
         );
         assert_eq!(handle.wire_fill().unwrap().unwrap().3, 0.25_f32 as f64);
         assert_eq!(handle.wire_stroke_width().unwrap(), 3.5_f32 as f64);

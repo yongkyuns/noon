@@ -16,6 +16,7 @@ mod execution_canvas;
 mod execution_transport;
 mod execution_wake;
 mod family_bounds;
+mod geometry_export;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 mod gpu_diagnostics;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]

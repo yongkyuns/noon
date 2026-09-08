@@ -1,7 +1,7 @@
 //! Ergonomic Rust authoring facade for Noon.
 //!
 //! `Scene` and `Mobject` author directly into the shared semantic store and
-//! lower through `ExecutionSession`. Snapshot-era APIs are explicit in `legacy`.
+//! lower through `ExecutionSession` using typed in-process Rust boundaries.
 
 #![forbid(unsafe_code)]
 
@@ -22,7 +22,6 @@ mod rotation_authoring;
 pub use rotation_authoring::ManimRotationPivot;
 mod geometry_authoring;
 mod host_callbacks;
-pub mod legacy;
 mod live_program;
 mod live_session;
 mod native_signal_authoring;
