@@ -375,7 +375,14 @@ mod wasm {
                 });
             let draw = self
                 .renderer
-                .encode_retained(&mut encoder, &view, &prepared, &self.text_gpu, CLEAR_COLOR)
+                .encode_retained(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &self.text_gpu,
+                    CLEAR_COLOR,
+                    None,
+                )
                 .map_err(js_error)?;
             self.queue.submit(Some(encoder.finish()));
             self.queue.present(surface_texture);
