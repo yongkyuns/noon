@@ -1,6 +1,19 @@
 --- a/scripts/playground-main-thread-mobile-smoke.mjs
 +++ b/scripts/playground-main-thread-mobile-smoke.mjs
-@@ -140,17 +140,31 @@
+@@ -123,6 +123,12 @@
+       `${baseUrl}/web/index.html?example=parity-create-circle${variant.host ? `&renderHost=${variant.host}` : ""}`,
+       { waitUntil: "load" },
+     );
++    // Neutralize only CSS chrome, keeping border widths and canvas dimensions.
++    // Otherwise a rounded decorative border is miscounted as engine geometry.
++    await page.addStyleTag({ content:
++      "#scene { border-color: #000 !important; border-radius: 0 !important; " +
++      "box-shadow: none !important; background: #000 !important; }",
++    });
+     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+     await waitForIdle(page);
+ 
+@@ -140,17 +146,31 @@
        window.__mobileRun = window.__noonExampleGallery.select("parity-square-to-circle");
        window.__mobileRun.catch(() => {});
      });
