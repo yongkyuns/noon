@@ -244,6 +244,13 @@ if [[ -e 'crates/noon-web/src/legacy/clock.rs' ]]; then
 fi
 
 deleted_legacy_validation_paths=(
+  'crates/noon-web/src/authoring_facade.rs'
+  'crates/noon/src/legacy/composition_authoring.rs'
+  'web/noon-authoring.js'
+  'web/noon-moving-camera.js'
+  'web/js/examples/manim-gallery-moving-around.js'
+  'web/js/examples/manim-gallery-moving-camera-center.js'
+  'web/js/examples/manim-quickstart-equivalents.js'
   'scripts/manim-seek-playback-raster.mjs'
   'web/gpu-profile.html'
   'web/gpu-profile.js'

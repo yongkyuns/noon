@@ -14,10 +14,6 @@ const [javascript, declarations, wasm, wasmStats] = await Promise.all([
 ]);
 
 const expectedJavascriptSurface = [
-  "export class AuthoringSceneCore",
-  "export class DetachedMobjectCore",
-  "export class AnimateCore",
-  "export class PlayBatchCore",
   "export class WasmAuthoringStore",
   "createManimCircle(",
   "createManimText(",
@@ -197,18 +193,8 @@ const expectedJavascriptSurface = [
   "manimMoveToPoint(",
   "manimNextToHandle(",
   "manimNextToPoint(",
-  "export function authoringCircle(",
-  "export function authoringSquare(",
-  "export function authoringRectangle(",
-  "export function authoringLine(",
-  "createPlayBatch(",
-  "appendAnimate(",
   "appendCreate(",
-  "appendFadeOut(",
-  "appendFadeIn(",
-  "appendTransform(",
   "appendRotate(",
-  "playBatch(",
   "sceneJson(",
   "export function verifySceneReplay(",
   "export function resolveAnimationOptions(",
@@ -218,22 +204,8 @@ const expectedJavascriptSurface = [
   "export function validatePresenceTransition(",
 ];
 const expectedTypeSurface = [
-  "export class AuthoringSceneCore",
   "constructor()",
-  "add(object: DetachedMobjectCore): number",
-  "animate(handle: number): AnimateCore",
-  "createPlayBatch(): PlayBatchCore",
-  "appendAnimate(batch: PlayBatchCore, animation: AnimateCore): void",
-  "appendCreate(batch: PlayBatchCore, handle: number): void",
-  "appendFadeOut(batch: PlayBatchCore, handle: number): void",
-  "appendFadeIn(batch: PlayBatchCore, handle: number): void",
-  "appendTransform(batch: PlayBatchCore, handle: number, target: DetachedMobjectCore): void",
-  "appendRotate(batch: PlayBatchCore, handle: number, angle: number): void",
-  "playBatch(batch: PlayBatchCore, run_time: number, rate_func: string): void",
   "sceneJson(): string",
-  "export class DetachedMobjectCore",
-  "export class AnimateCore",
-  "export class PlayBatchCore",
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
   "createManimText(source: string, font_family: string, font_size: number, line_spacing: number): WasmAuthoringMobjectHandle",
@@ -427,10 +399,6 @@ const expectedTypeSurface = [
   "manimMoveToPoint(",
   "manimNextToHandle(",
   "manimNextToPoint(",
-  "export function authoringCircle(radius: number): DetachedMobjectCore",
-  "export function authoringSquare(side_length: number): DetachedMobjectCore",
-  "export function authoringRectangle(width: number, height: number): DetachedMobjectCore",
-  "export function authoringLine(start_x: number, start_y: number, end_x: number, end_y: number): DetachedMobjectCore",
   "export function verifySceneReplay(scene_json: string, targets_json: string, forward_sample_count: number): void",
   "export function resolveAnimationOptions(",
   "export function resolveCompositionSchedule(",
@@ -530,12 +498,15 @@ for (const fragment of expectedTypeSurface) {
     throw new Error(`Generated declarations are missing: ${fragment}`);
   }
 }
-for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer"]) {
+for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer",
+  "AuthoringSceneCore", "DetachedMobjectCore", "AnimateCore", "PlayBatchCore"]) {
   if (javascript.includes(`export class ${retired}`) || declarations.includes(`export class ${retired}`)) {
-    throw new Error(`Deleted reactive player returned to the browser package: ${retired}`);
+    throw new Error(`Deleted browser API returned to the package: ${retired}`);
   }
 }
 for (const retired of [
+  "export function authoringCircle(", "export function authoringSquare(",
+  "export function authoringRectangle(", "export function authoringLine(",
   "createManimDot(", "createManimTriangle(", "createManimElbow(",
   "createManimRoundedRectangle(", "createManimAnnularSector(", "createManimSector(",
   "createManimAnnulus(", "createManimDashedLine(", "createManimUnderline(",

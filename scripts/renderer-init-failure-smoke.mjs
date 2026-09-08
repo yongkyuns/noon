@@ -83,12 +83,8 @@ async function waitForHarness(page) {
 
 async function loadVisibleAuthoringScene(page) {
   return page.evaluate(async () => {
-    const wasm = await import("./pkg/noon_web.js");
-    await wasm.default();
-    const scene = new wasm.AuthoringSceneCore();
-    const circle = scene.add(wasm.authoringCircle(0.75));
-    scene.moveTo(circle, 0, 0);
-    return window.noonSmoke.loadScene(scene.sceneJson());
+    const { loadExecutionTransportFixture } = await import("../scripts/explicit-transport-scene-fixture.js");
+    return window.noonSmoke.loadScene(await loadExecutionTransportFixture("circle"));
   });
 }
 

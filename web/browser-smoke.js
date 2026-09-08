@@ -1,5 +1,5 @@
+import { loadExecutionTransportFixture } from "../scripts/explicit-transport-scene-fixture.js";
 import init, {
-  AuthoringSceneCore,
   EngineScenePlayer,
   ExecutionCanvasRenderer,
 } from "./pkg/noon_web.js";
@@ -215,9 +215,8 @@ async function resizeBacking(width, height) {
 async function start() {
   await init();
 
-  const bootstrap = new AuthoringSceneCore();
   engine = new EngineScenePlayer(
-    bootstrap.sceneJson(),
+    await loadExecutionTransportFixture("empty"),
     SMOKE_RENDER_HORIZON_SECONDS,
     1,
   );

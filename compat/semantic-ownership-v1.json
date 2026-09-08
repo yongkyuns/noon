@@ -210,8 +210,8 @@
       "surface": "Transform/ReplacementTransform/TransformFromCopy",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::append_transform"},
-      "reason": "Python still expands transform variants and authors their object-snapshot tracks even though the Rust facade has the shared lowering.",
+      "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_transform_to"},
+      "reason": "Ordinary Transform reaches shared Rust execution; remaining migration/export transform variants still expand Python-authored tracks and must be retired.",
       "replacement": "Pass transform intent and handles to the shared Rust authoring scene.",
       "migration_issue": "#61"
     },
@@ -369,8 +369,8 @@
       "surface": "Scene.add/play/wait cursor and lifecycle authoring",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Scene.add/play/wait"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::add/play_batch/wait"},
-      "reason": "The Python facade still owns scene cursor and object binding decisions before serializing a Rust scene document.",
+      "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::add/declare_and_activate_composition/wait_segment"},
+      "reason": "Ordinary playback uses shared Rust continuations. The remaining export fallback still owns a Python scene cursor and binding decisions; deletion remains under #61.",
       "replacement": "Make the Rust authoring scene authoritative and keep Python Scene as a thin call-shape adapter.",
       "migration_issue": "#61"
     },
