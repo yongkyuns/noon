@@ -1,301 +1,106 @@
 import assert from "node:assert/strict";
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
-import { createServer } from "node:http";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
 
-const { chromium } = playwright;
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const port = Number(process.env.NOON_RETAINED_EXECUTION_WORKER_PORT ?? "4181");
-const baseUrl = `http://127.0.0.1:${port}`;
-
-const contentTypes = new Map([
-  [".html", "text/html; charset=utf-8"],
-  [".js", "text/javascript; charset=utf-8"],
-  [".mjs", "text/javascript; charset=utf-8"],
-  [".wasm", "application/wasm"],
-  [".json", "application/json; charset=utf-8"],
-]);
-
-const server = createServer(async (request, response) => {
-  try {
-    const url = new URL(request.url, baseUrl);
-    const relative = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-    const resolved = path.resolve(repoRoot, relative || "web/execution-worker-smoke.html");
-    if (resolved !== repoRoot && !resolved.startsWith(`${repoRoot}${path.sep}`)) {
-      response.writeHead(403).end("forbidden");
-      return;
-    }
-    const info = await stat(resolved);
-    if (!info.isFile()) {
-      response.writeHead(404).end("not found");
-      return;
-    }
-    response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    response.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
-    response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-    response.setHeader("Cache-Control", "no-store");
-    response.setHeader(
-      "Content-Type",
-      contentTypes.get(path.extname(resolved)) ?? "application/octet-stream",
-    );
-    response.writeHead(200);
-    createReadStream(resolved).pipe(response);
-  } catch (error) {
-    response.writeHead(error?.code === "ENOENT" ? 404 : 500).end(String(error));
-  }
-});
-await new Promise((resolve, reject) => {
-  server.once("error", reject);
-  server.listen(port, "127.0.0.1", resolve);
-});
-
-const browserArgs = [
-  "--enable-unsafe-webgpu",
-  "--enable-unsafe-swiftshader",
-  "--use-webgpu-adapter=swiftshader",
-  "--use-gpu-in-tests",
-  "--ignore-gpu-blocklist",
-  "--enable-features=Vulkan",
-  "--use-gl=angle",
-  "--use-angle=swiftshader",
-  "--use-vulkan=swiftshader",
-  "--disable-gpu-sandbox",
-  "--disable-dev-shm-usage",
-];
-
-const textA = 4503599627370496;
-const textB = 4503599627370497;
-
-async function runMode(browser, transportMode) {
-  const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
-  const browserErrors = [];
-  page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error}`));
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      browserErrors.push(`console: ${message.text()}`);
-    }
-  });
-  await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
-
-  const started = await page.evaluate(async ({ mode, textAId, textBId }) => {
-    const wasm = await import("./pkg/noon_web.js");
-    await wasm.default();
-    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
-    const canvas = document.querySelector("#scene");
-    const errors = [];
-    const client = new ExecutionWorkerClient(canvas, {
-      onError(error, owner) {
-        errors.push(`${owner}: ${error}`);
-      },
-    });
-    window.retainedExecutionSmoke = { client, errors };
-
-    const store = new wasm.WasmAuthoringStore();
-    const context = store.createSceneContext();
-    const circle = store.createManimCircle(0.65);
-    const typst = store.createManimTypst("*Hello* from _Typst!_", false, 64);
-    const rectangle = store.createManimRectangle(1.5, 0.9);
-    const line = store.createManimLine(-1.2, 0, 1.2, 0);
-    const math = store.createManimTypst("frac(x, 2)", true, 72);
-    const square = store.createManimSquare(0.8);
-    circle.setTranslation(-2.0, 0.6);
-    typst.setTranslation(0, 1.1);
-    rectangle.setTranslation(2.0, 0.6);
-    line.setTranslation(-1.5, -1.4);
-    math.setTranslation(0, -1);
-    math.setColor(1, 0.8, 0.2, 1);
-    math.setOpacity(0.9);
-    square.setTranslation(1.5, -1.4);
-    context.bindMobject("0", circle);
-    context.bindMobject(String(textAId), typst);
-    context.bindMobject("1", rectangle);
-    context.bindMobject("2", line);
-    context.bindMobject(String(textBId), math);
-    context.bindMobject("3", square);
-    const sceneSpecJson = context.sceneSpecJson("[]", "[]", "");
-    const ready = await client.startRetainedCanonical(sceneSpecJson, {
-      loopDurationSeconds: 4,
-      transportMode: mode,
-      sharedSlotCapacity: 1024 * 1024,
-    });
-    return {
-      ready,
-      canonicalObjectCount: JSON.parse(sceneSpecJson).objects.length,
-      crossOriginIsolated: window.crossOriginIsolated,
-      hasSharedArrayBuffer: typeof SharedArrayBuffer === "function",
-    };
-  }, { mode: transportMode, textAId: textA, textBId: textB });
-
-  assert.equal(started.crossOriginIsolated, true);
-  assert.equal(started.hasSharedArrayBuffer, true);
-  assert.equal(started.canonicalObjectCount, 6);
-  assert.equal(started.ready.transportMode, transportMode);
-  assert.equal(started.ready.engine.retained, true);
-  assert.equal(started.ready.engine.mixed, true);
-  assert.equal(started.ready.engine.canonical, true);
-  assert.equal(started.ready.render.retained, true);
-  assert.equal(started.ready.render.mixed, true);
-  assert.match(started.ready.render.backend, /WebGPU|WebGL2/);
-
-  await page.waitForTimeout(450);
-  const before = await page.evaluate(() => window.retainedExecutionSmoke.client.metrics());
-  assert.equal(before.metrics.ready, true);
-  assert.equal(before.metrics.retained, true);
-  assert.equal(before.metrics.mixed, true);
-  assert.equal(before.metrics.objectCount, 6);
-  assert.ok(before.metrics.presentedFrames >= 1, `${transportMode}: mixed retained frame was not presented`);
-  assert.ok(before.metrics.drawCalls > 0, `${transportMode}: mixed retained scene produced no draw calls`);
-  assert.ok(before.metrics.instancesDrawn > 0, `${transportMode}: mixed retained scene produced no instances`);
-  assert.ok(before.metrics.bytesUploaded > 0, `${transportMode}: mixed retained scene uploaded no GPU data`);
-  assert.equal(before.engineMetrics.retained, true);
-  assert.equal(before.engineMetrics.mixed, true);
-  assert.equal(before.engineMetrics.canonical, true);
-  assert.equal(before.engineMetrics.resourceBundleTransfers, 1);
-  assert.ok(before.engineMetrics.resourceBundleBytes > 0);
-  assert.ok(before.engineMetrics.time > 0, `${transportMode}: mixed retained engine playhead did not advance`);
-
-  const state = await page.evaluate(() => window.retainedExecutionSmoke.client.state());
-  assert.equal("sceneJson" in state, false);
-  assert.equal("retainedDocumentJson" in state, false);
-  const sceneSpec = JSON.parse(state.sceneSpecJson);
-  assert.equal(sceneSpec.objects.length, 6);
-  assert.equal(sceneSpec.objects[1].id, textA);
-  assert.equal(sceneSpec.objects[4].id, textB);
-  assert.equal(state.nextPatchSequence, "0");
-
-  const retimed = await page.evaluate(() =>
-    window.retainedExecutionSmoke.client.setLoopDurationSeconds(0.9),
-  );
-  assert.equal(retimed.nextPatchSequence, "0");
-  assert.equal("sceneSpecJson" in retimed, true);
-  await page.waitForTimeout(1050);
-  const afterRetime = await page.evaluate(() => window.retainedExecutionSmoke.client.metrics());
-  assert.ok(afterRetime.engineMetrics.time >= 0 && afterRetime.engineMetrics.time < 0.9);
-  assert.equal(afterRetime.engineMetrics.resourceBundleTransfers, 1);
-  assert.equal(afterRetime.engineMetrics.canonical, true);
-  assert.equal(afterRetime.metrics.objectCount, 6);
-
-  const reconnected = await page.evaluate(async () => {
-    async function bounded(label, operation, timeoutMs = 5_000) {
-      let timer = null;
-      try {
-        return await Promise.race([
-          Promise.resolve().then(operation),
-          new Promise((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`retained reconnect timed out during ${label}`)),
-              timeoutMs,
-            );
-          }),
-        ]);
-      } finally {
-        if (timer !== null) {
-          clearTimeout(timer);
-        }
-      }
-    }
-
-    const client = window.retainedExecutionSmoke.client;
-    const canvas = client.canvas;
-    const paused = await bounded("pause", () => client.pause());
-    const beforeReconnect = await bounded("pre-reconnect metrics", () => client.metrics());
-    const ready = await bounded("engine restart", () => client.restart({ failedOwner: "engine" }));
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    const afterReconnect = await bounded("post-reconnect metrics", () => client.metrics());
-    const state = await bounded("post-reconnect state", () => client.state());
-    return {
-      ready,
-      paused,
-      state,
-      sameCanvas: client.canvas === canvas,
-      presentedBefore: beforeReconnect.metrics.presentedFrames,
-      presentedAfter: afterReconnect.metrics.presentedFrames,
-      metrics: afterReconnect.metrics,
-      engineMetrics: afterReconnect.engineMetrics,
-    };
-  });
-  assert.equal(reconnected.ready.session, 2);
-  assert.equal(reconnected.ready.transportMode, transportMode);
-  assert.equal(reconnected.ready.engine.canonical, true);
-  assert.equal(reconnected.ready.render.retained, true);
-  assert.equal(reconnected.ready.render.mixed, true);
-  assert.equal(reconnected.paused.playing, false);
-  assert.equal(
-    reconnected.state.playing,
-    false,
-    `${transportMode}: retained engine reconnect lost paused mode`,
-  );
-  assert.equal("sceneJson" in reconnected.state, false);
-  assert.equal("retainedDocumentJson" in reconnected.state, false);
-  assert.equal(JSON.parse(reconnected.state.sceneSpecJson).objects.length, 6);
-  assert.equal(reconnected.sameCanvas, true, `${transportMode}: retained engine reconnect replaced canvas`);
-  assert.ok(
-    reconnected.presentedAfter >= reconnected.presentedBefore,
-    `${transportMode}: retained engine reconnect reset renderer presentation history`,
-  );
-  assert.equal(reconnected.metrics.ready, true);
-  assert.equal(reconnected.metrics.objectCount, 6);
-  assert.equal(reconnected.metrics.resourceBundlePending, false);
-  assert.equal(reconnected.engineMetrics.canonical, true);
-  assert.equal(reconnected.engineMetrics.resourceBundleTransfers, 1);
-  assert.ok(reconnected.engineMetrics.resourceBundleBytes > 0);
-  assert.ok(
-    reconnected.engineMetrics.time >= 0 && reconnected.engineMetrics.time < 0.9,
-    `${transportMode}: retained engine reconnect forgot the authored loop duration`,
-  );
-  await page.evaluate(() => window.retainedExecutionSmoke.client.resume());
-
-  const recovered = await page.evaluate(async () => {
-    const client = window.retainedExecutionSmoke.client;
-    const canvas = client.canvas;
-    const ready = await client.restart({ failedOwner: "render" });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const state = await client.state();
-    const metrics = await client.metrics();
-    return {
-      ready,
-      state,
-      canvasReplaced: client.canvas !== canvas,
-      metrics: metrics.metrics,
-      engineMetrics: metrics.engineMetrics,
-    };
-  });
-  assert.equal(recovered.ready.session, 3);
-  assert.equal(recovered.ready.engine.canonical, true);
-  assert.equal(recovered.canvasReplaced, true);
-  assert.equal("sceneJson" in recovered.state, false);
-  assert.equal("retainedDocumentJson" in recovered.state, false);
-  assert.equal(JSON.parse(recovered.state.sceneSpecJson).objects.length, 6);
-  assert.equal(recovered.metrics.objectCount, 6);
-  assert.equal(recovered.engineMetrics.canonical, true);
-  assert.equal(recovered.engineMetrics.resourceBundleTransfers, 1);
-
-  const clientErrors = await page.evaluate(() => window.retainedExecutionSmoke.errors.slice());
-  assert.deepEqual(clientErrors, []);
-  assert.deepEqual(browserErrors, []);
-  await page.evaluate(() => window.retainedExecutionSmoke.client.terminate());
-  await page.close();
-  console.log(
-    `✓ canonical retained execution ${transportMode}: ${before.metrics.backend}, ` +
-      `${reconnected.presentedAfter} frames through the shared execution owner`,
-  );
-}
-
-let browser = null;
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const server = await serveRepository(root, Number(process.env.NOON_RETAINED_EXECUTION_WORKER_PORT ?? 4181), { crossOriginIsolated: true });
+const source = `from noon import *
+scene = Scene()
+scene.add(
+    Circle(0.65).shift(2 * LEFT + 0.6 * UP),
+    Typst("*Hello* from _Typst!_", font_size=64).shift(1.1 * UP),
+    Rectangle(width=1.5, height=0.9).shift(2 * RIGHT + 0.6 * UP),
+    Line(1.2 * LEFT, 1.2 * RIGHT).shift(1.5 * LEFT + 1.4 * DOWN),
+    MathTypst("frac(x, 2)", font_size=72).set_color(YELLOW).set_opacity(0.9).shift(DOWN),
+    Square(0.8).shift(1.5 * RIGHT + 1.4 * DOWN),
+)
+result = scene
+`;
+let browser;
+const reports = [];
 try {
-  browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: browserArgs,
-  });
-  await runMode(browser, "transferable");
-  await runMode(browser, "shared");
-} finally {
-  await browser?.close();
-  await new Promise((resolve) => server.close(resolve));
-}
+  browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgpu") });
+  for (const transportMode of ["transferable", "shared"]) {
+    const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
+    const errors = [];
+    page.on("pageerror", error => errors.push(String(error)));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    let timer;
+    try {
+      await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
+      const result = await Promise.race([
+        page.evaluate(async ({ source, transportMode }) => {
+          const { PythonAuthoringClient } = await import("./authoring-client.js");
+          const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+          const authoring = new PythonAuthoringClient();
+          const clientErrors = [];
+          const client = new ExecutionWorkerClient(document.querySelector("#scene"), {
+            onError: error => clientErrors.push(String(error)),
+          });
+          async function context(code) { return (await authoring.run(code, {})).semanticExecution.contextId; }
+          async function snapshot() {
+            await client.advanceTo(0.75);
+            return { ...(await client.metrics()), state: await client.state() };
+          }
+          try {
+            // Prepare the real renderer before Python authoring finishes. No
+            // execution snapshot may be published until the shared context attaches.
+            const prepared = client.prepare({ transportMode, sharedSlotCapacity: 1024 * 1024 });
+            const initialContext = await context(source);
+            await prepared;
+            const ready = await client.startSemanticExecution(initialContext, authoring, { initiallyPaused: true });
+            const initial = await snapshot();
+            const canvas = client.canvas;
+            const engineReady = await client.restart({ failedOwner: "engine" });
+            const reconnected = await snapshot();
+            const engineKeptCanvas = client.canvas === canvas;
+            // A source replacement uses the existing retained renderer and shared
+            // semantic context preflight; no geometry/text engine-mode switch.
+            await client.switchToSemanticExecution(await context("from noon import *\nscene = Scene()\nscene.add(Circle(0.5))\nresult = scene"), authoring);
+            const geometry = await snapshot();
+            await client.switchToSemanticExecution(await context(source), authoring);
+            const mixed = await snapshot();
+            const switchingKeptCanvas = client.canvas === canvas;
+            const recoveryReady = await client.restart({ failedOwner: "render" });
+            const recovered = await snapshot();
+            return { ready, initial, engineReady, reconnected, geometry, mixed, recoveryReady, recovered,
+              engineKeptCanvas, switchingKeptCanvas, renderReplacedCanvas: client.canvas !== canvas,
+              mode: client.mode, crossOriginIsolated, clientErrors };
+          } finally { client.terminate(); authoring.terminate(); }
+        }, { source, transportMode }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${transportMode} shared recovery timed out`)), 90000); }),
+      ]);
+      assert.equal(result.crossOriginIsolated, true);
+      assert.equal(result.mode, "semantic");
+      assert.equal(result.ready.transportMode, transportMode);
+      assert.equal(result.engineReady.transportMode, transportMode);
+      assert.equal(result.recoveryReady.transportMode, transportMode);
+      assert.ok(result.engineKeptCanvas && result.switchingKeptCanvas && result.renderReplacedCanvas);
+      for (const [stage, count] of [["initial", 6], ["reconnected", 6], ["geometry", 1], ["mixed", 6], ["recovered", 6]]) {
+        const { metrics, state } = result[stage];
+        assert.equal(metrics.objectCount, count, stage);
+        assert.ok(metrics.presentedFrames > 0 && metrics.drawCalls > 0 && metrics.instancesDrawn > 0, stage);
+        assert.equal(metrics.resourceBundlePending, false, stage);
+        assert.equal(state.playing, false, `${stage} preserves paused state`);
+        assert.equal(state.time, 0.75, `${stage} presents the requested authored time`);
+        assert.ok(state.sceneJson == null);
+        assert.equal(state.sceneSpecJson, undefined);
+      }
+      assert.ok(result.reconnected.metrics.presentedFrames >= result.initial.metrics.presentedFrames);
+      assert.ok(result.mixed.metrics.presentedFrames >= result.reconnected.metrics.presentedFrames);
+      assert.deepEqual(result.clientErrors, []);
+      assert.deepEqual(errors, []);
+      reports.push({ transportMode, ...result });
+      console.log(`PASS ${transportMode}: shared mixed scene, prepared startup, 6→1→6 replacement, engine reconnect and renderer recovery`);
+    } finally { clearTimeout(timer); await page.close(); }
+  }
+  if (process.env.NOON_RETAINED_EXECUTION_WORKER_REPORT) {
+    const artifact = path.resolve(process.env.NOON_RETAINED_EXECUTION_WORKER_REPORT);
+    await mkdir(path.dirname(artifact), { recursive: true });
+    await writeFile(artifact, JSON.stringify(reports, (_key, value) => typeof value === "bigint" ? value.toString() : value, 2));
+  }
+} finally { await browser?.close(); await server.close(); }
