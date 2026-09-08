@@ -1,22 +1,69 @@
-name: Mobile demo diagnosis (temporary)
+name: Mobile demo repair qualification (temporary)
 on:
   push:
     branches: [codex/mobile-demo-diagnosis]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  diagnose:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1
-          npx playwright install --with-deps webkit
-      - run: timeout --signal=TERM --kill-after=10s 480s node scripts/mobile-jspi-diagnosis.mjs
+      - name: Validate exact source patch and prepare clean baseline
+        env:
+          BASE: 16d0a45eef9ec0328e59deb58802cc4ed31dac31
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mobile-repair-evidence"
+          cp mobile-repair.patch.gz "$RUNNER_TEMP/mobile-repair-evidence/patch.gz"
+          gzip -dc mobile-repair.patch.gz > "$RUNNER_TEMP/mobile-repair.patch"
+          echo "d9fee41e861ecdd46968388397d90c4e408f66800998b22a588c11a249513e5c  $RUNNER_TEMP/mobile-repair.patch" | sha256sum -c
+          git fetch --depth=1 origin "$BASE"
+          git checkout --detach "$BASE"
+          git apply --index "$RUNNER_TEMP/mobile-repair.patch"
+          git diff --cached --check
+          git diff --cached --stat
+      - name: Python and worker contracts
+        run: |
+          python3 -m unittest discover -s web/python -p 'test_*.py'
+          node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs
+          node scripts/build-python-worker.mjs
+      - name: Obtain the unchanged exact-baseline release WASM
+        env:
+          BASE: 16d0a45eef9ec0328e59deb58802cc4ed31dac31
+        run: |
+          set -euo pipefail
+          base=https://yongkyuns.github.io/noon
+          curl -fLsS "$base/build-info.json?verify=$BASE" > "$RUNNER_TEMP/mobile-repair-evidence/build-info.json"
+          python3 -c 'import json,os; assert json.load(open(os.environ["RUNNER_TEMP"]+"/mobile-repair-evidence/build-info.json"))["commit"] == os.environ["BASE"]'
+          mkdir -p web/pkg
+          curl -fLsS "$base/pkg/noon_web.js" -o web/pkg/noon_web.js
+          curl -fLsS "$base/pkg/noon_web_bg.wasm" -o web/pkg/noon_web_bg.wasm
+          sha256sum web/pkg/* > "$RUNNER_TEMP/mobile-repair-evidence/wasm-sha256.txt"
+      - name: Install pinned browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps webkit chromium
+      - name: Test mobile touch, visible intermediate frames, no-JSPI, Text and rerun
+        run: timeout --signal=TERM --kill-after=10s 240s node scripts/playground-main-thread-mobile-smoke.mjs
+      - name: Check unchanged desktop authoring behavior
+        run: |
+          timeout --signal=TERM --kill-after=10s 180s node scripts/playground-browser-matrix-smoke.mjs
+          timeout --signal=TERM --kill-after=10s 180s node scripts/manim-tutorial-smoke.mjs
+      - name: Publish source-only candidate branch, never master
+        run: |
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git commit -m 'Make ordinary browser Scene barriers portable without JSPI'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/mobile-repair-evidence/candidate-sha.txt"
+          git show --stat --oneline HEAD
+          git push origin HEAD:refs/heads/codex/mobile-portable-construct
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mobile-demo-diagnosis
-          path: mobile-diagnosis
+          name: mobile-repair-qualification
+          path: |
+            ${{ runner.temp }}/mobile-repair-evidence
+            browser-smoke-artifacts/playground-matrix
           retention-days: 3
