@@ -100,6 +100,7 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Geometry and text | [shared_text.rs](crates/noon-native/examples/shared_text.rs) | [shared_text.py](web/python/examples/shared_text.py) |
 | Live membership | [live_semantic_scene.rs](crates/noon-native/examples/live_semantic_scene.rs) | [live_semantic_scene.py](web/python/examples/live_semantic_scene.py) |
 | Affine animation | [live_affine_animation.rs](crates/noon-native/examples/live_affine_animation.rs) | [live_affine_animation.py](web/python/examples/live_affine_animation.py) |
+| Returning transform completion | [returning_transform.rs](crates/noon-native/examples/returning_transform.rs) | [returning_transform.py](web/python/examples/returning_transform.py) |
 | Mixed geometry/Text family fades | [mixed_family_fade.rs](crates/noon-native/examples/mixed_family_fade.rs) | [mixed_family_fade.py](web/python/examples/mixed_family_fade.py) |
 | Live masked placement | [live_masked_placement.rs](crates/noon-native/examples/live_masked_placement.rs) | [live_masked_placement.py](web/python/examples/live_masked_placement.py) |
 | Affine completion | [live_affine_completion.rs](crates/noon-native/examples/live_affine_completion.rs) | [live_affine_completion.py](web/python/examples/live_affine_completion.py) |

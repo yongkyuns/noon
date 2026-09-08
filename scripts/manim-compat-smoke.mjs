@@ -500,18 +500,30 @@ try {
   assert.ok(queryTransforms.metrics.presentedFrames > 0);
   assert.ok(queryTransforms.frame.objects.every(object => object.bounds.width > 0 && object.bounds.height > 0));
 
-  const sharedRates = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
-    rateFunctionSource,
-  );
-  const rateTracks = sharedRates.document.tracks.filter(
-    (track) => track.property === "transform",
-  );
-  assert.deepEqual(
-    rateTracks.map((track) => track.timing.easing),
-    ["smooth", "rush_into", "rush_from", "there_and_back"],
-    "known Python callables should lower directly to shared Rust semantic IDs",
-  );
+  // Runtime samples qualify both easing interiors and the returning endpoint.
+  const ratePage = await browser.newPage();
+  ratePage.on("pageerror", error => errors.push(String(error)));
+  const times = [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.65, 0.7, 0.75, 0.8];
+  await ratePage.goto(`${baseUrl}/web/manim-raster-host.html`);
+  const sharedRates = await ratePage.evaluate(async ({ source, times }) => {
+    await window.noonHostRaster.ready();
+    await window.noonHostRaster.load(source, 1);
+    const samples = [];
+    for (let index = 0; index < times.length; index += 1) {
+      const metrics = await window.noonHostRaster.renderThrough(index, times);
+      samples.push({ metrics, frame: await window.noonHostRaster.debugFrame() });
+    }
+    return samples;
+  }, { source: rateFunctionSource, times });
+  const expectedX = [0.070103716545108, 0.5, 0.929896283454892, 1,
+    0.859792566910216, 0.859792566910216, 0.5, 0, 0.5, 1];
+  for (const [index, { frame, metrics }] of sharedRates.entries()) {
+    assert.ok(Math.abs(frame.objects[0].center[0] - expectedX[index]) < 1e-5,
+      `shared rate function at ${times[index]}s: ${frame.objects[0].center[0]} != ${expectedX[index]}`);
+    assert.ok(metrics.presented && metrics.drawCalls > 0);
+    assert.ok(Math.abs(metrics.time - times[index]) < 1e-9);
+  }
+  await ratePage.close();
 
   let overlapError = null;
   try {

@@ -872,7 +872,7 @@ fn push_prepared_channel(
         target: leaf.target,
         execution_object_id: leaf.execution_object_id,
         property: channel.property,
-        completion: channel.completion,
+        completion: super::affine::completion_at_endpoint(channel.completion, leaf.timing.easing),
         values: channel.values,
         timing: leaf.timing,
         time_map: leaf.time_map.clone(),
