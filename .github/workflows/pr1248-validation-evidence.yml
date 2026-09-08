@@ -5,6 +5,9 @@ on:
 permissions:
   contents: read
   actions: read
+concurrency:
+  group: pr1248-validation-evidence
+  cancel-in-progress: true
 jobs:
   validate:
     name: ${{ matrix.case }}
@@ -61,7 +64,8 @@ jobs:
           done
           test "$complete" = true
           test "$(gh api repos/yongkyuns/noon/actions/jobs/102072974597 --jq '.conclusion')" = success
-          gh api repos/yongkyuns/noon/actions/jobs/102072974597/logs > validation-evidence/runtime-build.log
+          # Retain formatted logs as inert evidence, never evaluated shell input.
+          gh api --allow-escape-sequences repos/yongkyuns/noon/actions/jobs/102072974597/logs > validation-evidence/runtime-build.log
           grep -q 8b18c24842a45dce453a1dc418c7868e6b3c1e9d validation-evidence/runtime-build.log
           gh run download 34229854758 --repo yongkyuns/noon --name playground-cross-browser-web-runtime --dir web
           python3 - <<'PY'
