@@ -1,27 +1,75 @@
-name: Mobile gallery follow-up (temporary)
+name: Mobile gallery candidate validation (temporary)
 on:
   push:
     branches: [codex/mobile-gallery-followup-validation]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  snapshot:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: '0'
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: 77e5e2dcbab75b424756e5925c60953c463f8466
-      - name: Capture immutable source and current public revision
+      - name: Validate transport and apply source-only candidate
         run: |
           set -euo pipefail
-          mkdir -p gallery-followup
-          git archive HEAD | gzip > gallery-followup/source.tar.gz
-          git rev-parse HEAD > gallery-followup/source-sha.txt
-          curl --fail --silent --show-error -H 'Cache-Control: no-cache' "https://yongkyuns.github.io/noon/build-info.json?t=$(date +%s)" > gallery-followup/public-build-info.json
-          cat gallery-followup/public-build-info.json
-      - uses: actions/upload-artifact@v7
+          mkdir -p "$RUNNER_TEMP/gallery-evidence" "$RUNNER_TEMP/gallery-carrier"
+          cp gallery-python.patch.gz.b64 restore-python-candidate.py apply-updater-candidate.py add-updater-tests.py "$RUNNER_TEMP/gallery-carrier/"
+          cp gallery-python.patch.gz.b64 "$RUNNER_TEMP/gallery-evidence/"
+          python3 restore-python-candidate.py
+          git fetch --depth=1 origin 77e5e2dcbab75b424756e5925c60953c463f8466
+          git checkout --detach 77e5e2dcbab75b424756e5925c60953c463f8466
+          git apply --index /tmp/gallery-python.patch
+          python3 "$RUNNER_TEMP/gallery-carrier/apply-updater-candidate.py"
+          python3 "$RUNNER_TEMP/gallery-carrier/add-updater-tests.py"
+          git add crates web
+          git diff --cached --check
+          git diff --cached > "$RUNNER_TEMP/gallery-evidence/source.patch"
+      - name: Format and validate Python host contracts
+        run: |
+          set -euo pipefail
+          rustup default stable
+          cargo fmt --all
+          python3 -m unittest discover -s web/python -p 'test_*.py' 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/python.txt"
+          node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/node.txt"
+          bash scripts/renderer-host-boundary-ratchet.sh
+      - uses: actions/cache@v6
         with:
-          name: gallery-followup-source
-          path: gallery-followup
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: gallery-updater-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Shared semantic and runtime lifecycle regressions
+        run: |
+          set -euo pipefail
+          cargo test -p noon-core --lib semantic_transaction 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/core.txt"
+          cargo test -p noon-compile --lib host_callbacks 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/compiler.txt"
+          cargo test -p noon --lib live_updater 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/session.txt"
+          cargo test -p noon --lib live_rotation_updater 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/native-program.txt"
+          cargo test -p noon-web --lib callback_occurrences_publish 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/web-adapter.txt"
+      - name: Export source candidate only, never master
+        run: |
+          set -euo pipefail
+          git add crates web
+          git diff --cached --check
+          test -z "$(git diff --cached --name-only -- .github)"
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git commit -m 'Continue portable gallery sources and publish live updater edits through shared Rust'
+          git rev-parse HEAD > "$RUNNER_TEMP/gallery-evidence/candidate-sha.txt"
+          git push origin HEAD:refs/heads/codex/gallery-candidate-${GITHUB_RUN_ID}
+      - name: Retain candidate source for independent review
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/gallery-evidence"
+          git diff HEAD > "$RUNNER_TEMP/gallery-evidence/worktree.patch"
+          tar --exclude=.git --exclude=target --exclude=node_modules -czf "$RUNNER_TEMP/gallery-evidence/worktree.tar.gz" crates web scripts Cargo.toml Cargo.lock
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: gallery-candidate-validation
+          path: ${{ runner.temp }}/gallery-evidence
           retention-days: 3
