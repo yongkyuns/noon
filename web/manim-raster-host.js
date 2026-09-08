@@ -65,6 +65,7 @@ async function load(source, loopDurationSeconds, { mode = "semantic" } = {}) {
         execution = new AuthoringExecutionClient(canvas);
         await execution.startSemanticExecution(registration.semanticExecution, {
           authoringClient: client,
+          loopDurationSeconds: loopDuration,
           transportMode: "transferable",
           pacing: "external_samples",
         });

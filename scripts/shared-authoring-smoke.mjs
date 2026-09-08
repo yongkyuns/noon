@@ -3128,6 +3128,24 @@ result = scene
       `MovingDots tracker endpoint missing: ${JSON.stringify(blueDot)}`);
     assert.ok(redLine.red > 100 && redLine.red > redLine.green,
       `MovingDots Line endpoint match missing: ${JSON.stringify(redLine)}`);
+
+    await rasterPage.reload({ waitUntil: "load" });
+    await rasterPage.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+    const rotating = await rasterPage.evaluate(async (source) => {
+      await window.noonHostRaster.ready();
+      return window.noonHostRaster.load(source, 6);
+    }, rotatingDefaultsSource);
+    assert.equal(rotating.kind, "semantic_execution");
+    assert.equal(rotating.objectCount, 1);
+    const rotationTimes = [0, 0.625, 5];
+    await rasterPage.evaluate((times) => window.noonHostRaster.renderThrough(1, times), rotationTimes);
+    const diagonal = renderedWorldPixel(await rasterPage.locator("#scene").screenshot(), 0.95, 0);
+    assert.ok(diagonal.blue > diagonal.red + 30, "raster host did not sample the five-second angular path");
+    const rotated = await rasterPage.evaluate((times) => window.noonHostRaster.renderThrough(2, times), rotationTimes);
+    assert.equal(rotated.time, 5);
+    assert.equal(rotated.authoredDuration, 5);
+    assert.equal(rotated.objectCount, 1);
+    assert.equal(rotated.presented, true);
   } finally {
     await rasterPage.close();
   }
