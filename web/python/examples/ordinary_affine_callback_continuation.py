@@ -34,6 +34,7 @@ class OrdinaryAffineCallbackContinuation(Scene):
 
         def dim_after_lift(mobject, _dt):
             assert mobject.get_center().y == 1.0
+            mobject.set_fill(opacity=0.75)
             mobject.set_opacity(0.5)
 
         circle.add_updater(lift)
@@ -55,8 +56,19 @@ class OrdinaryAffineCallbackContinuation(Scene):
             raise AssertionError("callback family query materialized Python geometry")
         circle._current_raw = reject_raw_projection
         # Object-composite dimming must not alter observed fill/stroke alpha.
-        assert circle.get_fill_opacity() == 1.0
+        assert circle.get_fill_opacity() == 0.75
         assert circle.get_stroke_opacity() == 1.0
+        copied = circle.copy()
+        copied._current_raw = reject_raw_projection
+        copied.set_color(Color(1.0, 0.0, 0.0))
+        assert copied.get_fill_opacity() == 0.75
+        copied.set_fill(opacity=0.5)
+        assert copied.get_fill_opacity() == 0.5
+        copied.set_stroke(opacity=0.25)
+        assert copied.get_stroke_opacity() == 0.25
+        copied.set_opacity(0.4)
+        assert abs(copied.get_fill_opacity() - 0.4) < 1e-6
+        assert abs(copied.get_stroke_opacity() - 0.4) < 1e-6
         assert family.get_center() == (2.0, 1.0)
         assert abs(family.width - 0.8) < 1e-6
         assert abs(family.height - 0.8) < 1e-6
