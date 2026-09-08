@@ -83,11 +83,11 @@ class Demo(Scene):
 
 `;
 
-// Group fades still require incremental shared lifecycle support (#959).
-const groupFadeExportSource = `
+// Ordinary groups use the same shared family lifecycle as Text families.
+const groupFadeSource = `
 from noon import *
 
-class GroupFadeExport(Scene):
+class GroupFadeLive(Scene):
     def construct(self):
         intro = VGroup(
             Circle(radius=0.18, color=BLUE),
@@ -449,10 +449,10 @@ try {
   assert.ok(foundation.frame.objects.slice(0, 2).every(object => object.reveal === 1));
 
   const groupFades = await page.evaluate(
-    pythonSource => window.noonManimCompat.run(pythonSource), groupFadeExportSource,
+    pythonSource => window.noonManimCompat.runLive(pythonSource), groupFadeSource,
   );
-  assert.equal(groupFades.document.objects.length, 2);
-  assert.equal(groupFades.document.tracks.filter(track => track.property === "presence").length, 4);
+  assert.equal(groupFades.metrics.objectCount, 0, "family FadeOut detaches the shared root");
+  assert.ok(groupFades.metrics.presentedFrames > 0);
   assert.equal(groupFades.duration, 0.5);
 
   const uncreate = await page.evaluate(

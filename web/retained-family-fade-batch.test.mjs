@@ -13,7 +13,7 @@ test("obsolete retained family fade coordinator stays deleted", () => {
   assert.equal(existsSync("web/python/_manim_retained_animate.py"), false);
   assert.equal(existsSync("web/python/_manim_retained_state.py"), false);
   assert.doesNotMatch(manifestSource, /_manim_retained_animate|_manim_retained_state/);
-  assert.match(canonicalSource, /def _canonical_text_family_fade_animation/);
+  assert.match(canonicalSource, /def _canonical_family_fade_animation/);
   assert.match(canonicalSource, /appendFamilyFade/);
   assert.match(canonicalSource, /appendFamilyFadeEntering/);
 });
