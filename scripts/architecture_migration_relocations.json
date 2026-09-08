@@ -20,32 +20,6 @@
       "noon::legacy::Scene": 1,
       "noon::legacy::Square": 1,
       "noon::legacy::Transform": 1
-    },
-    "crates/noon/examples/cross_language_parity.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/examples/manim_gallery_moving_around.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/examples/manim_quickstart_equivalents.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/tests/cross_geometry_transform.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/tests/manim_gallery_moving_around.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/tests/manim_style_defaults.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/tests/set_fill_semantics.rs": {
-      "noon::legacy::Circle": 1,
-      "noon::legacy::IntoSnapshot": 1,
-      "noon::legacy::Scene": 1,
-      "noon::legacy::GREEN": 1,
-      "noon::legacy::PINK": 1,
-      "noon::legacy::RED": 1
     }
   },
   "token_budgets": {

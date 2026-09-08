@@ -1,52 +1,44 @@
-use noon::legacy::prelude::*;
+use noon::{Color, Scene, StrokeCap, StrokeJoin, StrokeWidthMode, Style};
 
 #[test]
-fn rust_authoring_shapes_use_manim_vmobject_defaults() {
-    for snapshot in [Square::default().snapshot(), Line::default().snapshot()] {
-        let fill = snapshot
+fn shared_shapes_lower_manim_defaults_into_effective_styles() {
+    let mut scene = Scene::new();
+    for shape in [
+        scene.square(2.0).unwrap(),
+        scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap(),
+        scene.circle(1.0).unwrap(),
+    ] {
+        scene.add(&shape).unwrap();
+    }
+    let session = scene.execution_session().unwrap();
+    for (object, color) in
+        session
+            .frame()
+            .objects
+            .iter()
+            .zip([Color::WHITE, Color::WHITE, Color::RED])
+    {
+        let fill = object
             .style
             .fill
-            .expect("Manim VMobject keeps a fill paint layer");
-        assert_eq!(fill.red, 1.0);
-        assert_eq!(fill.green, 1.0);
-        assert_eq!(fill.blue, 1.0);
-        assert_eq!(fill.alpha, 0.0);
-        assert_eq!(snapshot.style.stroke, Some(WHITE));
-        assert!((snapshot.style.stroke_width - 0.04).abs() < f32::EPSILON);
+            .expect("transparent fill layer is retained");
         assert_eq!(
-            snapshot.style.stroke_width_mode,
-            noon_core::StrokeWidthMode::ScreenSpace
+            (fill.red, fill.green, fill.blue, fill.alpha),
+            (color.red, color.green, color.blue, 0.0)
         );
-        assert_eq!(snapshot.style.stroke_join, noon_core::StrokeJoin::Miter);
-        assert_eq!(snapshot.style.stroke_cap, noon_core::StrokeCap::Butt);
+        assert_eq!(object.style.stroke, Some(color));
+        assert_eq!(object.style.stroke_width, 0.04);
+        assert_eq!(object.style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
+        assert_eq!(object.style.stroke_join, StrokeJoin::Miter);
+        assert_eq!(object.style.stroke_cap, StrokeCap::Butt);
     }
 }
 
 #[test]
-fn rust_circle_uses_manim_specific_red_default() {
-    let snapshot = Circle::default();
-    let fill = snapshot
-        .snapshot()
-        .style
-        .fill
-        .expect("Manim Circle keeps a transparent fill paint layer");
-    assert_eq!(fill.red, RED.red);
-    assert_eq!(fill.green, RED.green);
-    assert_eq!(fill.blue, RED.blue);
-    assert_eq!(fill.alpha, 0.0);
-    assert_eq!(snapshot.snapshot().style.stroke, Some(RED));
-    assert!((snapshot.snapshot().style.stroke_width - 0.04).abs() < f32::EPSILON);
-    assert_eq!(
-        snapshot.snapshot().style.stroke_width_mode,
-        noon_core::StrokeWidthMode::ScreenSpace
-    );
-}
-
-#[test]
 fn core_style_default_remains_renderer_neutral() {
-    let style = noon_core::Style::default();
-    assert_eq!(style.fill, Some(WHITE));
+    let style = Style::default();
+    assert_eq!(style.fill, Some(Color::WHITE));
     assert_eq!(style.stroke, None);
-    assert_eq!(style.stroke_join, noon_core::StrokeJoin::Round);
-    assert_eq!(style.stroke_cap, noon_core::StrokeCap::Round);
+    assert_eq!(style.stroke_join, StrokeJoin::Round);
+    assert_eq!(style.stroke_cap, StrokeCap::Round);
 }

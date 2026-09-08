@@ -5,7 +5,15 @@ edition = "2021"
 license = "MIT"
 description = "Ergonomic language-neutral authoring facade for Noon"
 
+[features]
+diagnostics = ["dep:serde_json"]
+
+[[example]]
+name = "cross_language_parity"
+required-features = ["diagnostics"]
+
 [dependencies]
+serde_json = { version = "1", optional = true }
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
 noon-runtime = { path = "../noon-runtime" }
@@ -13,6 +21,3 @@ noon-text-native = { path = "../noon-text-native" }
 noon-typst = { path = "../noon-typst" }
 swash = "=0.2.10"
 typst-assets = { version = "=0.15.1", features = ["fonts"] }
-
-[dev-dependencies]
-noon-ir = { path = "../noon-ir" }
