@@ -22,9 +22,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Use stable Rust and verify scanner prerequisites
+      - name: Use repository-pinned Cargo for scanner and fixtures
         run: |
-          rustup default stable
+          # Temporary fixture workspaces do not inherit rust-toolchain.toml.
+          active_toolchain="$(rustup show active-toolchain)"
+          toolchain="${active_toolchain%% *}"
+          test -n "$toolchain"
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
           cargo --version
           python3 --version
 
