@@ -26,12 +26,28 @@ const semanticContexts = new Map();
 let nextSemanticContext = 0;
 let nextContinuationGeneration = 1;
 let activeAuthoringRun = null;
+let fatalAuthoringFailure = false;
 
 pyodidePromise
   .then(() => post("ready"))
-  .catch((error) => postError(null, error));
+  .catch(failAuthoringWorker);
+
+// Interpreter-fatal rejections may never settle runPythonAsync. Forward them
+// through the existing fatal channel instead of leaving Run pending forever.
+self.addEventListener("unhandledrejection", (event) => {
+  event.preventDefault();
+  failAuthoringWorker(event.reason);
+});
+
+function failAuthoringWorker(error) {
+  if (fatalAuthoringFailure) return;
+  fatalAuthoringFailure = true;
+  postError(null, error);
+  self.close();
+}
 
 self.addEventListener("message", (event) => {
+  if (fatalAuthoringFailure) return;
   if (isContinuationControl(event.data)) {
     void handleContinuationControl(event.data);
     return;
@@ -776,8 +792,12 @@ import json
 import _manim_updaters
 from _manim_canonical_scene import (
     execute_construct,
+    await_source_barrier,
     execution_context,
     materialize_legacy_geometry,
+)
+from _manim_source_execution import (
+    BARRIER_GLOBAL, compile_authoring_source,
 )
 from noon import PatchBatch, Scene
 
@@ -785,7 +805,10 @@ __noon_namespace = {
     "context": json.loads(__noon_context_json),
     "__name__": "__main__",
 }
-exec(__noon_source, __noon_namespace)
+__noon_code, __noon_portable_constructs = compile_authoring_source(__noon_source)
+if __noon_portable_constructs:
+    __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
+exec(__noon_code, __noon_namespace)
 
 if "result" in __noon_namespace:
     __noon_result = __noon_namespace["result"]
@@ -810,7 +833,8 @@ else:
         )
     __noon_result = __noon_scene_classes[0]()
     await execute_construct(
-        __noon_result, export_document=bool(__noon_export_document)
+        __noon_result, export_document=bool(__noon_export_document),
+        portable_constructs=__noon_portable_constructs,
     )
 
 if isinstance(__noon_result, Scene):

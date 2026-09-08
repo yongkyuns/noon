@@ -51,7 +51,7 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.match(source, /requestQueue\s*=\s*requestQueue\.then\(\(\)\s*=>\s*handleRequest/);
   assert.match(
     source,
-    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\)\s*\)/,
+    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\),\s*portable_constructs=__noon_portable_constructs,\s*\)/,
   );
   assert.match(source, /continuation\.endpoint\.startContinuation\(continuation\.generation\)/);
   assert.match(source, /continuation\.runRequestId\s*!==\s*request\.continuationRunRequestId/);
@@ -102,7 +102,7 @@ test("worker delegates every Scene construct lifecycle to the canonical adapter"
   );
   assert.match(
     authoring,
-    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\)\s*\)/,
+    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\),\s*portable_constructs=__noon_portable_constructs,\s*\)/,
   );
   assert.doesNotMatch(authoring, /__noon_result\.(?:setup|construct|tear_down)\(/);
   assert.doesNotMatch(authoring, /_(?:begin|finish)_(?:async|synchronous)_continuation_construct/);
@@ -132,4 +132,38 @@ test("retired callback sessions release only after the active Python run unwinds
   finishRun();
   await released;
   assert.equal(releases, 1);
+});
+
+
+test("fatal interpreter rejection is forwarded once and closes the dead worker", () => {
+  const handlerSource = source.slice(
+    source.indexOf('self.addEventListener("unhandledrejection"'),
+    source.indexOf('self.addEventListener("message"'),
+  );
+  const handlers = new Map();
+  const errors = [];
+  let closes = 0;
+  let prevented = 0;
+  const scope = {
+    addEventListener(name, handler) { handlers.set(name, handler); },
+    close() { closes += 1; },
+  };
+  new Function("self", "postError", `let fatalAuthoringFailure = false; ${handlerSource}`)(
+    scope, (requestId, error) => errors.push({ requestId, error }),
+  );
+  const error = new Error("interpreter suspension failed");
+  const event = { reason: error, preventDefault() { prevented += 1; } };
+  handlers.get("unhandledrejection")(event);
+  handlers.get("unhandledrejection")(event);
+  assert.deepEqual(errors, [{ requestId: null, error }]);
+  assert.equal(closes, 1);
+  assert.equal(prevented, 2);
+  assert.match(source, /if \(fatalAuthoringFailure\) return;/);
+});
+
+test("source compilation never replays module effects or changes fixtures", () => {
+  assert.match(source, /compile_authoring_source\(__noon_source\)/);
+  assert.match(source, /exec\(__noon_code, __noon_namespace\)/);
+  assert.doesNotMatch(source, /exec\(__noon_source,|source\.replace/);
+  assert.match(source, /__noon_namespace\[BARRIER_GLOBAL\] = await_source_barrier/);
 });
