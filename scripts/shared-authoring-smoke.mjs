@@ -1031,6 +1031,48 @@ try {
   );
   assert.equal(exportBoundary.sentinelObjectCount, 0);
 
+  // A Rust-owned Scene must never silently switch to the Python document
+  // engine when finalization finds incompatible migration state. Explicit
+  // export above is the codec boundary; each rejected run uses the same worker.
+  const rejectedFinalizations = await page.evaluate(async () => {
+    const failures = [];
+    const corruptions = [
+      'scene._legacy_geometry_materialized = True',
+      'scene._reactive_signals.append({"legacy": True})',
+      'scene._semantic_geometry_handles.clear()',
+      'scene._tracks.append({"property": "position"})',
+    ];
+    for (const corruption of corruptions) {
+      const source = `from noon import Circle, Scene
+scene = Scene()
+scene.add(Circle(radius=0.4))
+assert scene._canonical_authoring_context is not None
+${corruption}
+def reject_export(*args, **kwargs):
+    raise AssertionError("normal shared finalization invoked the document exporter")
+scene.to_document = reject_export
+scene.to_scene_spec = reject_export
+result = scene
+`;
+      try {
+        await window.sharedAuthoringSmoke.authoring.run(source, {});
+        failures.push("unexpected success");
+      } catch (error) {
+        failures.push(String(error));
+      }
+    }
+    const recovered = await window.sharedAuthoringSmoke.authoring.run(
+      'from noon import Circle, Scene\nscene = Scene()\nscene.add(Circle(radius=0.4))\nresult = scene',
+      {},
+    );
+    return { failures, recovered: Object.hasOwn(recovered, "semanticExecution") };
+  });
+  for (const failure of rejectedFinalizations.failures) {
+    assert.match(failure, /shared Scene cannot fall back to scene-document execution/u);
+    assert.doesNotMatch(failure, /invoked the document exporter/u);
+  }
+  assert.equal(rejectedFinalizations.recovered, true);
+
   // A supported ordinary segment must fail at its JSPI capability gate instead
   // of silently using endpoint-only execution. The restore request verifies the
   // same worker-resident context never activated a player or advanced time.

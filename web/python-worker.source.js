@@ -863,6 +863,12 @@ if isinstance(__noon_result, Scene):
         __noon_document = None
         __noon_identities = None
     else:
+        if (not __noon_export_document and
+                getattr(__noon_result, "_canonical_authoring_context", None) is not None):
+            raise RuntimeError(
+                "shared Scene cannot fall back to scene-document execution; "
+                "remove incompatible legacy declarations or request exportDocument explicitly"
+            )
         __noon_callbacks = _manim_updaters.register_scene(__noon_result)
         if __noon_callbacks and getattr(__noon_result, "_semantic_text_handles", {}):
             raise RuntimeError(
