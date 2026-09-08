@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import playwright from 'playwright';
+import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
@@ -56,28 +57,28 @@ try {
   let next = 0;
   async function check({ entry, noJspi }) {
     const context = await browser.newContext({ ...options });
-    // Observe shared execution result metadata on the existing authoring channel,
-    // not an exported scene representation. Renderer time is the last visible
-    // presentation and may precede completion of an authored static wait.
-    await context.addInitScript(() => {
+    // Observe the existing result envelope without guessing its payload shape.
+    // The production parser below validates the semantic descriptor and duration;
+    // semantic_execution is an object, not the boolean true.
+    // Renderer time may precede completion of an authored static wait.
+    await context.addInitScript(({ channel, protocolVersion }) => {
       window.__galleryAuthoringResults = [];
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
           const worker = Reflect.construct(target, args, newTarget);
           worker.addEventListener('message', ({ data }) => {
-            if (data?.channel === 'noon.authoring' && data.type === 'result') {
-              try {
-                const result = JSON.parse(data.resultJson);
-                if (result.semantic_execution === true) {
-                  window.__galleryAuthoringResults.push({ duration: result.duration });
-                }
-              } catch (error) { window.__galleryAuthoringCaptureError = String(error); }
+            if (data?.channel === channel && data.type === 'result') {
+              if (data.protocolVersion !== protocolVersion) {
+                window.__galleryAuthoringCaptureError = 'unexpected authoring protocol version';
+              } else {
+                window.__galleryAuthoringResults.push(data.resultJson);
+              }
             }
           });
           return worker;
         },
       });
-    });
+    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: browser.version(), errors: [], samples: [] };
@@ -120,11 +121,14 @@ try {
       result.finalMetrics = metrics;
       assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
       const authoring = await page.evaluate(() => ({
-        result: window.__galleryAuthoringResults.at(-1), error: window.__galleryAuthoringCaptureError,
+        results: window.__galleryAuthoringResults, error: window.__galleryAuthoringCaptureError,
       }));
       assert.equal(authoring.error, undefined);
-      assert.ok(authoring.result, 'missing final shared authoring result');
-      result.authoredDuration = authoring.result.duration;
+      assert.equal(authoring.results.length, 1, 'expected exactly one final shared authoring result');
+      const parsed = parseAuthoringResult(authoring.results[0]);
+      assert.ok(parsed.semanticExecution, 'missing final shared execution descriptor');
+      result.semanticExecution = parsed.semanticExecution;
+      result.authoredDuration = parsed.duration;
       assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
       if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
         `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
