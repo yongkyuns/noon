@@ -12,31 +12,33 @@ from _manim_source_execution import (
 
 
 class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_source_invocation_restores_mode_and_cleanup_after_failure(self):
+    async def test_source_invocation_restores_cleanup_after_failure(self):
         cleanups = []
         self.assertIsNone(current_source_invocation())
         with authoring_source_scope():
             ordinary = current_source_invocation()
-            self.assertFalse(ordinary.export_document)
             ordinary.cleanup.callback(cleanups.append, "ordinary")
             with self.assertRaisesRegex(RuntimeError, "source failed"):
-                with authoring_source_scope(export_document=True):
-                    exported = current_source_invocation()
-                    self.assertTrue(exported.export_document)
-                    exported.cleanup.callback(cleanups.append, "export")
+                with authoring_source_scope():
+                    nested = current_source_invocation()
+                    self.assertIsNot(nested, ordinary)
+                    nested.cleanup.callback(cleanups.append, "nested")
                     await asyncio.sleep(0)
                     raise RuntimeError("source failed")
             self.assertIs(current_source_invocation(), ordinary)
-            self.assertEqual(cleanups, ["export"])
-        self.assertEqual(cleanups, ["export", "ordinary"])
+            self.assertEqual(cleanups, ["nested"])
+        self.assertEqual(cleanups, ["nested", "ordinary"])
         self.assertIsNone(current_source_invocation())
 
-    async def test_source_invocation_modes_are_isolated_between_tasks(self):
-        async def observe(export_document):
-            with authoring_source_scope(export_document=export_document):
+    async def test_source_invocations_are_isolated_between_tasks(self):
+        async def observe():
+            with authoring_source_scope():
+                invocation = current_source_invocation()
                 await asyncio.sleep(0)
-                return current_source_invocation().export_document
-        self.assertEqual(await asyncio.gather(observe(True), observe(False)), [True, False])
+                self.assertIs(current_source_invocation(), invocation)
+                return invocation
+        first, second = await asyncio.gather(observe(), observe())
+        self.assertIsNot(first, second)
         self.assertIsNone(current_source_invocation())
 
     def compile_scene(self, source, namespace=None):
