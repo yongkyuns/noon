@@ -2743,16 +2743,16 @@ impl CanonicalAuthoringScene {
                 )?);
                 continue;
             }
-            let snapshot = noon::legacy::export_mobject_snapshot(&handle)?;
+            let (geometry, transform, style) = crate::geometry_export::mobject_fields(&handle)?;
             let mut object = ObjectSpec::geometry(
                 *self
                     .identities
                     .get(&node)
                     .ok_or("unbound semantic scene member")?,
-                snapshot.geometry,
+                geometry,
             );
-            object.transform = snapshot.transform;
-            object.style = snapshot.style;
+            object.transform = transform;
+            object.style = style;
             objects.push(object);
         }
         let mut spec =

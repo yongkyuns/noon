@@ -244,6 +244,8 @@ if [[ -e 'crates/noon-web/src/legacy/clock.rs' ]]; then
 fi
 
 deleted_legacy_validation_paths=(
+  'crates/noon/src/legacy.rs'
+  'crates/noon/src/legacy/semantic_snapshot.rs'
   'crates/noon/src/analytic_geometry_authoring.rs'
   'crates/noon/src/polygram_authoring.rs'
   'crates/noon/src/line_matcher_authoring.rs'

@@ -2,18 +2,8 @@
   "deletion_issue": "#959",
   "rewritten_imports": {},
   "token_budgets": {
-    "crates/noon/src/legacy/semantic_snapshot.rs": {
-      "ObjectSnapshot": 6,
-      "from_legacy": 5
-    },
-    "crates/noon-web/src/authoring_mobject.rs": {
-      "ObjectSnapshot": 3,
-      "noon::legacy": 51
-    },
     "crates/noon-web/src/canonical_authoring_scene.rs": {
-      "ObjectSnapshot": 12,
-      "SceneSpec": 3,
-      "noon::legacy": 3
+      "SceneSpec": 3
     },
     "crates/noon-core/src/patch.rs": {
       "ObjectDefinition": 12,
@@ -57,9 +47,5 @@
         "SceneSpec": 1
       }
     }
-  },
-  "adapter_call_sites": [
-    "crates/noon-web/src/authoring_mobject.rs",
-    "crates/noon-web/src/canonical_authoring_scene.rs"
-  ]
+  }
 }
