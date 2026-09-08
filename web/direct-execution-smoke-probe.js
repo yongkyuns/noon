@@ -1511,6 +1511,7 @@ async function directExactPropertyTracksProof(expectedBackend) {
     seeker = await createDirectExactPropertyTracksSmokeRenderer(seekCanvas);
     renderer.resize(canvas.width, canvas.height);
     seeker.resize(seekCanvas.width, seekCanvas.height);
+    await settleDirectPublication(seeker, 0);
     renderer.directWakeDirectiveJson(0);
     for (const time of times) {
       renderer.advanceDirectRealtime(time * 1000);
