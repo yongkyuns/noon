@@ -6,6 +6,7 @@ on:
       - "web/semantic-preview-session*"
       - "web/manim-raster-host.js"
       - "scripts/semantic-preview-*"
+      - "scripts/agent-preview-capture*.mjs"
       - ".github/workflows/manim-raster-differential.yml"
   push:
     branches:
@@ -39,6 +40,8 @@ jobs:
         run: node scripts/manim-raster-policy.test.mjs
       - name: Validate preview session lifecycle and authoring context
         run: node --test web/semantic-preview-session.test.mjs web/semantic-preview-context.test.mjs
+      - name: Validate capture-to-artifact contract
+        run: node --test scripts/agent-preview-capture.test.mjs
       - name: Validate preview evidence assertions
         run: node --test scripts/semantic-preview-observations.test.mjs
       - name: Set up Python
@@ -90,6 +93,8 @@ jobs:
           npx playwright install chromium
       - name: Verify semantic preview frames, cancellation, and fresh-run recovery
         run: timeout --signal=TERM 180s node scripts/semantic-preview-smoke.mjs
+      - name: Verify actual preview PNG capture enters bounded artifact storage
+        run: timeout --signal=TERM 90s node scripts/agent-preview-capture-smoke.mjs
       - name: Upload semantic preview evidence
         if: always()
         uses: actions/upload-artifact@v7
