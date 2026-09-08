@@ -6,6 +6,9 @@ const canvas = document.querySelector("#scene");
 const readyPromise = Promise.resolve();
 
 let preview = null;
+// Non-owning diagnostic view for the trusted raster qualification harness. The
+// preview session remains the sole lifecycle owner and terminates this client.
+let executionDiagnostics = null;
 let closed = false;
 let currentFrameIndex = -1;
 let currentLogicalTime = 0;
@@ -33,7 +36,11 @@ async function load(source, loopDurationSeconds) {
 
   preview = new SemanticPreviewSession({
     createAuthoringClient: () => new PythonAuthoringClient(),
-    createExecutionClient: (options) => new AuthoringExecutionClient(canvas, options),
+    createExecutionClient: (options) => {
+      const execution = new AuthoringExecutionClient(canvas, options);
+      executionDiagnostics = execution;
+      return execution;
+    },
   });
   const result = await preview.open(source, { loopDurationSeconds: loopDuration });
   return {
@@ -113,16 +120,30 @@ async function renderThrough(frameIndex, frameTimes) {
   };
 }
 
+function debugFrame() {
+  if (closed) throw new Error("host raster page is closed");
+  if (preview === null || executionDiagnostics === null) {
+    throw new Error("host raster scene has not been loaded");
+  }
+  const report = preview.snapshot;
+  if (report.state !== "ready") {
+    throw new Error(report.error ?? "preview session is not ready");
+  }
+  return executionDiagnostics.debugFrame();
+}
+
 function close() {
   if (closed) return;
   closed = true;
   preview?.close();
+  executionDiagnostics = null;
 }
 
 window.noonHostRaster = {
   ready: () => readyPromise,
   load,
   renderThrough,
+  debugFrame,
   status: () => preview?.snapshot ?? null,
   close,
 };
