@@ -71,7 +71,7 @@ try {
     { pythonSource: source, times: [0.25, 0.75] },
   );
   assert.equal(errors.length, 0, errors.join("\n"));
-  assert.equal(output.result.kind, "scene_document");
+  assert.equal(output.result.kind, "semantic_scene");
   assert.ok(output.result.semanticExecution);
   assert.equal(output.ready.render.backend, "WebGL2");
   assert.equal(output.paused.playing, false);
