@@ -20,6 +20,7 @@ class OrdinaryFamilyArrangement(Scene):
         family.arrange(UP, buff=0.3, center=False)
         assert abs(nested.width - 3.7) < 1e-5
         nested.move_to(ORIGIN, coor_mask=(1, 0, 0))
-        nested.next_to(ORIGIN, direction=2 * UP, buff=0.25, coor_mask=(0, 1, 0))
+        nested.next_to(ORIGIN, direction=2 * UP, buff=0.25, coor_mask=(0, 1, 0),
+                       index_of_submobject_to_align=-1)
         nested.align_to(first, UP)
         self.wait(0.5)

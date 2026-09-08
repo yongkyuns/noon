@@ -20,7 +20,7 @@ mod family_authoring;
 mod family_copy;
 pub use family_copy::FamilyCopy;
 mod family_layout;
-pub use family_layout::{FamilyLayout, FamilyLayoutTarget};
+pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
 mod focus_on_authoring;
 mod rotation_authoring;
 pub use rotation_authoring::ManimRotationPivot;

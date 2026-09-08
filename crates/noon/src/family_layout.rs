@@ -25,6 +25,113 @@ pub enum FamilyLayoutTarget<'a> {
     Point(f64, f64),
     Mobject(&'a Mobject),
     Family(&'a FamilyLayout),
+    Anchor(&'a LayoutAnchor),
+}
+
+/// A layout reference into the existing semantic store, optionally selecting a
+/// direct family member. It owns no bounds or membership snapshot. Negative
+/// indices count from the end; selection is resolved when placement is requested.
+#[derive(Clone, Debug)]
+pub struct LayoutAnchor {
+    store: Rc<RefCell<SemanticStore>>,
+    node: SemanticNodeId,
+    index: Option<isize>,
+}
+
+impl From<&Mobject> for LayoutAnchor {
+    fn from(object: &Mobject) -> Self {
+        Self {
+            store: Rc::clone(object.store()),
+            node: object.node_id(),
+            index: None,
+        }
+    }
+}
+
+impl From<&MobjectFamily> for LayoutAnchor {
+    fn from(family: &MobjectFamily) -> Self {
+        Self {
+            store: Rc::clone(family.store()),
+            node: family.node_id(),
+            index: None,
+        }
+    }
+}
+
+impl LayoutAnchor {
+    /// Select a direct semantic family member, without traversing wrapper trees.
+    pub fn member(mut self, index: isize) -> Self {
+        self.index = Some(index);
+        self
+    }
+
+    pub(crate) fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+        &self.store
+    }
+
+    pub(crate) fn resolve(&self) -> Result<SemanticNodeId, String> {
+        let store = self.store.borrow();
+        let node = store
+            .node(self.node)
+            .ok_or_else(|| format!("stale layout anchor {:?}", self.node))?;
+        let Some(index) = self.index else {
+            return Ok(self.node);
+        };
+        if !matches!(node.kind(), crate::SemanticNodeKind::Family) {
+            return Err("alignment submobject index requires a semantic family".into());
+        }
+        let members = node.members();
+        let index = if index < 0 {
+            members.len().checked_add_signed(index)
+        } else {
+            Some(index as usize)
+        };
+        index
+            .and_then(|index| members.get(index).copied())
+            .ok_or_else(|| "alignment submobject index is unavailable".into())
+    }
+
+    /// Observe the selected object/family through the shared authored layout path.
+    pub fn layout(&self) -> Result<FamilyLayout, String> {
+        let node = self.resolve()?;
+        if matches!(
+            self.store.borrow().node(node).map(|n| n.kind()),
+            Some(crate::SemanticNodeKind::Family)
+        ) {
+            MobjectFamily::from_node(Rc::clone(&self.store), node)?.layout()
+        } else {
+            let object = Mobject::from_node(Rc::clone(&self.store), node)?;
+            let bounds = match object.layout_bounds()? {
+                Some(bounds) => Some(bounds),
+                None => {
+                    let (x, y) = object.center()?;
+                    Some(Bounds2D64::point(x, y))
+                }
+            };
+            Ok(FamilyLayout {
+                store: Rc::clone(&self.store),
+                leaves: vec![node],
+                bounds,
+            })
+        }
+    }
+
+    /// Move this entire source using another object's/family member's bounds.
+    pub fn next_to_aligned(
+        &self,
+        target: FamilyLayoutTarget<'_>,
+        aligner: &LayoutAnchor,
+        args: ManimNextToArgs,
+    ) -> Result<(), String> {
+        if !Rc::ptr_eq(&self.store, &aligner.store) {
+            return Err("layout anchors belong to different authoring stores".into());
+        }
+        let source = self.layout()?;
+        let alignment = aligner.layout()?;
+        let delta = RelativePlacement::Next(args)
+            .delta(alignment.bounds, |x, y| source.target_point(target, x, y))?;
+        source.shift(delta.0, delta.1)
+    }
 }
 
 impl MobjectFamily {
@@ -131,6 +238,7 @@ impl FamilyLayout {
             }
             FamilyLayoutTarget::Mobject(object) => object.store(),
             FamilyLayoutTarget::Family(family) => &family.store,
+            FamilyLayoutTarget::Anchor(anchor) => anchor.store(),
         };
         if !Rc::ptr_eq(&self.store, target_store) {
             return Err(
@@ -140,6 +248,7 @@ impl FamilyLayout {
         match target {
             FamilyLayoutTarget::Mobject(object) => object.critical_point(x, y),
             FamilyLayoutTarget::Family(family) => Ok(family.critical_point(x, y)),
+            FamilyLayoutTarget::Anchor(anchor) => Ok(anchor.layout()?.critical_point(x, y)),
             FamilyLayoutTarget::Point(..) => unreachable!(),
         }
     }

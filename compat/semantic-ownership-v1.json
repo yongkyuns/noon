@@ -133,12 +133,10 @@
     {
       "id": "mobject.next-to-submobject-aligner",
       "surface": "Mobject.next_to with submobject_to_align/index_of_submobject_to_align and Group-family targets",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_next_to/_next_to fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore family membership"},
-      "reason": "Selecting a wrapper submobject/family aligner still happens in Python before placement can be delegated.",
-      "replacement": "Expose family-member layout handles so Rust can resolve the selected aligner and target family bounds.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "LayoutAnchor::next_to_aligned"},
+      "reason": "Typed selected-member placement resolves direct family indices, including negative indices, and target/source bounds in Rust. Authored placement and LiveSession::next_layout_to_aligned reuse the same relative-placement math and atomic local mutation vocabulary. Python passes explicit wrapper references and coerces arguments only; legacy/export query fallbacks remain separately inventoried.",
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_selected_next_to"}]
     },
     {
       "id": "mobject.align",
@@ -174,12 +172,12 @@
     },
     {
       "id": "group-placement",
-      "surface": "Group/VGroup next_to submobject_to_align/index_of_submobject_to_align selection and arrange forwarded placement kwargs",
+      "surface": "Group/VGroup arrange forwarded placement kwargs and legacy placement fallback",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_next_to fallback"},
       "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "noon::FamilyLayout and noon::MobjectFamily::arrange"},
-      "reason": "Default family relative placement and ordinary arrange sequencing are shared-Rust-owned, but explicit wrapper/member aligner selection and forwarded arrange placement kwargs still resolve in Python.",
-      "replacement": "Expose shared family-member selection handles and route forwarded arrange alignment policy through the shared family placement API.",
+      "reason": "Default arrangement and typed next_to with explicit/indexed family aligners are shared-Rust-owned. The forwarded arrange placement kwargs path still sequences calls in Python; legacy/export placement retains Python query fallback.",
+      "replacement": "Route forwarded arrange placement policy through shared family arrangement, then delete the remaining legacy/export placement formulas.",
       "migration_issue": "#61"
     },
     {
