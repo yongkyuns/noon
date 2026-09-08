@@ -469,12 +469,12 @@ try {
   assert.ok(phaseB.metrics.presentedFrames > 0, "shared group membership must render");
 
   const defaultVmobjectStyle = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     defaultVmobjectStyleSource,
   );
-  assert.equal(defaultVmobjectStyle.kind, "scene_document");
-  assert.equal(defaultVmobjectStyle.document.objects.length, 3);
-  const defaultStyle = defaultVmobjectStyle.document.objects[0].style;
+  assert.equal(defaultVmobjectStyle.metrics.objectCount, 3);
+  assert.ok(defaultVmobjectStyle.metrics.presentedFrames > 0);
+  const defaultStyle = defaultVmobjectStyle.frame.objects[0];
   assert.equal(defaultStyle.fill.alpha, 0);
   assert.equal(defaultStyle.stroke.alpha, 1);
   assert.ok(Math.abs(defaultStyle.stroke_width - 0.04) < 1e-7);
@@ -490,11 +490,12 @@ try {
   assert.ok(animateParity.metrics.presentedFrames > 0, "shared family animate must render");
 
   const queryTransforms = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     queryTransformSource,
   );
-  assert.equal(queryTransforms.kind, "scene_document");
-  assert.equal(queryTransforms.document.objects.length, 3);
+  assert.equal(queryTransforms.metrics.objectCount, 3);
+  assert.ok(queryTransforms.metrics.presentedFrames > 0);
+  assert.ok(queryTransforms.frame.objects.every(object => object.bounds.width > 0 && object.bounds.height > 0));
 
   const sharedRates = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),
@@ -554,7 +555,7 @@ try {
   let zError = null;
   try {
     await page.evaluate(
-      (pythonSource) => window.noonManimCompat.run(pythonSource),
+      (pythonSource) => window.noonManimCompat.runLive(pythonSource),
       `from noon import *\nresult = Scene()\nLine((0, 0, 1), (1, 0, 0))`,
     );
   } catch (error) {
