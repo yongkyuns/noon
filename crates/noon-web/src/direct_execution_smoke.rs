@@ -640,3 +640,14 @@ pub async fn create_direct_scale_in_place_smoke_renderer(
     let program = noon::example_scenes::scale_in_place::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
+
+/// Sequential updater removal/replacement through the shared native/WASM session.
+#[wasm_bindgen(js_name = createDirectLiveUpdaterLifecycleSmokeRenderer)]
+pub async fn create_direct_live_updater_lifecycle_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (program, callbacks) =
+        noon::example_scenes::live_updater_lifecycle::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
+        .await
+}

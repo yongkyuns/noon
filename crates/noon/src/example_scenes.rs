@@ -10,6 +10,7 @@ pub mod family_placement;
 pub mod family_transform_indicate;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;
+pub mod live_updater_lifecycle;
 pub mod mixed_scalar_composition;
 pub mod moving_around;
 pub mod ordinary_become_semantics;

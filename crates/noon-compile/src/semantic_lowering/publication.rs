@@ -21,6 +21,12 @@ pub enum SemanticPublicationLoweringError {
     UnsupportedMutation {
         index: usize,
     },
+    UpdaterTargetNotIndexed {
+        target: SemanticNodeId,
+    },
+    RetroactiveUpdaterMutation {
+        index: usize,
+    },
     UnsupportedReactiveMembership {
         object: SemanticTransactionNodeRef,
     },
@@ -60,6 +66,12 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
             Self::UnsupportedMutation { index } => write!(
                 f,
                 "semantic mutation {index} has no incremental live publication contract"
+            ),
+            Self::UpdaterTargetNotIndexed { target } => write!(
+                f, "live updater target {target:?} requires callback preorder enrollment before execution"
+            ),
+            Self::RetroactiveUpdaterMutation { index } => write!(
+                f, "updater mutation {index} precedes the current live frame"
             ),
             Self::UnsupportedReactiveMembership { object } => write!(
                 f,
@@ -228,6 +240,47 @@ impl BoundSemanticPublication {
     pub fn into_parts(self) -> (ExecutionMutationTransaction, CompiledResources) {
         (self.transaction, self.resource_additions)
     }
+}
+
+/// Registration-only batches use callback-plan lowering, not the property lane.
+/// Mixed structural/registration transactions remain unsupported until their
+/// proposed target preorder can be preflighted together.
+pub fn is_semantic_updater_publication(mutations: &[SemanticMutation]) -> bool {
+    !mutations.is_empty()
+        && mutations.iter().all(|mutation| {
+            matches!(
+                mutation,
+                SemanticMutation::AddUpdater { .. }
+                    | SemanticMutation::RemoveUpdater { .. }
+                    | SemanticMutation::ClearUpdaters { .. }
+            )
+        })
+}
+
+/// Prepare the callback-plan revision and the empty geometry projection together.
+/// The caller must commit both after all semantic/runtime preflight succeeds.
+pub fn prepare_semantic_updater_publication(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    callbacks: &super::SemanticHostCallbackPlan,
+    current_time: f64,
+) -> Result<
+    (
+        PreparedSemanticPublication,
+        Option<super::SemanticHostCallbackRevision>,
+    ),
+    SemanticPublicationLoweringError,
+> {
+    let revised = callbacks.prepare_registration_revision(prepared, current_time)?;
+    Ok((
+        PreparedSemanticPublication {
+            values: ExecutionMutationTransaction::from_mutations(Vec::new()),
+            resource_additions: CompiledResources::default(),
+            entries: Vec::new(),
+            possible_exits: Vec::new(),
+            stats: SemanticPublicationPreparationStats::default(),
+        },
+        revised,
+    ))
 }
 
 pub fn validate_semantic_publication(
