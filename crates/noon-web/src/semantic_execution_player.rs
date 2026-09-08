@@ -382,25 +382,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_move_to_point(
+    pub(crate) fn live_move_to(
         &mut self,
         mobject: &noon::Mobject,
-        x: f64,
-        y: f64,
+        target: noon::LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
     ) -> Result<(), String> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .move_to_point(mobject, x, y)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        self.with_live_session(|live| live.move_to(mobject, target, edge, mask))
+            .map(|_| ())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

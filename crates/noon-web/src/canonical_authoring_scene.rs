@@ -5441,17 +5441,51 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = liveMoveToPoint)]
+        #[allow(clippy::too_many_arguments)]
         pub fn live_move_to_point(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
             y: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
         ) -> Result<(), JsValue> {
             handle.id_in_store(self.inner.scene.store(), "live execution context")?;
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
-                .live_move_to_point(handle.semantic_mobject(), x, y)
+                .live_move_to(
+                    handle.semantic_mobject(),
+                    noon::LiveLayoutTarget::Point(x, y),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveMoveToMobject)]
+        pub fn live_move_to_mobject(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            target.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_to(
+                    handle.semantic_mobject(),
+                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
                 .map_err(js_error)
         }
 
@@ -8373,7 +8407,12 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_move_to_point(&pulse, 2.0, -1.0)
+            .live_move_to(
+                &pulse,
+                noon::LiveLayoutTarget::Point(2.0, -1.0),
+                (0.0, 0.0),
+                (1.0, 1.0),
+            )
             .unwrap();
         {
             let store = context.scene.store().borrow();
