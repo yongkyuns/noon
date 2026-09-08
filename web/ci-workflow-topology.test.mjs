@@ -21,6 +21,7 @@ const exactFamilies = new Map([
   ["fuzz.yml", "fuzz"],
   ["branch-cleanup-once.yml", "maintenance"],
   ["noon-agent-foundation.yml", "agent-authoring"],
+  ["agent-preview-runner.yml", "agent-runner"],
 ]);
 
 function classifyWorkflow(name) {
