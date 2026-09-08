@@ -8,6 +8,7 @@ on:
       - "scripts/test_noon_capabilities.py"
       - "scripts/check-noon-agent-skill.py"
       - "scripts/manim-api-coverage.py"
+      - "scripts/agent-preview-artifacts*.mjs"
       - "compat/manim-v0.21.0.json"
       - "web/python/**"
       - "parity/manim-v0.21/upstream-examples/**"
@@ -20,6 +21,7 @@ on:
       - "scripts/test_noon_capabilities.py"
       - "scripts/check-noon-agent-skill.py"
       - "scripts/manim-api-coverage.py"
+      - "scripts/agent-preview-artifacts*.mjs"
       - "compat/manim-v0.21.0.json"
       - "web/python/**"
       - "parity/manim-v0.21/upstream-examples/**"
@@ -55,3 +57,20 @@ jobs:
           path: ${{ runner.temp }}/noon-agent-capabilities.json
           if-no-files-found: error
           retention-days: 14
+  artifacts:
+    name: Frame artifact ownership
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Record exact checkout and platform
+        run: |
+          git rev-parse HEAD
+          uname -a
+          node --version
+      - name: Check artifact module syntax
+        run: |
+          node --check scripts/agent-preview-artifacts.mjs
+          node --check scripts/agent-preview-artifacts.test.mjs
+      - name: Test bounded storage, provenance and cleanup
+        run: node --test scripts/agent-preview-artifacts.test.mjs
