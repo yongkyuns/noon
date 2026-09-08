@@ -2,19 +2,9 @@
   "deletion_issue": "#959",
   "rewritten_imports": {},
   "token_budgets": {
-    "crates/noon-web/src/canonical_authoring_scene.rs": {
-      "SceneSpec": 3
-    },
     "crates/noon-core/src/patch.rs": {
       "ObjectDefinition": 12,
       "SceneDefinition": 17
-    },
-    "web/authoring-client.js": {
-      "scene_document": 3
-    },
-    "web/authoring-client.test.mjs": {
-      "scene_document": 7,
-      "SceneSpec": 3
     },
     "web/python-worker.source.js": {
       "_manim_canonical_scene": 5

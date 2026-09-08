@@ -1,12 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use noon_core::{
-    Color, FamilyAnimationRequest, ObjectId, SemanticObjectState, SemanticPaint, SemanticStyle,
-    SemanticTransform2_5D, Style, TextSourceKind, TrackDefinition, Transform2D, Vec2,
-};
+use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction, SemanticVec3};
-use noon_ir::{ObjectSpec, SceneSpec, TextSpec};
 
 #[derive(Clone)]
 enum OwnedSceneMembershipMember {
@@ -882,8 +878,7 @@ impl CanonicalAuthoringScene {
 
     /// Read only the live runtime's authored handoff duration.
     ///
-    /// Static authoring has no live session, so its existing authored-duration
-    /// projection remains the fallback at the Python export boundary.
+    /// Returns `None` until a live session exists.
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_handoff_duration(&self) -> Option<f64> {
         self.live_player
@@ -2287,54 +2282,6 @@ impl CanonicalAuthoringScene {
         }
         player.drain_delta_json()
     }
-
-    /// Derive the explicit export document from shared semantic state at the boundary.
-    pub fn finalize(
-        &self,
-        geometry_tracks: Vec<TrackDefinition>,
-        family_animations: Vec<FamilyAnimationRequest>,
-        camera_object: Option<ObjectId>,
-    ) -> Result<SceneSpec, String> {
-        let mut objects = Vec::with_capacity(self.identities.len());
-        let leaves = self
-            .scene
-            .store()
-            .borrow()
-            .ordered_leaf_nodes(self.scene.root())
-            .map_err(|error| error.to_string())?;
-        for node in leaves {
-            let handle = noon::Mobject::from_node(std::rc::Rc::clone(self.scene.store()), node)?;
-            let state = handle.state()?;
-            if state.content.text().is_some() {
-                objects.push(canonical_text_export(
-                    &self.scene.store().borrow(),
-                    *self
-                        .identities
-                        .get(&node)
-                        .ok_or("unbound semantic scene member")?,
-                    &state,
-                )?);
-                continue;
-            }
-            let (geometry, transform, style) = crate::geometry_export::mobject_fields(&handle)?;
-            let mut object = ObjectSpec::geometry(
-                *self
-                    .identities
-                    .get(&node)
-                    .ok_or("unbound semantic scene member")?,
-                geometry,
-            );
-            object.transform = transform;
-            object.style = style;
-            objects.push(object);
-        }
-        let mut spec =
-            SceneSpec::new(objects, geometry_tracks).map_err(|error| error.to_string())?;
-        spec.family_animations = family_animations;
-        spec.camera_object = camera_object;
-        spec.validate().map_err(|error| error.to_string())?;
-        Ok(spec)
-    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -2351,127 +2298,8 @@ fn authored_mobject_layout(handle: &noon::Mobject) -> Result<(f64, f64, f64, f64
     ))
 }
 
-/// Project source-level Text content at the explicit export boundary.
-/// Content and presentation are read from the shared semantic store.
-fn canonical_text_export(
-    store: &noon_core::SemanticStore,
-    id: ObjectId,
-    state: &SemanticObjectState,
-) -> Result<ObjectSpec, String> {
-    let text = state
-        .content
-        .text()
-        .ok_or("canonical text export requires text content")?;
-    let resource = store
-        .text_resources()
-        .get(text)
-        .ok_or("canonical text export references an unknown text resource")?;
-    let (text, transform) = match resource.kind {
-        TextSourceKind::Plain => {
-            let run = resource
-                .runs
-                .first()
-                .ok_or("canonical native text resource has no shaped run")?;
-            (
-                TextSpec::native_plain(
-                    resource.source.as_ref(),
-                    run.font.family.as_ref(),
-                    run.font_size,
-                    native_line_spacing(resource)?,
-                ),
-                text_export_transform(
-                    state.transform,
-                    f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE),
-                )?,
-            )
-        }
-        TextSourceKind::Typst => (
-            TextSpec::typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
-            text_export_transform(
-                state.transform,
-                f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT),
-            )?,
-        ),
-        TextSourceKind::MathTypst => (
-            TextSpec::math_typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
-            text_export_transform(
-                state.transform,
-                f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT),
-            )?,
-        ),
-        kind => {
-            return Err(format!(
-                "canonical text export does not support {kind:?} source"
-            ))
-        }
-    };
-    let mut object = ObjectSpec::text(id, text);
-    object.transform = transform;
-    object.style = legacy_style(&state.style)?;
-    Ok(object)
-}
-
-fn text_export_transform(
-    transform: SemanticTransform2_5D,
-    point_scale: f64,
-) -> Result<Transform2D, String> {
-    Ok(Transform2D {
-        translation: Vec2::new(
-            legacy_f32("text translation x", transform.translation.x)?,
-            legacy_f32("text translation y", transform.translation.y)?,
-        ),
-        scale: Vec2::new(
-            legacy_f32("text scale x", transform.scale.x / point_scale)?,
-            legacy_f32("text scale y", transform.scale.y / point_scale)?,
-        ),
-        rotation: legacy_f32("text rotation", transform.rotation_z)?,
-    })
-}
-
-fn native_line_spacing(resource: &noon_core::TextResource) -> Result<f32, String> {
-    let Some(first) = resource.runs.first() else {
-        return Err("canonical native text resource has no shaped run".into());
-    };
-    if resource.runs.len() < 2 {
-        // A single line has no observable line advance. Preserve Manim's ordinary
-        // default spelling rather than manufacturing wrapper-side metadata.
-        return Ok(-1.0);
-    }
-    let second = &resource.runs[1];
-    let advance = first.transform.ty - second.transform.ty;
-    let spacing = advance / first.font_size - 1.0;
-    if !spacing.is_finite() || spacing < -1.0 {
-        return Err("canonical native text resource has invalid line spacing".into());
-    }
-    Ok(spacing)
-}
-
-fn legacy_style(style: &SemanticStyle) -> Result<Style, String> {
-    Ok(Style {
-        fill: legacy_color(style.fill.as_ref(), style.fill_opacity)?,
-        stroke: legacy_color(style.stroke.as_ref(), style.stroke_opacity)?,
-        stroke_width: legacy_f32("text stroke width", style.stroke_width)?,
-        stroke_width_mode: style.stroke_width_mode,
-        stroke_join: style.stroke_join,
-        stroke_cap: style.stroke_cap,
-        opacity: legacy_f32("text object opacity", style.object_opacity)?,
-    })
-}
-
-fn legacy_color(paint: Option<&SemanticPaint>, opacity: f64) -> Result<Option<Color>, String> {
-    let Some(paint) = paint else {
-        return Ok(None);
-    };
-    let SemanticPaint::Solid(color) = paint else {
-        return Err("legacy text export does not support resource-backed paint".into());
-    };
-    Ok(Some(Color {
-        alpha: legacy_f32("text paint opacity", f64::from(color.alpha) * opacity)?,
-        ..*color
-    }))
-}
-
-fn legacy_f32(name: &str, value: f64) -> Result<f32, String> {
+#[cfg(target_arch = "wasm32")]
+fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
     if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
         return Err(format!("{name} must be a finite f32-compatible number"));
     }
@@ -2480,6 +2308,7 @@ fn legacy_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use noon_core::{Color, Style, Transform2D, Vec2};
     use serde::de::DeserializeOwned;
     use wasm_bindgen::prelude::*;
 
@@ -5309,12 +5138,12 @@ mod wasm {
                 crate::authoring_mobject::manim_text(source, font_family, font_size, line_spacing)
                     .map_err(js_error)?
                     .color(Color::rgba(
-                        legacy_f32("text red", red)?,
-                        legacy_f32("text green", green)?,
-                        legacy_f32("text blue", blue)?,
-                        legacy_f32("text alpha", alpha)?,
+                        checked_f32("text red", red)?,
+                        checked_f32("text green", green)?,
+                        checked_f32("text blue", blue)?,
+                        checked_f32("text alpha", alpha)?,
                     ))
-                    .set_opacity(legacy_f32("text opacity", opacity)?);
+                    .set_opacity(checked_f32("text opacity", opacity)?);
             self.inner
                 .live_create_text(text)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
@@ -5338,12 +5167,12 @@ mod wasm {
             let font_size = crate::authoring_mobject::text_authoring_f32("font size", font_size)
                 .map_err(js_error)?;
             let color = Color::rgba(
-                legacy_f32("text red", red)?,
-                legacy_f32("text green", green)?,
-                legacy_f32("text blue", blue)?,
-                legacy_f32("text alpha", alpha)?,
+                checked_f32("text red", red)?,
+                checked_f32("text green", green)?,
+                checked_f32("text blue", blue)?,
+                checked_f32("text alpha", alpha)?,
             );
-            let opacity = legacy_f32("text opacity", opacity)?;
+            let opacity = checked_f32("text opacity", opacity)?;
             let result = if math {
                 self.inner.live_create_math_typst(
                     noon::MathTypst::new(source)
@@ -5883,31 +5712,6 @@ mod wasm {
         pub fn restore(&mut self, checkpoint: u32) -> Result<(), JsValue> {
             self.inner.restore(checkpoint as usize).map_err(js_error)
         }
-
-        #[wasm_bindgen(js_name = sceneSpecJson)]
-        pub fn scene_spec_json(
-            &self,
-            geometry_tracks_json: &str,
-            family_animations_json: &str,
-            camera_object_id: &str,
-        ) -> Result<String, JsValue> {
-            let geometry_tracks =
-                parse_json::<Vec<TrackDefinition>>("geometry tracks", geometry_tracks_json)?;
-            let family_animations = parse_json::<Vec<FamilyAnimationRequest>>(
-                "family animations",
-                family_animations_json,
-            )?;
-            let camera_object = if camera_object_id.is_empty() {
-                None
-            } else {
-                Some(parse_object_id("camera object ID", camera_object_id)?)
-            };
-            let spec = self
-                .inner
-                .finalize(geometry_tracks, family_animations, camera_object)
-                .map_err(js_error)?;
-            serde_json::to_string(&spec).map_err(js_error)
-        }
     }
 }
 
@@ -5920,7 +5724,6 @@ mod tests {
         AnimationOptions, GeometryRef, HostCallbackId, RateFunction, SemanticMutationTransaction,
         SemanticVec3, Vec2,
     };
-    use noon_ir::{ObjectSpecContent, TextSpecKind};
 
     use super::*;
 
@@ -6451,7 +6254,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_bind_events_define_the_canonical_object_stream_directly() {
+    fn mixed_bind_events_lower_to_one_ordered_execution_stream() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.5).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
@@ -6460,23 +6263,27 @@ mod tests {
         let square = context.scene.rectangle(1.0, 1.0).unwrap();
         context.bind_mobject(ObjectId::new(2), &square).unwrap();
 
-        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
+        let execution = context.lower_execution().unwrap();
         assert_eq!(
-            spec.objects
+            execution
+                .frame()
+                .objects
                 .iter()
-                .map(|object| object.id)
+                .map(|object| Some(object.id))
                 .collect::<Vec<_>>(),
-            vec![ObjectId::new(0), ObjectId::new(1), ObjectId::new(2)]
+            [&circle, &label, &square]
+                .map(|handle| execution.execution_object_id(handle.node_id()))
         );
-        let ObjectSpecContent::Text(text) = &spec.objects[1].content else {
-            panic!("middle object must be source-level text");
-        };
-        assert_eq!(text.kind, TextSpecKind::Plain);
-        assert_eq!(text.source, "A");
+        assert!(execution.frame().objects[1].text().is_some());
+        let resource = label.state().unwrap().content.text().unwrap();
+        let store = context.scene.store().borrow();
+        let text = store.text_resources().get(resource).unwrap();
+        assert_eq!(text.kind, noon_core::TextSourceKind::Plain);
+        assert_eq!(text.source.as_ref(), "A");
     }
 
     #[test]
-    fn canonical_export_flattens_family_roots_to_bound_semantic_leaves() {
+    fn family_roots_lower_to_bound_semantic_leaves() {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.circle(0.5).unwrap();
         let right = context.scene.square(0.5).unwrap();
@@ -6488,22 +6295,27 @@ mod tests {
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
                 members: vec![OwnedSceneMembershipMember::Family(family)],
-                bindings: vec![(ObjectId::new(4), left), (ObjectId::new(9), right)],
+                bindings: vec![
+                    (ObjectId::new(4), left.clone()),
+                    (ObjectId::new(9), right.clone()),
+                ],
             })
             .unwrap();
 
-        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
+        let execution = context.lower_execution().unwrap();
         assert_eq!(
-            spec.objects
+            execution
+                .frame()
+                .objects
                 .iter()
-                .map(|object| object.id)
+                .map(|object| Some(object.id))
                 .collect::<Vec<_>>(),
-            vec![ObjectId::new(4), ObjectId::new(9)],
+            [&left, &right].map(|handle| execution.execution_object_id(handle.node_id()))
         );
     }
 
     #[test]
-    fn native_semantic_text_exports_from_shared_state() {
+    fn native_text_layout_and_presentation_reach_typed_execution() {
         let mut context = CanonicalAuthoringScene::default();
         let mut label = context
             .scene
@@ -6515,23 +6327,30 @@ mod tests {
             .unwrap();
         label.shift(2.0, -1.0).unwrap();
         context.bind_mobject(ObjectId::new(4), &label).unwrap();
-
-        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
-        let ObjectSpecContent::Text(text) = &spec.objects[0].content else {
-            panic!("shared native Text must derive the exported text spec");
-        };
-        assert_eq!(text.source, "A\nB");
-        assert_eq!(text.font_size, 36.0);
-        let noon_ir::TextSpecOptions::NativePlain { line_spacing, .. } = &text.options else {
-            panic!("native Text export requires native options");
-        };
-        assert!((*line_spacing - 0.5).abs() < 1.0e-6);
-        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
-        assert_eq!(spec.objects[0].transform.scale, Vec2::ONE);
+        let execution = context.lower_execution().unwrap();
+        assert!(execution.frame().objects[0].text().is_some());
+        assert_eq!(
+            execution.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        let state = label.state().unwrap();
+        let store = context.scene.store().borrow();
+        let text = store
+            .text_resources()
+            .get(state.content.text().unwrap())
+            .unwrap();
+        assert_eq!(text.source.as_ref(), "A\nB");
+        assert_eq!(text.runs.len(), 2);
+        assert_eq!(text.runs[0].font_size, 36.0);
+        assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 54.0).abs() < 1e-6);
+        assert_eq!(
+            state.transform.scale.x,
+            f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE)
+        );
     }
 
     #[test]
-    fn typst_and_math_typst_export_source_kind_and_effective_presentation() {
+    fn typst_and_math_typst_share_resources_with_typed_execution() {
         let mut context = CanonicalAuthoringScene::default();
         let label = context
             .scene
@@ -6552,32 +6371,44 @@ mod tests {
             .unwrap();
         context.bind_mobject(ObjectId::new(4), &label).unwrap();
         context.bind_mobject(ObjectId::new(5), &equation).unwrap();
-
-        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
-        let ObjectSpecContent::Text(label) = &spec.objects[0].content else {
-            panic!("Typst export must remain source-level text");
-        };
-        assert_eq!(label.kind, TextSpecKind::Typst);
-        assert_eq!(label.source, "*Noon*");
-        assert_eq!(label.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
-        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
-        let scale = spec.objects[0].transform.scale;
-        assert!((scale.x - 1.5).abs() < 1.0e-6 && (scale.y - 1.5).abs() < 1.0e-6);
-        assert_eq!(spec.objects[0].style.fill, Some(noon_core::YELLOW));
-
-        let ObjectSpecContent::Text(equation) = &spec.objects[1].content else {
-            panic!("MathTypst export must remain source-level text");
-        };
-        assert_eq!(equation.kind, TextSpecKind::MathTypst);
-        assert_eq!(equation.source, "frac(x, 2)");
-        assert_eq!(equation.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
-        assert_eq!(spec.objects[1].transform.translation, Vec2::new(-1.0, 0.5));
-        assert_eq!(spec.objects[1].transform.scale, Vec2::ONE);
-        assert_eq!(spec.objects[1].style.opacity, 0.5);
+        let execution = context.lower_execution().unwrap();
+        assert_eq!(execution.frame().objects.len(), 2);
+        assert!(execution
+            .frame()
+            .objects
+            .iter()
+            .all(|object| object.text().is_some()));
+        assert_eq!(
+            execution.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        assert_eq!(
+            execution.frame().objects[1].transform.translation,
+            Vec2::new(-1.0, 0.5)
+        );
+        assert_eq!(
+            label.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::YELLOW))
+        );
+        assert_eq!(equation.state().unwrap().style.object_opacity, 0.5);
+        let store = context.scene.store().borrow();
+        for (handle, kind, source) in [
+            (&label, noon_core::TextSourceKind::Typst, "*Noon*"),
+            (
+                &equation,
+                noon_core::TextSourceKind::MathTypst,
+                "frac(x, 2)",
+            ),
+        ] {
+            let resource = handle.state().unwrap().content.text().unwrap();
+            let text = store.text_resources().get(resource).unwrap();
+            assert_eq!(text.kind, kind);
+            assert_eq!(text.source.as_ref(), source);
+        }
     }
 
     #[test]
-    fn updates_preserve_slots_and_append_checkpoint_restore_reclaims_failed_binds() {
+    fn checkpoint_restore_preserves_shared_edits_and_reclaims_failed_binds() {
         let mut context = CanonicalAuthoringScene::default();
         let first = ObjectId::new(0);
         let mut circle = context.scene.circle(0.5).unwrap();
@@ -6585,28 +6416,27 @@ mod tests {
         let checkpoint = context.checkpoint();
         let temporary = context.scene.text(noon::Text::new("temporary")).unwrap();
         context.bind_mobject(ObjectId::new(1), &temporary).unwrap();
-        // Checkpoint rollback is intentionally append-only: an update to an
-        // existing slot remains visible after the failed bind is reclaimed.
         circle.shift(0.75, 0.0).unwrap();
         context.restore(checkpoint).unwrap();
-        let exported = context.finalize(Vec::new(), Vec::new(), None).unwrap();
-        let ObjectSpecContent::Geometry(geometry) = &exported.objects[0].content else {
-            panic!("first object must remain geometry-backed");
-        };
-        assert_eq!(geometry, &GeometryRef::circle(0.5));
-        assert_eq!(exported.objects[0].transform.translation.x, 0.75);
+        let execution = context.lower_execution().unwrap();
+        assert_eq!(execution.frame().objects.len(), 1);
+        assert_eq!(execution.frame().objects[0].transform.translation.x, 0.75);
+        assert_eq!(context.bindings.get(&first), Some(&circle.node_id()));
+        assert!(!context.identities.contains_key(&temporary.node_id()));
 
         circle.move_to(2.0, -1.0).unwrap();
         let rectangle = context.scene.rectangle(2.0, 1.0).unwrap();
         context.bind_mobject(ObjectId::new(1), &rectangle).unwrap();
-
-        let spec = context
-            .finalize(Vec::new(), Vec::new(), Some(first))
-            .unwrap();
-        assert_eq!(spec.objects.len(), 2);
-        assert_eq!(spec.objects[0].id, first);
-        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
-        assert_eq!(spec.camera_object, Some(first));
+        let execution = context.lower_execution().unwrap();
+        assert_eq!(execution.frame().objects.len(), 2);
+        assert_eq!(
+            execution.execution_object_id(circle.node_id()),
+            Some(execution.frame().objects[0].id)
+        );
+        assert_eq!(
+            execution.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
     }
 
     #[test]
