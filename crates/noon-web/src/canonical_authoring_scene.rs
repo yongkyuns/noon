@@ -190,6 +190,11 @@ enum OrdinaryCompositionChild {
         target: noon::Mobject,
         options: noon_core::AnimationOptions,
     },
+    Uncreate {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        options: noon_core::AnimationOptions,
+    },
     AffineLifecycle {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1650,6 +1655,12 @@ impl CanonicalAuthoringScene {
                     target,
                     options: *options,
                 },
+                OrdinaryCompositionChild::Uncreate {
+                    target, options, ..
+                } => noon::AnimationCompositionRequest::Uncreate {
+                    target,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::AffineLifecycle {
                     target,
                     direction,
@@ -1721,6 +1732,11 @@ impl CanonicalAuthoringScene {
                     ..
                 }
                 | OrdinaryCompositionChild::Create {
+                    entering_id,
+                    target,
+                    ..
+                }
+                | OrdinaryCompositionChild::Uncreate {
                     entering_id,
                     target,
                     ..
@@ -2210,6 +2226,11 @@ impl CanonicalAuthoringScene {
                     target,
                     options,
                 }
+                | OrdinaryCompositionChild::Uncreate {
+                    entering_id,
+                    target,
+                    options,
+                }
                 | OrdinaryCompositionChild::AffineLifecycle {
                     entering_id,
                     target,
@@ -2237,6 +2258,7 @@ impl CanonicalAuthoringScene {
                         child,
                         OrdinaryCompositionChild::TextWrite { .. }
                             | OrdinaryCompositionChild::TextReveal { .. }
+                            | OrdinaryCompositionChild::Uncreate { .. }
                     ) {
                         // Glyph realization owns reversal; keep the original child
                         // options for shared schedule lowering after shape validation.
@@ -4321,6 +4343,31 @@ mod wasm {
                     options,
                 },
             )
+        }
+
+        #[wasm_bindgen(js_name = appendUncreate)]
+        pub fn append_uncreate(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+            remover: bool,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("Uncreate object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::Uncreate {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                options: Self::options(child_run_time, rate_function)?
+                    .remover(remover)
+                    .reverse_rate_function(reverse_rate_function),
+            });
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = appendAffineLifecycle)]
@@ -8510,6 +8557,11 @@ mod tests {
             .rate_func(RateFunction::Linear);
         let children = vec![
             OrdinaryCompositionChild::Wait { duration: 0.25 },
+            OrdinaryCompositionChild::Uncreate {
+                entering_id: None,
+                target: bound.clone(),
+                options: options.remover(true).reverse_rate_function(true),
+            },
             OrdinaryCompositionChild::Add {
                 entering_id: ObjectId::new(1),
                 target: add_target.clone(),
@@ -8557,6 +8609,7 @@ mod tests {
             )
             .unwrap();
         assert!(end > 0.0);
+        assert!(!context.live_contains_mobject(&bound).unwrap());
         assert!(context.live_contains_mobject(&add_target).unwrap());
         assert!(context.live_contains_mobject(&create_target).unwrap());
         assert!(context.live_contains_mobject(&fade_target).unwrap());

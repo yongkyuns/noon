@@ -8,7 +8,9 @@ class OrdinaryUncreateOptions(Scene):
         forward = Square(side_length=0.4, color=GREEN)
         self.add(first, kept, forward)
 
-        self.play(Uncreate(first), run_time=2.0, rate_func=rush_into)
+        self.play(AnimationGroup(
+            Uncreate(first, run_time=2.0, rate_func=rush_into), rate_func=linear,
+        ))
         assert first not in self.mobjects
         assert kept in self.mobjects and forward in self.mobjects
 

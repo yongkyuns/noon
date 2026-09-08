@@ -1,8 +1,9 @@
 //! Uncreate easing, retained membership, and forward reveal on the shared runtime.
 
 use crate::{
-    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    MobjectFamilyMember, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
+    LiveProgram, LiveSession, Mobject, MobjectFamilyMember, RateFunction, Scene,
+    SemanticAnimationCompositionKind,
 };
 
 pub struct UncreateOptions {
@@ -69,9 +70,19 @@ impl LiveContinuation for UncreateOptions {
             }
             _ => return Err("Uncreate continuation resumed after completion".into()),
         };
-        let segment = live
-            .declare_and_activate_uncreate(target, options)
-            .map_err(|error| error.to_string())?;
+        let segment = if self.stage == 0 {
+            live.declare_and_activate_composition(
+                &AnimationCompositionRequest::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    children: vec![AnimationCompositionRequest::Uncreate { target, options }],
+                    options: AnimationOptions::new().rate_func(RateFunction::Linear),
+                },
+                AnimationOptions::new(),
+            )
+        } else {
+            live.declare_and_activate_uncreate(target, options)
+        }
+        .map_err(|error| error.to_string())?;
         self.stage += 1;
         Ok(ContinuationStep::Await(segment))
     }
