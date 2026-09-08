@@ -92,6 +92,14 @@ impl GpuTimestampProfiler {
         None
     }
 
+    /// Release a reservation whose encoder will be discarded before submission.
+    /// No sample or mapping exists for this frame.
+    pub(crate) fn cancel_slot(&self, slot: usize) {
+        self.slots[slot].mapping.set(false);
+        let mut metrics = self.metrics.borrow_mut();
+        metrics.failed = metrics.failed.saturating_add(1);
+    }
+
     pub(crate) fn query_set(&self, slot: usize) -> &wgpu::QuerySet {
         &self.slots[slot].query_set
     }
