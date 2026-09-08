@@ -38,8 +38,6 @@ fn contract_manifest_inventories_current_cross_language_boundaries() {
         "patch_batch",
         "authoring_envelope",
         "authoring_result",
-        "host_callback_slots",
-        "host_callback_frame",
     ] {
         assert!(names.contains(required), "wire contract missing {required}");
     }

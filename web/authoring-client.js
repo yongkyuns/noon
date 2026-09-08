@@ -431,7 +431,6 @@ export function parseAuthoringResult(resultJson) {
       sceneSpec,
       duration: validateSceneDuration(result.duration),
       identities: validateSceneIdentities(result.identities, document),
-      callbacks: validateCallbackSession(result.callbacks, document),
     };
     return parsed;
   }
@@ -545,46 +544,6 @@ export function validateSceneIdentities(identities, scene) {
   validateIdentityEntries("object", identities.objects, scene.objects);
   validateIdentityEntries("track", identities.tracks, scene.tracks);
   return identities;
-}
-
-export function validateCallbackSession(callbacks, scene) {
-  if (callbacks === null || callbacks === undefined) {
-    return null;
-  }
-  if (!isRecord(callbacks)) {
-    throw new Error("Python Scene callback session must be an object");
-  }
-  if (!Number.isSafeInteger(callbacks.session_id) || callbacks.session_id < 0) {
-    throw new Error("Python Scene callback session has an invalid session ID");
-  }
-  if (!Array.isArray(callbacks.slots) || callbacks.slots.length === 0) {
-    throw new Error("Python Scene callback session must contain callback slots");
-  }
-  const objectIds = new Set(scene.objects.map(({ id }) => id));
-  const callbackIds = new Set();
-  for (const slot of callbacks.slots) {
-    if (!isRecord(slot) || !Number.isSafeInteger(slot.id) || slot.id < 0) {
-      throw new Error("Python Scene has an invalid callback slot ID");
-    }
-    if (callbackIds.has(slot.id)) {
-      throw new Error("Python Scene has duplicate callback slot IDs");
-    }
-    callbackIds.add(slot.id);
-    if (!Array.isArray(slot.objects)) {
-      throw new Error("Python Scene callback slot objects must be an array");
-    }
-    const seen = new Set();
-    for (const object of slot.objects) {
-      if (!Number.isSafeInteger(object) || object < 0 || !objectIds.has(object)) {
-        throw new Error("Python Scene callback slot references an invalid object");
-      }
-      if (seen.has(object)) {
-        throw new Error("Python Scene callback slot contains duplicate objects");
-      }
-      seen.add(object);
-    }
-  }
-  return callbacks;
 }
 
 function validateDefinitionIds(kind, definitions) {

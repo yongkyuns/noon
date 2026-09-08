@@ -829,7 +829,6 @@ if isinstance(__noon_result, Scene):
         __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
         if __noon_continuation_generation is not None:
             __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
-        __noon_callbacks = None
         __noon_scene_spec = None
         __noon_document = None
         __noon_identities = None
@@ -838,12 +837,6 @@ if isinstance(__noon_result, Scene):
             raise RuntimeError(
                 "shared Scene cannot fall back to scene-document execution; "
                 "remove incompatible legacy declarations or request exportDocument explicitly"
-            )
-        __noon_callbacks = _manim_updaters.register_scene(__noon_result)
-        if __noon_callbacks and getattr(__noon_result, "_semantic_text_handles", {}):
-            raise RuntimeError(
-                "native Text with Python callbacks is not supported by the retained "
-                "renderer path yet; callback lowering must migrate to the shared session"
             )
         # A native Text timeline/export remains in the canonical context so its
         # temporary #959 codec is derived from the Rust store at finalization.
@@ -870,7 +863,6 @@ json.dumps(
         "scene_spec": __noon_scene_spec,
         "duration": __noon_duration,
         "identities": __noon_identities,
-        "callbacks": __noon_callbacks,
     },
     separators=(",", ":"),
     allow_nan=False,

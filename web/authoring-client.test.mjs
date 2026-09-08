@@ -6,7 +6,6 @@ import {
   AUTHORING_PROTOCOL_VERSION,
   PythonAuthoringClient,
   parseAuthoringResult,
-  validateCallbackSession,
   validateSceneDocument,
   validateSceneDuration,
   validateSceneIdentities,
@@ -55,7 +54,6 @@ function sceneResult(overrides = {}) {
     scene_spec: { version: 1, objects: [], tracks: [], camera_object: null },
     duration: 0,
     identities: { objects: [], tracks: [] },
-    callbacks: null,
     ...overrides,
   };
 }
@@ -132,7 +130,7 @@ test("requests legacy Scene export only through an explicit boolean option", asy
   );
 });
 
-test("correlates a Python request with callback, mixed content, and duration metadata", async () => {
+test("correlates a Python request with mixed content and duration metadata", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
@@ -142,7 +140,6 @@ test("correlates a Python request with callback, mixed content, and duration met
   await Promise.resolve();
   const scene = { version: 1, objects: [{ id: 0 }], tracks: [] };
   const identities = { objects: [{ id: 0, key: "@object:0" }], tracks: [] };
-  const callbacks = { session_id: 3, slots: [{ id: 0, objects: [0] }] };
   const sceneSpec = {
     version: 1,
     objects: [
@@ -161,7 +158,6 @@ test("correlates a Python request with callback, mixed content, and duration met
         scene_spec: sceneSpec,
         duration: 2.75,
         identities,
-        callbacks,
       }),
     }),
   );
@@ -172,7 +168,6 @@ test("correlates a Python request with callback, mixed content, and duration met
     sceneSpec,
     duration: 2.75,
     identities,
-    callbacks,
   });
 });
 
@@ -186,7 +181,6 @@ test("scene results without canonical SceneSpec are rejected at the current prot
           document: scene,
           duration: 0,
           identities: { objects: [], tracks: [] },
-          callbacks: null,
         }),
       ),
     /must include canonical SceneSpec/,
@@ -477,7 +471,6 @@ test("Scene duration accepts zero and rejects missing, negative, or non-finite v
     document: { version: 1, objects: [], tracks: [] },
     scene_spec: { version: 1, objects: [], tracks: [] },
     identities: { objects: [], tracks: [] },
-    callbacks: null,
   };
   assert.throws(
     () => parseAuthoringResult(JSON.stringify(sceneResult)),
@@ -719,17 +712,6 @@ test("rejects Scene identities that do not cover the document", () => {
         { version: 1, objects: [{ id: 0 }], tracks: [] },
       ),
     /must match its definitions/,
-  );
-});
-
-test("rejects callback slots that reference objects outside the scene", () => {
-  assert.throws(
-    () =>
-      validateCallbackSession(
-        { session_id: 0, slots: [{ id: 0, objects: [4] }] },
-        { version: 1, objects: [{ id: 0 }], tracks: [] },
-      ),
-    /references an invalid object/,
   );
 });
 

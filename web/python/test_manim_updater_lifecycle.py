@@ -1,132 +1,96 @@
-import os
-import subprocess
-import sys
-import textwrap
+"""Callable bookkeeping delegates interval changes to the shared context."""
+
 import unittest
-from pathlib import Path
+from types import SimpleNamespace
+
+import _manim_updaters as updaters
 
 
-class ManimUpdaterLifecycleTests(unittest.TestCase):
-    def test_add_remove_history_becomes_runtime_activation_windows(self) -> None:
-        python_dir = Path(__file__).resolve().parent
-        env = os.environ.copy()
-        existing = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = str(python_dir) if not existing else os.pathsep.join((str(python_dir), existing))
-        source = textwrap.dedent(
-            """
-            import json
-            import math
-            import sys
-            import types
+class RecordingContext:
+    def __init__(self):
+        self.calls = []
+        self.reject = False
 
-            fake_js = types.ModuleType("js")
-            fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
-            fake_js.noonResolveAnimationOptions = lambda *args: None
-            sys.modules["js"] = fake_js
+    def addUpdater(self, handle, callback, time, position):
+        if self.reject:
+            raise ValueError("shared transaction rejected registration")
+        self.calls.append(("add", handle, callback, time, position))
 
-            import _manim_compat
-            _manim_compat.install()
-            from _test_manim_membership import install_test_membership
-            install_test_membership(_manim_compat)
-            import _manim_phase_b  # noqa: F401
-            import _manim_updaters as updaters
-            updaters.install()
+    def removeUpdater(self, handle, callback, time):
+        self.calls.append(("remove", handle, callback, time))
 
-            from noon import LEFT, ORIGIN, Line, Scene
+    def clearUpdaters(self, handle, time):
+        self.calls.append(("clear", handle, time))
 
-            scene = Scene()
-            moving = Line(ORIGIN, LEFT)
 
-            def forward(mobject, dt):
-                mobject.rotate_about_origin(dt)
-
-            def backward(mobject, dt):
-                mobject.rotate_about_origin(-dt)
-
-            moving.add_updater(forward)
-            scene.add(moving)
-            scene.wait(2)
-            moving.remove_updater(forward)
-            moving.add_updater(backward)
-            scene.wait(2)
-            moving.remove_updater(backward)
-            scene.wait(0.5)
-
-            assert not moving.has_updaters()
-            config = updaters.register_scene(scene)
-            assert config is not None
-            assert len(config["slots"]) == 2, config
-            first, second = config["slots"]
-            assert first["active_after"] == 0.0
-            assert first["active_through"] == 2.0
-            assert second["active_after"] == 2.0
-            assert second["active_through"] == 4.0
-
-            session = config["session_id"]
-            object_id = moving.id
-            base = scene._objects[object_id]
-            def frame(time, dt, callback):
-                return {
-                    "time": time,
-                    "delta_time": dt,
-                    "objects": [{
-                        "object": object_id,
-                        "transform": base["transform"],
-                        "style": base["style"],
-                        "presence": True,
-                        "appearance": 1.0,
-                        "reveal": 1.0,
-                        "morph": 1.0,
-                    }],
-                    "signals": [],
-                    "invocations": [{"callback": callback, "object_indices": [0]}],
-                }
-
-            forward_batch = json.loads(updaters.run_callback_phase(session, frame(1.0, 0.25, 0), 0))
-            forward_rotation = forward_batch["patches"][0]["set_transform"]["transform"]["rotation"]
-            assert abs(forward_rotation - 0.25) < 1e-6, forward_rotation
-
-            backward_batch = json.loads(updaters.run_callback_phase(session, frame(3.0, 0.25, 1), 1))
-            backward_rotation = backward_batch["patches"][0]["set_transform"]["transform"]["rotation"]
-            assert abs(backward_rotation + 0.25) < 1e-6, backward_rotation
-
-            detached_scene = Scene()
-            detached = Line(ORIGIN, LEFT)
-
-            def removed_before_bind(mobject):
-                mobject.shift(LEFT * 99)
-
-            def live_after_bind(mobject, dt):
-                mobject.rotate_about_origin(dt)
-
-            detached.add_updater(removed_before_bind)
-            detached.remove_updater(removed_before_bind)
-            detached.add_updater(live_after_bind)
-            detached_scene.add(detached)
-
-            detached_config = updaters.register_scene(detached_scene)
-            assert detached_config is not None
-            assert len(detached_config["slots"]) == 2, detached_config
-            removed_slot, live_slot = detached_config["slots"]
-            assert removed_slot["active_after"] == 0.0
-            assert removed_slot["active_through"] == 0.0
-            assert live_slot["active_after"] == 0.0
-            assert "active_through" not in live_slot
-            """
+class UpdaterLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.context = RecordingContext()
+        self.scene = SimpleNamespace(time=0.0, _canonical_authoring_context=self.context)
+        self.handle = SimpleNamespace(semanticSlot=7, semanticGeneration=3)
+        self.mobject = SimpleNamespace(
+            _scene=None, _object=object(), _semantic_handle=self.handle,
         )
-        completed = subprocess.run(
-            [sys.executable, "-c", source],
-            cwd=python_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            msg=f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
-        )
+
+    def tearDown(self):
+        session = getattr(self.scene, "_noon_canonical_callback_session", None)
+        if session is not None:
+            updaters.release_session(session.session_id)
+        updaters._TRACKED_MOBJECTS[:] = [
+            item for item in updaters._TRACKED_MOBJECTS if item is not self.mobject
+        ]
+
+    def bind(self):
+        self.mobject._scene = self.scene
+        updaters.prepare_canonical_callbacks(self.scene, self.context)
+
+    def test_add_remove_and_clear_delegate_authored_boundaries(self):
+        forward = lambda mobject, dt: None
+        backward = lambda mobject, dt: None
+        updaters.add_updater(self.mobject, forward)
+        self.bind()
+        self.scene.time = 2.0
+        updaters.remove_updater(self.mobject, forward)
+        updaters.add_updater(self.mobject, backward)
+        self.scene.time = 4.0
+        updaters.clear_updaters(self.mobject)
+        self.assertFalse(updaters.has_updaters(self.mobject))
+        self.assertEqual(self.context.calls, [
+            ("add", self.handle, "0", 0.0, None),
+            ("remove", self.handle, "0", 2.0),
+            ("add", self.handle, "1", 2.0, None),
+            ("clear", self.handle, 4.0),
+        ])
+
+    def test_detached_removed_occurrence_and_repeated_callable_reach_rust(self):
+        callback = lambda mobject: None
+        updaters.add_updater(self.mobject, callback)
+        updaters.remove_updater(self.mobject, callback)
+        updaters.add_updater(self.mobject, callback, index=0)
+        self.bind()
+        self.assertEqual(self.context.calls, [
+            ("add", self.handle, "0", 0.0, None),
+            ("remove", self.handle, "0", 0.0),
+            ("add", self.handle, "0", 0.0, 0),
+        ])
+        self.assertEqual(updaters.get_updaters(self.mobject), [callback])
+        updaters.prepare_canonical_callbacks(self.scene, self.context)
+        self.assertEqual(len(self.context.calls), 3, "published occurrences are not replayed")
+
+    def test_failed_shared_registration_does_not_commit_callable_identity(self):
+        self.bind()
+        callback = lambda mobject: None
+        self.context.reject = True
+        with self.assertRaisesRegex(ValueError, "shared transaction rejected"):
+            updaters.add_updater(self.mobject, callback)
+        self.assertEqual(updaters.get_updaters(self.mobject), [])
+        session = self.scene._noon_canonical_callback_session
+        self.assertEqual(session.callbacks, {})
+        self.assertEqual(session.targets, {})
+        self.context.reject = False
+        updaters.add_updater(self.mobject, callback)
+        self.assertEqual(self.context.calls, [("add", self.handle, "0", 0.0, None)])
+        self.assertIs(session.callbacks[0], callback)
 
 
 if __name__ == "__main__":
