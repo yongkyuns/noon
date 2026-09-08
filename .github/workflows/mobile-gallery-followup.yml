@@ -1,75 +1,182 @@
-name: Mobile gallery candidate validation (temporary)
+name: Gallery repair qualification (temporary)
 on:
   push:
-    branches: [codex/mobile-gallery-followup-validation]
+    branches: [codex/gallery-browser-qualification]
+concurrency:
+  group: gallery-repair-qualification
+  cancel-in-progress: true
 permissions:
-  contents: write
+  contents: read
 jobs:
-  qualify:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      CARGO_INCREMENTAL: '0'
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      candidate: ${{ steps.source.outputs.candidate }}
     steps:
       - uses: actions/checkout@v7
-      - name: Validate transport and apply source-only candidate
+      - name: Retain regression additions outside source tree
+        run: |
+          mkdir -p "$RUNNER_TEMP/carrier"
+          cp augment-gallery-validation.py "$RUNNER_TEMP/carrier/"
+          cp scripts/playground-gallery-runtime-smoke.mjs "$RUNNER_TEMP/carrier/"
+      - uses: actions/checkout@v7
+        with:
+          ref: 95f198804bc6f1983c4b86941888f611a4d9e89c
+      - name: Export reviewable source, never master
+        id: source
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/gallery-evidence" "$RUNNER_TEMP/gallery-carrier"
-          cp gallery-python.patch.gz.b64 restore-python-candidate.py apply-updater-candidate.py add-updater-tests.py "$RUNNER_TEMP/gallery-carrier/"
-          cp gallery-python.patch.gz.b64 "$RUNNER_TEMP/gallery-evidence/"
-          python3 restore-python-candidate.py
-          git fetch --depth=1 origin 77e5e2dcbab75b424756e5925c60953c463f8466
-          git checkout --detach 77e5e2dcbab75b424756e5925c60953c463f8466
-          git apply --index /tmp/gallery-python.patch
-          python3 "$RUNNER_TEMP/gallery-carrier/apply-updater-candidate.py"
-          python3 "$RUNNER_TEMP/gallery-carrier/add-updater-tests.py"
-          git add crates web
+          python3 "$RUNNER_TEMP/carrier/augment-gallery-validation.py"
+          node --check scripts/playground-gallery-runtime-smoke.mjs
+          node --check web/direct-execution-smoke-probe.js
+          git add scripts web docs
           git diff --cached --check
-          git diff --cached > "$RUNNER_TEMP/gallery-evidence/source.patch"
-      - name: Format and validate Python host contracts
-        run: |
-          set -euo pipefail
-          rustup default stable
-          cargo fmt --all
-          python3 -m unittest discover -s web/python -p 'test_*.py' 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/python.txt"
-          node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/node.txt"
-          bash scripts/renderer-host-boundary-ratchet.sh
+          test -z "$(git diff --cached --name-only -- .github)"
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git commit -m 'Protect all ready gallery sources and shared updater lifecycle rendering'
+          echo "candidate=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git push origin HEAD:refs/heads/codex/gallery-browser-candidate-${GITHUB_RUN_ID}
+  full:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: '0'
+      NOON_WASM_SKIP_OPT: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.candidate }}
       - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: gallery-updater-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      - name: Shared semantic and runtime lifecycle regressions
+          key: gallery-full-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: gallery-updater-${{ runner.os }}-
+      - run: |
+          rustup default stable
+          rustup component add clippy rustfmt
+          rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Complete repository gate
         run: |
           set -euo pipefail
-          cargo test -p noon-core --lib semantic_transaction 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/core.txt"
-          cargo test -p noon-compile --lib host_callbacks 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/compiler.txt"
-          cargo test -p noon --lib live_updater 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/session.txt"
-          cargo test -p noon --lib live_rotation_updater 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/native-program.txt"
-          cargo test -p noon-web --lib callback_occurrences_publish 2>&1 | tee "$RUNNER_TEMP/gallery-evidence/web-adapter.txt"
-      - name: Export source candidate only, never master
-        run: |
-          set -euo pipefail
-          git add crates web
-          git diff --cached --check
-          test -z "$(git diff --cached --name-only -- .github)"
-          git config user.name 'Yongkyun Shin'
-          git config user.email 'yongkyuns@gmail.com'
-          git commit -m 'Continue portable gallery sources and publish live updater edits through shared Rust'
-          git rev-parse HEAD > "$RUNNER_TEMP/gallery-evidence/candidate-sha.txt"
-          git push origin HEAD:refs/heads/codex/gallery-candidate-${GITHUB_RUN_ID}
-      - name: Retain candidate source for independent review
-        if: always()
-        run: |
-          mkdir -p "$RUNNER_TEMP/gallery-evidence"
-          git diff HEAD > "$RUNNER_TEMP/gallery-evidence/worktree.patch"
-          tar --exclude=.git --exclude=target --exclude=node_modules -czf "$RUNNER_TEMP/gallery-evidence/worktree.tar.gz" crates web scripts Cargo.toml Cargo.lock
+          mkdir -p qualification
+          bash scripts/check.sh full 2>&1 | tee qualification/full.log
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: gallery-candidate-validation
-          path: ${{ runner.temp }}/gallery-evidence
+          name: gallery-full-gate
+          path: qualification
+          retention-days: 3
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: '0'
+      NOON_SKIP_WEB_PREFLIGHT: '1'
+      NOON_WASM_PROFILE: dev
+      NOON_WASM_SKIP_OPT: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.candidate }}
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - run: bash scripts/build-web-demo.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gallery-web-runtime
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/python/compat-bundle.*.json
+          if-no-files-found: error
+          retention-days: 2
+  gallery:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: webkit
+            profile: mobile-dpr2
+          - browser: chromium
+            profile: android
+          - browser: chromium
+            profile: desktop-dpr1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.candidate }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: gallery-web-runtime
+          path: web
+      - run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: All selectable demos and four no-JSPI controls
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: gallery-${{ matrix.browser }}-${{ matrix.profile }}
+          path: browser-smoke-artifacts
+          retention-days: 3
+  pixels:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [webgpu, webgl]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.candidate }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: gallery-web-runtime
+          path: web
+      - run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Shared Rust/WASM pixel and runtime regressions
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
+        run: node scripts/browser-smoke.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: gallery-pixels-${{ matrix.backend }}
+          path: browser-smoke-artifacts
           retention-days: 3
