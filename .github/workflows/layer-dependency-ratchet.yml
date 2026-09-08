@@ -22,10 +22,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Validate ratchet scripts
-        run: bash -n scripts/layer-dependency-ratchet.sh scripts/layer-dependency-ratchet.test.sh
+      - name: Select repository Rust toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
 
-      - name: Prove ratchet catches forbidden edges
+      - name: Validate ratchet scripts
+        run: |
+          bash -n scripts/layer-dependency-ratchet.sh scripts/layer-dependency-ratchet.test.sh
+          python3 -m py_compile scripts/layer_dependency_ratchet.py scripts/layer_dependency_ratchet.test.py
+
+      - name: Prove ratchet catches forbidden edges and scanner failures
         run: bash scripts/layer-dependency-ratchet.test.sh
 
       - name: Enforce architecture layer dependencies
