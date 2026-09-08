@@ -7,76 +7,71 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - name: Install pinned browser harness
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1
-          npx playwright install --with-deps webkit chromium
-      - name: Save source snapshot for focused local tests
+          npx playwright install --with-deps webkit
+      - name: Isolate interpreter suspension from rendering
         run: |
           mkdir -p mobile-diagnosis
-          git archive HEAD | gzip > mobile-diagnosis/source.tar.gz
-      - name: Exercise public demo with mobile WebKit and Chromium
-        run: |
-          timeout --signal=TERM --kill-after=10s 420s node --input-type=module <<'JS'
-          import { chromium, webkit, devices } from 'playwright';
+          timeout --signal=TERM --kill-after=10s 360s node --input-type=module <<'JS'
+          import { webkit, devices } from 'playwright';
           import { writeFile } from 'node:fs/promises';
           const base = 'https://yongkyuns.github.io/noon/';
-          const revision = await fetch(`${base}build-info.json?diagnosis=${Date.now()}`, {headers:{'Cache-Control':'no-cache'}}).then(async r=>({status:r.status,body:await r.text()}));
-          console.log('PUBLIC_REVISION', JSON.stringify(revision));
-          const results = [];
-          for (const [name, engine, device, host] of [
-            ['webkit-mobile-auto', webkit, devices['iPhone 13'], null],
-            ['webkit-mobile-main', webkit, devices['iPhone 13'], 'main-thread'],
-            ['chromium-mobile-auto', chromium, devices['Pixel 7'], null],
-          ]) {
-            const browser = await engine.launch({headless:true, ...(engine===chromium?{args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']}: {})});
-            const context = await browser.newContext({...device});
-            const page = await context.newPage();
-            const result = {name,revision,errors:[],consoleErrors:[],failedRequests:[],scenes:[]};
-            page.on('pageerror', e=>result.errors.push(String(e)));
-            page.on('console', m=>{if(m.type()==='error')result.consoleErrors.push(m.text())});
-            page.on('requestfailed', r=>result.failedRequests.push({url:r.url(),error:r.failure()}));
+          const results=[];
+          for (const variant of ['pyodide-314.0.6','async-control','without-jspi','upstream-314.0.5','upstream-314.0.6']) {
+            const browser=await webkit.launch({headless:true});
+            const context=await browser.newContext({...devices['iPhone 13']});
+            const page=await context.newPage();
+            const result={variant,errors:[],patchedWorker:false};
+            let signalFatal;
+            const fatal=new Promise((resolve,reject)=>{signalFatal=reject});
+            fatal.catch(()=>{});
+            page.on('pageerror',e=>{result.errors.push(String(e));signalFatal(e)});
+            page.on('console',m=>{if(m.type()==='error'){result.errors.push(m.text());signalFatal(new Error(m.text()))}});
             try {
-              const url = new URL(base);
-              if(host) url.searchParams.set('renderHost',host);
-              await page.goto(url.href, {waitUntil:'domcontentloaded',timeout:30000});
-              await page.waitForFunction(()=>window.__noonExampleGallery!==undefined,null,{timeout:30000});
-              for(const example of [null,'parity-create-circle','compatible-text-write']) {
-                if(example) await page.evaluate(id=>{void window.__noonExampleGallery.select(id)},example);
-                await page.waitForFunction(()=>{
-                  const p=document.querySelector('#patch-status');
-                  return p?.dataset.state==='error'||p?.dataset.state==='applied';
-                },null,{timeout:45000});
-                result.scenes.push(await page.evaluate(()=>({
-                  selected:window.__noonExampleGallery?.selectedExampleId,
-                  inFlight:window.__noonExampleGallery?.runInFlight,
+              if(variant.startsWith('upstream-')) {
+                await context.route('**/__diagnostic__',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><title>interpreter diagnostic</title>'}));
+                await page.goto(`${base}__diagnostic__`);
+                result.value=await Promise.race([fatal,page.evaluate(async version=>{
+                  const source=`import {loadPyodide} from 'https://cdn.jsdelivr.net/pyodide/v${version}/full/pyodide.mjs';
+                    self.onunhandledrejection=e=>postMessage({error:String(e.reason)});
+                    try {const p=await loadPyodide(); const result=await p.runPythonAsync('from pyodide.ffi import run_sync\\nfrom js import Promise\\nrun_sync(Promise.resolve(123))');postMessage({result});} catch(e){postMessage({error:String(e)})}`;
+                  const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
+                  const worker=new Worker(url,{type:'module'});
+                  try{return await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('upstream timeout')),25000);worker.onmessage=e=>{clearTimeout(timer);resolve(e.data)};worker.onerror=e=>{clearTimeout(timer);reject(new Error(e.message))}})}
+                  finally{worker.terminate();URL.revokeObjectURL(url)}
+                },variant.slice('upstream-'.length))]);
+              } else {
+                await context.route('**/python-worker.js',async route=>{
+                  const response=await route.fetch();
+                  let body=await response.text();
+                  if(variant==='pyodide-314.0.6') body=body.replaceAll('v314.0.5/','v314.0.6/');
+                  if(variant==='without-jspi') body='delete WebAssembly.promising; delete WebAssembly.Suspending;\n'+body;
+                  if(variant==='async-control') {
+                    const needle='globals.set("__noon_source", source);';
+                    if(!body.includes(needle)) throw new Error('source boundary changed');
+                    body=body.replace(needle,'globals.set("__noon_source", source.replaceAll("def construct(self):", "async def construct(self):").replaceAll("self.play(", "await self.play(").replaceAll("self.wait(", "await self.wait("));');
+                  }
+                  result.patchedWorker=true;
+                  await route.fulfill({response,body});
+                });
+                await page.goto(`${base}?example=parity-create-circle&renderHost=main-thread`,{waitUntil:'domcontentloaded'});
+                await Promise.race([fatal,page.waitForFunction(()=>['error','applied'].includes(document.querySelector('#patch-status')?.dataset.state),null,{timeout:40000})]);
+                result.state=await page.evaluate(async()=>({
                   patch:{...document.querySelector('#patch-status')?.dataset},
-                  patchText:document.querySelector('#patch-status')?.value,
+                  text:document.querySelector('#patch-status')?.value,
                   status:document.querySelector('#status-text')?.textContent,
-                  metrics:window.__noonExampleGallery?.executionMetrics(),
-                })));
-                if(result.scenes.at(-1).patch.state==='error') break;
-                await page.waitForFunction(()=>!window.__noonExampleGallery.runInFlight,null,{timeout:45000});
+                  metrics:document.querySelector('#patch-status')?.dataset.state==='applied'?await window.__noonExampleGallery.executionMetrics():null,
+                }));
               }
-            } catch(e) {result.exception=String(e)}
-            try {
-              result.final=await page.evaluate(()=>({
-                body:document.body.innerText.slice(-10000),
-                userAgent:navigator.userAgent,
-                jspi:typeof WebAssembly.promising,
-                gpu:typeof navigator.gpu,
-                isolated:crossOriginIsolated,
-                patch:{...document.querySelector('#patch-status')?.dataset},
-                patchText:document.querySelector('#patch-status')?.value,
-                metrics:window.__noonExampleGallery?.executionMetrics(),
-              }));
-              await page.screenshot({path:`mobile-diagnosis/${name}.png`});
-            } catch(e) {result.captureError=String(e)}
-            console.log('MOBILE_RESULT',JSON.stringify(result));
-            results.push(result);
+            } catch(e){result.exception=String(e)}
+            result.final=await page.evaluate(()=>({body:document.body.innerText.slice(-4000),jspi:typeof WebAssembly.promising})).catch(e=>({error:String(e)}));
+            await page.screenshot({path:`mobile-diagnosis/${variant}.png`,timeout:5000}).catch(()=>{});
+            results.push(result);console.log('DIAGNOSIS',JSON.stringify(result));
             await writeFile('mobile-diagnosis/results.json',JSON.stringify(results,null,2));
             await browser.close();
           }
