@@ -18,7 +18,7 @@ function waitForPaint() {
   });
 }
 
-async function load(source, loopDurationSeconds) {
+async function load(source, loopDurationSeconds, context = {}) {
   await readyPromise;
   if (typeof source !== "string" || source.trim() === "") {
     throw new TypeError("host raster source must be non-empty");
@@ -37,7 +37,7 @@ async function load(source, loopDurationSeconds) {
     resolveAttached = resolve;
     rejectAttached = reject;
   });
-  const sourceRun = client.run(source, {}, {
+  const sourceRun = client.run(source, context, {
     async onSemanticContinuation(registration) {
       if (execution !== null) throw new Error("raster source registered a second execution context");
       execution = new AuthoringExecutionClient(canvas);

@@ -88,6 +88,14 @@ The worker loads the pinned Pyodide distribution from jsDelivr, so first-time Py
 
 `node scripts/authoring-perf.mjs` measures cold authoring, unchanged source reruns, one-object source edits, and static seek control round trips through shared sessions. Schema 2 explicitly reports session replacements and unavailable isolated CPU/GPU, incremental-mutation, and camera-uniform timings. It cannot be compared with the removed scene-document profiler. `node scripts/perf-corpus.mjs` measures representative authored scenes, including moving cameras, through shared execution.
 
+## Analytic performance workloads
+
+`node scripts/perf-profile.mjs` runs the target-neutral Rust analytic builder directly in WASM. The `fit`, `fixed`, and `overdraw` layouts author their camera and a single moving circle through the normal shared scene/track APIs. Frames advance in-process through Runtime and Renderer; JavaScript measures browser cadence and host-call durations. GPU timestamp availability is reported separately.
+
+Run the same builder in a native window with `cargo run --example analytic_profile -- 1000 fit`. The equivalent Python scene is `python/examples/analytic_profile.py`, with `object_count`, `layout`, `aspect`, and `duration` context parameters. These examples demonstrate the shared path; they do not establish 100k performance thresholds.
+
+The frame profiler emits schema 2. Its measurements must not be compared with the removed JSON scene/delta profiler; the aggregate benchmark name also distinguishes the direct Rust path.
+
 ## Vector paths
 
 Generic paths are semantic command streams and remain distinct from analytic circle/rectangle/line fast paths. The Rust and Python APIs support move, line, quadratic, cubic, and close commands:
