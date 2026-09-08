@@ -36,6 +36,18 @@ function validatePositiveInteger(name, value) {
   }
 }
 
+// Decoding malformed/truncated UTF-8 inserts replacement characters, which can
+// expand a raw-byte prefix. Bound the returned UTF-8 text as well, without
+// splitting a Unicode scalar. Only re-encode when replacement expansion needs it.
+function boundedDiagnostic(buffer, maxBytes, truncated) {
+  const text = buffer.toString("utf8");
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return { text, truncated };
+  const encoded = Buffer.from(text, "utf8");
+  let end = maxBytes;
+  while ((encoded[end] & 0xc0) === 0x80) end--;
+  return { text: encoded.toString("utf8", 0, end), truncated: true };
+}
+
 /**
  * Linux process-group lifecycle only, NOT a sandbox or orphan reaper. Descendants
  * that change session/group can escape. The caller must translate close,
@@ -43,8 +55,12 @@ function validatePositiveInteger(name, value) {
  * abrupt supervisor death is outside this boundary.
  *
  * timeoutMs bounds execution before cleanup. Cleanup adds at most killGraceMs
- * plus cleanupTimeoutMs (subject to event-loop/OS scheduling). Output is capped
- * per stream. Cancellation returns diagnostics rather than rejecting.
+ * plus cleanupTimeoutMs (subject to event-loop/OS scheduling). maxOutputBytes
+ * caps both captured raw bytes and returned UTF-8 diagnostic bytes per stream.
+ * Raw overflow requests termination; decode-time truncation only sets the
+ * corresponding stdoutTruncated/stderrTruncated flag, as does raw truncation.
+ * These are not JSON/wire payload limits. Cancellation returns diagnostics
+ * rather than rejecting.
  *
  * cleanup.outcome is deliberately evidence-qualified: group_absent means ESRCH
  * was observed, sigkill_sent means only that the kernel accepted the group kill
@@ -87,6 +103,8 @@ export async function runBoundedChild({
   const startedAt = performance.now();
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
+  let stdoutTruncated = false;
+  let stderrTruncated = false;
   let exitCode = null;
   let exitSignal = null;
   let terminationReason = null;
@@ -94,15 +112,20 @@ export async function runBoundedChild({
   let leaderExited = false;
   let stdioClosed = false;
   const errors = [];
-  const result = (outcome) => Object.freeze({
-    exitCode, signal: exitSignal, terminationReason, forcedKill,
-    durationMs: performance.now() - startedAt,
-    stdout: stdout.toString("utf8"), stderr: stderr.toString("utf8"),
-    cleanup: Object.freeze({
-      scope: "linux_process_group", outcome, leaderExited, stdioClosed,
-      errors: Object.freeze(errors.map((error) => Object.freeze(error))),
-    }),
-  });
+  const result = (outcome) => {
+    const out = boundedDiagnostic(stdout, maxOutputBytes, stdoutTruncated);
+    const err = boundedDiagnostic(stderr, maxOutputBytes, stderrTruncated);
+    return Object.freeze({
+      exitCode, signal: exitSignal, terminationReason, forcedKill,
+      durationMs: performance.now() - startedAt,
+      stdout: out.text, stderr: err.text,
+      stdoutTruncated: out.truncated, stderrTruncated: err.truncated,
+      cleanup: Object.freeze({
+        scope: "linux_process_group", outcome, leaderExited, stdioClosed,
+        errors: Object.freeze(errors.map((error) => Object.freeze(error))),
+      }),
+    });
+  };
   if (signal?.aborted) {
     terminationReason = "canceled";
     stdioClosed = true;
@@ -137,10 +160,17 @@ export async function runBoundedChild({
   const append = (streamName, chunk) => {
     const current = streamName === "stdout" ? stdout : stderr;
     const remaining = maxOutputBytes - current.length;
-    const next = Buffer.concat([current, chunk.subarray(0, remaining)]);
-    if (streamName === "stdout") stdout = next;
-    else stderr = next;
-    if (chunk.length > remaining) requestStop("output_limit");
+    // Continue draining during cleanup, but never re-copy a saturated buffer.
+    if (remaining > 0) {
+      const next = Buffer.concat([current, chunk.subarray(0, remaining)]);
+      if (streamName === "stdout") stdout = next;
+      else stderr = next;
+    }
+    if (chunk.length > remaining) {
+      if (streamName === "stdout") stdoutTruncated = true;
+      else stderrTruncated = true;
+      requestStop("output_limit");
+    }
   };
   child.stdout.on("data", (chunk) => append("stdout", chunk));
   child.stderr.on("data", (chunk) => append("stderr", chunk));
