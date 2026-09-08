@@ -688,15 +688,10 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_arrange_family(
         &mut self,
         family: &noon::MobjectFamily,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-        center: bool,
+        options: &noon::FamilyArrangeOptions,
     ) -> Result<(), String> {
-        self.with_live_session(|session| {
-            session.arrange_family(family, direction_x, direction_y, buff, center)
-        })
-        .map(|_| ())
+        self.with_live_session(|session| session.arrange_family_with_options(family, options))
+            .map(|_| ())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

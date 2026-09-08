@@ -63,7 +63,11 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
                     self.identity = store.allocate(self)
                     self.members = []
 
-                def arrange(self, direction_x, direction_y, buff, center):
+                def arrangeOptions(self, direction_x, direction_y, buff, center, *alignment):
+                    return (direction_x, direction_y, buff, center, *alignment)
+
+                def arrange(self, options):
+                    direction_x, direction_y, buff, center = options[:4]
                     self.store.arrange_calls.append(
                         (self.identity, direction_x, direction_y, buff, center)
                     )
@@ -133,7 +137,8 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
                 def __init__(self):
                     self.calls = []
 
-                def liveArrangeFamily(self, family, direction_x, direction_y, buff, center):
+                def liveArrangeFamily(self, family, options):
+                    direction_x, direction_y, buff, center = options[:4]
                     self.calls.append(
                         (family.identity, float(direction_x), float(direction_y), float(buff), bool(center))
                     )

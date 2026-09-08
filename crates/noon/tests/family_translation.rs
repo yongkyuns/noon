@@ -1,4 +1,4 @@
-use noon::{semantic_family_leaf_ids, Mobject, MobjectFamily, Scene};
+use noon::{Mobject, MobjectFamily, Scene};
 
 fn nested_family() -> (Scene, MobjectFamily, [Mobject; 3]) {
     let scene = Scene::new();
@@ -15,7 +15,7 @@ fn nested_translation_commits_all_authoritative_leaves_once() {
     let (scene, root, members) = nested_family();
     let store = scene.store();
     assert_eq!(
-        semantic_family_leaf_ids(&store.borrow(), root.node_id()).unwrap(),
+        store.borrow().ordered_leaf_nodes(root.node_id()).unwrap(),
         members.iter().map(Mobject::node_id).collect::<Vec<_>>()
     );
     let before = store.borrow().scene_revision();
@@ -48,7 +48,7 @@ fn stale_late_leaf_rejects_the_entire_translation() {
 }
 
 #[test]
-fn aliased_occurrences_accumulate_without_touching_other_objects() {
+fn aliased_references_shift_one_identity_once_without_touching_other_objects() {
     let (scene, root, members) = nested_family();
     let store = scene.store();
     store
@@ -65,6 +65,6 @@ fn aliased_occurrences_accumulate_without_touching_other_objects() {
     );
     assert_eq!(members[0].center().unwrap(), (0.25, -0.5));
     assert_eq!(members[1].center().unwrap(), (0.25, -0.5));
-    assert_eq!(members[2].center().unwrap(), (0.5, -1.0));
+    assert_eq!(members[2].center().unwrap(), (0.25, -0.5));
     assert_eq!(unrelated.center().unwrap(), (0.0, 0.0));
 }

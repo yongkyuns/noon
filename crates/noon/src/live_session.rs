@@ -10,7 +10,7 @@ mod family_layout;
 pub use family_layout::LiveLayoutTarget;
 
 use crate::{
-    family_authoring::FamilyArrangePlan,
+    family_arrangement::FamilyArrangePlan,
     semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
@@ -1971,33 +1971,36 @@ impl<'a> LiveSession<'a> {
         buff: f64,
         center: bool,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.arrange_family_with_options(
+            family,
+            &crate::FamilyArrangeOptions::new(direction_x, direction_y, buff, center),
+        )
+    }
+
+    /// Stage sequential layout observations and publish one atomic family edit.
+    pub fn arrange_family_with_options(
+        &mut self,
+        family: &MobjectFamily,
+        options: &crate::FamilyArrangeOptions,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
-        let mut plan = FamilyArrangePlan::begin(&self.store.borrow(), family.node_id())
-            .map_err(LiveSessionError::Mobject)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let mut plan =
+            FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::Mobject)?;
         plan.observe_leaf_bounds(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-            if !self.session.semantic_object_is_reachable(leaf) {
-                return mobject.layout_bounds();
-            }
-            self.effective_layout(&mobject).map_or_else(
-                |error| Err(error.to_string()),
-                |layout| {
-                    Ok(Some(Bounds2D64 {
-                        min_x: layout.center.0 - layout.width * 0.5,
-                        min_y: layout.center.1 - layout.height * 0.5,
-                        max_x: layout.center.0 + layout.width * 0.5,
-                        max_y: layout.center.1 + layout.height * 0.5,
-                    }))
-                },
-            )
+            self.family_member_bounds(&mobject)
+                .map_err(|e| e.to_string())
         })
         .map_err(LiveSessionError::Mobject)?;
         let transaction = plan
-            .transaction(direction_x, direction_y, buff, center, |leaf| {
+            .transaction(|leaf| {
                 let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
+                self.placement_authored_transform(&mobject)
+                    .map_err(|e| e.to_string())?;
                 self.authored(&mobject)
-                    .map(|state| state.transform.translation)
-                    .map_err(|error| error.to_string())
+                    .map(|s| s.transform.translation)
+                    .map_err(|e| e.to_string())
             })
             .map_err(LiveSessionError::Mobject)?;
         self.apply(transaction)
@@ -4650,7 +4653,7 @@ mod recursive_composition_tests {
     }
 
     #[test]
-    fn live_family_arrange_accumulates_aliases_for_detached_and_reachable_members() {
+    fn live_family_arrange_centers_unique_detached_and_reachable_members() {
         for mounted in [false, true] {
             let mut scene = Scene::new();
             let first = scene.circle(0.2).unwrap();
@@ -4686,18 +4689,18 @@ mod recursive_composition_tests {
                 live.session.publication_context().scene_revision(),
                 before.scene_revision().checked_next().unwrap()
             );
-            assert!((first.center().unwrap().0 + 2.0).abs() < 1e-6);
-            assert!((second.center().unwrap().0 - 1.3).abs() < 1e-6);
+            assert!((first.center().unwrap().0 + 1.0).abs() < 1e-6);
+            assert!((second.center().unwrap().0 - 1.0).abs() < 1e-6);
             let unrelated_after = live.effective(&unrelated).unwrap();
             assert_eq!(unrelated_after.transform, unrelated_before.transform);
             assert_eq!(unrelated_after.style, unrelated_before.style);
             assert_eq!(unrelated_after.appearance, unrelated_before.appearance);
             if mounted {
                 assert!(
-                    (live.effective(&first).unwrap().transform.translation.x + 2.0).abs() < 1e-6
+                    (live.effective(&first).unwrap().transform.translation.x + 1.0).abs() < 1e-6
                 );
                 assert!(
-                    (live.effective(&second).unwrap().transform.translation.x - 1.3).abs() < 1e-6
+                    (live.effective(&second).unwrap().transform.translation.x - 1.0).abs() < 1e-6
                 );
             }
         }

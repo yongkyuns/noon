@@ -1,4 +1,4 @@
-use noon::{semantic_family_leaf_ids, MobjectFamilyMember, Scene};
+use noon::{MobjectFamilyMember, Scene};
 
 #[test]
 fn nested_creation_and_membership_edits_preserve_identity_order_and_atomicity() {
@@ -25,8 +25,12 @@ fn nested_creation_and_membership_edits_preserve_identity_order_and_atomicity() 
         vec![first.node_id(), nested.node_id()]
     );
     assert_eq!(
-        semantic_family_leaf_ids(&scene.store().borrow(), root.node_id()).unwrap(),
-        vec![first.node_id(), first.node_id(), second.node_id()]
+        scene
+            .store()
+            .borrow()
+            .ordered_leaf_nodes(root.node_id())
+            .unwrap(),
+        vec![first.node_id(), second.node_id()]
     );
     let revision = scene.store().borrow().scene_revision();
     assert!(!root.add((&first).into()).unwrap());
@@ -37,8 +41,12 @@ fn nested_creation_and_membership_edits_preserve_identity_order_and_atomicity() 
     assert!(!root.remove((&nested).into()).unwrap());
     assert!(root.add((&nested).into()).unwrap());
     assert_eq!(
-        semantic_family_leaf_ids(&scene.store().borrow(), root.node_id()).unwrap(),
-        vec![first.node_id(), first.node_id(), second.node_id()]
+        scene
+            .store()
+            .borrow()
+            .ordered_leaf_nodes(root.node_id())
+            .unwrap(),
+        vec![first.node_id(), second.node_id()]
     );
     assert_eq!(second.center().unwrap(), (0.0, 0.0));
 }
@@ -64,7 +72,11 @@ fn foreign_and_stale_members_cannot_create_or_edit_a_family() {
     }
     assert_eq!(scene.store().borrow().scene_revision(), revision);
     assert_eq!(
-        semantic_family_leaf_ids(&scene.store().borrow(), root.node_id()).unwrap(),
+        scene
+            .store()
+            .borrow()
+            .ordered_leaf_nodes(root.node_id())
+            .unwrap(),
         vec![local.node_id()]
     );
 }
@@ -148,7 +160,11 @@ fn authored_member_batches_roll_back_cycles_and_late_invalid_handles() {
         .is_err());
     assert_eq!(scene.store().borrow().scene_revision(), revision);
     assert_eq!(
-        semantic_family_leaf_ids(&scene.store().borrow(), nested.node_id()).unwrap(),
+        scene
+            .store()
+            .borrow()
+            .ordered_leaf_nodes(nested.node_id())
+            .unwrap(),
         vec![first.node_id()]
     );
     let other = Scene::new();
@@ -173,9 +189,10 @@ fn authored_member_batches_roll_back_cycles_and_late_invalid_handles() {
             .unwrap(),
         vec![true, true, false]
     );
-    assert!(
-        semantic_family_leaf_ids(&scene.store().borrow(), nested.node_id())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(scene
+        .store()
+        .borrow()
+        .ordered_leaf_nodes(nested.node_id())
+        .unwrap()
+        .is_empty());
 }

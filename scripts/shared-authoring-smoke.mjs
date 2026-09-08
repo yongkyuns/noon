@@ -1558,6 +1558,58 @@ result = scene
     await stopSampledSource(page);
   }
 
+  const arrangedOptionsSource = `from noon import *
+class ArrangedOptions(Scene):
+    def construct(self):
+        first = Circle(0.2).set_fill(BLUE, opacity=1)
+        second = Circle(0.2).shift(2 * RIGHT)
+        nested = VGroup(first, second)
+        family = VGroup(first, nested)
+        left = VGroup(first)
+        right = VGroup(second)
+        empty = VGroup()
+        selected = VGroup(left, right)
+        invalid = VGroup(left, right, empty)
+        def reject_python_placement(*args, **kwargs):
+            raise AssertionError("arrange sequenced Python member placements")
+        for member in (first, second, nested, left, right, empty):
+            member.next_to = reject_python_placement
+            member.get_critical_point = reject_python_placement
+        family.shift(RIGHT)
+        assert abs(first.get_center().x - 1) < 1e-6
+        assert abs(second.get_center().x - 3) < 1e-6
+        family.arrange(RIGHT, buff=0.2, aligned_edge=UP)
+        assert abs(first.get_center().x + 1) < 1e-6
+        assert abs(second.get_center().x - 1) < 1e-6
+        self.add(first, second)
+        self.wait(0.1)
+        try:
+            invalid.arrange(center=False, index_of_submobject_to_align=0)
+        except IndexError:
+            pass
+        else:
+            raise AssertionError("late invalid arrangement index was accepted")
+        assert abs(first.get_center().x + 1) < 1e-6
+        assert abs(second.get_center().x - 1) < 1e-6
+        selected.arrange(RIGHT, buff=0.5, center=False,
+                         index_of_submobject_to_align=-1, submobject_to_align=second)
+        assert abs(first.get_center().x + 1) < 1e-6
+        assert abs(second.get_center().x + 0.1) < 1e-6
+        self.wait(0.1)
+`;
+  await startSampledSource(page, arrangedOptionsSource, "scene-arrange-options");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(0.2), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 0.2);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const selectedAlignmentSource = `from noon import *
 class SelectedAlignment(Scene):
     def construct(self):

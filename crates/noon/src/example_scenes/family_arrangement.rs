@@ -32,13 +32,18 @@ impl LiveContinuation for FamilyArrangement {
                     .map_err(|e| e.to_string())?;
                 live.add_family_members(&self.family, &[(&self.nested).into()])
                     .map_err(|e| e.to_string())?;
-                live.arrange_family(&self.family, 0.0, 1.0, 0.3, false)
+                let mut options = crate::FamilyArrangeOptions::new(0.0, 1.0, 0.3, false);
+                options.placement.aligned_edge = (-1.0, 0.0);
+                live.arrange_family_with_options(&self.family, &options)
                     .map_err(|e| e.to_string())?;
                 let layout = live
                     .effective_family_layout(&self.nested)
                     .map_err(|e| e.to_string())?;
-                if (layout.width - 3.7).abs() > 1e-5 {
+                if (layout.width - 2.4).abs() > 1e-5 {
                     return Err("live family layout did not observe the arranged members".into());
+                }
+                if layout.center.0.abs() > 1e-5 {
+                    return Err("aligned arrangement moved the common left edge".into());
                 }
                 live.move_family_to(
                     &self.nested,

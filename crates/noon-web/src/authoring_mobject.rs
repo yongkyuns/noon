@@ -1,5 +1,3 @@
-#[cfg(test)]
-use noon::semantic_family_leaf_ids;
 #[cfg(target_arch = "wasm32")]
 use noon::semantic_mobject::authoring_render_f64 as render_f64;
 pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
@@ -194,6 +192,20 @@ mod wasm {
     pub struct WasmAuthoringFamilyHandle {
         semantics: SharedSemanticStore,
         id: SemanticNodeId,
+    }
+
+    /// Host-normalized options for one shared arrangement transaction.
+    #[wasm_bindgen]
+    pub struct WasmFamilyArrangeOptions {
+        pub(crate) options: noon::FamilyArrangeOptions,
+    }
+
+    #[wasm_bindgen]
+    impl WasmFamilyArrangeOptions {
+        #[wasm_bindgen(js_name = setAligner)]
+        pub fn set_aligner(&mut self, aligner: &WasmLayoutAnchor) {
+            self.options.aligner = Some(aligner.anchor.clone());
+        }
     }
 
     /// Inert typed layout intent; identity and member selection stay in Rust.
@@ -564,16 +576,32 @@ mod wasm {
             })
         }
 
-        /// Arrange authored family state through the shared atomic transaction.
-        pub fn arrange(
+        #[wasm_bindgen(js_name = arrangeOptions)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn arrange_options(
             &self,
             direction_x: f64,
             direction_y: f64,
             buff: f64,
             center: bool,
-        ) -> Result<(), JsValue> {
-            noon::MobjectFamily::from_node(Rc::clone(&self.semantics), self.id)
-                .and_then(|family| family.arrange(direction_x, direction_y, buff, center))
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+            member_index: Option<i32>,
+        ) -> WasmFamilyArrangeOptions {
+            let mut options =
+                noon::FamilyArrangeOptions::new(direction_x, direction_y, buff, center);
+            options.placement.aligned_edge = (edge_x, edge_y);
+            options.placement.mask = (mask_x, mask_y);
+            options.member_index = member_index.map(|index| index as isize);
+            WasmFamilyArrangeOptions { options }
+        }
+
+        /// Arrange authored state with all options in one semantic transaction.
+        pub fn arrange(&self, options: &WasmFamilyArrangeOptions) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .arrange_with_options(&options.options)
                 .map_err(js_error)
         }
 
@@ -1713,7 +1741,7 @@ mod tests {
         store.add_member(outer, second).unwrap();
 
         assert_eq!(
-            semantic_family_leaf_ids(&store, outer).unwrap(),
+            store.ordered_leaf_nodes(outer).unwrap(),
             vec![first, second]
         );
 
@@ -1723,8 +1751,8 @@ mod tests {
         store.add_member(aliased_outer, nested).unwrap();
         store.add_member(aliased_outer, alias).unwrap();
         assert_eq!(
-            semantic_family_leaf_ids(&store, aliased_outer).unwrap(),
-            vec![first, first]
+            store.ordered_leaf_nodes(aliased_outer).unwrap(),
+            vec![first]
         );
     }
 
