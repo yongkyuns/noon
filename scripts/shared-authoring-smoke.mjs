@@ -1031,6 +1031,107 @@ try {
   );
   assert.equal(exportBoundary.sentinelObjectCount, 0);
 
+  // A Rust-owned Scene must never silently switch to the Python document
+  // engine when finalization finds incompatible migration state. Explicit
+  // export above is the codec boundary; each rejected run uses the same worker.
+  const rejectedFinalizations = await page.evaluate(async () => {
+    const failures = [];
+    const corruptions = [
+      'scene._legacy_geometry_materialized = True',
+      'scene._reactive_signals.append({"legacy": True})',
+      'scene._semantic_geometry_handles.clear()',
+      'scene._tracks.append({"property": "position"})',
+    ];
+    for (const corruption of corruptions) {
+      const source = `from noon import Circle, Scene
+scene = Scene()
+scene.add(Circle(radius=0.4))
+assert scene._canonical_authoring_context is not None
+${corruption}
+def reject_export(*args, **kwargs):
+    raise AssertionError("normal shared finalization invoked the document exporter")
+scene.to_document = reject_export
+scene.to_scene_spec = reject_export
+result = scene
+`;
+      try {
+        await window.sharedAuthoringSmoke.authoring.run(source, {});
+        failures.push("unexpected success");
+      } catch (error) {
+        failures.push(String(error));
+      }
+    }
+    const recovered = await window.sharedAuthoringSmoke.authoring.run(
+      'from noon import Circle, Scene\nscene = Scene()\nscene.add(Circle(radius=0.4))\nresult = scene',
+      {},
+    );
+    return { failures, recovered: Object.hasOwn(recovered, "semanticExecution") };
+  });
+  for (const failure of rejectedFinalizations.failures) {
+    assert.match(failure, /shared Scene cannot fall back to scene-document execution/u);
+    assert.doesNotMatch(failure, /invoked the document exporter/u);
+  }
+  assert.equal(rejectedFinalizations.recovered, true);
+
+  // Top-level source and helper calls share the existing wait/play continuation.
+  // Selecting result must not implicitly run its construct again.
+  const topLevelSource = `from noon import *
+class SelectedScene(Scene):
+    def construct(self):
+        raise AssertionError("prebuilt result construct ran twice")
+result = SelectedScene()
+def author(scene):
+    scene.wait(0.25)
+    assert scene.time == 0.25
+    circle = Circle(0.4).set_fill(BLUE, opacity=1)
+    scene.add(circle)
+    scene.play(circle.animate.shift(RIGHT), run_time=0.5, rate_func=linear)
+    assert abs(circle.get_center().x - 1) < 1e-6
+    assert scene.time == 0.75
+    scene.wait(0.25)
+author(result)
+`;
+  await startSampledSource(page, topLevelSource, "scene-top-level-wait-play");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(1), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 1);
+    assert.equal(result.metrics.objectCount, 1);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const topLevelExample = await readFile(
+    path.join(repoRoot, "web/python/examples/top_level_family_arrangement.py"), "utf8",
+  );
+  await startSampledSource(page, topLevelExample, "scene-top-level-family-arrangement");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(1), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 1);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const topLevelExport = await page.evaluate(async () => {
+    const result = await window.sharedAuthoringSmoke.authoring.run(
+      "from noon import *\nresult = Scene()\ncircle = Circle(0.4)\nresult.add(circle)\nresult.wait(0.25)\nresult.play(circle.animate.shift(RIGHT), run_time=0.5, rate_func=linear)\nresult.wait(0.25)",
+      {}, { exportDocument: true, onSemanticContinuation() {
+        throw new Error("top-level export leased a continuation");
+      } },
+    );
+    return { duration: result.duration, objects: result.document.objects.length,
+      semantic: Object.hasOwn(result, "semanticExecution") };
+  });
+  assert.deepEqual(topLevelExport, { duration: 1, objects: 1, semantic: false });
+
   // A supported ordinary segment must fail at its JSPI capability gate instead
   // of silently using endpoint-only execution. The restore request verifies the
   // same worker-resident context never activated a player or advanced time.
@@ -1512,6 +1613,104 @@ try {
     });
     assert.equal(result.duration, 3);
     assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const arrangedOptionsSource = `from noon import *
+class ArrangedOptions(Scene):
+    def construct(self):
+        first = Circle(0.2).set_fill(BLUE, opacity=1)
+        second = Circle(0.2).shift(2 * RIGHT)
+        nested = VGroup(first, second)
+        family = VGroup(first, nested)
+        left = VGroup(first)
+        right = VGroup(second)
+        empty = VGroup()
+        selected = VGroup(left, right)
+        invalid = VGroup(left, right, empty)
+        def reject_python_placement(*args, **kwargs):
+            raise AssertionError("arrange sequenced Python member placements")
+        for member in (first, second, nested, left, right, empty):
+            member.next_to = reject_python_placement
+            member.get_critical_point = reject_python_placement
+        family.shift(RIGHT)
+        assert abs(first.get_center().x - 1) < 1e-6
+        assert abs(second.get_center().x - 3) < 1e-6
+        family.arrange(RIGHT, buff=0.2, aligned_edge=UP)
+        assert abs(first.get_center().x + 1) < 1e-6
+        assert abs(second.get_center().x - 1) < 1e-6
+        self.add(first, second)
+        self.wait(0.1)
+        try:
+            invalid.arrange(center=False, index_of_submobject_to_align=0)
+        except IndexError:
+            pass
+        else:
+            raise AssertionError("late invalid arrangement index was accepted")
+        assert abs(first.get_center().x + 1) < 1e-6
+        assert abs(second.get_center().x - 1) < 1e-6
+        selected.arrange(RIGHT, buff=0.5, center=False,
+                         index_of_submobject_to_align=-1, submobject_to_align=second)
+        assert abs(first.get_center().x + 1) < 1e-6
+        assert abs(second.get_center().x + 0.1) < 1e-6
+        self.wait(0.1)
+`;
+  await startSampledSource(page, arrangedOptionsSource, "scene-arrange-options");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(0.2), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 0.2);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const selectedAlignmentSource = `from noon import *
+class SelectedAlignment(Scene):
+    def construct(self):
+        first = Square(1).set_fill(BLUE, opacity=1)
+        second = Square(1).shift(2 * RIGHT)
+        nested = VGroup(second)
+        family = VGroup(first, nested)
+        target = VGroup(Square(2).shift(6 * RIGHT))
+        def reject_python_bounds(*args, **kwargs):
+            raise AssertionError("selected placement evaluated Python critical points")
+        for value in (first, second, nested, family, target, target[0]):
+            value.get_critical_point = reject_python_bounds
+        family.next_to(target, index_of_submobject_to_align=0,
+                       submobject_to_align=second, buff=0.25)
+        assert abs(first.get_center().x - 5.75) < 1e-6
+        assert abs(second.get_center().x - 7.75) < 1e-6
+        self.add(first, second, target)
+        self.wait(0.1)
+        family.next_to(ORIGIN, index_of_submobject_to_align=-1, buff=0.25)
+        assert abs(first.get_center().x + 1.25) < 1e-6
+        assert abs(second.get_center().x - 0.75) < 1e-6
+        try:
+            family.next_to(ORIGIN, index_of_submobject_to_align=-3)
+        except IndexError:
+            pass
+        else:
+            raise AssertionError("invalid family index was accepted")
+        assert abs(first.get_center().x + 1.25) < 1e-6
+        first.next_to(2 * RIGHT, submobject_to_align=second, buff=0.25)
+        assert abs(first.get_center().x - 0.75) < 1e-6
+        assert abs(second.get_center().x - 0.75) < 1e-6
+        self.wait(0.1)
+`;
+  await startSampledSource(page, selectedAlignmentSource, "scene-selected-alignment");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(0.2), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 0.2);
+    assert.equal(result.metrics.objectCount, 3);
   } finally {
     await stopSampledSource(page);
   }
@@ -2778,31 +2977,31 @@ try {
     });
   }
 
-  // A legacy wait before the first canonical scalar play must fail in the real
-  // authoring worker. The #959 bridge may select one cursor, never merge them.
-  const mixedTimingError = await page.evaluate(async () => {
-    const source = `from noon import Circle, RIGHT, Scene, linear
-
+  // A top-level wait and later scalar play use the same shared Rust cursor.
+  const topLevelScalarSource = `from noon import Circle, Scene, linear
 scene = Scene()
 circle = Circle(radius=0.4)
 scene.add(circle)
 progress = scene.value_tracker(0.0)
 scene.wait(1.0)
+assert scene.time == 1.0
 scene.play(progress.animate(run_time=2.0, rate_func=linear).set_value(4.0))
+assert scene.time == 3.0
+assert progress.get_value() == 4.0
 result = scene
 `;
-    try {
-      await window.sharedAuthoringSmoke.authoring.run(source, {});
-    } catch (error) {
-      return String(error);
-    }
-    throw new Error("mixed legacy/canonical timing unexpectedly authored a scene");
-  });
-  assert.match(
-    mixedTimingError,
-    /canonical ValueTracker\.play cannot follow legacy Scene timing/u,
-    "real worker must reject a legacy timing prefix before canonical scalar authoring",
-  );
+  await startSampledSource(page, topLevelScalarSource, "scene-top-level-wait-scalar");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3);
+    assert.equal(result.metrics.objectCount, 1);
+  } finally {
+    await stopSampledSource(page);
+  }
 
   // Opaque callbacks must progress forward through the required Rust barrier.
   // The exact callback publication for the first ordered target is observed
@@ -3171,6 +3370,31 @@ result = scene
     const completedCapture = await rasterPage.evaluate(() => window.noonHostRaster.debugFrame());
     assert.equal(completedCapture.time, 5);
     assert.equal(completedCapture.present_object_count, 1);
+
+    await rasterPage.reload({ waitUntil: "load" });
+    await rasterPage.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+    await rasterPage.evaluate(async () => {
+      await window.noonHostRaster.ready();
+      await window.noonHostRaster.load(`from noon import *
+class RejectedAdmission(Scene):
+    def construct(self):
+        entering = Square()
+        try:
+            self.play(Create(entering), object())
+            raise AssertionError("unsupported composition was accepted")
+        except NotImplementedError:
+            pass
+        assert entering not in self.mobjects
+        assert not getattr(self, "_legacy_geometry_materialized", False)
+        self.play(Create(entering), run_time=0.1)
+        self.play(Uncreate(entering), run_time=0.1)
+        assert entering not in self.mobjects
+`, 1);
+    });
+    const admitted = await rasterPage.evaluate(() => window.noonHostRaster.renderThrough(2, [0, 0.1, 0.2]));
+    assert.equal(admitted.time, 0.2);
+    assert.equal(admitted.objectCount, 0);
+    assert.equal(admitted.authoredDuration, 0.2);
 
     await rasterPage.reload({ waitUntil: "load" });
     await rasterPage.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });

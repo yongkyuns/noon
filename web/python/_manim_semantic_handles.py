@@ -10,7 +10,6 @@ from __future__ import annotations
 import copy
 import json
 import sys
-from contextvars import ContextVar
 from typing import Any
 
 import noon as _base
@@ -168,8 +167,10 @@ except ImportError:  # Native CPython tests do not have the browser bridge.
 
 try:
     from js import noonCreateAuthoringFamilyHandle as _create_family_handle
-except ImportError:  # Older/mock bridges may expose only leaf Mobject handles.
+    from js import noonAuthoringMembershipBatch as _new_membership_batch
+except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _create_family_handle = None
+    _new_membership_batch = None
 
 _INSTALLED = False
 _ORIGINAL_INIT = _base.Mobject.__init__
@@ -198,7 +199,6 @@ _ORIGINAL_CIRCLE_INIT = _compat.Circle.__init__
 _ORIGINAL_SQUARE_INIT = _compat.Square.__init__
 _ORIGINAL_RECTANGLE_INIT = _compat.Rectangle.__init__
 _ORIGINAL_LINE_INIT = _compat.Line.__init__
-_ORIGINAL_GROUP_INIT = _compat.Group.__init__
 _ORIGINAL_GROUP_ADD = _compat.Group.add
 _ORIGINAL_GROUP_REMOVE = _compat.Group.remove
 _ORIGINAL_GROUP_SHIFT = _compat.Group.shift
@@ -206,8 +206,6 @@ _ORIGINAL_GROUP_MOVE_TO = _compat.Group.move_to
 _ORIGINAL_GROUP_NEXT_TO = _compat.Group.next_to
 _ORIGINAL_GROUP_ALIGN_TO = _compat.Group.align_to
 _ORIGINAL_GROUP_ARRANGE = _compat.Group.arrange
-_GROUP_COPY_DELEGATE = None
-_GROUP_TARGET_COPY = ContextVar("noon_group_target_copy", default=False)
 
 
 def _raw_from_json(value: str) -> _ir.Mobject:
@@ -876,7 +874,7 @@ def _clone_mobject(
 
 
 def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
-    return _clone_mobject(self, target_state=bool(_GROUP_TARGET_COPY.get()))
+    return _clone_mobject(self)
 
 
 def _target_mobject(self: _base.Mobject) -> _base.Mobject:
@@ -1359,6 +1357,68 @@ def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
     return _base._critical(value._current_raw(), direction)
 
 
+def _semantic_member_index(index):
+    if index is None:
+        return None
+    import operator
+    index = operator.index(index)
+    if not -(1 << 31) <= index < (1 << 31):
+        raise IndexError("alignment submobject index is unavailable")
+    return index
+
+
+def _layout_anchor(value, index=None):
+    if isinstance(value, _compat.Group):
+        if any(_handle_for(leaf) is None for leaf in _compat._leaf_mobjects(value)):
+            return None
+        handle = getattr(value, "_semantic_family_handle", None)
+    else:
+        handle = _handle_for(value)
+    if handle is None or not hasattr(handle, "layoutAnchor"):
+        return None
+    return handle.layoutAnchor(_semantic_member_index(index))
+
+
+def _selected_next_to(self, target, direction, buff, aligned_edge,
+                      submobject_to_align, index, coor_mask):
+    """Pass selection intent; Rust resolves members, observes bounds and places."""
+    if getattr(getattr(self, "_scene", None), "_legacy_geometry_materialized", False):
+        return False
+    source = _layout_anchor(self)
+    aligner = (_layout_anchor(submobject_to_align) if submobject_to_align is not None
+               else _layout_anchor(self, index))
+    if source is None or aligner is None:
+        return False
+    target_anchor = None
+    if isinstance(target, (_base.Mobject, _compat.Group)):
+        target_anchor = _layout_anchor(target, index)
+        if target_anchor is None:
+            return False
+    vector = _base._as_vec2(direction)
+    edge = _base._as_vec2(aligned_edge)
+    mask = _alignment_mask2(coor_mask)
+    arguments = (vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
+    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+               else _live_mutation_context(self))
+    try:
+        if target_anchor is not None:
+            if context is None:
+                source.nextTo(target_anchor, aligner, *arguments)
+            else:
+                context.liveNextLayoutTo(source, target_anchor, aligner, *arguments)
+        else:
+            point = _base._as_vec2(target)
+            if context is None:
+                source.nextToPoint(point.x, point.y, aligner, *arguments)
+            else:
+                context.liveNextLayoutToPoint(source, point.x, point.y, aligner, *arguments)
+    except Exception as error:
+        if "alignment submobject index" in str(error):
+            raise IndexError(str(error)) from None
+        raise ValueError(str(error)) from None
+    return True
+
+
 def _next_to(
     self: _base.Mobject,
     mobject_or_point: object,
@@ -1369,6 +1429,10 @@ def _next_to(
     index_of_submobject_to_align: int | None = None,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _base.Mobject:
+    if (submobject_to_align is not None or index_of_submobject_to_align is not None):
+        if _selected_next_to(self, mobject_or_point, direction, buff, aligned_edge,
+                             submobject_to_align, index_of_submobject_to_align, coor_mask):
+            return self
     handle = _mutation_handle_for(self)
     if (
         handle is None
@@ -1661,11 +1725,11 @@ def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
     return resolver(value)
 
 
-def _shared_family_layout_session(value: object, *, mutation: bool = False):
+def _shared_family_layout(value: object, *, mutation: bool = False):
     if not isinstance(value, _compat.Group):
         return None
     family_handle = getattr(value, "_semantic_family_handle", None)
-    if family_handle is None or not hasattr(family_handle, "layoutSession"):
+    if family_handle is None or not hasattr(family_handle, "layout"):
         return None
     leaves = _compat._leaf_mobjects(value)
     leaf_handles = [
@@ -1673,23 +1737,16 @@ def _shared_family_layout_session(value: object, *, mutation: bool = False):
     ]
     if not all(handle is not None for handle in leaf_handles):
         return None
-    session = family_handle.layoutSession()
-    for handle in leaf_handles:
-        assert handle is not None
-        session.includeMobject(handle)
-    return session, leaves, leaf_handles
+    return family_handle.layout(), leaves, leaf_handles
 
 
-def _apply_family_translation(
+def _sync_family_transforms(
     self: _compat.Group,
-    translation: object,
     leaves: list[_base.Mobject],
     leaf_handles: list[object],
 ) -> _compat.Group:
     for member, handle in zip(leaves, leaf_handles):
-        translation.applyMobject(handle)
         _sync_bound_transform(member, handle)
-    translation.finish()
     return self
 
 
@@ -1702,15 +1759,43 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
         except Exception as error:
             raise ValueError(str(error)) from None
         return self
-    shared = _shared_family_layout_session(self, mutation=True)
+    shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_SHIFT(self, direction)
     session, leaves, leaf_handles = shared
     if not hasattr(session, "shiftBy"):
         return _ORIGINAL_GROUP_SHIFT(self, direction)
     offset = _base._as_vec2(direction)
-    translation = session.shiftBy(offset.x, offset.y)
-    return _apply_family_translation(self, translation, leaves, leaf_handles)
+    session.shiftBy(offset.x, offset.y)
+    return _sync_family_transforms(self, leaves, leaf_handles)
+
+
+def _group_live_layout_context(value: _compat.Group):
+    context = _group_target_context(value)
+    if context is None:
+        return None
+    # Callback overlays and explicit legacy timelines keep their own qualified
+    # read path until #70/#959 migration. Ordinary layout comes from live Rust.
+    for leaf in _compat._leaf_mobjects(value):
+        if (not bool(getattr(leaf, "_semantic_handle_fresh", False))
+                or getattr(leaf, "_semantic_handle", None) is None
+                or hasattr(leaf, "_noon_updaters")
+                or getattr(getattr(leaf, "_scene", None), "_legacy_geometry_materialized", False)):
+            return None
+    return context
+
+
+def _live_family_placement(context, family, target, operation, *arguments):
+    if isinstance(target, _compat.Group):
+        method = getattr(context, f"live{operation}FamilyToFamily")
+        method(family, target._semantic_family_handle, *arguments)
+    elif isinstance(target, _base.Mobject):
+        method = getattr(context, f"live{operation}FamilyToMobject")
+        method(family, target._semantic_handle, *arguments)
+    else:
+        point = _base._as_vec2(target)
+        method = getattr(context, f"live{operation}FamilyToPoint")
+        method(family, point.x, point.y, *arguments)
 
 
 def _group_move_to(
@@ -1719,36 +1804,46 @@ def _group_move_to(
     aligned_edge: object = _base.ORIGIN,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _compat.Group:
-    shared = _shared_family_layout_session(self, mutation=True)
+    context = _group_live_layout_context(self)
+    if context is not None:
+        edge = _base._as_vec2(aligned_edge)
+        mask = _alignment_mask2(coor_mask)
+        _live_family_placement(context, self._semantic_family_handle, point_or_mobject, "Move",
+                               edge.x, edge.y, mask.x, mask.y)
+        return self
+    shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
     session, leaves, leaf_handles = shared
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
 
-    translation = None
+    applied = False
     if isinstance(point_or_mobject, _compat.Group):
-        target_shared = _shared_family_layout_session(point_or_mobject)
+        target_shared = _shared_family_layout(point_or_mobject)
         if target_shared is not None and hasattr(session, "moveToFamily"):
             target_session = target_shared[0]
-            translation = session.moveToFamily(
+            session.moveToFamily(
                 target_session, edge.x, edge.y, mask.x, mask.y
             )
+            applied = True
     elif _alignment_is_mobject(point_or_mobject):
         target_adapter = _family_layout_leaf_adapter(point_or_mobject)
         if target_adapter is not None and hasattr(session, "moveToMobject"):
-            translation = session.moveToMobject(
+            session.moveToMobject(
                 target_adapter, edge.x, edge.y, mask.x, mask.y
             )
+            applied = True
     elif hasattr(session, "moveToPoint"):
         point = _base._as_vec2(point_or_mobject)
-        translation = session.moveToPoint(
+        session.moveToPoint(
             point.x, point.y, edge.x, edge.y, mask.x, mask.y
         )
+        applied = True
 
-    if translation is None:
+    if not applied:
         return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
-    return _apply_family_translation(self, translation, leaves, leaf_handles)
+    return _sync_family_transforms(self, leaves, leaf_handles)
 
 
 
@@ -1762,8 +1857,11 @@ def _group_next_to(
     index_of_submobject_to_align: int | None = None,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _compat.Group:
-    # Selecting a specific wrapper/member remains explicit #61 debt until shared
-    # family-member handles expose that selection. Do not silently rederive it here.
+    if (submobject_to_align is not None or index_of_submobject_to_align is not None):
+        if _selected_next_to(self, mobject_or_point, direction, buff, aligned_edge,
+                             submobject_to_align, index_of_submobject_to_align, coor_mask):
+            return self
+    # Explicit codec/fixture wrappers without shared anchors retain #959 fallback.
     if submobject_to_align is not None or index_of_submobject_to_align is not None:
         return _ORIGINAL_GROUP_NEXT_TO(
             self,
@@ -1776,7 +1874,15 @@ def _group_next_to(
             coor_mask,
         )
 
-    shared = _shared_family_layout_session(self, mutation=True)
+    context = _group_live_layout_context(self)
+    if context is not None:
+        vector = _base._as_vec2(direction)
+        edge = _base._as_vec2(aligned_edge)
+        mask = _alignment_mask2(coor_mask)
+        _live_family_placement(context, self._semantic_family_handle, mobject_or_point, "Next",
+                               vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
+        return self
+    shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_NEXT_TO(
             self,
@@ -1793,11 +1899,11 @@ def _group_next_to(
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
 
-    translation = None
+    applied = False
     if isinstance(mobject_or_point, _compat.Group):
-        target_shared = _shared_family_layout_session(mobject_or_point)
+        target_shared = _shared_family_layout(mobject_or_point)
         if target_shared is not None and hasattr(session, "nextToFamily"):
-            translation = session.nextToFamily(
+            session.nextToFamily(
                 target_shared[0],
                 vector.x,
                 vector.y,
@@ -1807,10 +1913,11 @@ def _group_next_to(
                 mask.x,
                 mask.y,
             )
+            applied = True
     elif _alignment_is_mobject(mobject_or_point):
         target_adapter = _family_layout_leaf_adapter(mobject_or_point)
         if target_adapter is not None and hasattr(session, "nextToMobject"):
-            translation = session.nextToMobject(
+            session.nextToMobject(
                 target_adapter,
                 vector.x,
                 vector.y,
@@ -1820,9 +1927,10 @@ def _group_next_to(
                 mask.x,
                 mask.y,
             )
+            applied = True
     elif hasattr(session, "nextToPoint"):
         point = _base._as_vec2(mobject_or_point)
-        translation = session.nextToPoint(
+        session.nextToPoint(
             point.x,
             point.y,
             vector.x,
@@ -1833,8 +1941,9 @@ def _group_next_to(
             mask.x,
             mask.y,
         )
+        applied = True
 
-    if translation is None:
+    if not applied:
         return _ORIGINAL_GROUP_NEXT_TO(
             self,
             mobject_or_point,
@@ -1845,7 +1954,7 @@ def _group_next_to(
             index_of_submobject_to_align,
             coor_mask,
         )
-    return _apply_family_translation(self, translation, leaves, leaf_handles)
+    return _sync_family_transforms(self, leaves, leaf_handles)
 
 
 def _group_align_to(
@@ -1853,28 +1962,36 @@ def _group_align_to(
     mobject_or_point: object,
     direction: object = _base.ORIGIN,
 ) -> _compat.Group:
-    shared = _shared_family_layout_session(self, mutation=True)
+    context = _group_live_layout_context(self)
+    if context is not None:
+        axis = _base._as_vec2(direction)
+        _live_family_placement(context, self._semantic_family_handle, mobject_or_point, "Align", axis.x, axis.y)
+        return self
+    shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
     session, leaves, leaf_handles = shared
     axis = _base._as_vec2(direction)
 
-    translation = None
+    applied = False
     if isinstance(mobject_or_point, _compat.Group):
-        target_shared = _shared_family_layout_session(mobject_or_point)
+        target_shared = _shared_family_layout(mobject_or_point)
         if target_shared is not None and hasattr(session, "alignToFamily"):
-            translation = session.alignToFamily(target_shared[0], axis.x, axis.y)
+            session.alignToFamily(target_shared[0], axis.x, axis.y)
+            applied = True
     elif _alignment_is_mobject(mobject_or_point):
         target_adapter = _family_layout_leaf_adapter(mobject_or_point)
         if target_adapter is not None and hasattr(session, "alignToMobject"):
-            translation = session.alignToMobject(target_adapter, axis.x, axis.y)
+            session.alignToMobject(target_adapter, axis.x, axis.y)
+            applied = True
     elif hasattr(session, "alignToPoint"):
         point = _base._as_vec2(mobject_or_point)
-        translation = session.alignToPoint(point.x, point.y, axis.x, axis.y)
+        session.alignToPoint(point.x, point.y, axis.x, axis.y)
+        applied = True
 
-    if translation is None:
+    if not applied:
         return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
-    return _apply_family_translation(self, translation, leaves, leaf_handles)
+    return _sync_family_transforms(self, leaves, leaf_handles)
 
 
 
@@ -1885,71 +2002,61 @@ def _group_arrange(
     center: bool = True,
     **kwargs: Any,
 ) -> _compat.Group:
-    # Forwarded placement kwargs can select additional alignment semantics; retain
-    # the pinned compatibility path until shared member-selection support lands.
-    if kwargs:
-        return _ORIGINAL_GROUP_ARRANGE(
-            self,
-            direction=direction,
-            buff=buff,
-            center=center,
-            **kwargs,
-        )
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    if family_handle is None or not hasattr(family_handle, "arrangeOptions"):
+        return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
     if not self.submobjects:
         return self
-
-    family_handle = getattr(self, "_semantic_family_handle", None)
-    if family_handle is None or not hasattr(family_handle, "arrangeSession"):
-        return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
-
+    unknown = set(kwargs) - {"aligned_edge", "coor_mask", "submobject_to_align", "index_of_submobject_to_align"}
+    if unknown:
+        raise TypeError(f"arrange got unexpected placement keyword {sorted(unknown)[0]!r}")
     axis = _base._as_vec2(_base.RIGHT if direction is None else direction)
+    edge = _base._as_vec2(kwargs.get("aligned_edge", _base.ORIGIN))
+    mask = _alignment_mask2(kwargs.get("coor_mask", (1, 1, 1)))
+    index = _semantic_member_index(kwargs.get("index_of_submobject_to_align"))
+    options = family_handle.arrangeOptions(axis.x, axis.y, float(buff), bool(center),
+                                           edge.x, edge.y, mask.x, mask.y, index)
+    aligner = kwargs.get("submobject_to_align")
+    if aligner is not None:
+        anchor = _layout_anchor(aligner)
+        if anchor is None:
+            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
+        options.setAligner(anchor)
     context = _group_target_context(self)
-    if context is not None:
-        try:
-            context.liveArrangeFamily(
-                family_handle, axis.x, axis.y, float(buff), bool(center)
-            )
-        except Exception as error:
-            raise ValueError(str(error)) from None
-        return self
-    arrangement = family_handle.arrangeSession(axis.x, axis.y, float(buff), bool(center))
-    prepared: list[tuple[object, list[_base.Mobject], list[object]]] = []
-
-    for member in self.submobjects:
-        if isinstance(member, _compat.Group):
-            shared = _shared_family_layout_session(member, mutation=True)
-            if shared is None or not hasattr(arrangement, "includeFamily"):
-                return _ORIGINAL_GROUP_ARRANGE(
-                    self, direction=direction, buff=buff, center=center
-                )
-            arrangement.includeFamily(shared[0])
-            prepared.append((member, shared[1], shared[2]))
-        elif isinstance(member, _base.Mobject):
-            adapter = _family_layout_leaf_adapter(member, mutation=True)
-            if adapter is None:
-                return _ORIGINAL_GROUP_ARRANGE(
-                    self, direction=direction, buff=buff, center=center
-                )
-            arrangement.includeMobject(adapter)
-            prepared.append((member, [member], [adapter]))
-        else:
-            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
-
-    for member, leaves, leaf_handles in prepared:
-        translation = arrangement.nextTranslation()
-        _apply_family_translation(member, translation, leaves, leaf_handles)
-    arrangement.finish()
+    try:
+        if context is not None:
+            context.liveArrangeFamily(family_handle, options)
+            return self
+        leaves = _compat._leaf_mobjects(self)
+        leaf_handles = [_family_layout_leaf_adapter(member, mutation=True) for member in leaves]
+        if any(handle is None for handle in leaf_handles):
+            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
+        family_handle.arrange(options)
+    except Exception as error:
+        if "alignment submobject index" in str(error):
+            raise IndexError(str(error)) from None
+        raise ValueError(str(error)) from None
+    # Only the explicit #959 export path still needs projected values.
+    for member, handle in zip(leaves, leaf_handles):
+        _sync_bound_transform(member, handle)
     return self
 
 
 def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
+    if isinstance(value, _compat.Group):
+        context = _group_live_layout_context(value)
+        if context is not None:
+            layout = context.queryFamilyLayout(value._semantic_family_handle)
+            return (
+                _base.Vec2(float(layout.criticalX(-1.0, 0.0)), float(layout.criticalY(0.0, -1.0))),
+                _base.Vec2(float(layout.criticalX(1.0, 0.0)), float(layout.criticalY(0.0, 1.0))),
+            )
     leaves = _compat._leaf_mobjects(value)
 
-    # Group/VGroup wrapper traversal remains host-language metadata, but the shared
-    # family graph independently derives the expected recursive leaf sequence and
-    # rejects any wrapper divergence. Rust owns the actual aggregate bounds math.
+    # Rust observes the complete semantic family directly. The wrapper list only
+    # selects whether this caller is eligible for the shared query.
     if isinstance(value, _compat.Group):
-        shared = _shared_family_layout_session(value)
+        shared = _shared_family_layout(value)
         if shared is not None:
             session = shared[0]
             return (
@@ -1996,24 +2103,6 @@ def _family_member_handle(value: object) -> tuple[str | None, object | None]:
     return None, None
 
 
-def _family_add_handle(family_handle: object, value: object) -> bool:
-    kind, handle = _family_member_handle(value)
-    if handle is None:
-        raise RuntimeError("family member has no shared semantic identity")
-    if kind == "family":
-        return bool(family_handle.addFamily(handle))
-    return bool(family_handle.addMobject(handle))
-
-
-def _family_remove_handle(family_handle: object, value: object) -> bool:
-    kind, handle = _family_member_handle(value)
-    if handle is None:
-        raise RuntimeError("family member has no shared semantic identity")
-    if kind == "family":
-        return bool(family_handle.removeFamily(handle))
-    return bool(family_handle.removeMobject(handle))
-
-
 def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) -> None:
     for mobject in mobjects:
         if not isinstance(mobject, (_base.Mobject, _compat.Group)):
@@ -2022,39 +2111,75 @@ def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) 
             raise ValueError("Group cannot contain itself")
 
 
+def _family_membership_batch(context: object, kind: str, mobjects: tuple[object, ...]):
+    batch = (
+        context.beginMembershipBatch(kind)
+        if context is not None
+        else _new_membership_batch(kind)
+    )
+    for value in mobjects:
+        member_kind, handle = _family_member_handle(value)
+        if handle is None:
+            raise RuntimeError("family member has no shared semantic identity")
+        if member_kind == "family":
+            batch.appendFamily(handle)
+        else:
+            batch.appendMobject("", handle)
+    return batch
+
+
 def _group_init(self: _compat.Group, *mobjects: object) -> None:
-    self._semantic_family_handle = _create_family_handle()
-    _ORIGINAL_GROUP_INIT(self, *mobjects)
+    _validate_group_members(self, mobjects)
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", mobjects)
+    family = (
+        context.liveCreateFamily(batch)
+        if context is not None
+        else _create_family_handle(batch)
+    )
+    # Rust selects the authoritative ordered members; this map retains Python identity.
+    wrappers = {}
+    for value in mobjects:
+        _, handle = _family_member_handle(value)
+        key = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+        wrappers.setdefault(key, value)
+    self._semantic_family_handle = family
+    self.submobjects = [wrappers[str(key)] for key in family.memberKeys()]
 
 
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
+    if not mobjects:
+        return self
     family_handle = self._semantic_family_handle
-    for mobject in mobjects:
-        if _family_add_handle(family_handle, mobject):
-            _ORIGINAL_GROUP_ADD(self, mobject)
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "add", mobjects)
+    changed = (
+        context.liveEditFamilyMembership(family_handle, batch)
+        if context is not None
+        else family_handle.editMembership(batch)
+    )
+    accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
+    if accepted:
+        _ORIGINAL_GROUP_ADD(self, *accepted)
     return self
 
 
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    if not mobjects:
+        return self
     family_handle = self._semantic_family_handle
-    for mobject in mobjects:
-        if _family_remove_handle(family_handle, mobject):
-            _ORIGINAL_GROUP_REMOVE(self, mobject)
+    context = _live_constructor_context("family")
+    batch = _family_membership_batch(context, "remove", mobjects)
+    changed = (
+        context.liveEditFamilyMembership(family_handle, batch)
+        if context is not None
+        else family_handle.editMembership(batch)
+    )
+    accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
+    if accepted:
+        _ORIGINAL_GROUP_REMOVE(self, *accepted)
     return self
-
-
-def _family_target_accept(editor: object, source: object, target: object) -> None:
-    source_kind, source_handle = _family_member_handle(source)
-    target_kind, target_handle = _family_member_handle(target)
-    if source_kind != target_kind or source_handle is None or target_handle is None:
-        raise RuntimeError("Group target wrapper mirror diverged from shared family membership")
-    if source_kind == "family":
-        editor.acceptFamily(source_handle, target_handle)
-    elif source_kind == "mobject":
-        editor.acceptMobject(source_handle, target_handle)
-    else:
-        raise RuntimeError("unsupported Group target member kind")
 
 
 def _group_target_context(value: object) -> object | None:
@@ -2082,83 +2207,57 @@ def _group_target_context(value: object) -> object | None:
     return context
 
 
-def _group_target_copy(self: _compat.Group) -> _compat.Group:
-    delegate = _GROUP_COPY_DELEGATE
-    if delegate is None:
-        raise RuntimeError("shared Group copy delegate is not installed")
-    source_family_handle = getattr(self, "_semantic_family_handle", None)
-    if source_family_handle is None:
-        raise RuntimeError("Group has no shared semantic family identity")
-
-    # Reuse the geometry layer's constructor-free wrapper clone so custom Group
-    # subclasses preserve named child references. During this call only, member
-    # `copy()` operations route leaf state through the shared target editor and
-    # nested Groups recursively construct their own shared target families.
-    token = _GROUP_TARGET_COPY.set(True)
-    family_handle = self.__dict__.pop("_semantic_family_handle", None)
-    try:
-        clone = delegate(self)
-    finally:
-        if family_handle is not None:
-            self._semantic_family_handle = family_handle
-        _GROUP_TARGET_COPY.reset(token)
-
-    if len(clone.submobjects) != len(self.submobjects):
-        raise RuntimeError("Group target wrapper copy changed direct membership")
-    context = _group_target_context(clone)
-    editor = (
-        context.beginLiveFamilyTarget(source_family_handle)
-        if context is not None
-        else source_family_handle.targetEditor()
-    )
-    for source_member, target_member in zip(
-        self.submobjects, clone.submobjects, strict=True
-    ):
-        _family_target_accept(editor, source_member, target_member)
-    clone._semantic_family_handle = (
-        context.finishLiveFamilyTarget(editor)
-        if context is not None
-        else editor.finish()
-    )
-    return clone
-
-
-def _group_target_mobject(self: _compat.Group) -> _compat.Group:
-    """Build a Group.animate target through the shared family target editor."""
-
-    return _group_target_copy(self)
-
-
 def _group_copy(self: _compat.Group) -> _compat.Group:
-    if _GROUP_TARGET_COPY.get():
-        return _group_target_copy(self)
-    delegate = _GROUP_COPY_DELEGATE
-    if delegate is None:
-        raise RuntimeError("shared Group copy delegate is not installed")
+    context = _group_target_context(self)
+    # Bound families outside construct() still have the same context on leaves.
+    if context is None:
+        contexts = [candidate for leaf in _compat._leaf_mobjects(self)
+                    if (candidate := _live_mutation_context(leaf)) is not None]
+        if contexts:
+            context = contexts[0]
+            if any(candidate is not context for candidate in contexts[1:]):
+                raise RuntimeError("family copy members belong to different live contexts")
 
-    # The geometry layer owns the constructor-free wrapper-copy algorithm, including
-    # remapping custom subclass attributes such as Arrow._shaft/_tip. A Pyodide
-    # JsProxy cannot be deep-copied, so temporarily remove only the shared family
-    # handle from that host-language metadata pass. Nested Groups recurse through
-    # this adapter and receive their own fresh family identities.
-    family_handle = self.__dict__.pop("_semantic_family_handle", None)
-    try:
-        clone = delegate(self)
-    finally:
-        if family_handle is not None:
-            self._semantic_family_handle = family_handle
+    def excluded_fields(value):
+        excluded = {
+            "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
+            "_semantic_family_handle", "_canonical_live_target_context",
+            "_noon_updater_registrations", "_noon_updater_registration_history",
+        }
+        if not isinstance(value, _compat.Group) and _is_bound(value) and hasattr(value, "_noon_updaters"):
+            excluded.add("_noon_updaters")
+        return excluded
 
-    # Constructor-based delegates may already have created a family handle. The
-    # browser geometry delegate uses object.__new__ and therefore needs one here.
-    if getattr(clone, "_semantic_family_handle", None) is None:
-        clone._semantic_family_handle = _create_family_handle()
-        for member in clone.submobjects:
-            _family_add_handle(clone._semantic_family_handle, member)
+    clone, pairs = _compat.prepare_family_wrapper_copy(self, excluded_fields)
+    # Verify host identity metadata before committing the semantic copy. Rust owns
+    # the graph; Python cannot add, reorder, or omit a copied semantic member.
+    for source, _ in pairs:
+        if isinstance(source, _compat.Group):
+            keys = []
+            for member in source.submobjects:
+                _, handle = _family_member_handle(member)
+                if handle is None:
+                    raise RuntimeError("family member has no shared semantic identity")
+                keys.append(f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}")
+            if keys != [str(key) for key in source._semantic_family_handle.memberKeys()]:
+                raise RuntimeError("Group wrapper mirror diverged from shared family membership")
+    references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
+    copied = (context.liveCopyFamily(self._semantic_family_handle, references)
+              if context is not None else self._semantic_family_handle.copyFamily(references))
+    for source, target in pairs:
+        if isinstance(source, _compat.Group):
+            target._semantic_family_handle = copied.familyFor(source._semantic_family_handle)
+        else:
+            _initialize_shared_wrapper(target)
+            target._semantic_handle = copied.mobjectFor(source._semantic_handle)
+            target._semantic_handle_fresh = True
+            if context is not None:
+                target._canonical_live_target_context = context
     return clone
 
 
 def install() -> None:
-    global _INSTALLED, _GROUP_COPY_DELEGATE
+    global _INSTALLED
     if _INSTALLED or _create_geometry_handle is None:
         return
     _INSTALLED = True
@@ -2167,6 +2266,8 @@ def install() -> None:
     _base.Mobject._current_raw = _current_raw
     _base.Mobject._apply = _apply
     _base.Mobject.copy = _copy_mobject
+    _base.Mobject.__deepcopy__ = _compat.deepcopy_semantic_wrapper
+    _compat.Group.__deepcopy__ = _compat.deepcopy_semantic_wrapper
     _base.Mobject._copy_for_animate_target = _target_mobject
     _base.Mobject.get_center = _get_center
     _base.Mobject.get_critical_point = _get_critical_point
@@ -2203,7 +2304,6 @@ def install() -> None:
     _compat.Line.__init__ = _line_init
 
     if _create_family_handle is not None:
-        _GROUP_COPY_DELEGATE = _compat.Group.copy
         _compat.Group.__init__ = _group_init
         _compat.Group.add = _group_add
         _compat.Group.remove = _group_remove
@@ -2213,4 +2313,4 @@ def install() -> None:
         _compat.Group.align_to = _group_align_to
         _compat.Group.arrange = _group_arrange
         _compat.Group.copy = _group_copy
-        _compat.Group._copy_for_animate_target = _group_target_mobject
+        _compat.Group._copy_for_animate_target = _group_copy

@@ -168,9 +168,7 @@ def _copy_group_without_constructor(self: _compat.Group) -> _compat.Group:
     for original, copied in zip(self.submobjects, cloned_members, strict=True):
         map_family(original, copied)
 
-    for name, value in self.__dict__.items():
-        if name != "submobjects":
-            setattr(clone, name, copy.deepcopy(value, memo))
+    _compat.copy_wrapper_attributes(self, clone, memo, {"submobjects"})
     return clone
 
 

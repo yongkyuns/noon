@@ -33,6 +33,7 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                 def __init__(self, store, snapshot_json):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.snapshot = json.loads(snapshot_json)
                     self.shift_calls = []
 
@@ -58,50 +59,35 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                     pass
 
 
-            class FakeTranslation:
-                def __init__(self, store, members, dx, dy):
+            class FakeLayoutObservation:
+                def __init__(self, store, members):
                     self.store = store
-                    self.expected = [member.identity for member in members]
-                    self.next_index = 0
-                    self.dx = float(dx)
-                    self.dy = float(dy)
+                    self.members = list(members)
 
-                def applyMobject(self, member):
-                    assert member.identity == self.expected[self.next_index]
-                    member.shift(self.dx, self.dy)
-                    self.store.applied.append(member.identity)
-                    self.next_index += 1
-
-                def finish(self):
-                    assert self.next_index == len(self.expected)
+                def _apply(self, dx, dy):
+                    for member in self.members:
+                        member.shift(float(dx), float(dy))
+                        self.store.applied.append(member.identity)
                     self.store.finishes += 1
 
 
-            class FakeLayoutSession:
-                def __init__(self, store):
-                    self.store = store
-                    self.members = []
-
-                def includeMobject(self, member):
-                    self.members.append(member)
-
                 def nextToPoint(self, *args):
                     self.store.next_to_point.append(tuple(float(value) for value in args))
-                    return FakeTranslation(self.store, self.members, 2.0, -1.0)
+                    return self._apply(2.0, -1.0)
 
                 def nextToFamily(self, target, *args):
                     self.store.next_to_family.append(tuple(float(value) for value in args))
                     assert len(target.members) == 1
-                    return FakeTranslation(self.store, self.members, 3.0, 0.5)
+                    return self._apply(3.0, 0.5)
 
                 def alignToPoint(self, *args):
                     self.store.align_to_point.append(tuple(float(value) for value in args))
-                    return FakeTranslation(self.store, self.members, 0.0, 4.0)
+                    return self._apply(0.0, 4.0)
 
                 def alignToFamily(self, target, *args):
                     self.store.align_to_family.append(tuple(float(value) for value in args))
                     assert len(target.members) == 1
-                    return FakeTranslation(self.store, self.members, -2.0, 0.0)
+                    return self._apply(-2.0, 0.0)
 
                 def criticalX(self, direction_x, direction_y):
                     raise AssertionError("Python must not derive family relative-placement deltas")
@@ -114,40 +100,20 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                 def __init__(self, store):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.members = []
 
-                def layoutSession(self):
-                    return FakeLayoutSession(self.store)
+                def layout(self):
+                    return FakeLayoutObservation(self.store, [self.store.entities[key] for key in self.members])
 
                 @property
                 def memberCount(self):
                     return len(self.members)
 
-                def addMobject(self, member):
-                    if member.identity in self.members:
-                        return False
-                    self.members.append(member.identity)
-                    return True
-
-                def addFamily(self, member):
-                    if member.identity in self.members:
-                        return False
-                    self.members.append(member.identity)
-                    return True
-
-                def removeMobject(self, member):
-                    if member.identity not in self.members:
-                        return False
-                    self.members.remove(member.identity)
-                    return True
-
-                def removeFamily(self, member):
-                    return self.removeMobject(member)
-
-
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
+                    self.entities = {}
                     self.next_to_point = []
                     self.next_to_family = []
                     self.align_to_point = []
@@ -170,7 +136,8 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
             store = FakeStore()
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, store.createMobject)
-            handles._create_family_handle = store.createFamily
+            import _typed_family_test_support as _family_test
+            _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
             handles.install()
 
             from noon import Circle, RIGHT, Square, UP, VGroup

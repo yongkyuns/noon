@@ -1,166 +1,83 @@
-use noon_core::{
-    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, Style, TrackTiming, Transform2D, Vec2,
-};
-use noon_ir::encode_scene;
-use noon_web::{playback_snapshot_json, scene_snapshot_json, verify_scene_replay};
+use noon::ExecutionSession;
+use noon_web::{verify_scene_replay, ReplayVerificationError};
 
-fn build_scene() -> SceneDefinition {
-    let mut scene = SceneDefinition::new();
+type SessionFactory = fn() -> Result<ExecutionSession, String>;
 
-    let circle = scene.add(GeometryRef::circle(0.75));
-    scene
-        .animate_position(
-            circle,
-            Vec2::new(-2.0, -1.0),
-            Vec2::new(3.0, 1.5),
-            TrackTiming::new(0.25, 2.5, Easing::Smooth),
-        )
-        .unwrap();
-    scene
-        .animate_scalar(
-            circle,
-            noon_core::Property::Opacity,
-            1.0,
-            0.2,
-            TrackTiming::new(0.5, 1.75, Easing::ThereAndBack),
-        )
-        .unwrap();
-
-    let rectangle = scene.add(GeometryRef::rectangle(2.0, 1.0));
-    let from = ObjectSnapshot::new(GeometryRef::rectangle(2.0, 1.0));
-    let to = ObjectSnapshot::new(GeometryRef::rectangle(4.0, 2.0))
-        .shift(Vec2::new(-1.5, 2.0))
-        .rotate_by(0.8)
-        .set_opacity(0.55);
-    scene
-        .animate_transform(
-            rectangle,
-            from,
-            to,
-            TrackTiming::new(1.0, 2.0, Easing::EaseInOutCubic),
-        )
-        .unwrap();
-
-    let line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
-    scene
-        .animate_reveal(line, 0.0, 1.0, TrackTiming::new(0.0, 1.2, Easing::Linear))
-        .unwrap();
-
-    scene
+fn sessions() -> [SessionFactory; 2] {
+    [
+        noon::example_scenes::exact_property_tracks::session,
+        noon::example_scenes::specialized_geometry::session,
+    ]
 }
 
-fn scene_json(scene: &SceneDefinition) -> String {
-    encode_scene(scene).expect("test scene encodes")
+fn assert_same_execution(actual: &ExecutionSession, expected: &ExecutionSession) {
+    assert_eq!(actual.painter_order(), expected.painter_order());
+    // Compare typed runtime data directly, including derived renderer transforms,
+    // geometry, presence/reveal/morph channels and compact family animation state.
+    assert_eq!(actual.frame(), expected.frame());
 }
 
 #[test]
-fn direct_seek_incremental_playback_and_backward_scrub_have_identical_frames() {
-    let json = scene_json(&build_scene());
-    let targets = [0.0, 0.25, 0.499, 0.5, 1.0, 1.2, 1.75, 2.25, 2.75, 3.0, 4.0];
+fn typed_direct_seek_forward_playback_and_backward_scrub_have_identical_frames() {
+    for build in sessions() {
+        let mut direct = build().unwrap();
+        let mut forward = build().unwrap();
+        let mut rewind = build().unwrap();
+        for target in [0.0, 0.25, 0.499, 0.5, 1.0, 1.2, 1.75, 2.0, 2.25, 3.0, 4.0] {
+            direct.seek(target).unwrap();
+            forward.seek(0.0).unwrap();
+            for step in 0..37 {
+                forward.advance_to(target * f64::from(step) / 37.0).unwrap();
+            }
+            forward.advance_to(target).unwrap();
+            assert_same_execution(&forward, &direct);
 
-    for &target in &targets {
-        let direct = scene_snapshot_json(&json, target).unwrap();
-
-        let mut forward = Vec::new();
-        let steps = 37;
-        for step in 0..=steps {
-            forward.push(target * step as f64 / steps as f64);
+            for time in [0.1, 1.3, 2.9, 0.7, 3.4, target] {
+                rewind.advance_to(time).unwrap();
+            }
+            assert_same_execution(&rewind, &direct);
         }
-        let incremental = playback_snapshot_json(&json, &forward).unwrap();
-        assert_eq!(
-            incremental, direct,
-            "incremental playback diverged at target={target}"
-        );
-
-        let rewind = playback_snapshot_json(&json, &[0.1, 1.3, 2.9, 0.7, 3.4, target]).unwrap();
-        assert_eq!(rewind, direct, "backward scrub diverged at target={target}");
     }
 }
 
 #[test]
-fn batched_replay_verifier_preserves_full_direct_forward_and_rewind_contract() {
-    let json = scene_json(&build_scene());
-    let targets = [0.0, 0.25, 0.499, 0.5, 1.0, 1.2, 1.75, 2.25, 2.75, 3.0, 4.0];
-
-    verify_scene_replay(&json, &targets, 38).unwrap();
+fn remaining_external_replay_verifier_validates_workloads_before_decoding() {
+    assert!(matches!(
+        verify_scene_replay("", &[0.5], 1),
+        Err(ReplayVerificationError::InvalidForwardSampleCount(1))
+    ));
+    assert!(matches!(
+        verify_scene_replay("", &[f64::NAN], 38),
+        Err(ReplayVerificationError::NonFiniteTarget { index: 0, .. })
+    ));
 }
 
 #[test]
-fn batched_replay_verifier_rejects_invalid_workloads_before_evaluation() {
-    let json = scene_json(&build_scene());
-
-    assert!(verify_scene_replay(&json, &[0.5], 1).is_err());
-    assert!(verify_scene_replay(&json, &[f64::NAN], 38).is_err());
-}
-
-#[test]
-fn repeated_evaluation_is_stable_at_boundaries_and_extreme_valid_times() {
-    let json = scene_json(&build_scene());
-    for time in [
-        0.0,
-        f64::EPSILON,
-        0.25,
-        0.5,
-        1.0,
-        1.2,
-        2.25,
-        2.75,
-        3.0,
-        1.0e-9,
-        1.0e6,
-    ] {
-        let first = scene_snapshot_json(&json, time).unwrap();
-        let second = scene_snapshot_json(&json, time).unwrap();
-        assert_eq!(first, second, "fresh evaluation drifted at time={time}");
-
-        let replayed = playback_snapshot_json(&json, &[time, time, time]).unwrap();
-        assert_eq!(replayed, first, "same-frame replay drifted at time={time}");
+fn typed_repeated_evaluation_is_stable_at_boundaries_and_extreme_valid_times() {
+    for build in sessions() {
+        for time in [
+            0.0,
+            f64::EPSILON,
+            0.25,
+            0.5,
+            1.0,
+            1.2,
+            2.0,
+            2.25,
+            3.0,
+            1.0e-9,
+            1.0e6,
+        ] {
+            let mut direct = build().unwrap();
+            let mut repeated = build().unwrap();
+            direct.seek(time).unwrap();
+            for _ in 0..3 {
+                repeated.advance_to(time).unwrap();
+                assert_same_execution(&repeated, &direct);
+            }
+            repeated.take_frame_changes();
+            repeated.advance_to(time).unwrap();
+            assert!(repeated.take_frame_changes().is_empty());
+        }
     }
-}
-
-#[test]
-fn normalized_snapshot_omits_execution_bookkeeping_but_preserves_render_observables() {
-    let mut scene = build_scene();
-    let first = scene.objects()[0].id;
-    scene.object_mut(first).unwrap().transform = Transform2D {
-        translation: Vec2::new(0.5, -0.25),
-        rotation: 0.1,
-        scale: Vec2::new(1.1, 0.9),
-    };
-    scene.object_mut(first).unwrap().style = Style {
-        opacity: 0.9,
-        stroke_width: 1.25,
-        stroke_width_mode: Default::default(),
-        ..Style::default()
-    };
-    let json = scene_json(&scene);
-    let snapshot: serde_json::Value =
-        serde_json::from_str(&scene_snapshot_json(&json, 1.2).unwrap())
-            .expect("snapshot is valid JSON");
-
-    assert_eq!(snapshot["time"], 1.2);
-    let objects = snapshot["objects"].as_array().expect("objects array");
-    assert_eq!(objects.len(), 3);
-    for object in objects {
-        assert!(object.get("id").is_some());
-        let content = object
-            .get("content")
-            .and_then(serde_json::Value::as_object)
-            .expect("shared object content");
-        assert_eq!(
-            content.get("kind").and_then(serde_json::Value::as_str),
-            Some("geometry")
-        );
-        assert!(content.get("geometry").is_some());
-        assert!(object.get("transform").is_some());
-        assert!(object.get("style").is_some());
-        assert!(object.get("appearance").is_some());
-        assert!(object.get("present").is_some());
-        assert!(object.get("reveal").is_some());
-        assert!(object.get("morph").is_some());
-        assert!(object.get("render_geometry").is_some());
-    }
-    assert!(snapshot.get("groups").is_none());
-    assert!(snapshot.get("cursors").is_none());
-    assert!(snapshot.get("cache").is_none());
 }

@@ -13,7 +13,7 @@ fn family_surrounding_rectangle_uses_the_authoritative_bounds_union() {
     let scene = Scene::new();
     let first = shifted_rectangle(&scene, 2.0, 2.0, -2.0, 0.0);
     let second = shifted_rectangle(&scene, 4.0, 1.0, 3.0, 2.0);
-    let family = scene.family(&[&first, &second]).unwrap();
+    let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
     let bounds = family.layout_bounds().unwrap().unwrap();
 
     let surround = Mobject::from_manim_geometry(
@@ -32,7 +32,7 @@ fn family_background_rectangle_preserves_union_style() {
     let scene = Scene::new();
     let first = shifted_rectangle(&scene, 1.0, 2.0, -1.0, -1.0);
     let second = shifted_rectangle(&scene, 3.0, 1.0, 2.0, 2.0);
-    let family = scene.family(&[&first, &second]).unwrap();
+    let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
     let bounds = family.layout_bounds().unwrap().unwrap();
 
     let background = Mobject::from_manim_geometry(
@@ -60,7 +60,7 @@ fn one_leaf_family_matcher_matches_the_object_bounds_route() {
     let target = shifted_rectangle(&scene, 4.0, 2.0, 1.0, -2.0);
     let object_bounds = target.layout_bounds().unwrap().unwrap();
     let family_bounds = scene
-        .family(&[&target])
+        .family(&[(&target).into()])
         .unwrap()
         .layout_bounds()
         .unwrap()

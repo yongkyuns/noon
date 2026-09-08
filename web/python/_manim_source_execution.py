@@ -15,9 +15,40 @@ from __future__ import annotations
 import ast
 import copy
 import inspect
+from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from types import CodeType, FunctionType, MethodType
 
 BARRIER_GLOBAL = "_noon_await_source_barrier"
+
+
+@dataclass
+class _SourceInvocation:
+    export_document: bool
+    cleanup: ExitStack
+
+
+_SOURCE_INVOCATION: ContextVar[_SourceInvocation | None] = ContextVar(
+    "noon_source_invocation", default=None
+)
+
+
+def current_source_invocation():
+    return _SOURCE_INVOCATION.get()
+
+
+@contextmanager
+def authoring_source_scope(*, export_document: bool = False):
+    """Scope top-level host execution and restore continuation flags on exit.
+
+    Scene state and timing stay in Rust. The scope carries invocation mode and
+    host cleanup only; construct dispatch retains its portable/async handling.
+    """
+    with ExitStack() as cleanup:
+        token = _SOURCE_INVOCATION.set(_SourceInvocation(export_document, cleanup))
+        cleanup.callback(_SOURCE_INVOCATION.reset, token)
+        yield
 
 # Calls on the scene that cannot suspend the authoring continuation. Unknown
 # methods (including super().construct()) are not silently converted.

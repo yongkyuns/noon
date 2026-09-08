@@ -55,26 +55,17 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
                         stroke[\"alpha\"] = float(opacity)
 
 
-            class FakeLayoutSession:
+            class FakeLayoutObservation:
                 def __init__(self, store):
                     self.store = store
-                    self.members = []
-                    store.layout_sessions += 1
-
-                def includeMobject(self, member):
-                    self.members.append(member.identity)
-
-                def _complete(self):
-                    assert len(self.members) == 2
+                    store.layout_queries += 1
 
                 def criticalX(self, direction_x, direction_y):
                     del direction_y
-                    self._complete()
                     return -3.0 if direction_x < 0 else (5.0 if direction_x > 0 else 1.0)
 
                 def criticalY(self, direction_x, direction_y):
                     del direction_x
-                    self._complete()
                     return -2.0 if direction_y < 0 else (4.0 if direction_y > 0 else 1.0)
 
 
@@ -84,46 +75,17 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
                     self.identity = store.allocate()
                     self.members = []
 
-                def layoutSession(self):
-                    return FakeLayoutSession(self.store)
+                def layout(self):
+                    return FakeLayoutObservation(self.store)
 
                 @property
                 def memberCount(self):
                     return len(self.members)
 
-                def _add(self, member):
-                    key = member.identity
-                    if key in self.members:
-                        return False
-                    self.members.append(key)
-                    return True
-
-                def addMobject(self, member):
-                    assert member.store is self.store
-                    return self._add(member)
-
-                def addFamily(self, member):
-                    assert member.store is self.store
-                    return self._add(member)
-
-                def _remove(self, member):
-                    key = member.identity
-                    if key not in self.members:
-                        return False
-                    self.members.remove(key)
-                    return True
-
-                def removeMobject(self, member):
-                    return self._remove(member)
-
-                def removeFamily(self, member):
-                    return self._remove(member)
-
-
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
-                    self.layout_sessions = 0
+                    self.layout_queries = 0
 
                 def allocate(self):
                     value = self.next_identity
@@ -140,7 +102,8 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             store = FakeStore()
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, store.createMobject)
-            handles._create_family_handle = store.createFamily
+            import _typed_family_test_support as _family_test
+            _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
             handles.install()
 
             from noon import Circle, Square, VGroup
@@ -164,6 +127,15 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             assert list(family) == [second]
             assert family._semantic_family_handle.memberCount == 1
 
+            family._semantic_family_handle.reject_membership = True
+            try:
+                family.add(first, second)
+                raise AssertionError("expected shared rejection")
+            except RuntimeError:
+                pass
+            assert list(family) == [second]
+            family._semantic_family_handle.reject_membership = False
+
             nested = VGroup(first)
             outer = VGroup(nested, second)
             assert outer._semantic_family_handle.memberCount == 2
@@ -173,7 +145,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             assert center.x == 1.0 and center.y == 1.0
             assert outer.width == 8.0
             assert outer.height == 6.0
-            assert store.layout_sessions == 3
+            assert store.layout_queries == 3
 
             clone = outer.copy()
             assert clone is not outer
@@ -181,6 +153,46 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
             assert clone._semantic_family_handle.memberCount == 2
             assert clone[0] is not nested
             assert clone[1] is not second
+
+            aliased = VGroup(first, nested)
+            copied_alias = aliased.copy()
+            assert copied_alias[0] is copied_alias[1][0]
+
+            class Named(VGroup):
+                constructions = 0
+                def __init__(self, child, label):
+                    Named.constructions += 1
+                    super().__init__(child)
+                    self.child = child
+                    self.label = label
+
+            named = Named(first, "label")
+            named_copy = named.copy()
+            assert type(named_copy) is Named
+            assert Named.constructions == 1
+            assert named_copy.child is named_copy[0]
+            assert named_copy.child is not first
+            assert named_copy.label == "label"
+
+            first.save_state()
+            saved_copy = aliased.copy()
+            assert saved_copy[0].saved_state is not first.saved_state
+            named.related = {"state": first.saved_state, "self": named}
+            related_copy = named.copy()
+            assert related_copy.related["state"] is related_copy[0].saved_state
+            assert related_copy.related["self"] is related_copy
+
+            class Uncopyable:
+                def __deepcopy__(self, memo):
+                    raise ValueError("metadata copy refused")
+            named.bad = Uncopyable()
+            before = store.next_identity
+            try:
+                named.copy()
+                raise AssertionError("expected metadata failure")
+            except ValueError:
+                pass
+            assert store.next_identity == before
             """
         )
         completed = subprocess.run(

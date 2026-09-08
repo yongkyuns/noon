@@ -17,6 +17,10 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 config = json.loads(path.read_text())
+# Synthetic historical imports qualify the mechanism after real consumers vanish.
+config['rewritten_imports']['crates/noon-web/examples/import_relocation_fixture.rs'] = {
+    'noon::legacy::Elbow': 1, 'noon::legacy::IntoSnapshot': 1,
+}
 config.pop('regression_fixtures', None)
 path.write_text(json.dumps(config, indent=2) + '\n')
 PY
@@ -97,6 +101,7 @@ reset_to_base() {
   git reset -q --hard "$BASE"
   rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs src/scene_player_spread_probe.rs src/deleted_legacy_web_probe.rs src/duplicate_clock_probe.rs src/legacy_clock_probe.rs
   rm -f web/browser-smoke.js crates/noon-web/src/duplicate_clock.rs crates/noon-web/src/legacy/clock.rs
+  rm -f crates/noon/src/lib.rs crates/noon-web/src/authoring_mobject.rs
   rm -rf crates/noon-web/src/retained_execution_resources crates/noon-web/src/retained_resource_transport
   rm -f crates/noon-web/src/retained_execution_resources.rs crates/noon-web/src/retained_resource_transport.rs scripts/retained-dynamic-stress-perf.mjs
   rmdir crates/noon-web/src/legacy 2>/dev/null || true
@@ -306,13 +311,13 @@ fi
 # imports. It grants no new file, alias, glob, or non-import namespace access.
 reset_to_base
 mkdir -p crates/noon-web/src crates/noon-web/examples crates/noon/src/legacy
-cat > crates/noon-web/examples/manim_elbow_oracle.rs <<'EOF'
+cat > crates/noon-web/examples/import_relocation_fixture.rs <<'EOF'
 use noon::{Elbow, IntoSnapshot, ReactiveTimelineScene};
 EOF
-git add crates/noon-web/examples/manim_elbow_oracle.rs
+git add crates/noon-web/examples/import_relocation_fixture.rs
 git commit -qm "existing unqualified import consumer"
 IMPORT_BASE="$(git rev-parse HEAD)"
-cat > crates/noon-web/examples/manim_elbow_oracle.rs <<'EOF'
+cat > crates/noon-web/examples/import_relocation_fixture.rs <<'EOF'
 use noon::legacy::{
     Elbow,
     IntoSnapshot,
@@ -321,7 +326,7 @@ use noon::ReactiveTimelineScene;
 EOF
 bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null
 for import in 'use noon::legacy::{Elbow as Hidden, IntoSnapshot};' 'use noon::legacy::*;' 'use noon::legacy::{Elbow, Unknown};' 'use noon::{legacy::{Elbow as Hidden, IntoSnapshot}};' 'use noon::legacy;' 'use noon::{legacy};' 'use noon::legacy as old;' 'use noon::r#legacy::Elbow;' 'use noon::legacy::Elbow @ unsupported;'; do
-  printf '%s\n' "$import" > crates/noon-web/examples/manim_elbow_oracle.rs
+  printf '%s\n' "$import" > crates/noon-web/examples/import_relocation_fixture.rs
   if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
     echo "architecture ratchet test failed: accepted unreviewed import $import" >&2
     exit 1
@@ -335,60 +340,19 @@ if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
 fi
 rm crates/noon-web/src/new_legacy_consumer.rs
 
-# The initial codec allowance requires deleting the old snapshot authority.
+# Deleted adapters must not return with spaced or raw namespace spellings.
 reset_to_base
-mkdir -p crates/noon/src/legacy
-cat > crates/noon-web/src/authoring_mobject.rs <<'EOF'
-pub struct FrontendMobjectHandle { snapshot: ObjectSnapshot }
-EOF
-git add crates/noon-web/src/authoring_mobject.rs
-git commit -qm "old snapshot handle before relocation"
-RELOCATION_BASE="$(git rev-parse HEAD)"
-cat > crates/noon/src/legacy/semantic_snapshot.rs <<'EOF'
-use noon_core::ObjectSnapshot;
-pub fn export_mobject_snapshot() -> ObjectSnapshot { todo!() }
-EOF
-if bash scripts/architecture-ratchet.sh "$RELOCATION_BASE" >/dev/null 2>&1; then
-  echo "architecture ratchet test failed: accepted relocation retaining old authority" >&2
-  exit 1
-fi
-printf 'pub struct WasmAuthoringMobjectHandle { handle: noon::Mobject }\n' > crates/noon-web/src/authoring_mobject.rs
-bash scripts/architecture-ratchet.sh "$RELOCATION_BASE" >/dev/null
-printf 'impl noon::Mobject { pub fn snapshot() {} }\n' >> crates/noon/src/legacy/semantic_snapshot.rs
-if bash scripts/architecture-ratchet.sh "$RELOCATION_BASE" >/dev/null 2>&1; then
-  echo "architecture ratchet test failed: accepted inherent snapshot API in codec" >&2
-  exit 1
-fi
-sed -i.bak '$d' crates/noon/src/legacy/semantic_snapshot.rs
-rm crates/noon/src/legacy/semantic_snapshot.rs.bak
-# Direct calls must obey the same API/count inventory despite whitespace or
-# raw-identifier spellings of a Rust namespace.
-for call in 'noon :: legacy :: NewApi();' 'noon::r#legacy::NewApi();'; do
-  printf 'pub fn probe() { %s }\n' "$call" >> crates/noon-web/src/authoring_mobject.rs
-  if bash scripts/architecture-ratchet.sh "$RELOCATION_BASE" >/dev/null 2>&1; then
-    echo "architecture ratchet test failed: accepted unreviewed spaced/raw adapter call" >&2
+for call in 'noon :: legacy :: NewApi();' 'noon::r#legacy::NewApi();' 'noon :: legacy :: export_mobject_snapshot();'; do
+  printf 'pub fn probe() { %s }\n' "$call" > crates/noon-web/src/authoring_mobject.rs
+  if bash scripts/architecture-ratchet.sh "$BASE" >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted deleted spaced/raw adapter call" >&2
     exit 1
   fi
-  sed -i.bak '$d' crates/noon-web/src/authoring_mobject.rs
-  rm crates/noon-web/src/authoring_mobject.rs.bak
 done
-git add crates/noon/src/legacy/semantic_snapshot.rs crates/noon-web/src/authoring_mobject.rs
-git commit -qm "bounded codec relocation"
-MOVED_BASE="$(git rev-parse HEAD)"
-printf 'pub fn probe() { noon :: legacy :: export_mobject_snapshot(); }\n' >> crates/noon-web/src/authoring_mobject.rs
-if bash scripts/architecture-ratchet.sh "$MOVED_BASE" >/dev/null 2>&1; then
-  echo "architecture ratchet test failed: spaced approved call bypassed zero baseline budget" >&2
-  exit 1
-fi
-sed -i.bak '$d' crates/noon-web/src/authoring_mobject.rs
-rm crates/noon-web/src/authoring_mobject.rs.bak
-printf 'pub fn export_mobject_snapshot() {}\n' > crates/noon/src/legacy/semantic_snapshot.rs
-git add crates/noon/src/legacy/semantic_snapshot.rs
-git commit -qm "shrink codec debt"
-SHRUNK_BASE="$(git rev-parse HEAD)"
-printf 'use noon_core::ObjectSnapshot;\n' >> crates/noon/src/legacy/semantic_snapshot.rs
-if bash scripts/architecture-ratchet.sh "$SHRUNK_BASE" >/dev/null 2>&1; then
-  echo "architecture ratchet test failed: accepted regrowth under initial codec cap" >&2
+reset_to_base
+printf 'pub mod legacy {}\n' > crates/noon/src/lib.rs
+if bash scripts/architecture-ratchet.sh "$BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted inline legacy namespace" >&2
   exit 1
 fi
 

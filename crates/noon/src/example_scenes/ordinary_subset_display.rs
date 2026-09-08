@@ -81,14 +81,14 @@ pub fn program() -> Result<LiveProgram<OrdinarySubsetDisplay>, String> {
         colored_circle(&scene, 1.0, -0.7, Color::YELLOW)?,
     ];
     let increasing = scene.family(&[
-        &increasing_members[0],
-        &increasing_members[1],
-        &increasing_members[2],
+        (&increasing_members[0]).into(),
+        (&increasing_members[1]).into(),
+        (&increasing_members[2]).into(),
     ])?;
     let one_by_one = scene.family(&[
-        &one_by_one_members[0],
-        &one_by_one_members[1],
-        &one_by_one_members[2],
+        (&one_by_one_members[0]).into(),
+        (&one_by_one_members[1]).into(),
+        (&one_by_one_members[2]).into(),
     ])?;
     increasing.prepare_subset_display()?;
     one_by_one.prepare_subset_display()?;

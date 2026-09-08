@@ -1,70 +1,9 @@
 {
   "deletion_issue": "#959",
-  "rewritten_imports": {
-    "crates/noon-web/examples/manim_elbow_oracle.rs": {
-      "noon::legacy::Elbow": 1,
-      "noon::legacy::IntoSnapshot": 1
-    },
-    "crates/noon-web/src/authoring_facade.rs": {
-      "noon::legacy::Animate": 1,
-      "noon::legacy::Animation": 1,
-      "noon::legacy::Circle": 1,
-      "noon::legacy::Create": 1,
-      "noon::legacy::FadeIn": 1,
-      "noon::legacy::FadeOut": 1,
-      "noon::legacy::IntoSnapshot": 1,
-      "noon::legacy::Line": 1,
-      "noon::legacy::Mobject": 1,
-      "noon::legacy::Rectangle": 1,
-      "noon::legacy::Rotate": 1,
-      "noon::legacy::Scene": 1,
-      "noon::legacy::Square": 1,
-      "noon::legacy::Transform": 1
-    },
-    "crates/noon/examples/cross_language_parity.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/examples/manim_gallery_moving_around.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/examples/manim_quickstart_equivalents.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/tests/cross_geometry_transform.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/tests/manim_gallery_moving_around.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/tests/manim_style_defaults.rs": {
-      "noon::legacy::prelude::*": 1
-    },
-    "crates/noon/tests/set_fill_semantics.rs": {
-      "noon::legacy::Circle": 1,
-      "noon::legacy::IntoSnapshot": 1,
-      "noon::legacy::Scene": 1,
-      "noon::legacy::GREEN": 1,
-      "noon::legacy::PINK": 1,
-      "noon::legacy::RED": 1
-    }
-  },
+  "rewritten_imports": {},
   "token_budgets": {
-    "crates/noon/src/legacy/semantic_snapshot.rs": {
-      "ObjectSnapshot": 6,
-      "from_legacy": 5
-    },
-    "crates/noon-web/src/authoring_facade.rs": {
-      "ObjectSnapshot": 3,
-      "noon::legacy": 2
-    },
-    "crates/noon-web/src/authoring_mobject.rs": {
-      "ObjectSnapshot": 3,
-      "noon::legacy": 51
-    },
     "crates/noon-web/src/canonical_authoring_scene.rs": {
-      "ObjectSnapshot": 12,
-      "SceneSpec": 3,
-      "noon::legacy": 3
+      "SceneSpec": 3
     },
     "crates/noon-core/src/patch.rs": {
       "ObjectDefinition": 12,
@@ -108,9 +47,5 @@
         "SceneSpec": 1
       }
     }
-  },
-  "adapter_call_sites": [
-    "crates/noon-web/src/authoring_mobject.rs",
-    "crates/noon-web/src/canonical_authoring_scene.rs"
-  ]
+  }
 }

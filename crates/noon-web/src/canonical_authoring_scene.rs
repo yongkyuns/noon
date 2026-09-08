@@ -34,6 +34,48 @@ struct SceneMembershipBatch {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
+impl SceneMembershipBatch {
+    fn create_family(
+        &self,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    ) -> Result<noon::MobjectFamily, String> {
+        if self.kind != SceneMembershipBatchKind::Add {
+            return Err("family creation requires an add batch".into());
+        }
+        noon::MobjectFamily::create(store, &self.family_members()?)
+    }
+
+    fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, String> {
+        let members = self.family_members()?;
+        match self.kind {
+            SceneMembershipBatchKind::Add => family.add_many(&members),
+            SceneMembershipBatchKind::Remove => family.remove_many(&members),
+            _ => Err("family membership requires add or remove".into()),
+        }
+    }
+
+    fn family_members(&self) -> Result<Vec<noon::MobjectFamilyMember<'_>>, String> {
+        if !self.bindings.is_empty() {
+            return Err("family membership does not accept scene binding reservations".into());
+        }
+        self.members
+            .iter()
+            .map(|member| match member {
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle,
+                } => Ok(handle.into()),
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: Some(_),
+                    ..
+                } => Err("family membership does not accept wrapper binding IDs".into()),
+                OwnedSceneMembershipMember::Family(family) => Ok(family.into()),
+            })
+            .collect()
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone)]
 enum OrdinaryCompositionChild {
     FocusOn {
@@ -144,6 +186,11 @@ enum OrdinaryCompositionChild {
         options: noon_core::AnimationOptions,
     },
     Create {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        options: noon_core::AnimationOptions,
+    },
+    Uncreate {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
         options: noon_core::AnimationOptions,
@@ -729,22 +776,6 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn declare_tracker_play(
-        &mut self,
-        tracker: &noon::ValueTracker,
-        target: f64,
-        duration: f64,
-        rate_function: noon_core::RateFunction,
-    ) -> Result<f64, String> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .play_value(tracker, target)
-            .rate_func(rate_function)
-            .run_time(duration)?;
-        Ok(self.scene.time())
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
     fn tracker_value(&mut self, tracker: &noon::ValueTracker) -> Result<f64, String> {
         if self.live_player_transferred {
             return Err("semantic execution session is running in the semantic engine".into());
@@ -768,54 +799,6 @@ impl CanonicalAuthoringScene {
             Some(player) => player.live_set_signal(tracker, value),
             None => self.scene.set_value(tracker, value),
         }
-    }
-
-    /// Atomically activate one ordinary scalar tracker play without advancing it.
-    /// The one retained execution player owns the segment and any required callback
-    /// barriers; Python receives only the shared segment endpoint.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_value_tracker_play(
-        &mut self,
-        tracker: &noon::ValueTracker,
-        target: f64,
-        duration: f64,
-        rate_function: noon_core::RateFunction,
-    ) -> Result<f64, String> {
-        if !tracker.is_in_store(self.scene.store()) {
-            return Err("ValueTracker belongs to another scene store".into());
-        }
-        self.scene
-            .store()
-            .borrow()
-            .semantic_signal_state(tracker.node_id())
-            .map_err(|error| error.to_string())?;
-        if !target.is_finite() || target.abs() > f32::MAX as f64 {
-            return Err("ValueTracker target must fit the runtime scalar range".into());
-        }
-        if !duration.is_finite() || duration <= 0.0 {
-            return Err("ValueTracker duration must be finite and positive".into());
-        }
-        if self.live_player.is_none() {
-            if self.scene.time() != 0.0 {
-                return Err(
-                    "ordinary ValueTracker play cannot follow pre-execution canonical timing"
-                        .into(),
-                );
-            }
-            self.prepare_local_player_for_run()?;
-            let mut player = self.build_live_player(duration.max(1.0), 0)?;
-            let end_time = player.live_declare_and_activate_value_tracker(
-                tracker,
-                target,
-                duration,
-                rate_function,
-            )?;
-            self.live_player = Some(player);
-            self.live_player_returned = false;
-            return Ok(end_time);
-        }
-        self.active_live_player()?
-            .live_declare_and_activate_value_tracker(tracker, target, duration, rate_function)
     }
 
     /// The authored scalar-track endpoint used for handoff before a player exists.
@@ -901,296 +884,6 @@ impl CanonicalAuthoringScene {
         self.scene.declare_transform_to(source, target, options)
     }
 
-    /// Run one ordinary leaf fade through the retained live session.
-    ///
-    /// Rust owns lifecycle membership, appearance tracks, activation, and
-    /// completion. The object ID only records this wrapper's derived binding
-    /// after the shared fade has succeeded; it is never a semantic identity.
-    #[cfg(target_arch = "wasm32")]
-    fn ordinary_play_fade(
-        &mut self,
-        id: ObjectId,
-        target: &noon::Mobject,
-        direction: SemanticFadeDirection,
-        endpoint: noon::FadeEndpoint,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        let end_time = self.begin_ordinary_fade(id, target, direction, endpoint, options)?;
-        let player = self.active_live_player()?;
-        player.live_advance_segment_to(end_time)?;
-        player.live_complete_segment()?;
-        player
-            .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
-    }
-
-    /// Run one ordinary single-leaf Create through the retained live session.
-    #[cfg(target_arch = "wasm32")]
-    fn ordinary_play_create(
-        &mut self,
-        id: ObjectId,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        let end_time = self.begin_ordinary_create(id, target, options)?;
-        let player = self.active_live_player()?;
-        player.live_advance_segment_to(end_time)?;
-        player.live_complete_segment()?;
-        player
-            .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
-    }
-
-    /// Run one ordinary single-leaf Uncreate through the retained live session.
-    #[cfg(target_arch = "wasm32")]
-    fn ordinary_play_uncreate(
-        &mut self,
-        id: ObjectId,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        let end_time = self.begin_ordinary_uncreate(id, target, options)?;
-        let player = self.active_live_player()?;
-        player.live_advance_segment_to(end_time)?;
-        player.live_complete_segment()?;
-        player
-            .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
-    }
-
-    /// Atomically bind, introduce, and activate one detached leaf's Create reveal.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_create(
-        &mut self,
-        id: ObjectId,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
-            return Err("ordinary Create mobject belongs to another authoring store".into());
-        }
-        target.validate()?;
-        let node = target.node_id();
-        if self.bindings.contains_key(&id) || self.identities.contains_key(&node) {
-            return Err(format!("canonical object {} is already bound", id.get()));
-        }
-        if self.live_player.is_none() && self.scene.time() != 0.0 {
-            return Err("ordinary Create cannot follow pre-execution canonical timing".into());
-        }
-        let bootstrap_duration = self
-            .live_handoff_duration()
-            .unwrap_or_else(|| self.scene.time())
-            .max(options.run_time.unwrap_or(1.0));
-        let end_time = if self.live_player.is_none() {
-            self.prepare_local_player_for_run()?;
-            let mut player = self.build_live_player(bootstrap_duration, 0)?;
-            let end_time = player.live_declare_and_activate_create(target, options)?;
-            self.live_player = Some(player);
-            self.live_player_returned = false;
-            end_time
-        } else {
-            self.active_live_player()?
-                .live_declare_and_activate_create(target, options)?
-        };
-        self.bindings.insert(id, node);
-        self.identities.insert(node, id);
-        Ok(end_time)
-    }
-
-    /// Atomically activate one detached or direct-bound leaf's reverse reveal.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_uncreate(
-        &mut self,
-        id: ObjectId,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
-            return Err("ordinary Uncreate mobject belongs to another authoring store".into());
-        }
-        target.validate()?;
-        let node = target.node_id();
-        let new_binding = match (self.bindings.get(&id), self.identities.get(&node)) {
-            (None, None) => true,
-            (Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => false,
-            _ => return Err(format!("canonical object {} is already bound", id.get())),
-        };
-        if self.live_player.is_none() && self.scene.time() != 0.0 {
-            return Err("ordinary Uncreate cannot follow pre-execution canonical timing".into());
-        }
-        let bootstrap_duration = self
-            .live_handoff_duration()
-            .unwrap_or_else(|| self.scene.time())
-            .max(options.run_time.unwrap_or(1.0));
-        let end_time = if self.live_player.is_none() {
-            self.prepare_local_player_for_run()?;
-            let mut player = self.build_live_player(bootstrap_duration, 0)?;
-            let end_time = player.live_declare_and_activate_uncreate(target, options)?;
-            self.live_player = Some(player);
-            self.live_player_returned = false;
-            end_time
-        } else {
-            self.active_live_player()?
-                .live_declare_and_activate_uncreate(target, options)?
-        };
-        if new_binding {
-            self.bindings.insert(id, node);
-            self.identities.insert(node, id);
-        }
-        Ok(end_time)
-    }
-
-    /// Run one flat parallel Create through the retained live session.
-    #[cfg(target_arch = "wasm32")]
-    fn ordinary_play_create_parallel(
-        &mut self,
-        children: &[(ObjectId, noon::Mobject, noon_core::AnimationOptions)],
-        play_options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        let end_time = self.begin_ordinary_create_parallel(children, play_options)?;
-        let player = self.active_live_player()?;
-        player.live_advance_segment_to(end_time)?;
-        player.live_complete_segment()?;
-        player
-            .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
-    }
-
-    /// Atomically bind detached leaves and activate one flat parallel Create segment.
-    ///
-    /// Derived wrapper bindings are recorded only after the shared session accepted the
-    /// complete transaction. The candidate owns no semantic identity, timing, or runtime state.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_create_parallel(
-        &mut self,
-        children: &[(ObjectId, noon::Mobject, noon_core::AnimationOptions)],
-        play_options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        if children.is_empty() {
-            return Err("ordinary parallel Create requires at least one detached leaf".into());
-        }
-        if self.live_player.is_none() && self.scene.time() != 0.0 {
-            return Err("ordinary Create cannot follow pre-execution canonical timing".into());
-        }
-
-        let mut object_ids = BTreeSet::new();
-        let mut nodes = BTreeSet::new();
-        for (id, target, _) in children {
-            if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
-                return Err("ordinary Create mobject belongs to another authoring store".into());
-            }
-            target.validate()?;
-            let node = target.node_id();
-            if !object_ids.insert(*id) || !nodes.insert(node) {
-                return Err("ordinary parallel Create requires distinct detached leaves".into());
-            }
-            if self.bindings.contains_key(id) || self.identities.contains_key(&node) {
-                return Err(format!("canonical object {} is already bound", id.get()));
-            }
-        }
-
-        let bootstrap_duration = self
-            .live_handoff_duration()
-            .unwrap_or_else(|| self.scene.time())
-            .max(play_options.run_time.unwrap_or(0.0))
-            .max(
-                children
-                    .iter()
-                    .filter_map(|(_, _, options)| options.run_time)
-                    .fold(0.0, f64::max),
-            );
-        let requests = children
-            .iter()
-            .map(|(_, target, options)| (target, *options))
-            .collect::<Vec<_>>();
-        let end_time = if self.live_player.is_none() {
-            self.prepare_local_player_for_run()?;
-            let mut player = self.build_live_player(bootstrap_duration, 0)?;
-            let end_time =
-                player.live_declare_and_activate_create_parallel(&requests, play_options)?;
-            self.live_player = Some(player);
-            self.live_player_returned = false;
-            end_time
-        } else {
-            self.active_live_player()?
-                .live_declare_and_activate_create_parallel(&requests, play_options)?
-        };
-        for (id, target, _) in children {
-            let node = target.node_id();
-            self.bindings.insert(*id, node);
-            self.identities.insert(node, *id);
-        }
-        Ok(end_time)
-    }
-
-    /// Atomically declare and activate one ordinary fade without advancing it.
-    ///
-    /// A FadeIn may bind an existing detached semantic handle. A FadeOut retains
-    /// its derived binding so that the exact same handle can later re-enter via
-    /// `Scene.add`; membership itself remains entirely in the shared session.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_fade(
-        &mut self,
-        id: ObjectId,
-        target: &noon::Mobject,
-        direction: SemanticFadeDirection,
-        endpoint: noon::FadeEndpoint,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
-            return Err("ordinary fade mobject belongs to another authoring store".into());
-        }
-        target.validate()?;
-        let node = target.node_id();
-        let new_binding = match (
-            direction,
-            self.bindings.get(&id),
-            self.identities.get(&node),
-        ) {
-            (SemanticFadeDirection::In, None, None) => true,
-            (_, Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => {
-                false
-            }
-            (SemanticFadeDirection::Out, None, None) => {
-                return Err("ordinary FadeOut target is not bound to this canonical Scene".into());
-            }
-            _ => return Err(format!("canonical object {} is already bound", id.get())),
-        };
-        if self.live_player.is_none() && self.scene.time() != 0.0 {
-            return Err("ordinary fade cannot follow pre-execution canonical timing".into());
-        }
-
-        // The retained player needs a valid presentation extent before activation.
-        // An existing returned continuation is preserved exactly; first bootstrap
-        // remains provisional until the shared activation succeeds.
-        let bootstrap_duration = self
-            .live_handoff_duration()
-            .unwrap_or_else(|| self.scene.time())
-            .max(options.run_time.unwrap_or(1.0));
-        let end_time = if self.live_player.is_none() {
-            // Build the initial runtime provisionally. A failed shared preflight
-            // must not install a player or change context lease ownership.
-            self.prepare_local_player_for_run()?;
-            let mut player = self.build_live_player(bootstrap_duration, 0)?;
-            let end_time =
-                player.live_declare_and_activate_fade(target, direction, endpoint, options)?;
-            self.live_player = Some(player);
-            self.live_player_returned = false;
-            end_time
-        } else {
-            // `declare_and_activate_fade` is the shared atomic preflight: required
-            // callbacks, bindings, membership, options, and lifecycle conflicts all
-            // fail before its semantic/runtime publication.
-            self.active_live_player()?
-                .live_declare_and_activate_fade(target, direction, endpoint, options)?
-        };
-        if new_binding {
-            self.bindings.insert(id, node);
-            self.identities.insert(node, id);
-        }
-        Ok(end_time)
-    }
-
     /// Read the shared session's direct-root membership for one retained wrapper.
     ///
     /// This lets Python update only its derived wrapper attachment after a completed
@@ -1205,49 +898,6 @@ impl CanonicalAuthoringScene {
             return Err("live Mobject is not bound to this canonical Scene".into());
         }
         self.active_live_player()?.live_contains(target)
-    }
-
-    /// Run one supported ordinary leaf TransformTo through the one retained
-    /// session. Declaration, activation, endpoint evaluation, and completion
-    /// remain Rust/session operations; Python only supplies typed handles and
-    /// resolved options.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn ordinary_play_transform_to(
-        &mut self,
-        source: &noon::Mobject,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        if !self.can_ordinary_transform_to(source, target, options)? {
-            return Err("ordinary affine animation payload is not yet supported".into());
-        }
-        let bootstrap_duration = self
-            .live_handoff_duration()
-            .unwrap_or_else(|| self.scene.time())
-            .max(options.run_time.unwrap_or(1.0));
-        let bootstrapped = self.live_player.is_none();
-        if bootstrapped {
-            self.live_player(bootstrap_duration)?;
-        }
-        if self.active_live_player()?.has_required_callbacks() {
-            if bootstrapped {
-                self.live_player = None;
-                self.live_player_returned = false;
-            }
-            return Err(
-                "ordinary endpoint-only animation cannot execute required callbacks; use a continuation"
-                    .into(),
-            );
-        }
-        let end_time = self.begin_ordinary_transform_to(source, target, options)?;
-        let player = self.active_live_player()?;
-        // Reaching the endpoint still has completion reconciliation pending.
-        // The shared completion operation validates time and callback coherence.
-        player.live_advance_segment_to(end_time)?;
-        player.live_complete_segment()?;
-        player
-            .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1322,32 +972,6 @@ impl CanonicalAuthoringScene {
             self.identities.insert(node, id);
         }
         Ok(end)
-    }
-
-    /// Atomically declare and activate one ordinary leaf transform without advancing it.
-    ///
-    /// The retained player stores the existing shared execution segment. A worker may lease
-    /// that player and use its Rust-owned wake/drive/completion methods without rebuilding the
-    /// context or manufacturing a frontend segment identity.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_transform_to(
-        &mut self,
-        source: &noon::Mobject,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        if !self.can_ordinary_transform_to(source, target, options)? {
-            return Err("ordinary affine animation payload is not yet supported".into());
-        }
-
-        // `live_player` needs a valid presentation extent before activation. The
-        // player replaces it with the exact returned segment endpoint below.
-        let bootstrap_duration = self
-            .live_handoff_duration()
-            .unwrap_or_else(|| self.scene.time())
-            .max(options.run_time.unwrap_or(1.0));
-        let player = self.active_or_bootstrap_live_player(bootstrap_duration)?;
-        player.live_declare_and_activate_transform_to(source, target, options)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1608,6 +1232,12 @@ impl CanonicalAuthoringScene {
                     target,
                     options: *options,
                 },
+                OrdinaryCompositionChild::Uncreate {
+                    target, options, ..
+                } => noon::AnimationCompositionRequest::Uncreate {
+                    target,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::AffineLifecycle {
                     target,
                     direction,
@@ -1679,6 +1309,11 @@ impl CanonicalAuthoringScene {
                     ..
                 }
                 | OrdinaryCompositionChild::Create {
+                    entering_id,
+                    target,
+                    ..
+                }
+                | OrdinaryCompositionChild::Uncreate {
                     entering_id,
                     target,
                     ..
@@ -1765,45 +1400,17 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn can_ordinary_transform_to(
-        &self,
-        source: &noon::Mobject,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<bool, String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
-            || !std::rc::Rc::ptr_eq(self.scene.store(), target.store())
-        {
-            return Err(
-                "ordinary affine animation mobjects belong to another authoring store".into(),
-            );
-        }
-        source.validate()?;
-        target.validate()?;
-        if !self.identities.contains_key(&source.node_id()) {
-            return Err(
-                "ordinary affine animation source is not bound to this canonical Scene".into(),
-            );
-        }
-        if self.identities.contains_key(&target.node_id()) {
-            return Err("ordinary affine animation target must be a detached Mobject".into());
-        }
-        if self.live_player.is_none() && self.scene.time() != 0.0 {
-            return Err(
-                "ordinary affine animation cannot follow pre-execution canonical timing".into(),
-            );
-        }
-        self.scene
-            .can_ordinary_transform_to(source, target, options)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
     fn validate_ordinary_mixed_composition(
         &self,
         children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
     ) -> Result<(), String> {
+        // A continuation cannot restart a pre-authored Rust timeline at zero.
+        // This is the common admission guard for every request shape.
+        if self.live_player.is_none() && self.scene.time() != 0.0 {
+            return Err("ordinary composition cannot follow pre-execution canonical timing".into());
+        }
         if children.is_empty() {
             return Err("ordinary composition requires at least one child".into());
         }
@@ -1940,10 +1547,12 @@ impl CanonicalAuthoringScene {
                         );
                     }
                     target.validate()?;
-                    let family_leaves = noon::semantic_family_leaf_ids(
-                        &self.scene.store().borrow(),
-                        target.node_id(),
-                    )?;
+                    let family_leaves = self
+                        .scene
+                        .store()
+                        .borrow()
+                        .ordered_leaf_nodes(target.node_id())
+                        .map_err(|e| e.to_string())?;
                     let expected_entering = family_leaves
                         .iter()
                         .copied()
@@ -2005,10 +1614,12 @@ impl CanonicalAuthoringScene {
                         );
                     }
                     target.validate()?;
-                    let family_leaves = noon::semantic_family_leaf_ids(
-                        &self.scene.store().borrow(),
-                        target.node_id(),
-                    )?;
+                    let family_leaves = self
+                        .scene
+                        .store()
+                        .borrow()
+                        .ordered_leaf_nodes(target.node_id())
+                        .map_err(|e| e.to_string())?;
                     let expected_entering = family_leaves
                         .iter()
                         .copied()
@@ -2168,6 +1779,11 @@ impl CanonicalAuthoringScene {
                     target,
                     options,
                 }
+                | OrdinaryCompositionChild::Uncreate {
+                    entering_id,
+                    target,
+                    options,
+                }
                 | OrdinaryCompositionChild::AffineLifecycle {
                     entering_id,
                     target,
@@ -2195,6 +1811,7 @@ impl CanonicalAuthoringScene {
                         child,
                         OrdinaryCompositionChild::TextWrite { .. }
                             | OrdinaryCompositionChild::TextReveal { .. }
+                            | OrdinaryCompositionChild::Uncreate { .. }
                     ) {
                         // Glyph realization owns reversal; keep the original child
                         // options for shared schedule lowering after shape validation.
@@ -2259,32 +1876,6 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    /// Reuse inert typed membership operands to publish a detached family.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn create_live_family(
-        &mut self,
-        batch: SceneMembershipBatch,
-    ) -> Result<noon::MobjectFamily, String> {
-        if batch.kind != SceneMembershipBatchKind::Add || !batch.bindings.is_empty() {
-            return Err("live family construction requires unbound add operands".into());
-        }
-        let members = batch
-            .members
-            .iter()
-            .map(|member| match member {
-                OwnedSceneMembershipMember::Mobject {
-                    wrapper_id: None,
-                    handle,
-                } => Ok(noon::MobjectFamilyMember::Mobject(handle)),
-                OwnedSceneMembershipMember::Family(family) => {
-                    Ok(noon::MobjectFamilyMember::Family(family))
-                }
-                _ => Err("live family construction cannot reserve wrapper bindings".to_owned()),
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        self.live_family(&members)
-    }
-
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_shift_family(
         &mut self,
@@ -2305,18 +1896,10 @@ impl CanonicalAuthoringScene {
     fn live_arrange_family(
         &mut self,
         family: &noon::MobjectFamily,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-        center: bool,
+        options: &noon::FamilyArrangeOptions,
     ) -> Result<(), String> {
-        self.active_live_player()?.live_arrange_family(
-            family,
-            direction_x,
-            direction_y,
-            buff,
-            center,
-        )
+        self.active_live_player()?
+            .live_arrange_family(family, options)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2335,63 +1918,6 @@ impl CanonicalAuthoringScene {
             "transferred" => Err("live execution session is running in the semantic engine".into()),
             _ => unreachable!("canonical live ownership has one closed set of states"),
         }
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn finish_live_family_target_members(
-        &mut self,
-        target_members: &[noon_core::SemanticNodeId],
-    ) -> Result<noon::MobjectFamily, String> {
-        enum OwnedMember {
-            Mobject(noon::Mobject),
-            Family(noon::MobjectFamily),
-        }
-        enum MemberKind {
-            Mobject,
-            Family,
-        }
-
-        let store = std::rc::Rc::clone(self.scene.store());
-        let mut owned = Vec::with_capacity(target_members.len());
-        for &id in target_members {
-            let kind = {
-                let store = store.borrow();
-                match store.node(id).map(|node| node.kind()) {
-                    Some(
-                        noon_core::SemanticNodeKind::Object(_)
-                        | noon_core::SemanticNodeKind::AuthoringObject,
-                    ) => MemberKind::Mobject,
-                    Some(noon_core::SemanticNodeKind::Family) => MemberKind::Family,
-                    Some(
-                        noon_core::SemanticNodeKind::Signal(_)
-                        | noon_core::SemanticNodeKind::Animation(_),
-                    ) => {
-                        return Err(
-                            "live family targets require ordinary mobjects or nested families"
-                                .into(),
-                        );
-                    }
-                    None => return Err(format!("unknown live family target member {id:?}")),
-                }
-            };
-            owned.push(match kind {
-                MemberKind::Mobject => {
-                    OwnedMember::Mobject(noon::Mobject::from_node(std::rc::Rc::clone(&store), id)?)
-                }
-                MemberKind::Family => OwnedMember::Family(noon::MobjectFamily::from_node(
-                    std::rc::Rc::clone(&store),
-                    id,
-                )?),
-            });
-        }
-        let members = owned
-            .iter()
-            .map(|member| match member {
-                OwnedMember::Mobject(mobject) => noon::MobjectFamilyMember::Mobject(mobject),
-                OwnedMember::Family(family) => noon::MobjectFamilyMember::Family(family),
-            })
-            .collect::<Vec<_>>();
-        self.live_family(&members)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2769,16 +2295,16 @@ impl CanonicalAuthoringScene {
                 )?);
                 continue;
             }
-            let snapshot = noon::legacy::export_mobject_snapshot(&handle)?;
+            let (geometry, transform, style) = crate::geometry_export::mobject_fields(&handle)?;
             let mut object = ObjectSpec::geometry(
                 *self
                     .identities
                     .get(&node)
                     .ok_or("unbound semantic scene member")?,
-                snapshot.geometry,
+                geometry,
             );
-            object.transform = snapshot.transform;
-            object.style = snapshot.style;
+            object.transform = transform;
+            object.style = style;
             objects.push(object);
         }
         let mut spec =
@@ -3088,6 +2614,29 @@ mod wasm {
         inner: SceneMembershipBatch,
     }
 
+    impl WasmSceneMembershipBatch {
+        pub(crate) fn copy_references(&self) -> Result<Vec<noon::MobjectFamilyMember<'_>>, String> {
+            if self.inner.kind != SceneMembershipBatchKind::Add {
+                return Err("copy references require an add batch".into());
+            }
+            self.inner.family_members()
+        }
+
+        pub(crate) fn create_family(
+            &self,
+            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Result<noon::MobjectFamily, String> {
+            self.inner.create_family(store)
+        }
+
+        pub(crate) fn edit_family(
+            &self,
+            family: &noon::MobjectFamily,
+        ) -> Result<Vec<bool>, String> {
+            self.inner.edit_family(family)
+        }
+    }
+
     #[wasm_bindgen]
     impl WasmSceneMembershipBatch {
         #[wasm_bindgen(constructor)]
@@ -3218,11 +2767,6 @@ mod wasm {
     /// It carries only wrapper-derived IDs, opaque shared handles, and unresolved
     /// options. The shared Rust session owns admission, schedule, reveal tracks,
     /// and execution identity when this candidate is consumed.
-    #[wasm_bindgen]
-    pub struct WasmOrdinaryCreateParallelBuilder {
-        children: Vec<(ObjectId, noon::Mobject, noon_core::AnimationOptions)>,
-        play_options: noon_core::AnimationOptions,
-    }
 
     /// Opaque Python/JS identity for one canonical scalar input signal.
     #[wasm_bindgen]
@@ -4341,6 +3885,31 @@ mod wasm {
             )
         }
 
+        #[wasm_bindgen(js_name = appendUncreate)]
+        pub fn append_uncreate(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+            remover: bool,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("Uncreate object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::Uncreate {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                options: Self::options(child_run_time, rate_function)?
+                    .remover(remover)
+                    .reverse_rate_function(reverse_rate_function),
+            });
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = appendAffineLifecycle)]
         #[allow(clippy::too_many_arguments)]
         pub fn append_affine_lifecycle(
@@ -4383,34 +3952,6 @@ mod wasm {
                 children: nested.children,
                 options: nested.composition_options,
             });
-        }
-    }
-
-    #[wasm_bindgen]
-    impl WasmOrdinaryCreateParallelBuilder {
-        #[wasm_bindgen(js_name = appendCreate)]
-        pub fn append_create(
-            &mut self,
-            object_id: &str,
-            target: &crate::WasmAuthoringMobjectHandle,
-            child_run_time: f64,
-            rate_function: &str,
-        ) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            self.children.push((
-                id,
-                target.semantic_mobject().clone(),
-                noon_core::AnimationOptions::new()
-                    .run_time(child_run_time)
-                    .rate_func(rate_function),
-            ));
-            Ok(())
         }
     }
 
@@ -5008,26 +4549,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = declareValueTrackerPlay)]
-        pub fn declare_value_tracker_play(
-            &mut self,
-            tracker: &WasmValueTrackerHandle,
-            target: f64,
-            duration: f64,
-            rate_function: &str,
-        ) -> Result<f64, JsValue> {
-            let tracker = tracker.tracker_in(self.inner.scene.store())?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported ValueTracker rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            self.inner
-                .declare_tracker_play(tracker, target, duration, rate_function)
-                .map_err(js_error)
-        }
-
         #[wasm_bindgen(js_name = valueTrackerValue)]
         pub fn value_tracker_value(
             &mut self,
@@ -5046,27 +4567,6 @@ mod wasm {
             let tracker = tracker.tracker_in(self.inner.scene.store())?;
             self.inner
                 .set_tracker_value(tracker, value)
-                .map_err(js_error)
-        }
-
-        /// Begin one ordinary scalar tracker play for the shared continuation host.
-        #[wasm_bindgen(js_name = beginOrdinaryValueTrackerPlay)]
-        pub fn begin_ordinary_value_tracker_play(
-            &mut self,
-            tracker: &WasmValueTrackerHandle,
-            target: f64,
-            duration: f64,
-            rate_function: &str,
-        ) -> Result<f64, JsValue> {
-            let tracker = tracker.tracker_in(self.inner.scene.store())?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported ValueTracker rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            self.inner
-                .begin_ordinary_value_tracker_play(tracker, target, duration, rate_function)
                 .map_err(js_error)
         }
 
@@ -5280,6 +4780,332 @@ mod wasm {
             })
         }
 
+        /// Read a family through the same live session that owns its effective leaves.
+        #[wasm_bindgen(js_name = queryFamilyLayout)]
+        pub fn query_family_layout(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<WasmMobjectLayoutObservation, JsValue> {
+            let family = handle.semantic_family()?;
+            let layout = self
+                .inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_family_layout(&family)
+                .map_err(js_error)?;
+            Ok(WasmMobjectLayoutObservation {
+                center_x: layout.center.0,
+                center_y: layout.center.1,
+                width: layout.width,
+                height: layout.height,
+            })
+        }
+
+        #[wasm_bindgen(js_name = liveMoveFamilyToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_move_family_to_point(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Point(x, y),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveMoveFamilyToMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_move_family_to_mobject(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveMoveFamilyToFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_move_family_to_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let target = target.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Family(&target),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextFamilyToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_family_to_point(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Point(x, y),
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextLayoutTo)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_layout_to(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            aligner: &crate::authoring_mobject::WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_layout_to_aligned(
+                    &source.anchor,
+                    noon::LiveLayoutTarget::Anchor(&target.anchor),
+                    &aligner.anchor,
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextLayoutToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_layout_to_point(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            x: f64,
+            y: f64,
+            aligner: &crate::authoring_mobject::WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_layout_to_aligned(
+                    &source.anchor,
+                    noon::LiveLayoutTarget::Point(x, y),
+                    &aligner.anchor,
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextFamilyToMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_family_to_mobject(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveNextFamilyToFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_next_family_to_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let target = target.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_next_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Family(&target),
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAlignFamilyToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_align_family_to_point(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+            axis_x: f64,
+            axis_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_align_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Point(x, y),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAlignFamilyToMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_align_family_to_mobject(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            axis_x: f64,
+            axis_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_align_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAlignFamilyToFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_align_family_to_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+            axis_x: f64,
+            axis_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let target = target.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_align_family_to(
+                    &family,
+                    noon::LiveLayoutTarget::Family(&target),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectLineEndpoints)]
         pub fn query_mobject_line_endpoints(
             &mut self,
@@ -5333,66 +5159,6 @@ mod wasm {
                 declaration,
                 store: std::rc::Rc::clone(self.inner.scene.store()),
             })
-        }
-
-        #[wasm_bindgen(js_name = ordinaryPlayTransformTo)]
-        pub fn ordinary_play_transform_to(
-            &mut self,
-            source: &crate::WasmAuthoringMobjectHandle,
-            target: &crate::WasmAuthoringMobjectHandle,
-            run_time: f64,
-            rate_function: &str,
-        ) -> Result<f64, JsValue> {
-            source.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
-            target.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function);
-            self.inner
-                .ordinary_play_transform_to(
-                    source.semantic_mobject(),
-                    target.semantic_mobject(),
-                    options,
-                )
-                .map_err(js_error)
-        }
-
-        /// Atomically declare and activate one ordinary transform for an async continuation.
-        ///
-        /// The retained player keeps the shared segment; this method intentionally does not
-        /// advance or complete it.
-        #[wasm_bindgen(js_name = beginOrdinaryTransformTo)]
-        pub fn begin_ordinary_transform_to(
-            &mut self,
-            source: &crate::WasmAuthoringMobjectHandle,
-            target: &crate::WasmAuthoringMobjectHandle,
-            run_time: f64,
-            rate_function: &str,
-        ) -> Result<f64, JsValue> {
-            source.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
-            target.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function);
-            self.inner
-                .begin_ordinary_transform_to(
-                    source.semantic_mobject(),
-                    target.semantic_mobject(),
-                    options,
-                )
-                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = ordinaryPlayAffineLifecycle)]
@@ -5501,227 +5267,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        /// Atomically declare, activate, run, and complete one basic lifecycle fade.
-        #[wasm_bindgen(js_name = ordinaryPlayFade)]
-        pub fn ordinary_play_fade(
-            &mut self,
-            object_id: &str,
-            target: &crate::WasmAuthoringMobjectHandle,
-            direction: &str,
-            scale_factor: f64,
-            translation: &str,
-            x: f64,
-            y: f64,
-            run_time: f64,
-            rate_function: &str,
-        ) -> Result<f64, JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            target.id_in_store(self.inner.scene.store(), "ordinary fade animation")?;
-            let direction = parse_fade_direction(direction)?;
-            let endpoint = parse_fade_endpoint(scale_factor, translation, x, y)?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function);
-            self.inner
-                .ordinary_play_fade(id, target.semantic_mobject(), direction, endpoint, options)
-                .map_err(js_error)
-        }
-
-        /// Begin one basic lifecycle fade for an async/synchronous continuation.
-        ///
-        /// The exact retained player owns the returned segment and must later be
-        /// driven and completed through the existing continuation lease.
-        #[wasm_bindgen(js_name = beginOrdinaryFade)]
-        pub fn begin_ordinary_fade(
-            &mut self,
-            object_id: &str,
-            target: &crate::WasmAuthoringMobjectHandle,
-            direction: &str,
-            scale_factor: f64,
-            translation: &str,
-            x: f64,
-            y: f64,
-            run_time: f64,
-            rate_function: &str,
-        ) -> Result<f64, JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            target.id_in_store(self.inner.scene.store(), "ordinary fade animation")?;
-            let direction = parse_fade_direction(direction)?;
-            let endpoint = parse_fade_endpoint(scale_factor, translation, x, y)?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function);
-            self.inner
-                .begin_ordinary_fade(id, target.semantic_mobject(), direction, endpoint, options)
-                .map_err(js_error)
-        }
-
-        /// Start one inert flat-parallel Create candidate. It does not mutate the
-        /// semantic store or allocate an execution player.
-        #[wasm_bindgen(js_name = beginOrdinaryCreateParallel)]
-        pub fn begin_ordinary_create_parallel(
-            &self,
-            play_run_time: Option<f64>,
-            rate_function: &str,
-        ) -> Result<WasmOrdinaryCreateParallelBuilder, JsValue> {
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let mut play_options = noon_core::AnimationOptions::new().rate_func(rate_function);
-            if let Some(run_time) = play_run_time {
-                play_options = play_options.run_time(run_time);
-            }
-            Ok(WasmOrdinaryCreateParallelBuilder {
-                children: Vec::new(),
-                play_options,
-            })
-        }
-
-        /// Consume, activate, run, and complete one flat-parallel Create candidate.
-        #[wasm_bindgen(js_name = ordinaryPlayCreateParallel)]
-        pub fn ordinary_play_create_parallel(
-            &mut self,
-            candidate: WasmOrdinaryCreateParallelBuilder,
-        ) -> Result<f64, JsValue> {
-            self.inner
-                .ordinary_play_create_parallel(&candidate.children, candidate.play_options)
-                .map_err(js_error)
-        }
-
-        /// Consume and activate one flat-parallel Create candidate without advancing it.
-        #[wasm_bindgen(js_name = beginOrdinaryCreateParallelSegment)]
-        pub fn begin_ordinary_create_parallel_segment(
-            &mut self,
-            candidate: WasmOrdinaryCreateParallelBuilder,
-        ) -> Result<f64, JsValue> {
-            self.inner
-                .begin_ordinary_create_parallel(&candidate.children, candidate.play_options)
-                .map_err(js_error)
-        }
-
-        /// Atomically declare, activate, run, and complete one single-leaf Create.
-        #[wasm_bindgen(js_name = ordinaryPlayCreate)]
-        pub fn ordinary_play_create(
-            &mut self,
-            object_id: &str,
-            target: &crate::WasmAuthoringMobjectHandle,
-            run_time: f64,
-            rate_function: &str,
-        ) -> Result<f64, JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            target.id_in_store(self.inner.scene.store(), "ordinary Create animation")?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function);
-            self.inner
-                .ordinary_play_create(id, target.semantic_mobject(), options)
-                .map_err(js_error)
-        }
-
-        /// Begin one Create for the existing async/synchronous continuation player.
-        #[wasm_bindgen(js_name = beginOrdinaryCreate)]
-        pub fn begin_ordinary_create(
-            &mut self,
-            object_id: &str,
-            target: &crate::WasmAuthoringMobjectHandle,
-            run_time: f64,
-            rate_function: &str,
-        ) -> Result<f64, JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            target.id_in_store(self.inner.scene.store(), "ordinary Create animation")?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function);
-            self.inner
-                .begin_ordinary_create(id, target.semantic_mobject(), options)
-                .map_err(js_error)
-        }
-
-        /// Atomically declare, activate, run, and complete one single-leaf Uncreate.
-        #[wasm_bindgen(js_name = ordinaryPlayUncreate)]
-        pub fn ordinary_play_uncreate(
-            &mut self,
-            object_id: &str,
-            target: &crate::WasmAuthoringMobjectHandle,
-            run_time: f64,
-            rate_function: &str,
-            remover: bool,
-            reverse_rate_function: bool,
-        ) -> Result<f64, JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            target.id_in_store(self.inner.scene.store(), "ordinary Uncreate animation")?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function)
-                .remover(remover)
-                .reverse_rate_function(reverse_rate_function);
-            self.inner
-                .ordinary_play_uncreate(id, target.semantic_mobject(), options)
-                .map_err(js_error)
-        }
-
-        /// Begin one Uncreate for the existing async/synchronous continuation player.
-        #[wasm_bindgen(js_name = beginOrdinaryUncreate)]
-        pub fn begin_ordinary_uncreate(
-            &mut self,
-            object_id: &str,
-            target: &crate::WasmAuthoringMobjectHandle,
-            run_time: f64,
-            rate_function: &str,
-            remover: bool,
-            reverse_rate_function: bool,
-        ) -> Result<f64, JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            target.id_in_store(self.inner.scene.store(), "ordinary Uncreate animation")?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function)
-                .remover(remover)
-                .reverse_rate_function(reverse_rate_function);
-            self.inner
-                .begin_ordinary_uncreate(id, target.semantic_mobject(), options)
-                .map_err(js_error)
-        }
-
         /// Query shared root membership after an exact fade completion. Python
         /// uses it only to attach/detach its derived wrapper identity.
         #[wasm_bindgen(js_name = liveContainsMobject)]
@@ -5732,34 +5277,6 @@ mod wasm {
             target.id_in_store(self.inner.scene.store(), "live execution context")?;
             self.inner
                 .live_contains_mobject(target.semantic_mobject())
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = ordinaryCanPlayTransformTo)]
-        pub fn ordinary_can_play_transform_to(
-            &self,
-            source: &crate::WasmAuthoringMobjectHandle,
-            target: &crate::WasmAuthoringMobjectHandle,
-            run_time: f64,
-            rate_function: &str,
-        ) -> Result<bool, JsValue> {
-            source.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
-            target.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
-            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
-                .ok_or_else(|| {
-                    js_error(format!(
-                        "unsupported animation rate function semantic ID {rate_function:?}"
-                    ))
-                })?;
-            let options = noon_core::AnimationOptions::new()
-                .run_time(run_time)
-                .rate_func(rate_function);
-            self.inner
-                .can_ordinary_transform_to(
-                    source.semantic_mobject(),
-                    target.semantic_mobject(),
-                    options,
-                )
                 .map_err(js_error)
         }
 
@@ -5775,58 +5292,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        /// Publish a complete Group/VGroup constructor through the live owner.
-        #[wasm_bindgen(js_name = createLiveFamily)]
-        pub fn create_live_family(
-            &mut self,
-            batch: WasmSceneMembershipBatch,
-        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-            self.inner
-                .create_live_family(batch.inner)
-                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
-                .map_err(js_error)
-        }
-
-        /// Begin an inert ordered family target. Member targets may be built
-        /// bottom-up before the family node and edges publish through this context.
-        #[wasm_bindgen(js_name = beginLiveFamilyTarget)]
-        pub fn begin_live_family_target(
+        /// Copy the complete family through one coherent live publication.
+        #[wasm_bindgen(js_name = liveCopyFamily)]
+        pub fn live_copy_family(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
-        ) -> Result<crate::WasmAuthoringFamilyTargetEditor, JsValue> {
-            let family = source.semantic_family()?;
-            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), family.store()) {
-                return Err(js_error(
-                    "family target and canonical context belong to different authoring stores",
-                ));
-            }
-            if self.inner.live_execution_ownership() == "transferred" {
-                return Err(js_error(
-                    "live execution session is running in the semantic engine",
-                ));
-            }
-            source.target_editor()
-        }
-
-        /// Atomically publish one completed family target through the current
-        /// live owner. Before bootstrap, the editor uses its ordinary one-transaction finish.
-        #[wasm_bindgen(js_name = finishLiveFamilyTarget)]
-        pub fn finish_live_family_target(
-            &mut self,
-            editor: &crate::WasmAuthoringFamilyTargetEditor,
-        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), editor.store()) {
-                return Err(js_error(
-                    "family target and canonical context belong to different authoring stores",
-                ));
-            }
-            if self.inner.live_execution_ownership() == "none" {
-                return editor.finish();
-            }
-
+            references: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmFamilyCopy, JsValue> {
+            let source = source.semantic_family()?;
             self.inner
-                .finish_live_family_target_members(editor.target_member_ids()?)
-                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .active_live_player()
+                .map_err(js_error)?
+                .live_copy_family(&source, &references.copy_references().map_err(js_error)?)
+                .map(crate::WasmFamilyCopy::from_copy)
                 .map_err(js_error)
         }
 
@@ -6255,6 +5733,44 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Create a complete detached family through the current live publication.
+        #[wasm_bindgen(js_name = liveCreateFamily)]
+        pub fn live_create_family(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            if batch.inner.kind != SceneMembershipBatchKind::Add {
+                return Err(js_error("family creation requires an add batch"));
+            }
+            let members = batch.inner.family_members().map_err(js_error)?;
+            self.inner
+                .live_family(&members)
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(js_error)
+        }
+
+        /// Commit all requested direct-member edits before returning wrapper decisions.
+        #[wasm_bindgen(js_name = liveEditFamilyMembership)]
+        pub fn live_edit_family_membership(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<Vec<u8>, JsValue> {
+            let adding = match batch.inner.kind {
+                SceneMembershipBatchKind::Add => true,
+                SceneMembershipBatchKind::Remove => false,
+                _ => return Err(js_error("family membership requires add or remove")),
+            };
+            let family = handle.semantic_family()?;
+            let members = batch.inner.family_members().map_err(js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_edit_family_members(&family, &members, adding)
+                .map(|changed| changed.into_iter().map(u8::from).collect())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveShiftFamily)]
         pub fn live_shift_family(
             &mut self,
@@ -6277,14 +5793,11 @@ mod wasm {
         pub fn live_arrange_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
-            direction_x: f64,
-            direction_y: f64,
-            buff: f64,
-            center: bool,
+            options: &crate::authoring_mobject::WasmFamilyArrangeOptions,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .live_arrange_family(&family, direction_x, direction_y, buff, center)
+                .live_arrange_family(&family, &options.options)
                 .map_err(js_error)
         }
 
@@ -6452,6 +5965,115 @@ mod tests {
             wrapper_id: Some(ObjectId::new(id)),
             handle: handle.clone(),
         }
+    }
+
+    fn begin_request(
+        context: &mut CanonicalAuthoringScene,
+        child: OrdinaryCompositionChild,
+    ) -> Result<f64, String> {
+        context.begin_ordinary_mixed_composition(
+            noon_core::SemanticAnimationCompositionKind::Parallel,
+            &[child],
+            AnimationOptions::new().rate_func(RateFunction::Linear),
+            AnimationOptions::new(),
+        )
+    }
+
+    fn play_request(
+        context: &mut CanonicalAuthoringScene,
+        child: OrdinaryCompositionChild,
+    ) -> Result<f64, String> {
+        context.ordinary_play_mixed_composition(
+            noon_core::SemanticAnimationCompositionKind::Parallel,
+            &[child],
+            AnimationOptions::new().rate_func(RateFunction::Linear),
+            AnimationOptions::new(),
+        )
+    }
+
+    fn fade_request(
+        entering_id: Option<ObjectId>,
+        target: &noon::Mobject,
+        direction: SemanticFadeDirection,
+        endpoint: noon::FadeEndpoint,
+        options: AnimationOptions,
+    ) -> OrdinaryCompositionChild {
+        OrdinaryCompositionChild::Fade {
+            entering_id,
+            target: target.clone(),
+            direction,
+            endpoint,
+            options,
+        }
+    }
+
+    fn create_request(
+        entering_id: Option<ObjectId>,
+        target: &noon::Mobject,
+        options: AnimationOptions,
+    ) -> OrdinaryCompositionChild {
+        OrdinaryCompositionChild::Create {
+            entering_id,
+            target: target.clone(),
+            options,
+        }
+    }
+
+    fn uncreate_request(
+        entering_id: Option<ObjectId>,
+        target: &noon::Mobject,
+        options: AnimationOptions,
+    ) -> OrdinaryCompositionChild {
+        OrdinaryCompositionChild::Uncreate {
+            entering_id,
+            target: target.clone(),
+            options,
+        }
+    }
+
+    fn create_requests(
+        children: &[(ObjectId, noon::Mobject, AnimationOptions)],
+    ) -> Vec<OrdinaryCompositionChild> {
+        children
+            .iter()
+            .map(|(id, target, options)| create_request(Some(*id), target, *options))
+            .collect()
+    }
+
+    #[test]
+    fn family_argument_batches_reject_scene_binding_metadata() {
+        let scene = noon::Scene::new();
+        let object = scene.circle(0.2).unwrap();
+        let revision = scene.store().borrow().scene_revision();
+        let mut batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: object.clone(),
+            }],
+            bindings: Vec::new(),
+        };
+        assert_eq!(batch.family_members().unwrap().len(), 1);
+        let family = batch
+            .create_family(std::rc::Rc::clone(scene.store()))
+            .unwrap();
+        let committed = scene.store().borrow().scene_revision();
+        assert_eq!(committed, revision.checked_next().unwrap());
+        assert_eq!(batch.edit_family(&family).unwrap(), vec![false]);
+        batch.kind = SceneMembershipBatchKind::Remove;
+        assert!(batch
+            .create_family(std::rc::Rc::clone(scene.store()))
+            .is_err());
+        assert_eq!(batch.edit_family(&family).unwrap(), vec![true]);
+        batch.kind = SceneMembershipBatchKind::Clear;
+        let revision = scene.store().borrow().scene_revision();
+        assert!(batch.edit_family(&family).is_err());
+        batch.bindings.push((ObjectId::new(1), object.clone()));
+        assert!(batch.family_members().is_err());
+        batch.bindings.clear();
+        batch.members = vec![membership_mobject(1, &object)];
+        assert!(batch.family_members().is_err());
+        assert_eq!(scene.store().borrow().scene_revision(), revision);
     }
 
     #[test]
@@ -6635,7 +6257,10 @@ mod tests {
 
         let left = context.scene.circle(0.5).unwrap();
         let right = context.scene.square(0.5).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
@@ -6680,7 +6305,7 @@ mod tests {
     fn checkpoint_restore_keeps_a_binding_reachable_through_a_retained_alias() {
         let mut context = CanonicalAuthoringScene::default();
         let shared = context.scene.circle(0.5).unwrap();
-        let retained = context.scene.family(&[&shared]).unwrap();
+        let retained = context.scene.family(&[(&shared).into()]).unwrap();
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
@@ -6691,7 +6316,10 @@ mod tests {
         let checkpoint = context.checkpoint();
 
         let temporary = context.scene.square(0.5).unwrap();
-        let alias = context.scene.family(&[&shared, &temporary]).unwrap();
+        let alias = context
+            .scene
+            .family(&[(&shared).into(), (&temporary).into()])
+            .unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_member(context.scene.root(), alias.node_id());
         transaction
@@ -6874,7 +6502,10 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.circle(0.5).unwrap();
         let right = context.scene.square(0.5).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
@@ -7192,72 +6823,6 @@ mod tests {
     }
 
     #[test]
-    fn live_family_constructor_rejects_invalid_operands_without_poisoning_the_owner() {
-        let mut context = CanonicalAuthoringScene::default();
-        let circle = context.scene.circle(0.4).unwrap();
-        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
-        context.live_player(1.0).unwrap();
-        let foreign = noon::Scene::new().circle(0.2).unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
-        for (kind, handle, wrapper_id) in [
-            (SceneMembershipBatchKind::Remove, circle.clone(), None),
-            (SceneMembershipBatchKind::Add, foreign, None),
-            (
-                SceneMembershipBatchKind::Add,
-                circle.clone(),
-                Some(ObjectId::new(2)),
-            ),
-        ] {
-            assert!(context
-                .create_live_family(SceneMembershipBatch {
-                    kind,
-                    members: vec![OwnedSceneMembershipMember::Mobject { wrapper_id, handle }],
-                    bindings: Vec::new(),
-                })
-                .is_err());
-            assert_eq!(context.scene.store().borrow().scene_revision(), revision);
-        }
-        context.live_target_editor(&circle).unwrap();
-    }
-
-    #[test]
-    fn live_family_constructor_preserves_shared_order_and_duplicate_suppression() {
-        let mut context = CanonicalAuthoringScene::default();
-        let circle = context.scene.circle(0.4).unwrap();
-        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
-        context.live_player(1.0).unwrap();
-        let target = context.live_target_editor(&circle).unwrap();
-        let nested = context
-            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)])
-            .unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
-        let family = context
-            .create_live_family(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::Add,
-                members: vec![
-                    OwnedSceneMembershipMember::Family(nested.clone()),
-                    OwnedSceneMembershipMember::Mobject {
-                        wrapper_id: None,
-                        handle: target.clone(),
-                    },
-                    OwnedSceneMembershipMember::Family(nested.clone()),
-                ],
-                bindings: Vec::new(),
-            })
-            .unwrap();
-        let store = context.scene.store().borrow();
-        assert_eq!(store.scene_revision().get(), revision.get() + 1);
-        assert_eq!(
-            store
-                .semantic_family_members_checked(family.node_id())
-                .unwrap(),
-            &[nested.node_id(), target.node_id()]
-        );
-        drop(store);
-        context.live_target_editor(&circle).unwrap();
-    }
-
-    #[test]
     fn live_created_group_arrange_and_target_preserve_returned_player_after_prior_plays() {
         let mut context = CanonicalAuthoringScene::default();
         let anchor = context.scene.circle(0.3).unwrap();
@@ -7268,18 +6833,22 @@ mod tests {
 
         let mut first_target = anchor.target_editor().unwrap();
         first_target.set_translation(0.5, 0.0).unwrap();
-        context
-            .ordinary_play_transform_to(&anchor, &first_target, options)
-            .unwrap();
+        play_request(
+            &mut context,
+            bound_transform_child(&anchor, first_target.clone(), options),
+        )
+        .unwrap();
         let second_target = context.live_target_editor(&anchor).unwrap();
         context
             .active_live_player()
             .unwrap()
             .live_set_translation(&second_target, 1.0, 0.0)
             .unwrap();
-        context
-            .ordinary_play_transform_to(&anchor, &second_target, options)
-            .unwrap();
+        play_request(
+            &mut context,
+            bound_transform_child(&anchor, second_target.clone(), options),
+        )
+        .unwrap();
         let handoff = context.live_handoff_duration().unwrap();
         let returned = context.take_execution_player(handoff, 17).unwrap();
         context.return_execution_player(returned).unwrap();
@@ -7291,15 +6860,72 @@ mod tests {
         let right = context
             .live_create_manim_geometry(noon::ManimGeometryOptions::square(0.3).unwrap())
             .unwrap();
+        let batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            members: vec![
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: left.clone(),
+                },
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: right.clone(),
+                },
+            ],
+            bindings: Vec::new(),
+        };
         let pair = context
-            .live_family(&[
-                noon::MobjectFamilyMember::Mobject(&left),
-                noon::MobjectFamilyMember::Mobject(&right),
-            ])
+            .live_family(&batch.family_members().unwrap())
             .unwrap();
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_edit_family_members(&pair, &[(&right).into()], false)
+                .unwrap(),
+            vec![true]
+        );
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_edit_family_members(&pair, &[(&right).into(), (&right).into()], true)
+                .unwrap(),
+            vec![true, false]
+        );
         context
-            .live_arrange_family(&pair, 1.0, 0.0, 0.15, true)
+            .live_arrange_family(
+                &pair,
+                &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.15, true),
+            )
             .unwrap();
+        let player = context.active_live_player().unwrap();
+        let before = player.live_family_layout(&pair).unwrap();
+        player
+            .live_move_family_to(
+                &pair,
+                noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                (0.0, 0.0),
+                (1.0, 1.0),
+            )
+            .unwrap();
+        player
+            .live_next_family_to(
+                &pair,
+                noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                noon::semantic_mobject::ManimNextToArgs {
+                    direction: (0.0, 0.0),
+                    buff: 0.0,
+                    aligned_edge: (0.0, 0.0),
+                    mask: (1.0, 1.0),
+                },
+            )
+            .unwrap();
+        player
+            .live_align_family_to(&pair, noon::LiveLayoutTarget::Family(&pair), (1.0, 1.0))
+            .unwrap();
+        assert_eq!(player.live_family_layout(&pair).unwrap(), before);
+
         let arranged_left = left.center().unwrap();
         let arranged_right = right.center().unwrap();
         assert!((arranged_right.0 - arranged_left.0 - 0.45).abs() < 1e-6);
@@ -7312,31 +6938,16 @@ mod tests {
         context.live_add_mobject(ObjectId::new(2), &right).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
 
-        let left_target = context.live_target_editor(&left).unwrap();
-        let right_target = context.live_target_editor(&right).unwrap();
-        let mut editor = crate::FrontendFamilyTargetEditor::begin(
-            &context.scene.store().borrow(),
-            pair.node_id(),
-        )
-        .unwrap();
-        editor
-            .accept_member(left.node_id(), left_target.node_id())
+        let copied = context
+            .active_live_player()
+            .unwrap()
+            .live_copy_family(&pair, &[])
             .unwrap();
-        editor
-            .accept_member(right.node_id(), right_target.node_id())
-            .unwrap();
-        {
-            let store = context.scene.store().borrow();
-            for target in [&left_target, &right_target] {
-                assert!(matches!(
-                    store.node(target.node_id()).unwrap().kind(),
-                    noon_core::SemanticNodeKind::AuthoringObject
-                ));
-            }
-        }
-        let target_pair = context
-            .finish_live_family_target_members(editor.target_members().unwrap())
-            .unwrap();
+        let left_target = copied.mobject(&left).unwrap();
+        let right_target = copied.mobject(&right).unwrap();
+        assert_ne!(left_target.node_id(), left.node_id());
+        assert_ne!(right_target.node_id(), right.node_id());
+        let target_pair = copied.root().clone();
         context.live_shift_family(&target_pair, 0.0, 1.0).unwrap();
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
@@ -7435,9 +7046,11 @@ mod tests {
             .rate_func(RateFunction::Linear);
 
         assert_eq!(
-            context
-                .ordinary_play_transform_to(&circle, &first_target, options)
-                .unwrap(),
+            play_request(
+                &mut context,
+                bound_transform_child(&circle, first_target.clone(), options)
+            )
+            .unwrap(),
             2.0
         );
         assert_eq!(context.authored_duration(), 2.0);
@@ -7482,9 +7095,11 @@ mod tests {
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
         assert_eq!(
-            context
-                .ordinary_play_transform_to(&circle, &second_target, second_options)
-                .unwrap(),
+            play_request(
+                &mut context,
+                bound_transform_child(&circle, second_target.clone(), second_options)
+            )
+            .unwrap(),
             4.0
         );
         assert_eq!(context.authored_duration(), 4.0);
@@ -7720,7 +7335,10 @@ mod tests {
         let leaf = context.scene.circle(0.3).unwrap();
         let left = context.scene.square(0.5).unwrap();
         let right = context.scene.circle(0.25).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         let outline = noon::DrawBorderThenFillOptions::new(0.04, Some(noon_core::YELLOW))
             .with_phase_rate_function(RateFunction::Linear);
         let options = AnimationOptions::new()
@@ -7906,7 +7524,10 @@ mod tests {
         let left = context.scene.text(noon::Text::new("LEFT")).unwrap();
         let right = context.scene.text(noon::Text::new("RIGHT")).unwrap();
         let writing = context.scene.text(noon::Text::new("WRITE")).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         let family_options = AnimationOptions::new()
             .run_time(2.0)
             .rate_func(RateFunction::Linear)
@@ -7978,7 +7599,10 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.text(noon::Text::new("LEFT")).unwrap();
         let right = context.scene.text(noon::Text::new("RIGHT")).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         let write = [OrdinaryCompositionChild::FamilyTextWrite {
             target: family.clone(),
             entering: vec![
@@ -8041,7 +7665,10 @@ mod tests {
         let single = context.scene.text(noon::Text::new("SINGLE")).unwrap();
         let text = context.scene.text(noon::Text::new("GROUP")).unwrap();
         let circle = context.scene.circle(0.25).unwrap();
-        let family = context.scene.family(&[&text, &circle]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&text).into(), (&circle).into()])
+            .unwrap();
         let create_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Smooth)
@@ -8123,7 +7750,10 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
         let right = context.scene.circle(0.25).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         context.prepare_family_subset_display(&family).unwrap();
         let options = AnimationOptions::new()
             .run_time(2.0)
@@ -8179,7 +7809,10 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
         let right = context.scene.circle(0.25).unwrap();
-        let family = context.scene.family(&[&left, &right]).unwrap();
+        let family = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
 
         context.begin_ordinary_wait(1.0).unwrap();
         let mut player = context.take_execution_player(2.0, 17).unwrap();
@@ -8232,6 +7865,11 @@ mod tests {
             .rate_func(RateFunction::Linear);
         let children = vec![
             OrdinaryCompositionChild::Wait { duration: 0.25 },
+            OrdinaryCompositionChild::Uncreate {
+                entering_id: None,
+                target: bound.clone(),
+                options: options.remover(true).reverse_rate_function(true),
+            },
             OrdinaryCompositionChild::Add {
                 entering_id: ObjectId::new(1),
                 target: add_target.clone(),
@@ -8279,6 +7917,7 @@ mod tests {
             )
             .unwrap();
         assert!(end > 0.0);
+        assert!(!context.live_contains_mobject(&bound).unwrap());
         assert!(context.live_contains_mobject(&add_target).unwrap());
         assert!(context.live_contains_mobject(&create_target).unwrap());
         assert!(context.live_contains_mobject(&fade_target).unwrap());
@@ -8310,16 +7949,19 @@ mod tests {
         let right = context.scene.circle(0.4).unwrap();
         context.bind_mobject(ObjectId::new(0), &left).unwrap();
         context.bind_mobject(ObjectId::new(1), &right).unwrap();
-        let source = context.scene.family(&[&left, &right]).unwrap();
+        let source = context
+            .scene
+            .family(&[(&left).into(), (&right).into()])
+            .unwrap();
         let mut left_target = left.target_editor().unwrap();
         left_target.set_translation(-2.0, 1.0).unwrap();
         let mut right_target = right.target_editor().unwrap();
         right_target.set_translation(2.0, -1.0).unwrap();
         let target = context
             .scene
-            .family(&[&left_target, &right_target])
+            .family(&[(&left_target).into(), (&right_target).into()])
             .unwrap();
-        let invalid_target = context.scene.family(&[&left_target]).unwrap();
+        let invalid_target = context.scene.family(&[(&left_target).into()]).unwrap();
         let transform_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear)
@@ -8724,9 +8366,11 @@ mod tests {
         let child = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
-        context
-            .ordinary_play_transform_to(&source, &setup_target, child)
-            .unwrap();
+        play_request(
+            &mut context,
+            bound_transform_child(&source, setup_target.clone(), child),
+        )
+        .unwrap();
         let player = context.take_execution_player(1.0, 73).unwrap();
         context.return_execution_player(player).unwrap();
         let composition = AnimationOptions::new()
@@ -9290,17 +8934,19 @@ mod tests {
             .live_contains(&math)
             .unwrap());
 
-        let end = context
-            .begin_ordinary_fade(
-                ObjectId::new(0),
+        let end = begin_request(
+            &mut context,
+            fade_request(
+                Some(ObjectId::new(0)),
                 &label,
                 SemanticFadeDirection::In,
                 noon::FadeEndpoint::default(),
                 AnimationOptions::new()
                     .run_time(0.75)
                     .rate_func(RateFunction::Linear),
-            )
-            .unwrap();
+            ),
+        )
+        .unwrap();
         assert_eq!(end, 1.25);
         assert!(context.live_contains_mobject(&label).unwrap());
         assert_eq!(
@@ -9359,15 +9005,17 @@ mod tests {
         target.set_translation(2.0, -1.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
 
-        let end_time = context
-            .begin_ordinary_transform_to(
+        let end_time = begin_request(
+            &mut context,
+            bound_transform_child(
                 &circle,
-                &target,
+                target.clone(),
                 AnimationOptions::new()
                     .run_time(2.0)
                     .rate_func(RateFunction::Linear),
-            )
-            .unwrap();
+            ),
+        )
+        .unwrap();
         assert_eq!(end_time, 2.0);
         assert_eq!(context.active_live_player().unwrap().time(), 0.0);
 
@@ -9408,15 +9056,17 @@ mod tests {
             .unwrap()
             .live_shift(&next_target, 2.0, 0.0)
             .unwrap();
-        let next_endpoint = context
-            .begin_ordinary_transform_to(
+        let next_endpoint = begin_request(
+            &mut context,
+            bound_transform_child(
                 &circle,
-                &next_target,
+                next_target.clone(),
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
-            )
-            .unwrap();
+            ),
+        )
+        .unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
         let mut resumed = context.resume_execution_player().unwrap();
         resumed.live_advance_segment_to(next_endpoint).unwrap();
@@ -9495,7 +9145,11 @@ mod tests {
         context.bind_tracker_position(&circle, &position).unwrap();
         assert_eq!(
             context
-                .declare_tracker_play(&tracker, 4.0, 2.0, RateFunction::Linear)
+                .scene
+                .play_value(&tracker, 4.0)
+                .rate_func(RateFunction::Linear)
+                .run_time(2.0)
+                .map(|()| context.scene.time())
                 .unwrap(),
             2.0
         );
@@ -9593,12 +9247,19 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let tracker = context.create_value_tracker(0.0).unwrap();
         context
-            .declare_tracker_play(&tracker, 4.0, 2.0, RateFunction::Linear)
+            .scene
+            .play_value(&tracker, 4.0)
+            .rate_func(RateFunction::Linear)
+            .run_time(2.0)
             .unwrap();
         assert_eq!(context.authored_wait(1.0).unwrap(), 3.0);
         assert_eq!(
             context
-                .declare_tracker_play(&tracker, 6.0, 1.0, RateFunction::Linear)
+                .scene
+                .play_value(&tracker, 6.0)
+                .rate_func(RateFunction::Linear)
+                .run_time(1.0)
+                .map(|()| context.scene.time())
                 .unwrap(),
             4.0
         );
@@ -9633,15 +9294,31 @@ mod tests {
         context.bind_tracker_position(&circle, &position).unwrap();
         let revision = context.scene.store().borrow().scene_revision();
 
-        assert!(context
-            .begin_ordinary_value_tracker_play(&tracker, f64::MAX, 2.0, RateFunction::Linear,)
-            .is_err());
+        assert!(begin_request(
+            &mut context,
+            OrdinaryCompositionChild::ValueTracker {
+                tracker: tracker.clone(),
+                target: f64::MAX,
+                options: AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear)
+            }
+        )
+        .is_err());
         assert!(context.live_player.is_none());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
-        let end = context
-            .begin_ordinary_value_tracker_play(&tracker, 2.0, 2.0, RateFunction::Linear)
-            .unwrap();
+        let end = begin_request(
+            &mut context,
+            OrdinaryCompositionChild::ValueTracker {
+                tracker: tracker.clone(),
+                target: 2.0,
+                options: AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            },
+        )
+        .unwrap();
         assert_eq!(end, 2.0);
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(1.0).unwrap();
@@ -9680,7 +9357,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_affine_play_rejects_a_pre_execution_scalar_cursor_without_bootstrapping() {
+    fn ordinary_composition_play_rejects_a_pre_execution_scalar_cursor_without_bootstrapping() {
         let mut context = CanonicalAuthoringScene::default();
         let tracker = context.create_value_tracker(0.0).unwrap();
         let circle = context.scene.circle(0.4).unwrap();
@@ -9688,19 +9365,24 @@ mod tests {
         target.set_translation(2.0, -1.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         context
-            .declare_tracker_play(&tracker, 4.0, 2.0, RateFunction::Linear)
+            .scene
+            .play_value(&tracker, 4.0)
+            .rate_func(RateFunction::Linear)
+            .run_time(2.0)
             .unwrap();
         let revision = context.scene.store().borrow().scene_revision();
 
-        let error = context
-            .ordinary_play_transform_to(
+        let error = play_request(
+            &mut context,
+            bound_transform_child(
                 &circle,
-                &target,
+                target.clone(),
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
-            )
-            .unwrap_err();
+            ),
+        )
+        .unwrap_err();
         assert!(error.contains("cannot follow pre-execution canonical timing"));
         assert!(context.live_player.is_none());
         assert_eq!(context.authored_duration(), 2.0);
@@ -9741,15 +9423,17 @@ mod tests {
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
 
-        let fade_in_end = context
-            .begin_ordinary_fade(
-                ObjectId::new(0),
+        let fade_in_end = begin_request(
+            &mut context,
+            fade_request(
+                Some(ObjectId::new(0)),
                 &circle,
                 SemanticFadeDirection::In,
                 noon::FadeEndpoint::default(),
                 options,
-            )
-            .unwrap();
+            ),
+        )
+        .unwrap();
         assert!(context.live_contains_mobject(&circle).unwrap());
         {
             let player = context.active_live_player().unwrap();
@@ -9759,15 +9443,17 @@ mod tests {
         }
         assert!(context.live_contains_mobject(&circle).unwrap());
 
-        let fade_out_end = context
-            .begin_ordinary_fade(
-                ObjectId::new(0),
+        let fade_out_end = begin_request(
+            &mut context,
+            fade_request(
+                None,
                 &circle,
                 SemanticFadeDirection::Out,
                 noon::FadeEndpoint::default(),
                 options,
-            )
-            .unwrap();
+            ),
+        )
+        .unwrap();
         {
             let player = context.active_live_player().unwrap();
             player.live_advance_segment_to(fade_out_end).unwrap();
@@ -9786,13 +9472,15 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
         let revision = context.scene.store().borrow().scene_revision();
-        assert!(context
-            .begin_ordinary_create(
-                ObjectId::new(0),
+        assert!(begin_request(
+            &mut context,
+            create_request(
+                Some(ObjectId::new(0)),
                 &circle,
-                AnimationOptions::new().run_time(f64::NAN),
+                AnimationOptions::new().run_time(f64::NAN)
             )
-            .is_err());
+        )
+        .is_err());
         assert!(context.live_player.is_none());
         assert!(context.bindings.is_empty());
         assert!(context.identities.is_empty());
@@ -9802,34 +9490,40 @@ mod tests {
             .scene
             .circle(0.4)
             .unwrap();
-        assert!(context
-            .begin_ordinary_create(
-                ObjectId::new(0),
+        assert!(begin_request(
+            &mut context,
+            create_request(
+                Some(ObjectId::new(0)),
                 &foreign,
-                AnimationOptions::new().run_time(1.0),
+                AnimationOptions::new().run_time(1.0)
             )
-            .is_err());
+        )
+        .is_err());
         assert!(context.live_player.is_none());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
-        let end = context
-            .begin_ordinary_create(
-                ObjectId::new(0),
+        let end = begin_request(
+            &mut context,
+            create_request(
+                Some(ObjectId::new(0)),
                 &circle,
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
-            )
-            .unwrap();
+            ),
+        )
+        .unwrap();
         assert_eq!(end, 1.0);
         assert!(context.live_contains_mobject(&circle).unwrap());
-        assert!(context
-            .begin_ordinary_create(
-                ObjectId::new(1),
+        assert!(begin_request(
+            &mut context,
+            create_request(
+                Some(ObjectId::new(1)),
                 &circle,
-                AnimationOptions::new().run_time(1.0),
+                AnimationOptions::new().run_time(1.0)
             )
-            .is_err());
+        )
+        .is_err());
         assert_eq!(context.bindings.len(), 1);
         assert_eq!(context.identities.len(), 1);
     }
@@ -9839,9 +9533,11 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let square = context.scene.square(2.0).unwrap();
         let id = ObjectId::new(0);
-        let end = context
-            .begin_ordinary_uncreate(id, &square, AnimationOptions::new())
-            .unwrap();
+        let end = begin_request(
+            &mut context,
+            uncreate_request(Some(id), &square, AnimationOptions::new()),
+        )
+        .unwrap();
         assert_eq!(end, 1.0);
         assert!(context.live_contains_mobject(&square).unwrap());
         let player = context.active_live_player().unwrap();
@@ -9860,15 +9556,17 @@ mod tests {
         let id = ObjectId::new(0);
         context.bind_mobject(id, &square).unwrap();
 
-        let end = context
-            .begin_ordinary_uncreate(
-                id,
+        let end = begin_request(
+            &mut context,
+            uncreate_request(
+                None,
                 &square,
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
-            )
-            .unwrap();
+            ),
+        )
+        .unwrap();
         assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
         assert!(context.live_contains_mobject(&square).unwrap());
         let player = context.active_live_player().unwrap();
@@ -9888,11 +9586,13 @@ mod tests {
             .run_time(1.0)
             .rate_func(RateFunction::Smooth);
         let end = context
-            .begin_ordinary_create_parallel(
-                &[
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &create_requests(&[
                     (ObjectId::new(0), circle.clone(), options),
                     (ObjectId::new(1), square.clone(), options),
-                ],
+                ]),
+                AnimationOptions::new(),
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
@@ -9932,8 +9632,9 @@ mod tests {
         let revision = context.scene.store().borrow().scene_revision();
 
         assert!(context
-            .begin_ordinary_create_parallel(
-                &[
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &create_requests(&[
                     (
                         ObjectId::new(0),
                         circle.clone(),
@@ -9944,8 +9645,9 @@ mod tests {
                         square.clone(),
                         AnimationOptions::new().run_time(f64::NAN)
                     ),
-                ],
-                AnimationOptions::new().run_time(1.0),
+                ]),
+                AnimationOptions::new(),
+                AnimationOptions::new().run_time(1.0)
             )
             .is_err());
         assert!(context.live_player.is_none());
@@ -9961,18 +9663,20 @@ mod tests {
         let before = context.scene.store().borrow().scene_revision();
         let id = ObjectId::new(0);
 
-        assert!(context
-            .begin_ordinary_fade(
-                id,
+        assert!(begin_request(
+            &mut context,
+            fade_request(
+                Some(id),
                 &circle,
                 SemanticFadeDirection::In,
                 noon::FadeEndpoint::default(),
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear)
-                    .lag_ratio(0.5),
+                    .lag_ratio(0.5)
             )
-            .is_err());
+        )
+        .is_err());
         assert!(context.live_player.is_none());
         assert!(!context.live_player_returned);
         assert!(!context.live_player_transferred);
@@ -9981,17 +9685,19 @@ mod tests {
         assert_eq!(context.scene.store().borrow().scene_revision(), before);
 
         // The failed provisional player did not poison the ordinary path.
-        context
-            .begin_ordinary_fade(
-                id,
+        begin_request(
+            &mut context,
+            fade_request(
+                Some(id),
                 &circle,
                 SemanticFadeDirection::In,
                 noon::FadeEndpoint::default(),
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
-            )
-            .unwrap();
+            ),
+        )
+        .unwrap();
         assert!(context.live_player.is_some());
         assert_eq!(context.bindings.get(&id), Some(&circle.node_id()));
     }
@@ -10006,17 +9712,19 @@ mod tests {
         let before = context.scene.store().borrow().scene_revision();
         let id = ObjectId::new(0);
 
-        assert!(context
-            .begin_ordinary_fade(
-                id,
+        assert!(begin_request(
+            &mut context,
+            fade_request(
+                Some(id),
                 &text,
                 SemanticFadeDirection::In,
                 noon::FadeEndpoint::default(),
                 AnimationOptions::new()
                     .run_time(-1.0)
-                    .rate_func(RateFunction::Linear),
+                    .rate_func(RateFunction::Linear)
             )
-            .is_err());
+        )
+        .is_err());
         assert!(context.live_player.is_none());
         assert!(!context.bindings.contains_key(&id));
         assert!(!context.identities.contains_key(&text.node_id()));

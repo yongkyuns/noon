@@ -133,12 +133,10 @@
     {
       "id": "mobject.next-to-submobject-aligner",
       "surface": "Mobject.next_to with submobject_to_align/index_of_submobject_to_align and Group-family targets",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_next_to/_next_to fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore family membership"},
-      "reason": "Selecting a wrapper submobject/family aligner still happens in Python before placement can be delegated.",
-      "replacement": "Expose family-member layout handles so Rust can resolve the selected aligner and target family bounds.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "LayoutAnchor::next_to_aligned"},
+      "reason": "Typed selected-member placement resolves direct family indices, including negative indices, and target/source bounds in Rust. Authored placement and LiveSession::next_layout_to_aligned reuse the same relative-placement math and atomic local mutation vocabulary. Python passes explicit wrapper references and coerces arguments only; legacy/export query fallbacks remain separately inventoried.",
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_selected_next_to"}]
     },
     {
       "id": "mobject.align",
@@ -152,35 +150,33 @@
       "id": "group-layout-bounds",
       "surface": "Deterministic Group/VGroup aggregate bounds, center, width/height, and critical-point queries",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "semantic_family_leaf_ids/WasmAuthoringFamilyHandle::layout_session/WasmAuthoringFamilyLayout"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "MobjectFamily::layout/FamilyLayout"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_compat_bounds_for"}],
-      "reason": "Rust derives recursive leaf order from SemanticStore, validates the Python wrapper mirror against that order, and computes the aggregate bounds; Python only supplies the corresponding live shared leaf handles."
+      "reason": "Rust aggregates semantic family membership using authored bounds or current effective runtime transforms through LiveSession. Python only checks local wrapper eligibility; it cannot feed per-leaf bounds or construct a partial observation."
     },
     {
       "id": "group-translation",
       "surface": "Deterministic Group/VGroup shift/move_to/center/set_x/set_y translation",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout::shift_by/move_to_*/WasmAuthoringFamilyTranslation::apply_mobject"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_shift/_group_move_to/_apply_family_translation"}],
-      "reason": "Rust computes the family translation delta from authoritative shared bounds, validates recursive leaf order, and mutates each shared leaf handle; Python only coerces host arguments and synchronizes the legacy scene transport mirror."
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "FamilyLayout::shift/move_to"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_shift/_group_move_to/_sync_family_transforms"}],
+      "reason": "Rust computes the translation from shared bounds and commits every observed leaf through one alias-aware semantic transaction. Python only coerces arguments and synchronizes the existing legacy export projection."
     },
     {
       "id": "group-relative-placement",
       "surface": "Deterministic Group/VGroup next_to/align_to without explicit submobject selection",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout::next_to_*/align_to_*/WasmAuthoringFamilyTranslation"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "RelativePlacement; FamilyLayout::next_to/align_to"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_next_to/_group_align_to"}],
       "reason": "Rust resolves family/leaf/point critical points, Manim's unnormalized next_to direction and buffer, align_to axis masking, and the authoritative recursive leaf mutation order. Python only coerces host arguments and selects the target handle kind."
     },
     {
       "id": "group-placement",
-      "surface": "Group/VGroup next_to submobject_to_align/index_of_submobject_to_align selection and arrange forwarded placement kwargs",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_next_to fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/WasmAuthoringFamilyArrange/WasmAuthoringFamilyTranslation"},
-      "reason": "Default family relative placement and ordinary arrange sequencing are shared-Rust-owned, but explicit wrapper/member aligner selection and forwarded arrange placement kwargs still resolve in Python.",
-      "replacement": "Expose shared family-member selection handles and route forwarded arrange alignment policy through the shared family placement API.",
-      "migration_issue": "#61"
+      "surface": "Group/VGroup authored and live move_to/next_to/align_to with selected-member anchors",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "FamilyLayout/LayoutAnchor"},
+      "reason": "Family observations, selected anchors and relative-placement math are shared Rust operations. Live placement reads effective bounds and uses the same local mutation transaction. Python passes wrapper references and coerces vector/index arguments; remaining explicit legacy snapshot fallback is separately inventoried.",
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_move_to/_group_next_to/_group_align_to"}]
     },
     {
       "id": "mobject.become-replace",
@@ -210,8 +206,8 @@
       "surface": "Transform/ReplacementTransform/TransformFromCopy",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::append_transform"},
-      "reason": "Python still expands transform variants and authors their object-snapshot tracks even though the Rust facade has the shared lowering.",
+      "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_transform_to"},
+      "reason": "Ordinary Transform reaches shared Rust execution; remaining migration/export transform variants still expand Python-authored tracks and must be retired.",
       "replacement": "Pass transform intent and handles to the shared Rust authoring scene.",
       "migration_issue": "#61"
     },
@@ -220,7 +216,7 @@
       "surface": "Typed leaf FadeIn/FadeOut with scale, shift, or target_position",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_fade_with_endpoint"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_fade_endpoint/_play_canonical_fade"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_fade_endpoint/_build_canonical_composition_candidate"}],
       "reason": "Python coerces the Manim call into scale plus a shift or point value. Rust resolves effective endpoint layout, authors the affine and appearance tracks, owns lifecycle membership, and schedules composition timing."
     },
     {
@@ -308,9 +304,9 @@
       "id": "animate.group-target-state",
       "surface": "Group.animate target derivation",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendFamilyTargetEditor/WasmAuthoringFamilyHandle::target_editor"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_target_mobject/_group_target_copy"}],
-      "reason": "Rust snapshots authoritative source-family order, validates every source/target wrapper pair, and constructs the target family graph; Python only mirrors wrapper identity while leaf target edits use the shared Mobject target editor."
+      "owner": {"language": "rust", "path": "crates/noon/src/family_copy.rs", "symbol": "MobjectFamily::copy_family"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_copy"}],
+      "reason": "Rust copies the complete semantic family in one transaction, preserving ordered edges and internal aliases. Live copies capture coherent effective leaf state. Python prepares class/attribute metadata and binds the returned typed copies; it does not construct target nodes or edges."
     },
     {
       "id": "scene-bound-deterministic-state",
@@ -352,7 +348,7 @@
       "id": "group-family",
       "surface": "Group/VGroup direct family identity, membership, and order",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore::insert_family/add_member/remove_member"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_authoring.rs", "symbol": "MobjectFamily::create/add/remove and family_creation_transaction"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_init/_group_add/_group_remove"}],
       "reason": "The shared semantic store assigns stable object/family identities, owns duplicate suppression and direct-member order, and returns membership decisions that Python mirrors for wrapper identity."
     },
@@ -369,8 +365,8 @@
       "surface": "Scene.add/play/wait cursor and lifecycle authoring",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Scene.add/play/wait"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::add/play_batch/wait"},
-      "reason": "The Python facade still owns scene cursor and object binding decisions before serializing a Rust scene document.",
+      "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::add/declare_and_activate_composition/wait_segment"},
+      "reason": "Ordinary playback uses shared Rust continuations. The remaining export fallback still owns a Python scene cursor and binding decisions; deletion remains under #61.",
       "replacement": "Make the Rust authoring scene authoritative and keep Python Scene as a thin call-shape adapter.",
       "migration_issue": "#61"
     },
@@ -384,11 +380,11 @@
     },
     {
       "id": "layout.arrange",
-      "surface": "Deterministic Group/VGroup arrange(direction, buff, center) without forwarded placement kwargs",
+      "surface": "Group/VGroup arrange with edge, coordinate mask, explicit/indexed aligners and shared family aliases",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon/src/family_authoring.rs", "symbol": "FamilyArrangePlan/manim_family_arrange_deltas/MobjectFamily::arrange"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_arrangement.rs", "symbol": "FamilyArrangePlan/MobjectFamily::arrange_with_options"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_arrange"}],
-      "reason": "The common Rust family planner owns direct-member order, validated bounds, spacing and recentering. MobjectFamily::arrange and LiveSession::arrange_family publish atomic translations; the WASM facade reuses the same planner and Python only supplies handles/options."
+      "reason": "One shared planner resolves direct-member selections, observes local leaf bounds, stages successive placements against preceding moves and centers unique semantic leaves once. Authored and live options calls publish one atomic transaction. Python passes one typed options object without sequencing member placements or supplying bounds."
     },
     {
       "id": "rate-function.lookup",

@@ -9,6 +9,7 @@ use crate::{
 
 pub struct FamilyTransformIndicate {
     left: Mobject,
+    saved_left: Mobject,
     right: Mobject,
     source: MobjectFamily,
     target: MobjectFamily,
@@ -57,8 +58,21 @@ impl LiveContinuation for FamilyTransformIndicate {
                     .map_err(|error| error.to_string())
             }
             3 => {
-                live.shift(&self.left, 1.0, 0.0)
-                    .map_err(|error| error.to_string())?;
+                let copied = live
+                    .copy_family_with_references(&self.source, &[(&self.saved_left).into()])
+                    .map_err(|e| e.to_string())?;
+                if copied.mobject(&self.saved_left)?.center()? != (-2.0, 0.0) {
+                    return Err("family copy changed detached saved state".into());
+                }
+                let left_target = copied.mobject(&self.left)?;
+                live.shift(&left_target, 1.0, 0.0)
+                    .map_err(|e| e.to_string())?;
+                live.become_mobject(
+                    &self.left,
+                    &left_target,
+                    crate::ManimBecomeOptions::default(),
+                )
+                .map_err(|e| e.to_string())?;
                 self.stage = 4;
                 live.wait_segment(0.25)
                     .map(ContinuationStep::Await)
@@ -113,15 +127,15 @@ pub fn program() -> Result<LiveProgram<FamilyTransformIndicate>, String> {
     }
     scene.add(&left).map_err(|error| error.to_string())?;
     scene.add(&right).map_err(|error| error.to_string())?;
-    let source = scene.family(&[&left, &right])?;
-    let mut left_target = left.target_editor()?;
-    let mut right_target = right.target_editor()?;
-    left_target.shift(1.0, 0.0)?;
-    right_target.shift(1.0, 0.0)?;
-    let target = scene.family(&[&left_target, &right_target])?;
+    let source = scene.family(&[(&left).into(), (&right).into()])?;
+    let saved_left = left.target_editor()?;
+    let copied = source.copy_with_references(&[(&saved_left).into()])?;
+    let target = copied.root().clone();
+    target.shift(1.0, 0.0)?;
     scene
         .into_live_program(FamilyTransformIndicate {
             left,
+            saved_left,
             right,
             source,
             target,

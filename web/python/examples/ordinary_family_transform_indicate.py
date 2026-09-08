@@ -14,6 +14,7 @@ class OrdinaryFamilyTransformIndicate(Scene):
             .set_fill(BLUE, opacity=0.9)
             .set_stroke(opacity=0)
         )
+        left.save_state()
         family = VGroup(left, right)
         self.add(family)
         self.play(
@@ -25,6 +26,10 @@ class OrdinaryFamilyTransformIndicate(Scene):
         assert abs(left.get_center().x + 1) < 1e-6
         assert abs(right.get_center().x - 1) < 1e-6
         self.wait(0.25)
-        left.shift(RIGHT)
+        copied = family.copy()
+        assert copied[0].saved_state is not left.saved_state
+        assert abs(copied[0].saved_state.get_center().x + 2) < 1e-6
+        copied[0].shift(RIGHT)
+        left.become(copied[0])
         self.wait(0.25)
         assert abs(left.get_center().x) < 1e-6

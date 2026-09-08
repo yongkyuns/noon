@@ -70,11 +70,10 @@ async function waitForHarness(page) {
   assert.equal(metrics.error, null, `renderer failed to initialize: ${metrics.error}`);
   assert.equal(metrics.rendererBackend, "WebGL2", `expected WebGL2, got ${metrics.rendererBackend}`);
   const loaded = await page.evaluate(async () => {
-    const wasm = await import("./pkg/noon_web.js");
-    const { createExplicitTransportSceneJson } = await import(
+    const { loadExecutionTransportFixture } = await import(
       "../scripts/explicit-transport-scene-fixture.js"
     );
-    return window.noonSmoke.loadScene(createExplicitTransportSceneJson(wasm));
+    return window.noonSmoke.loadScene(await loadExecutionTransportFixture("four_animated"));
   });
   assert.equal(loaded.objectCount, 4, "context-loss fixture must contain visible geometry");
   return page.evaluate(() => window.noonSmoke.metrics());

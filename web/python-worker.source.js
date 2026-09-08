@@ -2,6 +2,7 @@ import initNoonWeb, {
   WasmAuthoringStore,
   WasmAuthoringVectorPath,
   WasmManimGeometryOptions,
+  WasmSceneMembershipBatch,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
@@ -133,7 +134,8 @@ async function initializePyodide() {
     authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
-  self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
+  self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
+  self.noonCreateAuthoringFamilyHandle = (batch) => authoringStore.createFamily(batch);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
@@ -795,7 +797,7 @@ from _manim_canonical_scene import (
     materialize_legacy_geometry,
 )
 from _manim_source_execution import (
-    BARRIER_GLOBAL, compile_authoring_source,
+    BARRIER_GLOBAL, compile_authoring_source, authoring_source_scope,
 )
 from noon import PatchBatch, Scene
 
@@ -808,7 +810,8 @@ __noon_code, __noon_portable_constructs = compile_authoring_source(
 )
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
-exec(__noon_code, __noon_namespace)
+with authoring_source_scope(export_document=bool(__noon_export_document)):
+    exec(__noon_code, __noon_namespace)
 
 if "result" in __noon_namespace:
     __noon_result = __noon_namespace["result"]
@@ -861,6 +864,12 @@ if isinstance(__noon_result, Scene):
         __noon_document = None
         __noon_identities = None
     else:
+        if (not __noon_export_document and
+                getattr(__noon_result, "_canonical_authoring_context", None) is not None):
+            raise RuntimeError(
+                "shared Scene cannot fall back to scene-document execution; "
+                "remove incompatible legacy declarations or request exportDocument explicitly"
+            )
         __noon_callbacks = _manim_updaters.register_scene(__noon_result)
         if __noon_callbacks and getattr(__noon_result, "_semantic_text_handles", {}):
             raise RuntimeError(

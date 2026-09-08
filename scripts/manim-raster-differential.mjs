@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import pngjs from "pngjs";
+import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -203,40 +204,6 @@ async function renderManimReferences() {
   return results;
 }
 
-function noonSourceFor(fixture) {
-  const adapted = fixtureSourceFor(fixture).replace("from manim import *", "from noon import *");
-  // Selection is host bootstrap. The normal source runner owns construct and
-  // continuation; authored semantics and callbacks remain unchanged.
-  return `${adapted}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${fixture.scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
-}
-
-function browserArgs(backend) {
-  if (backend === "webgpu") {
-    return [
-      "--enable-unsafe-webgpu",
-      "--enable-unsafe-swiftshader",
-      "--use-webgpu-adapter=swiftshader",
-      "--use-gpu-in-tests",
-      "--ignore-gpu-blocklist",
-      "--enable-features=Vulkan",
-      "--use-gl=angle",
-      "--use-angle=swiftshader",
-      "--use-vulkan=swiftshader",
-      "--disable-gpu-sandbox",
-      "--disable-dev-shm-usage",
-    ];
-  }
-  return [
-    "--disable-features=WebGPU",
-    "--enable-unsafe-swiftshader",
-    "--ignore-gpu-blocklist",
-    "--use-gl=angle",
-    "--use-angle=swiftshader",
-    "--disable-gpu-sandbox",
-    "--disable-dev-shm-usage",
-  ];
-}
-
 async function prepareHostCapturePage(page) {
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
   await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
@@ -246,7 +213,7 @@ async function prepareHostCapturePage(page) {
 async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend) {
   const loaded = await page.evaluate(
     ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
-    { source: noonSourceFor(fixture), loopDuration: Math.max(1, fixture.expected_duration + 1) },
+    { source: rasterFixtureSource(fixtureSourceFor(fixture), fixture.scene), loopDuration: Math.max(1, fixture.expected_duration + 1) },
   );
   assert.equal(loaded.kind, "semantic_execution", `${fixture.id}: shared source execution`);
   assert.equal(loaded.rendererBackend, expectedBackend, `${fixture.id}: host renderer backend`);

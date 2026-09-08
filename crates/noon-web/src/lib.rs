@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-mod authoring_facade;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
 mod authoring_mobject;
@@ -16,7 +15,7 @@ mod direct_execution_smoke;
 mod execution_canvas;
 mod execution_transport;
 mod execution_wake;
-mod family_bounds;
+mod geometry_export;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 mod gpu_diagnostics;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
@@ -41,9 +40,7 @@ mod retained_text_family_transport;
 #[cfg(feature = "renderer")]
 mod retained_typst_canvas;
 mod semantic_execution_player;
-mod semantic_snapshot;
 
-pub use authoring_facade::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_geometry::*;
 pub use authoring_mobject::*;
@@ -59,7 +56,6 @@ pub use direct_execution_smoke::*;
 pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use execution_wake::*;
-pub use family_bounds::*;
 pub use legacy::{PlayerError, ReconcileOutcome};
 pub use lifecycle::*;
 pub use renderer_observation::*;

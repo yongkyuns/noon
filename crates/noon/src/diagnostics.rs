@@ -1,5 +1,5 @@
 //! Explicit diagnostic codec over the current shared execution frame.
-use noon::ExecutionSession;
+use crate::ExecutionSession;
 use noon_core::{Color, GeometryRef, GeometryResource, GeometryResourceLookup, Rect, Vec2};
 use serde_json::{json, Value};
 
@@ -27,7 +27,10 @@ fn bounds_json(bounds: Option<Rect>) -> Value {
     }
 }
 
-pub(crate) fn execution_frame_value(session: &ExecutionSession) -> Value {
+/// Capture derived current-frame observations for debugging and test artifacts.
+///
+/// This opt-in codec performs O(frame size) work and never advances or mutates execution.
+pub fn execution_frame_value(session: &ExecutionSession) -> Value {
     let frame = session.frame();
     let objects = session
         .painter_order()
@@ -93,11 +96,11 @@ pub(crate) fn execution_frame_value(session: &ExecutionSession) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon::{AnimationOptions, LiveProgramStatus, RateFunction, RustHostCallbackTable, Scene};
+    use crate::{AnimationOptions, LiveProgramStatus, RateFunction, RustHostCallbackTable, Scene};
 
     #[test]
     fn debug_capture_reads_the_current_shared_frame_without_advancing_it() {
-        let mut program = noon::example_scenes::scale_in_place::program().unwrap();
+        let mut program = crate::example_scenes::scale_in_place::program().unwrap();
         let mut callbacks = RustHostCallbackTable::new();
         assert!(matches!(
             program.resume().unwrap(),
@@ -117,7 +120,7 @@ mod tests {
     fn debug_capture_resolves_retained_paths_and_effective_transforms() {
         let mut scene = Scene::new();
         let mut shape =
-            noon::Mobject::manim_square(std::rc::Rc::clone(scene.store()), 2.0).unwrap();
+            crate::Mobject::manim_square(std::rc::Rc::clone(scene.store()), 2.0).unwrap();
         shape.set_fill_color(0.25, 0.5, 0.75, 0.4).unwrap();
         shape.set_fill_opacity(0.4).unwrap();
         shape.set_object_opacity(0.5).unwrap();

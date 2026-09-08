@@ -104,13 +104,24 @@ class GroupMembershipLive(Scene):
         pair.add(left)
         assert len(pair) == 2
         assert int(pair._semantic_family_handle.memberCount) == 2
-        layout = pair._semantic_family_handle.layoutSession()
-        layout.includeMobject(left._semantic_handle)
-        layout.includeMobject(right._semantic_handle)
+        layout = pair._semantic_family_handle.layout()
         assert abs(float(layout.width) - pair.width) < 1e-12
         assert abs(float(layout.height) - pair.height) < 1e-12
         alias = VGroup(left)
         assert int(alias._semantic_family_handle.memberCount) == 1
+
+        duplicate = VGroup(left, alias, left)
+        assert list(duplicate) == [left, alias]
+        spare = Circle(radius=0.1)
+        cycle = VGroup(pair)
+        before = list(pair.submobjects)
+        try:
+            pair.add(spare, cycle)
+            raise AssertionError("authored cyclic batch must fail")
+        except Exception as error:
+            assert "cycle" in str(error).lower()
+        assert pair.submobjects == before
+        assert int(pair._semantic_family_handle.memberCount) == 2
 
         assert isinstance(pair, Mobject)
         assert isinstance(pair, Group)
@@ -187,6 +198,16 @@ class AnimateParity(Scene):
             Circle(radius=0.15, color=GREEN),
             Square(side_length=0.3, color=RED),
         ).arrange(RIGHT, buff=0.15)
+        spare = Circle(radius=0.1)
+        cycle = VGroup(pair)
+        before_members = list(pair.submobjects)
+        try:
+            pair.add(spare, cycle)
+        except Exception:
+            pass
+        else:
+            raise AssertionError("cyclic live family batch must fail")
+        assert pair.submobjects == before_members
         for member in pair:
             self.live_execution().add(member)
         self.play(pair.animate(run_time=1.2, lag_ratio=0.5).shift(UP))
@@ -358,7 +379,12 @@ try {
     const otherStore = new wasm.WasmAuthoringStore();
     const circle = store.createManimCircle(0.6);
     const foreign = otherStore.createManimCircle(0.6);
-    const family = store.createFamily();
+    const batch = (...members) => {
+      const request = new wasm.WasmSceneMembershipBatch("add");
+      for (const member of members) request.appendMobject("", member);
+      return request;
+    };
+    const family = store.createFamily(batch());
     const copy = circle.cloneHandle();
     const target = circle.targetEditor();
     const identity = (handle) => `${handle.semanticSlot}:${handle.semanticGeneration}`;
@@ -369,28 +395,28 @@ try {
       return false;
     };
     const sameNumericId = identity(circle) === identity(foreign);
-    const foreignAddRejected = rejectsForeign(() => family.addMobject(foreign));
-    for (const handle of [circle, copy, target]) family.addMobject(handle);
-    const layout = family.layoutSession();
-    const foreignLayoutRejected = rejectsForeign(() => layout.includeMobject(foreign));
-    for (const handle of [circle, copy, target]) layout.includeMobject(handle);
-    const translation = layout.shiftBy(1, 0);
-    const foreignTranslationRejected = rejectsForeign(() => translation.applyMobject(foreign));
+    const foreignAddRejected = rejectsForeign(() => family.editMembership(batch(circle, foreign)));
+    if (family.memberCount !== 0) throw new Error("failed authored batch partially committed");
+    family.editMembership(batch(circle, copy, target));
+    const layout = family.layout();
+    const foreignFamily = otherStore.createFamily(batch(foreign));
+    const foreignLayout = foreignFamily.layout();
+    const foreignObjectPlacementRejected = rejectsForeign(() => layout.moveToMobject(foreign, 0, 0, 1, 1));
+    const foreignFamilyPlacementRejected = rejectsForeign(() => layout.moveToFamily(foreignLayout, 0, 0, 1, 1));
     store.free();
     otherStore.free();
-    // Handles keep the authoritative identity owner alive, independent of JS roots.
-    for (const handle of [circle, copy, target]) translation.applyMobject(handle);
-    translation.finish();
+    // Observations retain their semantic store; one operation applies all members.
+    layout.shiftBy(1, 0);
     const memberCount = family.memberCount;
-    for (const handle of [translation, layout, family]) handle.free();
+    for (const handle of [layout, family, foreignLayout, foreignFamily]) handle.free();
     // Only mobject wrappers now retain the store; copy/target mutation still works.
     copy.shift(2, 0);
     target.shift(-1, 0);
     const result = {
       sameNumericId,
       foreignAddRejected,
-      foreignLayoutRejected,
-      foreignTranslationRejected,
+      foreignObjectPlacementRejected,
+      foreignFamilyPlacementRejected,
       identities: [circle, copy, target].map(identity),
       centers: [circle.centerX, copy.centerX, target.centerX],
       memberCount,
@@ -400,8 +426,8 @@ try {
   });
   assert.equal(handleOwnership.sameNumericId, true, "independent stores may reuse numeric IDs");
   assert.equal(handleOwnership.foreignAddRejected, true);
-  assert.equal(handleOwnership.foreignLayoutRejected, true);
-  assert.equal(handleOwnership.foreignTranslationRejected, true);
+  assert.equal(handleOwnership.foreignObjectPlacementRejected, true);
+  assert.equal(handleOwnership.foreignFamilyPlacementRejected, true);
   assert.equal(new Set(handleOwnership.identities).size, 3, "copy/target allocate fresh identities");
   assert.deepEqual(handleOwnership.centers, [1, 3, 0], "copies/targets retain independent state");
   assert.equal(handleOwnership.memberCount, 3, "failed cross-store operations leave membership intact");

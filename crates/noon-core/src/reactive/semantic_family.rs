@@ -184,11 +184,12 @@ impl SemanticStore {
             let node = store
                 .node(node_id)
                 .ok_or(SemanticStoreError::UnknownNode(node_id))?;
+            if !seen.insert(node_id) {
+                return Ok(());
+            }
             match node.kind() {
                 SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => {
-                    if seen.insert(node_id) {
-                        leaves.push(node_id);
-                    }
+                    leaves.push(node_id);
                 }
                 SemanticNodeKind::Family => {
                     for member in node.members() {

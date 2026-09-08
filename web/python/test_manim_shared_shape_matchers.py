@@ -67,6 +67,7 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                 def __init__(self, store, snapshot_json):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.snapshot = json.loads(snapshot_json)
                     self._sync()
 
@@ -183,12 +184,9 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     }
                     self._sync()
 
-            class FakeLayoutSession:
-                def __init__(self):
-                    self.members = []
-
-                def includeMobject(self, member):
-                    self.members.append(member)
+            class FakeLayoutObservation:
+                def __init__(self, members):
+                    self.members = list(members)
 
                 def _bounds(self):
                     min_x = min(member.criticalX(-1.0, 0.0) for member in self.members)
@@ -236,36 +234,20 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                 def __init__(self, store):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.members = []
 
-                def layoutSession(self):
-                    return FakeLayoutSession()
+                def layout(self):
+                    return FakeLayoutObservation([self.store.entities[key] for key in self.members])
 
                 @property
                 def memberCount(self):
                     return len(self.members)
 
-                def addMobject(self, member):
-                    if member.identity in self.members:
-                        return False
-                    self.members.append(member.identity)
-                    return True
-
-                def addFamily(self, member):
-                    return self.addMobject(member)
-
-                def removeMobject(self, member):
-                    if member.identity not in self.members:
-                        return False
-                    self.members.remove(member.identity)
-                    return True
-
-                def removeFamily(self, member):
-                    return self.removeMobject(member)
-
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
+                    self.entities = {}
 
                 def allocate(self):
                     value = self.next_identity
@@ -284,7 +266,8 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             store = FakeStore()
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, store.createMobject)
-            handles._create_family_handle = store.createFamily
+            import _typed_family_test_support as _family_test
+            _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeHandle)
             handles.install()
 
             import noon as _base

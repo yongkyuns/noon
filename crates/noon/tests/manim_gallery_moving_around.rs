@@ -1,46 +1,35 @@
-use noon::legacy::prelude::*;
-use noon_core::{Property, RateFunction};
+use noon::{example_scenes::moving_around, Color, LiveProgramStatus, RustHostCallbackTable, Vec2};
 
 #[test]
-fn moving_around_is_four_sequential_target_state_transforms() {
-    let mut scene = Scene::new();
-    let square = scene.add(
-        Square::default()
-            .color(BLUE)
-            .set_fill(Some(BLUE), Some(1.0)),
-    );
-
-    scene
-        .play(square.animate().shift(LEFT))
-        .run_time(1.0)
-        .unwrap();
-    scene
-        .play(square.animate().set_fill(Some(ORANGE), None))
-        .run_time(1.0)
-        .unwrap();
-    scene
-        .play(square.animate().scale(0.3))
-        .run_time(1.0)
-        .unwrap();
-    scene
-        .play(square.animate().rotate(0.4))
-        .run_time(1.0)
-        .unwrap();
-
-    assert_eq!(scene.time(), 4.0);
-    assert_eq!(scene.definition().objects().len(), 1);
-    let tracks = scene.definition().tracks();
-    assert_eq!(tracks.len(), 4);
-    for (index, track) in tracks.iter().enumerate() {
-        assert_eq!(track.property, Property::Transform);
-        assert_eq!(track.timing.start_time, index as f64);
-        assert_eq!(track.timing.duration, 1.0);
-        assert_eq!(track.timing.easing, RateFunction::Smooth);
+fn moving_around_captures_each_completed_target_and_keeps_identity() {
+    let mut program = moving_around::program().unwrap();
+    let mut callbacks = RustHostCallbackTable::new();
+    let mut identity = None;
+    for end in 1..=4 {
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        let state = program.drive_to(&mut callbacks, f64::from(end)).unwrap();
+        let frame = program.session().frame();
+        assert_eq!(frame.objects.len(), 1);
+        let object = &frame.objects[0];
+        assert_eq!(*identity.get_or_insert(object.id), object.id);
+        assert_eq!(object.transform.translation, Vec2::new(-1.0, 0.0));
+        if end >= 2 {
+            assert_eq!(object.style.fill, Some(Color::ORANGE));
+        }
+        if end >= 3 {
+            assert_eq!(object.transform.scale, Vec2::new(0.3, 0.3));
+        }
+        if end == 4 {
+            assert!((object.transform.rotation - 0.4).abs() < 1e-6);
+        }
+        if let LiveProgramStatus::PublicationPending(expected) = state {
+            let publication = program.take_renderer_publication().context();
+            assert_eq!(publication, expected);
+            program.admit_publication(publication).unwrap();
+        }
     }
-
-    let final_state = scene.snapshot(square).unwrap();
-    assert_eq!(final_state.transform.translation, LEFT);
-    assert_eq!(final_state.transform.scale, Vec2::new(0.3, 0.3));
-    assert!((final_state.transform.rotation - 0.4).abs() < 1e-6);
-    assert_eq!(final_state.style.fill, Some(ORANGE));
+    assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
 }

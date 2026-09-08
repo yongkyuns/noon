@@ -33,6 +33,7 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
                 def __init__(self, store, snapshot_json):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.snapshot = json.loads(snapshot_json)
                     self.shift_calls = []
 
@@ -62,46 +63,29 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
                         stroke[\"alpha\"] = float(opacity)
 
 
-            class FakeTranslation:
-                def __init__(self, store, members, dx, dy):
+            class FakeLayoutObservation:
+                def __init__(self, store, members):
                     self.store = store
-                    self.expected = [member.identity for member in members]
-                    self.next_index = 0
-                    self.dx = float(dx)
-                    self.dy = float(dy)
+                    self.members = list(members)
+                    store.layout_queries += 1
 
-                def applyMobject(self, member):
-                    assert member.identity == self.expected[self.next_index]
-                    self.store.applied.append(member.identity)
-                    member.shift(self.dx, self.dy)
-                    self.next_index += 1
-
-                def finish(self):
-                    assert self.next_index == len(self.expected)
+                def _apply(self, dx, dy):
+                    for member in self.members:
+                        member.shift(float(dx), float(dy))
+                        self.store.applied.append(member.identity)
                     self.store.finishes += 1
 
 
-            class FakeLayoutSession:
-                def __init__(self, store):
-                    self.store = store
-                    self.members = []
-                    store.layout_sessions += 1
-
-                def includeMobject(self, member):
-                    self.members.append(member)
-
                 def shiftBy(self, dx, dy):
                     self.store.shift_by.append((float(dx), float(dy)))
-                    return FakeTranslation(self.store, self.members, dx, dy)
+                    return self._apply(dx, dy)
 
                 def moveToPoint(self, x, y, edge_x, edge_y, mask_x, mask_y):
                     self.store.move_to_point.append(
                         (float(x), float(y), float(edge_x), float(edge_y), float(mask_x), float(mask_y))
                     )
                     # The fake family has center (1, 1) for aligned_edge == ORIGIN.
-                    return FakeTranslation(
-                        self.store,
-                        self.members,
+                    return self._apply(
                         (float(x) - 1.0) * float(mask_x),
                         (float(y) - 1.0) * float(mask_y),
                     )
@@ -117,41 +101,21 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
                 def __init__(self, store):
                     self.store = store
                     self.identity = store.allocate()
+                    store.entities[self.identity] = self
                     self.members = []
 
-                def layoutSession(self):
-                    return FakeLayoutSession(self.store)
+                def layout(self):
+                    return FakeLayoutObservation(self.store, [self.store.entities[key] for key in self.members])
 
                 @property
                 def memberCount(self):
                     return len(self.members)
 
-                def addMobject(self, member):
-                    if member.identity in self.members:
-                        return False
-                    self.members.append(member.identity)
-                    return True
-
-                def addFamily(self, member):
-                    if member.identity in self.members:
-                        return False
-                    self.members.append(member.identity)
-                    return True
-
-                def removeMobject(self, member):
-                    if member.identity not in self.members:
-                        return False
-                    self.members.remove(member.identity)
-                    return True
-
-                def removeFamily(self, member):
-                    return self.removeMobject(member)
-
-
             class FakeStore:
                 def __init__(self):
                     self.next_identity = 0
-                    self.layout_sessions = 0
+                    self.entities = {}
+                    self.layout_queries = 0
                     self.shift_by = []
                     self.move_to_point = []
                     self.applied = []
@@ -172,7 +136,8 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
             store = FakeStore()
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, store.createMobject)
-            handles._create_family_handle = store.createFamily
+            import _typed_family_test_support as _family_test
+            _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
             handles.install()
 
             from noon import Circle, RIGHT, Square, VGroup

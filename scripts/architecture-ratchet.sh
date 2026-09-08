@@ -203,9 +203,10 @@ fi
 deleted_legacy_web_surface_found=0
 deleted_legacy_web_references="$(
   git grep -nE \
-    '(^|[^[:alnum:]_])(NoonCanvasPlayer|demoSceneJson)([^[:alnum:]_]|$)' \
+    '(^|[^[:alnum:]_])(NoonCanvasPlayer|demoSceneJson|WasmAuthoringFamilyMemberHandle|FrontendFamilyBoundsPlan|noonCreateAuthoringFamilyMemberHandle|evaluateSceneSnapshot|evaluateScenePlaybackSnapshot|scene_snapshot_json|playback_snapshot_json|normalized_frame_json)([^[:alnum:]_]|$)' \
     -- \
     'crates/noon-web/src' \
+    'web/python-worker.source.js' \
     'web/browser-smoke.js' \
     'web/execution-renderer-smoke.js' \
     'scripts/check-web-package.mjs' \
@@ -242,15 +243,30 @@ if [[ -e 'crates/noon-web/src/legacy/clock.rs' ]]; then
   deleted_legacy_web_surface_found=1
 fi
 
-deleted_manual_profiler_paths=(
+deleted_legacy_validation_paths=(
+  'crates/noon/src/legacy.rs'
+  'crates/noon/src/legacy/semantic_snapshot.rs'
+  'crates/noon/src/analytic_geometry_authoring.rs'
+  'crates/noon/src/polygram_authoring.rs'
+  'crates/noon/src/line_matcher_authoring.rs'
+  'crates/noon/src/shape_matcher_authoring.rs'
+  'crates/noon-web/examples/manim_elbow_oracle.rs'
+  'crates/noon-web/src/authoring_facade.rs'
+  'crates/noon/src/legacy/composition_authoring.rs'
+  'web/noon-authoring.js'
+  'web/noon-moving-camera.js'
+  'web/js/examples/manim-gallery-moving-around.js'
+  'web/js/examples/manim-gallery-moving-camera-center.js'
+  'web/js/examples/manim-quickstart-equivalents.js'
+  'scripts/manim-seek-playback-raster.mjs'
   'web/gpu-profile.html'
   'web/gpu-profile.js'
   'web/morph-profile.html'
   'web/morph-profile.js'
 )
-for path in "${deleted_manual_profiler_paths[@]}"; do
+for path in "${deleted_legacy_validation_paths[@]}"; do
   if [[ -e "$path" ]]; then
-    printf 'architecture ratchet: deleted legacy manual profiler returned: %s\n' "$path" >&2
+    printf 'architecture ratchet: deleted legacy validation path returned: %s\n' "$path" >&2
     deleted_legacy_web_surface_found=1
   fi
 done
@@ -262,7 +278,7 @@ The browser package/smoke boundaries, duplicate playback clock, and manual legac
 profiler pages were cleaned by #1003, #1005, and follow-up A4 migration. Those
 completed boundaries must not regain the NoonCanvasPlayer/demoSceneJson frontend,
 noon-web must keep one PlaybackClock definition in crates/noon-web/src/clock.rs,
-and deleted manual profiler pages must stay absent. The remaining workflow-backed
+identity-only family bindings and deleted validation paths must stay absent. The remaining workflow-backed
 performance pages are separate A4 deletion debt; do not spread that debt back into
 cleaned product or validation paths. See #959/A4 and #961/A6.8.
 EOF

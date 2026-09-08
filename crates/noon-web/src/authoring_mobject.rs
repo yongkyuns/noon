@@ -1,14 +1,10 @@
-#[cfg(any(target_arch = "wasm32", test))]
-use noon::semantic_mobject::{
-    authoring_render_f64 as render_f64, authoring_xy_f64 as semantic_xy_f64,
-};
+#[cfg(target_arch = "wasm32")]
+use noon::semantic_mobject::authoring_render_f64 as render_f64;
 pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
-#[cfg(test)]
-use noon::{semantic_family_leaf_ids, FamilyTranslation};
-use noon_core::{
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
-    SemanticStore,
-};
+#[cfg(target_arch = "wasm32")]
+use noon_core::SemanticNodeId;
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::SemanticStore;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn text_authoring_f32(field: &str, value: f64) -> Result<f32, String> {
@@ -37,136 +33,15 @@ pub(crate) fn manim_text(
         .with_line_spacing(line_spacing))
 }
 
-/// Shared target-family construction used by frontend Group/VGroup animation builders.
-///
-/// The Python/JS wrapper tree is host-language identity metadata only. This editor
-/// snapshots the source family's authoritative ordered membership, validates each
-/// wrapper pair against that order, and constructs the target family in the same
-/// semantic store. Leaf target state is edited through `Mobject`.
-#[derive(Clone, Debug)]
-pub struct FrontendFamilyTargetEditor {
-    source_members: Vec<SemanticNodeId>,
-    target_members: Vec<SemanticNodeId>,
-    next_index: usize,
-}
-
-impl FrontendFamilyTargetEditor {
-    pub fn begin(store: &SemanticStore, source: SemanticNodeId) -> Result<Self, String> {
-        let source_members = {
-            let source_node = store
-                .node(source)
-                .ok_or_else(|| format!("unknown source family semantic node {source:?}"))?;
-            if !matches!(source_node.kind(), SemanticNodeKind::Family) {
-                return Err(format!("source semantic node {source:?} is not a family"));
-            }
-            source_node.members().to_vec()
-        };
-        Ok(Self {
-            source_members,
-            target_members: Vec::new(),
-            next_index: 0,
-        })
-    }
-
-    pub fn accept_member(
-        &mut self,
-        source_member: SemanticNodeId,
-        target_member: SemanticNodeId,
-    ) -> Result<(), String> {
-        let expected = self
-            .source_members
-            .get(self.next_index)
-            .copied()
-            .ok_or_else(|| "family target editor received too many members".to_owned())?;
-        if expected != source_member {
-            return Err(format!(
-                "family target source member mismatch at index {}: expected {expected:?}, got {source_member:?}",
-                self.next_index
-            ));
-        }
-        self.target_members.push(target_member);
-        self.next_index += 1;
-        Ok(())
-    }
-
-    pub fn target_members(&self) -> Result<&[SemanticNodeId], String> {
-        if self.next_index != self.source_members.len() {
-            return Err(format!(
-                "family target editor is incomplete: accepted {} of {} members",
-                self.next_index,
-                self.source_members.len()
-            ));
-        }
-        Ok(&self.target_members)
-    }
-
-    pub fn finish(&self, store: &mut SemanticStore) -> Result<SemanticNodeId, String> {
-        let members = self.target_members()?;
-        let mut transaction = SemanticMutationTransaction::new();
-        let family = transaction.create_node(SemanticNodeCreation::family());
-        for &member in members {
-            transaction.add_member(family, member);
-        }
-        let result = transaction
-            .apply(store)
-            .map_err(|error| error.to_string())?;
-        let node = result
-            .resolve(family)
-            .expect("committed target family token resolves to one semantic identity");
-        Ok(node)
-    }
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-fn manim_family_next_to_delta(
-    source: (f64, f64),
-    target: (f64, f64),
-    direction: (f64, f64),
-    buff: f64,
-    mask: (f64, f64),
-) -> Result<(f64, f64), String> {
-    let direction = semantic_xy_f64(direction.0, direction.1)?;
-    let mask = semantic_xy_f64(mask.0, mask.1)?;
-    let buff = render_f64("buffer", buff)?;
-    Ok((
-        (target.0 - source.0 + direction.x * buff) * mask.x,
-        (target.1 - source.1 + direction.y * buff) * mask.y,
-    ))
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-fn manim_family_align_to_delta(
-    source: (f64, f64),
-    target: (f64, f64),
-    axis: (f64, f64),
-) -> Result<(f64, f64), String> {
-    let axis = semantic_xy_f64(axis.0, axis.1)?;
-    Ok((
-        if axis.x != 0.0 {
-            target.0 - source.0
-        } else {
-            0.0
-        },
-        if axis.y != 0.0 {
-            target.1 - source.1
-        } else {
-            0.0
-        },
-    ))
-}
-
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::{cell::RefCell, rc::Rc};
 
-    use noon::{semantic_family_leaf_ids, FamilyArrangePlan, FamilyTranslation};
+    use noon::{FamilyLayout, FamilyLayoutTarget};
     use noon_core::Bounds2D64;
     use wasm_bindgen::prelude::*;
 
-    use super::{
-        manim_family_align_to_delta, manim_family_next_to_delta, render_f64, semantic_xy_f64,
-        FrontendFamilyTargetEditor, ManimNextToArgs, Mobject, SemanticNodeId, SemanticStore,
-    };
+    use super::{ManimNextToArgs, Mobject, SemanticNodeId, SemanticStore};
 
     fn js_error(error: String) -> JsValue {
         JsValue::from_str(&error)
@@ -302,12 +177,14 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = createFamily)]
-        pub fn create_family(&self) -> WasmAuthoringFamilyHandle {
-            let id = self.semantics.borrow_mut().insert_family();
-            WasmAuthoringFamilyHandle {
-                semantics: Rc::clone(&self.semantics),
-                id,
-            }
+        pub fn create_family(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+            batch
+                .create_family(Rc::clone(&self.semantics))
+                .map(WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(js_error)
         }
     }
 
@@ -317,241 +194,124 @@ mod wasm {
         id: SemanticNodeId,
     }
 
+    /// Host-normalized options for one shared arrangement transaction.
+    #[wasm_bindgen]
+    pub struct WasmFamilyArrangeOptions {
+        pub(crate) options: noon::FamilyArrangeOptions,
+    }
+
+    #[wasm_bindgen]
+    impl WasmFamilyArrangeOptions {
+        #[wasm_bindgen(js_name = setAligner)]
+        pub fn set_aligner(&mut self, aligner: &WasmLayoutAnchor) {
+            self.options.aligner = Some(aligner.anchor.clone());
+        }
+    }
+
+    /// Inert typed layout intent; identity and member selection stay in Rust.
+    #[wasm_bindgen]
+    pub struct WasmLayoutAnchor {
+        pub(crate) anchor: noon::LayoutAnchor,
+    }
+
+    #[wasm_bindgen]
+    impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = nextTo)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn next_to(
+            &self,
+            target: &WasmLayoutAnchor,
+            aligner: &WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .next_to_aligned(
+                    noon::FamilyLayoutTarget::Anchor(&target.anchor),
+                    &aligner.anchor,
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = nextToPoint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn next_to_point(
+            &self,
+            x: f64,
+            y: f64,
+            aligner: &WasmLayoutAnchor,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .next_to_aligned(
+                    noon::FamilyLayoutTarget::Point(x, y),
+                    &aligner.anchor,
+                    noon::semantic_mobject::ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (edge_x, edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
+        }
+    }
+
+    /// Thin browser wrapper over the shared authored family observation.
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyLayout {
-        semantics: SharedSemanticStore,
-        family_id: SemanticNodeId,
-        expected_leaves: Vec<SemanticNodeId>,
-        next_leaf: usize,
-        bounds: Option<Bounds2D64>,
-    }
-
-    #[wasm_bindgen]
-    pub struct WasmAuthoringFamilyTranslation {
-        semantics: SharedSemanticStore,
-        translation: FamilyTranslation,
-    }
-
-    #[wasm_bindgen]
-    pub struct WasmAuthoringFamilyArrange {
-        semantics: SharedSemanticStore,
-        plan: FamilyArrangePlan,
-        direction: (f64, f64),
-        buff: f64,
-        center: bool,
-        translations: Option<Vec<Option<FamilyTranslation>>>,
-        next_translation: usize,
-    }
-
-    impl WasmAuthoringFamilyArrange {
-        fn prepare(&mut self) -> Result<(), JsValue> {
-            if self.translations.is_none() {
-                let translations = self
-                    .plan
-                    .finish(self.direction.0, self.direction.1, self.buff, self.center)
-                    .map_err(js_error)?;
-                self.translations = Some(translations.into_iter().map(Some).collect());
-            }
-            Ok(())
-        }
-
-        fn mobject_member_id(
-            &self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            member.id_in_store(&self.semantics, "family arrange")
-        }
-    }
-
-    #[wasm_bindgen]
-    impl WasmAuthoringFamilyArrange {
-        #[wasm_bindgen(js_name = includeMobject)]
-        pub fn include_mobject(
-            &mut self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            let id = self.mobject_member_id(member)?;
-            self.plan
-                .accept_member_bounds(id, member.handle.layout_bounds().map_err(js_error)?)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = includeFamily)]
-        pub fn include_family(
-            &mut self,
-            layout: &WasmAuthoringFamilyLayout,
-        ) -> Result<(), JsValue> {
-            layout.ensure_complete()?;
-            if !Rc::ptr_eq(&self.semantics, &layout.semantics) {
-                return Err(JsValue::from_str(
-                    "family arrange and nested family belong to different authoring stores",
-                ));
-            }
-            self.plan
-                .accept_member_bounds(layout.family_id, layout.bounds)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = nextTranslation)]
-        pub fn next_translation(&mut self) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.prepare()?;
-            let translations = self.translations.as_mut().expect("prepared translations");
-            let slot = translations
-                .get_mut(self.next_translation)
-                .ok_or_else(|| JsValue::from_str("family arrange has no remaining translations"))?;
-            let translation = slot.take().ok_or_else(|| {
-                JsValue::from_str("family arrange translation was already consumed")
-            })?;
-            self.next_translation += 1;
-            Ok(WasmAuthoringFamilyTranslation {
-                semantics: Rc::clone(&self.semantics),
-                translation,
-            })
-        }
-
-        pub fn finish(&self) -> Result<(), JsValue> {
-            self.plan.ensure_complete().map_err(js_error)?;
-            if self.next_translation != self.plan.member_count() {
-                return Err(JsValue::from_str(&format!(
-                    "family arrange is incomplete: emitted {} of {} translations",
-                    self.next_translation,
-                    self.plan.member_count()
-                )));
-            }
-            Ok(())
-        }
+        layout: FamilyLayout,
     }
 
     impl WasmAuthoringFamilyLayout {
-        pub(crate) fn completed_bounds(&self) -> Result<Bounds2D64, JsValue> {
-            self.ensure_complete()?;
-            Ok(self.bounds.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0)))
-        }
-
-        fn include_leaf_bounds(
-            &mut self,
-            id: SemanticNodeId,
-            bounds: Option<Bounds2D64>,
-        ) -> Result<(), JsValue> {
-            let expected = self
-                .expected_leaves
-                .get(self.next_leaf)
-                .copied()
-                .ok_or_else(|| JsValue::from_str("family layout received too many leaves"))?;
-            if id != expected {
-                return Err(JsValue::from_str(&format!(
-                    "family layout leaf mismatch at index {}: expected {expected:?}, got {id:?}",
-                    self.next_leaf
-                )));
-            }
-            if let Some(bounds) = bounds {
-                self.include_bounds(bounds);
-            }
-            self.next_leaf += 1;
-            Ok(())
-        }
-
-        fn ensure_complete(&self) -> Result<(), JsValue> {
-            if self.next_leaf != self.expected_leaves.len() {
-                return Err(JsValue::from_str(&format!(
-                    "family layout is incomplete: accepted {} of {} leaves",
-                    self.next_leaf,
-                    self.expected_leaves.len()
-                )));
-            }
-            Ok(())
-        }
-
-        fn center(&self) -> Result<(f64, f64), JsValue> {
-            self.ensure_complete()?;
-            Ok(self.bounds.as_ref().map_or((0.0, 0.0), |bounds| {
-                (
-                    (bounds.min_x + bounds.max_x) * 0.5,
-                    (bounds.min_y + bounds.max_y) * 0.5,
-                )
-            }))
-        }
-
-        fn include_bounds(&mut self, bounds: Bounds2D64) {
-            if let Some(total) = &mut self.bounds {
-                total.include(bounds.min_x, bounds.min_y);
-                total.include(bounds.max_x, bounds.max_y);
-            } else {
-                self.bounds = Some(bounds);
-            }
-        }
-
-        fn translation(
-            &self,
-            delta_x: f64,
-            delta_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            let translation =
-                FamilyTranslation::from_members(self.expected_leaves.clone(), delta_x, delta_y)
-                    .map_err(js_error)?;
-            Ok(WasmAuthoringFamilyTranslation {
-                semantics: Rc::clone(&self.semantics),
-                translation,
-            })
-        }
-
-        fn validate_target_mobject(
-            &self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            member
-                .id_in_store(&self.semantics, "family placement")
-                .map(|_| ())
+        pub(crate) fn bounds(&self) -> Bounds2D64 {
+            self.layout
+                .bounds()
+                .unwrap_or_else(|| Bounds2D64::point(0.0, 0.0))
         }
     }
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyLayout {
-        #[wasm_bindgen(js_name = includeMobject)]
-        pub fn include_mobject(
-            &mut self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            let id = member.id_in_store(&self.semantics, "family layout")?;
-            self.include_leaf_bounds(id, member.handle.layout_bounds().map_err(js_error)?)
-        }
-
         #[wasm_bindgen(getter, js_name = centerX)]
-        pub fn center_x(&self) -> Result<f64, JsValue> {
-            self.center().map(|center| center.0)
+        pub fn center_x(&self) -> f64 {
+            self.layout.center().0
         }
 
         #[wasm_bindgen(getter, js_name = centerY)]
-        pub fn center_y(&self) -> Result<f64, JsValue> {
-            self.center().map(|center| center.1)
+        pub fn center_y(&self) -> f64 {
+            self.layout.center().1
         }
 
         #[wasm_bindgen(getter)]
-        pub fn width(&self) -> Result<f64, JsValue> {
-            self.ensure_complete()?;
-            Ok(self
-                .bounds
-                .as_ref()
-                .map_or(0.0, |bounds| bounds.max_x - bounds.min_x))
+        pub fn width(&self) -> f64 {
+            self.layout.width()
         }
 
         #[wasm_bindgen(getter)]
-        pub fn height(&self) -> Result<f64, JsValue> {
-            self.ensure_complete()?;
-            Ok(self
-                .bounds
-                .as_ref()
-                .map_or(0.0, |bounds| bounds.max_y - bounds.min_y))
+        pub fn height(&self) -> f64 {
+            self.layout.height()
         }
 
         #[wasm_bindgen(js_name = shiftBy)]
-        pub fn shift_by(
-            &self,
-            delta_x: f64,
-            delta_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.translation(delta_x, delta_y)
+        pub fn shift_by(&self, delta_x: f64, delta_y: f64) -> Result<(), JsValue> {
+            self.layout.shift(delta_x, delta_y).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = moveToPoint)]
@@ -563,13 +323,14 @@ mod wasm {
             aligned_edge_y: f64,
             mask_x: f64,
             mask_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            let point = semantic_xy_f64(point_x, point_y).map_err(js_error)?;
-            let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y).map_err(js_error)?;
-            let mask = semantic_xy_f64(mask_x, mask_y).map_err(js_error)?;
-            let source_x = self.critical_x(edge.x, edge.y)?;
-            let source_y = self.critical_y(edge.x, edge.y)?;
-            self.translation((point.x - source_x) * mask.x, (point.y - source_y) * mask.y)
+        ) -> Result<(), JsValue> {
+            self.layout
+                .move_to(
+                    FamilyLayoutTarget::Point(point_x, point_y),
+                    (aligned_edge_x, aligned_edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = moveToMobject)]
@@ -580,21 +341,14 @@ mod wasm {
             aligned_edge_y: f64,
             mask_x: f64,
             mask_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            self.validate_target_mobject(target)?;
-            let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y).map_err(js_error)?;
-            let mask = semantic_xy_f64(mask_x, mask_y).map_err(js_error)?;
-            let source_x = self.critical_x(edge.x, edge.y)?;
-            let source_y = self.critical_y(edge.x, edge.y)?;
-            let target_point = target
-                .handle
-                .critical_point(edge.x, edge.y)
-                .map_err(js_error)?;
-            self.translation(
-                (target_point.0 - source_x) * mask.x,
-                (target_point.1 - source_y) * mask.y,
-            )
+        ) -> Result<(), JsValue> {
+            self.layout
+                .move_to(
+                    FamilyLayoutTarget::Mobject(&target.handle),
+                    (aligned_edge_x, aligned_edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = moveToFamily)]
@@ -605,24 +359,14 @@ mod wasm {
             aligned_edge_y: f64,
             mask_x: f64,
             mask_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            target.ensure_complete()?;
-            if !Rc::ptr_eq(&self.semantics, &target.semantics) {
-                return Err(JsValue::from_str(
-                    "family placement source and target belong to different authoring stores",
-                ));
-            }
-            let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y).map_err(js_error)?;
-            let mask = semantic_xy_f64(mask_x, mask_y).map_err(js_error)?;
-            let source_x = self.critical_x(edge.x, edge.y)?;
-            let source_y = self.critical_y(edge.x, edge.y)?;
-            let target_x = target.critical_x(edge.x, edge.y)?;
-            let target_y = target.critical_y(edge.x, edge.y)?;
-            self.translation(
-                (target_x - source_x) * mask.x,
-                (target_y - source_y) * mask.y,
-            )
+        ) -> Result<(), JsValue> {
+            self.layout
+                .move_to(
+                    FamilyLayoutTarget::Family(&target.layout),
+                    (aligned_edge_x, aligned_edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = nextToPoint)]
@@ -638,23 +382,18 @@ mod wasm {
             aligned_edge_y: f64,
             mask_x: f64,
             mask_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            let point = semantic_xy_f64(point_x, point_y).map_err(js_error)?;
-            let direction = semantic_xy_f64(direction_x, direction_y).map_err(js_error)?;
-            let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y).map_err(js_error)?;
-            let source = (
-                self.critical_x(edge.x - direction.x, edge.y - direction.y)?,
-                self.critical_y(edge.x - direction.x, edge.y - direction.y)?,
-            );
-            let delta = manim_family_next_to_delta(
-                source,
-                (point.x, point.y),
-                (direction.x, direction.y),
-                buff,
-                (mask_x, mask_y),
-            )
-            .map_err(js_error)?;
-            self.translation(delta.0, delta.1)
+        ) -> Result<(), JsValue> {
+            self.layout
+                .next_to(
+                    FamilyLayoutTarget::Point(point_x, point_y),
+                    ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (aligned_edge_x, aligned_edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = nextToMobject)]
@@ -669,28 +408,18 @@ mod wasm {
             aligned_edge_y: f64,
             mask_x: f64,
             mask_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            self.validate_target_mobject(target)?;
-            let direction = semantic_xy_f64(direction_x, direction_y).map_err(js_error)?;
-            let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y).map_err(js_error)?;
-            let source = (
-                self.critical_x(edge.x - direction.x, edge.y - direction.y)?,
-                self.critical_y(edge.x - direction.x, edge.y - direction.y)?,
-            );
-            let target_point = target
-                .handle
-                .critical_point(edge.x + direction.x, edge.y + direction.y)
-                .map_err(js_error)?;
-            let delta = manim_family_next_to_delta(
-                source,
-                target_point,
-                (direction.x, direction.y),
-                buff,
-                (mask_x, mask_y),
-            )
-            .map_err(js_error)?;
-            self.translation(delta.0, delta.1)
+        ) -> Result<(), JsValue> {
+            self.layout
+                .next_to(
+                    FamilyLayoutTarget::Mobject(&target.handle),
+                    ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (aligned_edge_x, aligned_edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = nextToFamily)]
@@ -705,33 +434,18 @@ mod wasm {
             aligned_edge_y: f64,
             mask_x: f64,
             mask_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            target.ensure_complete()?;
-            if !Rc::ptr_eq(&self.semantics, &target.semantics) {
-                return Err(JsValue::from_str(
-                    "family placement source and target belong to different authoring stores",
-                ));
-            }
-            let direction = semantic_xy_f64(direction_x, direction_y).map_err(js_error)?;
-            let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y).map_err(js_error)?;
-            let source = (
-                self.critical_x(edge.x - direction.x, edge.y - direction.y)?,
-                self.critical_y(edge.x - direction.x, edge.y - direction.y)?,
-            );
-            let target_point = (
-                target.critical_x(edge.x + direction.x, edge.y + direction.y)?,
-                target.critical_y(edge.x + direction.x, edge.y + direction.y)?,
-            );
-            let delta = manim_family_next_to_delta(
-                source,
-                target_point,
-                (direction.x, direction.y),
-                buff,
-                (mask_x, mask_y),
-            )
-            .map_err(js_error)?;
-            self.translation(delta.0, delta.1)
+        ) -> Result<(), JsValue> {
+            self.layout
+                .next_to(
+                    FamilyLayoutTarget::Family(&target.layout),
+                    ManimNextToArgs {
+                        direction: (direction_x, direction_y),
+                        buff,
+                        aligned_edge: (aligned_edge_x, aligned_edge_y),
+                        mask: (mask_x, mask_y),
+                    },
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = alignToPoint)]
@@ -741,16 +455,13 @@ mod wasm {
             point_y: f64,
             axis_x: f64,
             axis_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            let point = semantic_xy_f64(point_x, point_y).map_err(js_error)?;
-            let axis = semantic_xy_f64(axis_x, axis_y).map_err(js_error)?;
-            let source = (
-                self.critical_x(axis.x, axis.y)?,
-                self.critical_y(axis.x, axis.y)?,
-            );
-            let delta = manim_family_align_to_delta(source, (point.x, point.y), (axis.x, axis.y))
-                .map_err(js_error)?;
-            self.translation(delta.0, delta.1)
+        ) -> Result<(), JsValue> {
+            self.layout
+                .align_to(
+                    FamilyLayoutTarget::Point(point_x, point_y),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = alignToMobject)]
@@ -759,21 +470,13 @@ mod wasm {
             target: &WasmAuthoringMobjectHandle,
             axis_x: f64,
             axis_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            self.validate_target_mobject(target)?;
-            let axis = semantic_xy_f64(axis_x, axis_y).map_err(js_error)?;
-            let source = (
-                self.critical_x(axis.x, axis.y)?,
-                self.critical_y(axis.x, axis.y)?,
-            );
-            let target_point = target
-                .handle
-                .critical_point(axis.x, axis.y)
-                .map_err(js_error)?;
-            let delta = manim_family_align_to_delta(source, target_point, (axis.x, axis.y))
-                .map_err(js_error)?;
-            self.translation(delta.0, delta.1)
+        ) -> Result<(), JsValue> {
+            self.layout
+                .align_to(
+                    FamilyLayoutTarget::Mobject(&target.handle),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = alignToFamily)]
@@ -782,131 +485,61 @@ mod wasm {
             target: &WasmAuthoringFamilyLayout,
             axis_x: f64,
             axis_y: f64,
-        ) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.ensure_complete()?;
-            target.ensure_complete()?;
-            if !Rc::ptr_eq(&self.semantics, &target.semantics) {
-                return Err(JsValue::from_str(
-                    "family placement source and target belong to different authoring stores",
-                ));
-            }
-            let axis = semantic_xy_f64(axis_x, axis_y).map_err(js_error)?;
-            let source = (
-                self.critical_x(axis.x, axis.y)?,
-                self.critical_y(axis.x, axis.y)?,
-            );
-            let target_point = (
-                target.critical_x(axis.x, axis.y)?,
-                target.critical_y(axis.x, axis.y)?,
-            );
-            let delta = manim_family_align_to_delta(source, target_point, (axis.x, axis.y))
-                .map_err(js_error)?;
-            self.translation(delta.0, delta.1)
+        ) -> Result<(), JsValue> {
+            self.layout
+                .align_to(FamilyLayoutTarget::Family(&target.layout), (axis_x, axis_y))
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = criticalX)]
-        pub fn critical_x(&self, direction_x: f64, _direction_y: f64) -> Result<f64, JsValue> {
-            self.ensure_complete()?;
-            let center = self.center()?.0;
-            Ok(self.bounds.as_ref().map_or(center, |bounds| {
-                if direction_x < 0.0 {
-                    bounds.min_x
-                } else if direction_x > 0.0 {
-                    bounds.max_x
-                } else {
-                    center
-                }
-            }))
+        pub fn critical_x(&self, direction_x: f64, _direction_y: f64) -> f64 {
+            self.layout.critical_point(direction_x, _direction_y).0
         }
 
         #[wasm_bindgen(js_name = criticalY)]
-        pub fn critical_y(&self, _direction_x: f64, direction_y: f64) -> Result<f64, JsValue> {
-            self.ensure_complete()?;
-            let center = self.center()?.1;
-            Ok(self.bounds.as_ref().map_or(center, |bounds| {
-                if direction_y < 0.0 {
-                    bounds.min_y
-                } else if direction_y > 0.0 {
-                    bounds.max_y
-                } else {
-                    center
-                }
-            }))
+        pub fn critical_y(&self, _direction_x: f64, direction_y: f64) -> f64 {
+            self.layout.critical_point(_direction_x, direction_y).1
+        }
+    }
+
+    /// Derived typed lookup used only to reconstruct host wrapper identities.
+    #[wasm_bindgen]
+    pub struct WasmFamilyCopy {
+        copied: noon::FamilyCopy,
+    }
+
+    impl WasmFamilyCopy {
+        pub(crate) fn from_copy(copied: noon::FamilyCopy) -> Self {
+            Self { copied }
         }
     }
 
     #[wasm_bindgen]
-    pub struct WasmAuthoringFamilyTargetEditor {
-        semantics: SharedSemanticStore,
-        editor: FrontendFamilyTargetEditor,
-    }
-
-    impl WasmAuthoringFamilyTargetEditor {
-        pub(crate) fn store(&self) -> &SharedSemanticStore {
-            &self.semantics
+    impl WasmFamilyCopy {
+        pub fn root(&self) -> WasmAuthoringFamilyHandle {
+            WasmAuthoringFamilyHandle::from_semantic_family(self.copied.root().clone())
         }
 
-        pub(crate) fn target_member_ids(&self) -> Result<&[SemanticNodeId], JsValue> {
-            self.editor.target_members().map_err(js_error)
-        }
-
-        fn mobject_member_id(
+        #[wasm_bindgen(js_name = mobjectFor)]
+        pub fn mobject_for(
             &self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            member.id_in_store(&self.semantics, "family target editor")
-        }
-
-        fn family_member_id(
-            &self,
-            member: &WasmAuthoringFamilyHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(&self.semantics, &member.semantics) {
-                return Err(JsValue::from_str(
-                    "family target editor and family belong to different authoring stores",
-                ));
-            }
-            Ok(member.id)
-        }
-    }
-
-    #[wasm_bindgen]
-    impl WasmAuthoringFamilyTargetEditor {
-        #[wasm_bindgen(js_name = acceptMobject)]
-        pub fn accept_mobject(
-            &mut self,
             source: &WasmAuthoringMobjectHandle,
-            target: &WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            let source_id = self.mobject_member_id(source)?;
-            let target_id = self.mobject_member_id(target)?;
-            self.editor
-                .accept_member(source_id, target_id)
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            self.copied
+                .mobject(&source.handle)
+                .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = acceptFamily)]
-        pub fn accept_family(
-            &mut self,
+        #[wasm_bindgen(js_name = familyFor)]
+        pub fn family_for(
+            &self,
             source: &WasmAuthoringFamilyHandle,
-            target: &WasmAuthoringFamilyHandle,
-        ) -> Result<(), JsValue> {
-            let source_id = self.family_member_id(source)?;
-            let target_id = self.family_member_id(target)?;
-            self.editor
-                .accept_member(source_id, target_id)
+        ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+            self.copied
+                .family(&source.semantic_family()?)
+                .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
-        }
-
-        pub fn finish(&self) -> Result<WasmAuthoringFamilyHandle, JsValue> {
-            let id = self
-                .editor
-                .finish(&mut self.semantics.borrow_mut())
-                .map_err(js_error)?;
-            Ok(WasmAuthoringFamilyHandle {
-                semantics: Rc::clone(&self.semantics),
-                id,
-            })
         }
     }
 
@@ -921,107 +554,66 @@ mod wasm {
         pub(crate) fn semantic_family(&self) -> Result<noon::MobjectFamily, JsValue> {
             noon::MobjectFamily::from_node(Rc::clone(&self.semantics), self.id).map_err(js_error)
         }
-
-        fn object_member_id(
-            &self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            member.id_in_store(&self.semantics, "family")
-        }
-
-        fn family_member_id(
-            &self,
-            member: &WasmAuthoringFamilyHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(&self.semantics, &member.semantics) {
-                return Err(JsValue::from_str(
-                    "families belong to different authoring stores",
-                ));
-            }
-            Ok(member.id)
-        }
-
-        fn add_id(&mut self, member: SemanticNodeId) -> Result<bool, JsValue> {
-            let before = self.member_count();
-            self.semantics
-                .borrow_mut()
-                .add_member(self.id, member)
-                .map_err(|error| js_error(error.to_string()))?;
-            Ok(self.member_count() != before)
-        }
-
-        fn remove_id(&mut self, member: SemanticNodeId) -> Result<bool, JsValue> {
-            self.semantics
-                .borrow_mut()
-                .remove_member(self.id, member)
-                .map_err(|error| js_error(error.to_string()))
-        }
-    }
-
-    #[wasm_bindgen]
-    impl WasmAuthoringFamilyTranslation {
-        #[wasm_bindgen(js_name = applyMobject)]
-        pub fn apply_mobject(
-            &mut self,
-            member: &mut WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            let id = member.id_in_store(&self.semantics, "family translation")?;
-            self.translation
-                .apply(id, &mut member.handle)
-                .map_err(js_error)
-        }
-
-        pub fn finish(&self) -> Result<(), JsValue> {
-            self.translation.finish().map_err(js_error)
-        }
     }
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
-        #[wasm_bindgen(js_name = layoutSession)]
-        pub fn layout_session(&self) -> Result<WasmAuthoringFamilyLayout, JsValue> {
-            let expected_leaves =
-                semantic_family_leaf_ids(&self.semantics.borrow(), self.id).map_err(js_error)?;
-            Ok(WasmAuthoringFamilyLayout {
-                semantics: Rc::clone(&self.semantics),
-                family_id: self.id,
-                expected_leaves,
-                next_leaf: 0,
-                bounds: None,
+        #[wasm_bindgen(js_name = layoutAnchor)]
+        pub fn layout_anchor(&self, index: Option<i32>) -> Result<WasmLayoutAnchor, JsValue> {
+            let anchor = noon::LayoutAnchor::from(&self.semantic_family()?);
+            Ok(WasmLayoutAnchor {
+                anchor: match index {
+                    Some(index) => anchor.member(index as isize),
+                    None => anchor,
+                },
             })
         }
 
-        #[wasm_bindgen(js_name = arrangeSession)]
-        pub fn arrange_session(
+        /// Read an immutable layout observation from the shared semantic family.
+        pub fn layout(&self) -> Result<WasmAuthoringFamilyLayout, JsValue> {
+            Ok(WasmAuthoringFamilyLayout {
+                layout: self.semantic_family()?.layout().map_err(js_error)?,
+            })
+        }
+
+        #[wasm_bindgen(js_name = arrangeOptions)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn arrange_options(
             &self,
             direction_x: f64,
             direction_y: f64,
             buff: f64,
             center: bool,
-        ) -> Result<WasmAuthoringFamilyArrange, JsValue> {
-            let direction = semantic_xy_f64(direction_x, direction_y).map_err(js_error)?;
-            let buff = render_f64("buffer", buff).map_err(js_error)?;
-            let plan =
-                FamilyArrangePlan::begin(&self.semantics.borrow(), self.id).map_err(js_error)?;
-            Ok(WasmAuthoringFamilyArrange {
-                semantics: Rc::clone(&self.semantics),
-                plan,
-                direction: (direction.x, direction.y),
-                buff,
-                center,
-                translations: None,
-                next_translation: 0,
-            })
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+            member_index: Option<i32>,
+        ) -> WasmFamilyArrangeOptions {
+            let mut options =
+                noon::FamilyArrangeOptions::new(direction_x, direction_y, buff, center);
+            options.placement.aligned_edge = (edge_x, edge_y);
+            options.placement.mask = (mask_x, mask_y);
+            options.member_index = member_index.map(|index| index as isize);
+            WasmFamilyArrangeOptions { options }
         }
 
-        #[wasm_bindgen(js_name = targetEditor)]
-        pub fn target_editor(&self) -> Result<WasmAuthoringFamilyTargetEditor, JsValue> {
-            let editor = FrontendFamilyTargetEditor::begin(&self.semantics.borrow(), self.id)
-                .map_err(js_error)?;
-            Ok(WasmAuthoringFamilyTargetEditor {
-                semantics: Rc::clone(&self.semantics),
-                editor,
-            })
+        /// Arrange authored state with all options in one semantic transaction.
+        pub fn arrange(&self, options: &WasmFamilyArrangeOptions) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .arrange_with_options(&options.options)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = copyFamily)]
+        pub fn copy_family(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            self.semantic_family()?
+                .copy_with_references(&references.copy_references().map_err(js_error)?)
+                .map(WasmFamilyCopy::from_copy)
+                .map_err(js_error)
         }
 
         /// Atomically apply Manim subset-display constructor semantics to every
@@ -1048,7 +640,20 @@ mod wasm {
             self.semantics
                 .borrow()
                 .node(self.id)
-                .map_or(0, |node| node.members().len())
+                .map_or(0, |node| node.member_count())
+        }
+
+        /// One bounded observation for mirroring a newly constructed wrapper list.
+        #[wasm_bindgen(js_name = memberKeys)]
+        pub fn member_keys(&self) -> Result<Vec<String>, JsValue> {
+            let store = self.semantics.borrow();
+            let node = store
+                .semantic_family_checked(self.id)
+                .map_err(|e| js_error(e.to_string()))?;
+            Ok(node
+                .members_iter()
+                .map(|id| format!("{}:{}", id.slot(), id.generation()))
+                .collect())
         }
 
         #[wasm_bindgen(js_name = memberSlot)]
@@ -1071,37 +676,16 @@ mod wasm {
                 .ok_or_else(|| JsValue::from_str("family member index is out of bounds"))
         }
 
-        #[wasm_bindgen(js_name = addMobject)]
-        pub fn add_mobject(
-            &mut self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<bool, JsValue> {
-            let id = self.object_member_id(member)?;
-            self.add_id(id)
-        }
-
-        #[wasm_bindgen(js_name = addFamily)]
-        pub fn add_family(&mut self, member: &WasmAuthoringFamilyHandle) -> Result<bool, JsValue> {
-            let id = self.family_member_id(member)?;
-            self.add_id(id)
-        }
-
-        #[wasm_bindgen(js_name = removeMobject)]
-        pub fn remove_mobject(
-            &mut self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<bool, JsValue> {
-            let id = self.object_member_id(member)?;
-            self.remove_id(id)
-        }
-
-        #[wasm_bindgen(js_name = removeFamily)]
-        pub fn remove_family(
-            &mut self,
-            member: &WasmAuthoringFamilyHandle,
-        ) -> Result<bool, JsValue> {
-            let id = self.family_member_id(member)?;
-            self.remove_id(id)
+        /// Apply the complete authored edit before returning per-argument decisions.
+        #[wasm_bindgen(js_name = editMembership)]
+        pub fn edit_membership(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+        ) -> Result<Vec<u8>, JsValue> {
+            batch
+                .edit_family(&self.semantic_family()?)
+                .map(|changed| changed.into_iter().map(u8::from).collect())
+                .map_err(js_error)
         }
     }
 
@@ -1198,6 +782,17 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = layoutAnchor)]
+        pub fn layout_anchor(&self, index: Option<i32>) -> Result<WasmLayoutAnchor, JsValue> {
+            let anchor = noon::LayoutAnchor::from(&self.handle);
+            Ok(WasmLayoutAnchor {
+                anchor: match index {
+                    Some(index) => anchor.member(index as isize),
+                    None => anchor,
+                },
+            })
+        }
+
         #[wasm_bindgen(js_name = manimLineEndpoints)]
         pub fn manim_line_endpoints(&self) -> Result<WasmManimLineEndpoints, JsValue> {
             self.handle
@@ -1245,11 +840,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = snapshotJson)]
         pub fn snapshot_json(&self) -> Result<String, JsValue> {
-            self.handle.validate().map_err(js_error)?;
-            serde_json::to_string(
-                &noon::legacy::export_mobject_snapshot(&self.handle).map_err(js_error)?,
-            )
-            .map_err(|error| js_error(error.to_string()))
+            crate::geometry_export::mobject_json(&self.handle).map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = wireTranslationX)]
@@ -1773,18 +1364,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn family_relative_placement_preserves_manim_direction_and_axis_semantics() {
-        let next =
-            manim_family_next_to_delta((2.0, 3.0), (7.0, 11.0), (2.0, -3.0), 0.5, (1.0, 0.25))
-                .expect("next_to delta");
-        assert_eq!(next, (6.0, 1.625));
-
-        let aligned = manim_family_align_to_delta((2.0, 3.0), (7.0, 11.0), (0.0, -1.0))
-            .expect("align_to delta");
-        assert_eq!(aligned, (0.0, 8.0));
-    }
-
-    #[test]
     fn handle_mutations_keep_state_in_shared_rust_semantics() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
@@ -1818,16 +1397,7 @@ mod tests {
         assert_eq!(handle.state().unwrap().transform.translation.y, 0.3);
         assert!((handle.critical_point(-1.0, 0.0).unwrap().0 + 0.3).abs() < 1e-12);
         assert!((handle.critical_point(0.0, 1.0).unwrap().1 - 0.8).abs() < 1e-12);
-        assert_ne!(
-            f64::from(
-                noon::legacy::export_mobject_snapshot(&handle)
-                    .unwrap()
-                    .transform
-                    .translation
-                    .x
-            ),
-            0.7
-        );
+        assert_ne!(handle.wire_translation().unwrap().0, 0.7);
 
         handle.scale(1.1, 0.9).unwrap();
         handle.rotate(0.2).unwrap();
@@ -2171,7 +1741,7 @@ mod tests {
         store.add_member(outer, second).unwrap();
 
         assert_eq!(
-            semantic_family_leaf_ids(&store, outer).unwrap(),
+            store.ordered_leaf_nodes(outer).unwrap(),
             vec![first, second]
         );
 
@@ -2181,113 +1751,9 @@ mod tests {
         store.add_member(aliased_outer, nested).unwrap();
         store.add_member(aliased_outer, alias).unwrap();
         assert_eq!(
-            semantic_family_leaf_ids(&store, aliased_outer).unwrap(),
-            vec![first, first]
+            store.ordered_leaf_nodes(aliased_outer).unwrap(),
+            vec![first]
         );
-    }
-
-    #[test]
-    fn family_translation_uses_shared_recursive_leaf_order() {
-        let authoring_store =
-            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
-        let mut store = SemanticStore::new();
-        let first = store.insert_authoring_object();
-        let second = store.insert_authoring_object();
-        let nested = store.insert_family();
-        store.add_member(nested, first).unwrap();
-        let outer = store.insert_family();
-        store.add_member(outer, nested).unwrap();
-        store.add_member(outer, second).unwrap();
-
-        let mut first_handle =
-            Mobject::manim_circle(std::rc::Rc::clone(&authoring_store), 1.0).unwrap();
-        let mut second_handle =
-            Mobject::manim_square(std::rc::Rc::clone(&authoring_store), 2.0).unwrap();
-        let first_before = first_handle.center().unwrap();
-        let second_before = second_handle.center().unwrap();
-
-        let mut translation = FamilyTranslation::begin(&store, outer, 2.5, -1.25).unwrap();
-        translation.apply(first, &mut first_handle).unwrap();
-        translation.apply(second, &mut second_handle).unwrap();
-        translation.finish().unwrap();
-
-        assert_eq!(
-            first_handle.center().unwrap(),
-            (first_before.0 + 2.5, first_before.1 - 1.25)
-        );
-        assert_eq!(
-            second_handle.center().unwrap(),
-            (second_before.0 + 2.5, second_before.1 - 1.25)
-        );
-
-        let mut reordered = FamilyTranslation::begin(&store, outer, 1.0, 0.0).unwrap();
-        let error = reordered.apply(second, &mut second_handle).unwrap_err();
-        assert!(error.contains("mismatch at index 0"));
-        assert!(reordered.finish().unwrap_err().contains("incomplete"));
-    }
-
-    #[test]
-    fn family_target_editor_builds_target_from_shared_source_order() {
-        let mut store = SemanticStore::new();
-        let source_a = store.insert_semantic_object(noon_core::SemanticObjectState::new(
-            noon_core::StoredGeometry::Circle { radius: 1.0 },
-        ));
-        let source_b = store.insert_semantic_object(noon_core::SemanticObjectState::new(
-            noon_core::StoredGeometry::Circle { radius: 1.0 },
-        ));
-        let source_family = store.insert_family();
-        store.add_member(source_family, source_a).unwrap();
-        store.add_member(source_family, source_b).unwrap();
-
-        let target_a = store.insert_semantic_object(noon_core::SemanticObjectState::new(
-            noon_core::StoredGeometry::Circle { radius: 1.0 },
-        ));
-        let target_b = store.insert_semantic_object(noon_core::SemanticObjectState::new(
-            noon_core::StoredGeometry::Circle { radius: 1.0 },
-        ));
-        let mut editor = FrontendFamilyTargetEditor::begin(&store, source_family).unwrap();
-
-        editor.accept_member(source_a, target_a).unwrap();
-        editor.accept_member(source_b, target_b).unwrap();
-        let target_family = editor.finish(&mut store).unwrap();
-
-        assert_eq!(
-            store.node(source_family).unwrap().members(),
-            &[source_a, source_b]
-        );
-        assert_eq!(
-            store.node(target_family).unwrap().members(),
-            &[target_a, target_b]
-        );
-        assert!(store
-            .node(target_a)
-            .unwrap()
-            .parents()
-            .contains(&target_family));
-        assert!(store
-            .node(target_b)
-            .unwrap()
-            .parents()
-            .contains(&target_family));
-    }
-
-    #[test]
-    fn family_target_editor_rejects_wrapper_reordering_and_incomplete_targets() {
-        let mut store = SemanticStore::new();
-        let source_a = store.insert_authoring_object();
-        let source_b = store.insert_authoring_object();
-        let source_family = store.insert_family();
-        store.add_member(source_family, source_a).unwrap();
-        store.add_member(source_family, source_b).unwrap();
-        let target_a = store.insert_authoring_object();
-
-        let mut editor = FrontendFamilyTargetEditor::begin(&store, source_family).unwrap();
-        let error = editor.accept_member(source_b, target_a).unwrap_err();
-        assert!(error.contains("mismatch at index 0"));
-        assert!(editor
-            .finish(&mut store)
-            .unwrap_err()
-            .contains("accepted 0 of 2"));
     }
 
     #[test]
@@ -2347,9 +1813,9 @@ mod tests {
     }
 
     #[test]
-    fn wire_projection_matches_lowered_snapshot_after_shared_edits() {
-        let authoring_store =
-            std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+    fn wire_projection_matches_typed_runtime_after_shared_edits() {
+        let mut scene = noon::Scene::new();
+        let authoring_store = std::rc::Rc::clone(scene.store());
         let mut options = ManimGeometryOptions::rectangle(2.0, 1.0).unwrap();
         options.set_fill(0.2, 0.3, 0.4, 0.5).unwrap();
         options.set_stroke(0.6, 0.7, 0.8, 0.9).unwrap();
@@ -2362,24 +1828,26 @@ mod tests {
         handle.set_fill_opacity(0.25).unwrap();
         handle.set_stroke_width(3.5).unwrap();
 
-        let snapshot = noon::legacy::export_mobject_snapshot(&handle).unwrap();
+        scene.add(&handle).unwrap();
+        let session = scene.execution_session().unwrap();
+        let effective = &session.frame().objects[0];
         assert_eq!(
             handle.wire_translation().unwrap(),
             (
-                f64::from(snapshot.transform.translation.x),
-                f64::from(snapshot.transform.translation.y),
+                f64::from(effective.transform.translation.x),
+                f64::from(effective.transform.translation.y),
             )
         );
         assert_eq!(
             handle.wire_scale().unwrap(),
             (
-                f64::from(snapshot.transform.scale.x),
-                f64::from(snapshot.transform.scale.y),
+                f64::from(effective.transform.scale.x),
+                f64::from(effective.transform.scale.y),
             )
         );
         assert_eq!(
             handle.wire_rotation().unwrap(),
-            f64::from(snapshot.transform.rotation)
+            f64::from(effective.transform.rotation)
         );
         assert_eq!(handle.wire_fill().unwrap().unwrap().3, 0.25_f32 as f64);
         assert_eq!(handle.wire_stroke_width().unwrap(), 3.5_f32 as f64);

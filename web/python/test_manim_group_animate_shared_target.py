@@ -93,31 +93,6 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                     translation["x"] += float(x)
                     translation["y"] += float(y)
 
-            class FakeFamilyTargetEditor:
-                def __init__(self, source):
-                    self.expected = list(source.members)
-                    self.index = 0
-                    self.target = FakeFamilyHandle()
-                    source.calls.append("targetEditor")
-
-                def _accept(self, source, target):
-                    assert self.index < len(self.expected)
-                    assert self.expected[self.index] == source.identity(), (
-                        self.index, self.expected, source.identity()
-                    )
-                    self.target.members.append(target.identity())
-                    self.index += 1
-
-                def acceptMobject(self, source, target):
-                    self._accept(source, target)
-
-                def acceptFamily(self, source, target):
-                    self._accept(source, target)
-
-                def finish(self):
-                    assert self.index == len(self.expected)
-                    return self.target
-
             class FakeFamilyHandle:
                 def __init__(self):
                     self.semanticSlot = allocate_id()
@@ -132,37 +107,11 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                 def memberCount(self):
                     return len(self.members)
 
-                def addMobject(self, member):
-                    identity = member.identity()
-                    if identity in self.members:
-                        return False
-                    self.members.append(identity)
-                    return True
-
-                def addFamily(self, member):
-                    identity = member.identity()
-                    if identity in self.members:
-                        return False
-                    self.members.append(identity)
-                    return True
-
-                def removeMobject(self, member):
-                    identity = member.identity()
-                    if identity not in self.members:
-                        return False
-                    self.members.remove(identity)
-                    return True
-
-                def removeFamily(self, member):
-                    return self.removeMobject(member)
-
-                def targetEditor(self):
-                    return FakeFamilyTargetEditor(self)
-
             import _typed_geometry_test_support as _geometry_test
 
             _geometry_test.install_js_bridge(fake_js, FakeHandle)
-            fake_js.noonCreateAuthoringFamilyHandle = FakeFamilyHandle
+            import _typed_family_test_support as _family_test
+            _family_test.install_bridge(fake_js, FakeFamilyHandle, FakeFamilyHandle, FakeHandle, js=True)
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -194,8 +143,8 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             assert target is not group
             assert len(target.submobjects) == 2
             assert isinstance(target[1], VGroup)
-            assert source_family.calls == ["targetEditor"], source_family.calls
-            assert nested_source_family.calls == ["targetEditor"], nested_source_family.calls
+            assert source_family.calls == ["copyFamily"], source_family.calls
+            assert nested_source_family.calls == [], nested_source_family.calls
             assert first_source_handle.calls.count("targetEditor") == 1
             assert second_source_handle.calls.count("targetEditor") == 1
             assert "cloneHandle" not in first_source_handle.calls
@@ -232,13 +181,12 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                     self.calls.append(("leaf", handle.identity()))
                     return handle.targetEditor()
 
-                def beginLiveFamilyTarget(self, family):
-                    self.calls.append(("begin-family", family.identity()))
-                    return FakeFamilyTargetEditor(family)
+                def beginMembershipBatch(self, kind):
+                    return _family_test.FakeMembershipBatch(kind)
 
-                def finishLiveFamilyTarget(self, editor):
-                    self.calls.append(("finish-family", editor.index))
-                    return editor.finish()
+                def liveCopyFamily(self, family, references):
+                    self.calls.append(("copy-family", family.identity()))
+                    return family.copyFamily(references)
 
                 def liveShiftFamily(self, family, x, y):
                     self.calls.append(("shift-family", family.identity(), float(x), float(y)))
@@ -256,8 +204,7 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             live_target = group.animate.target
             assert isinstance(live_target, VGroup)
             assert [call[0] for call in context.calls] == [
-                "leaf", "leaf", "begin-family", "finish-family",
-                "begin-family", "finish-family",
+                "copy-family",
             ], context.calls
             live_target.shift(RIGHT)
             assert context.calls[-1][0] == "shift-family", context.calls

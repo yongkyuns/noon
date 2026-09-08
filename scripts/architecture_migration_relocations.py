@@ -153,22 +153,16 @@ def main() -> int:
             code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
             if re.search(r'\b(?:ScenePatch|MutationTransaction|ObjectDefinition)\b', code):
                 errors.append(f'{path}: canonical execution depends on the external scene patch codec')
-    codec = sources.get('crates/noon/src/legacy/semantic_snapshot.rs', '')
-    if re.search(r'\b(?:struct|enum|impl|static)\s+[A-Za-z_]', re.sub(r'/\*.*?\*/|//[^\n]*', '', codec, flags=re.S)):
-        errors.append('crates/noon/src/legacy/semantic_snapshot.rs: codec may contain only free adapters and tests, not another state owner or inherent API')
     root = sources.get('crates/noon/src/lib.rs', '')
-    if re.search(r'\blegacy\s*::', root) or any('legacy' in leaf.split(' as ', 1)[0].split('::') for _, leaf in imports(root)):
+    if re.search(r'\blegacy\s*::|\bmod\s+legacy\b', root) or any('legacy' in leaf.split(' as ', 1)[0].split('::') for _, leaf in imports(root)):
         errors.append('crates/noon/src/lib.rs: legacy public reexport bypasses the canonical namespace')
 
-    # The one-time larger caps require deletion of the old authority from the
-    # same comparison. Once migrated files exist at base, the base is the cap.
-    initial = bool(re.search(r'\bstruct\s+FrontendMobjectHandle\b', at_base(base, 'crates/noon-web/src/authoring_mobject.rs')))
     permissions: set[tuple[str, str]] = set()
     for path, limits in config['token_budgets'].items():
         source = sources.get(path, '')
         previous = at_base(base, path)
         for token, reviewed_cap in limits.items():
-            cap = reviewed_cap if initial else min(token_count(previous, token), reviewed_cap)
+            cap = min(token_count(previous, token), reviewed_cap)
             if token_count(source, token) > cap:
                 errors.append(f'{path}: {token} count {token_count(source, token)} exceeds relocation budget {cap}')
             else:
@@ -223,18 +217,12 @@ def main() -> int:
         # No raw namespace references are covered by this import permission.
         import_occurrences = len(re.findall(r'\buse\s+noon::legacy::', normalized_namespaces(re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S))))
         code = normalized_namespaces(re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S))
-        if code.count('noon::legacy') != import_occurrences and path not in config['adapter_call_sites']:
+        if code.count('noon::legacy') != import_occurrences:
             errors.append(f'{path}: legacy namespace use outside an approved import')
         if current and not any(error.startswith(path + ':') for error in errors):
             permissions.add((path, 'noon::legacy'))
 
-    # Existing bridge call sites may only name the explicit value exporter.
-    for path in config['adapter_call_sites']:
-        source = sources.get(path, '')
-        calls = re.findall(r'noon::legacy::([A-Za-z_][A-Za-z0-9_]*)', normalized_namespaces(re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)))
-        if any(name not in {'export_mobject_snapshot'} for name in calls):
-            errors.append(f'{path}: new legacy adapter API')
-    permitted_namespaces = set(config['rewritten_imports']) | set(config['adapter_call_sites'])
+    permitted_namespaces = set(config['rewritten_imports'])
     for path, source in sources.items():
         if path.endswith('.rs') and path not in permitted_namespaces and ('noon::legacy' in normalized_namespaces(source) or any(legacy_namespace(leaf, ('noon::legacy',)) for _, leaf in imports(source))):
             errors.append(f'{path}: legacy namespace spread outside reviewed files')

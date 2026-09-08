@@ -104,7 +104,8 @@ impl SemanticStore {
             .ok_or(SemanticSceneOperationError::NotSemanticObject(id))
     }
 
-    fn semantic_family_checked(
+    /// Validate a family handle without allocating or traversing its members.
+    pub fn semantic_family_checked(
         &self,
         id: SemanticNodeId,
     ) -> Result<&SemanticNode, SemanticSceneOperationError> {

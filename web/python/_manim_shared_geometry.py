@@ -258,7 +258,7 @@ def _shape_matcher_target(target: object):
     if not isinstance(target, _base.Mobject):
         raise TypeError("shape matcher target must be a Mobject")
     if isinstance(target, _compat.Group):
-        shared = _shared._shared_family_layout_session(target)
+        shared = _shared._shared_family_layout(target)
         if shared is None:
             raise NotImplementedError(
                 "shape matcher Group/VGroup targets require shared semantic family bounds"

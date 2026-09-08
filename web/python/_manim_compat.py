@@ -111,9 +111,7 @@ class VMobject(_BaseMobject):
     def copy(self) -> VMobject:
         clone = object.__new__(type(self))
         _BaseMobject.__init__(clone, self._current_raw())
-        for name, value in self.__dict__.items():
-            if name not in {"_raw", "_scene", "_object"}:
-                setattr(clone, name, copy.deepcopy(value))
+        copy_wrapper_attributes(self, clone, excluded={"_raw", "_scene", "_object"})
         return clone
 
 
@@ -1107,3 +1105,56 @@ def install() -> None:
         if name not in exports:
             exports.append(name)
     _base.__all__ = exports
+
+
+_FAMILY_COPY_METADATA = object()
+
+
+def deepcopy_semantic_wrapper(self, memo):
+    """Participate in a metadata preparation pass without copying engine handles."""
+    allocate = memo.get(_FAMILY_COPY_METADATA)
+    if allocate is not None:
+        return allocate(self)
+    clone = self.copy()
+    memo[id(self)] = clone
+    return clone
+
+
+def prepare_family_wrapper_copy(source: Group, excluded_fields):
+    """Prepare wrapper metadata, including saved-state references, before commit.
+
+    No constructors or semantic operations run here. Rust copies all referenced
+    nodes in one transaction after the fallible host metadata pass has completed.
+    """
+    pairs = []
+    memo = {}
+
+    def allocate(value):
+        existing = memo.get(id(value))
+        if existing is not None:
+            return existing
+        clone = object.__new__(type(value))
+        memo[id(value)] = clone
+        pairs.append((value, clone))
+        if isinstance(value, Group):
+            clone.submobjects = [allocate(member) for member in value.submobjects]
+        return clone
+
+    memo[_FAMILY_COPY_METADATA] = allocate
+    root = allocate(source)
+    # Deepcopy can discover saved states or wrappers nested in arbitrary metadata
+    # containers. Their hooks enqueue metadata work instead of touching Rust.
+    index = 0
+    while index < len(pairs):
+        original, clone = pairs[index]
+        index += 1
+        excluded = excluded_fields(original)
+        copy_wrapper_attributes(original, clone, memo, excluded | {"submobjects"})
+    return root, pairs
+
+
+def copy_wrapper_attributes(source, target, memo=None, excluded=()):
+    """Copy host-language attributes using an optional family identity memo."""
+    for name, value in source.__dict__.items():
+        if name not in excluded:
+            setattr(target, name, copy.deepcopy(value, memo))

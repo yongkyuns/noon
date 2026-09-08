@@ -6,7 +6,11 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
+mod family_layout;
+pub use family_layout::LiveLayoutTarget;
+
 use crate::{
+    family_arrangement::FamilyArrangePlan,
     semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
@@ -16,8 +20,8 @@ use crate::{
     DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
-    FamilyArrangePlan, FamilyTranslation, ManimBecomeOptions, ManimLineEndpoints, Mobject,
-    MobjectFamily, MobjectFamilyMember, SceneMembershipRequest, ValueTracker,
+    ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectFamilyMember,
+    SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
@@ -347,6 +351,10 @@ pub enum AnimationCompositionRequest<'a> {
         target: &'a Mobject,
         options: AnimationOptions,
     },
+    Uncreate {
+        target: &'a Mobject,
+        options: AnimationOptions,
+    },
     AffineLifecycle {
         target: &'a Mobject,
         direction: AffineLifecycleDirection,
@@ -610,6 +618,21 @@ impl<'a> LiveSession<'a> {
     /// without resetting or relowering the active runtime.
     pub fn target_editor(&mut self, source: &Mobject) -> Result<Mobject, LiveSessionError> {
         self.require_mobject(source)?;
+        self.require_target_capture()?;
+
+        let state = self.capture_mobject_state(source)?;
+
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        let result = self.apply(transaction)?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one prepared target copy has one exact semantic impact")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+    }
+
+    fn require_target_capture(&self) -> Result<(), LiveSessionError> {
+        self.session.require_published_store(&self.store.borrow())?;
         if self.session.pending_callback_token().is_some() {
             return Err(LiveSessionError::Mobject(
                 "cannot create a target while a required callback phase is pending".into(),
@@ -621,15 +644,33 @@ impl<'a> LiveSession<'a> {
             ));
         }
 
-        let state = self.capture_mobject_state(source)?;
+        Ok(())
+    }
 
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+    /// Copy a complete family from this coherent runtime in one publication.
+    pub fn copy_family(
+        &mut self,
+        source: &MobjectFamily,
+    ) -> Result<crate::FamilyCopy, LiveSessionError> {
+        self.copy_family_with_references(source, &[])
+    }
+
+    /// Copy a family and detached metadata references from one coherent state.
+    pub fn copy_family_with_references(
+        &mut self,
+        source: &MobjectFamily,
+        references: &[crate::MobjectFamilyMember<'_>],
+    ) -> Result<crate::FamilyCopy, LiveSessionError> {
+        self.require_family(source)?;
+        self.require_target_capture()?;
+        let (transaction, pending) =
+            crate::family_copy::prepare_family_copy(source, references, |mobject| {
+                self.capture_mobject_state(mobject)
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(LiveSessionError::Mobject)?;
         let result = self.apply(transaction)?;
-        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one prepared target copy has one exact semantic impact")
-        };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+        pending.resolve(&result).map_err(LiveSessionError::Mobject)
     }
 
     /// Replace one object's presentation with another object's effective state while
@@ -712,32 +753,45 @@ impl<'a> LiveSession<'a> {
         &mut self,
         members: &[MobjectFamilyMember<'_>],
     ) -> Result<MobjectFamily, LiveSessionError> {
-        if members.is_empty() {
-            return Err(LiveSessionError::Mobject(
-                "semantic family requires at least one member".into(),
-            ));
-        }
-        for member in members {
-            if !Rc::ptr_eq(self.store, member.store()) {
-                return Err(LiveSessionError::ForeignMobjectStore);
-            }
-            member.validate().map_err(LiveSessionError::Mobject)?;
-        }
-        let mut transaction = SemanticMutationTransaction::new();
-        let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
-        // Families have ordered, unique direct membership. Validate every operand
-        // above, then stage each identity once in first-occurrence order.
-        let mut seen = std::collections::BTreeSet::new();
-        for member in members {
-            if seen.insert(member.node_id()) {
-                transaction.add_member(family, member.node_id());
-            }
-        }
+        let (transaction, family) =
+            crate::family_authoring::family_creation_transaction(self.store, members)
+                .map_err(LiveSessionError::Mobject)?;
         let result = self.apply(transaction)?;
         let node = result
             .resolve(family)
             .expect("committed family token resolves to one semantic identity");
         MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::Mobject)
+    }
+
+    /// Publish one atomic batch of direct family additions.
+    pub fn add_family_members(
+        &mut self,
+        family: &MobjectFamily,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Vec<bool>, LiveSessionError> {
+        self.edit_family_members(family, members, true)
+    }
+
+    pub fn remove_family_members(
+        &mut self,
+        family: &MobjectFamily,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Vec<bool>, LiveSessionError> {
+        self.edit_family_members(family, members, false)
+    }
+
+    fn edit_family_members(
+        &mut self,
+        family: &MobjectFamily,
+        members: &[MobjectFamilyMember<'_>],
+        adding: bool,
+    ) -> Result<Vec<bool>, LiveSessionError> {
+        self.require_family(family)?;
+        let (transaction, changed) =
+            crate::family_authoring::family_membership_transaction(family, members, adding)
+                .map_err(LiveSessionError::Mobject)?;
+        self.apply(transaction)?;
+        Ok(changed)
     }
 
     /// Publish one fully validated detached Manim geometry object through this session.
@@ -1687,6 +1741,13 @@ impl<'a> LiveSession<'a> {
                     options: *options,
                 }
             }
+            AnimationCompositionRequest::Uncreate { target, options } => {
+                self.require_mobject(target)?;
+                Request::Uncreate {
+                    target: target.node_id(),
+                    options: *options,
+                }
+            }
             AnimationCompositionRequest::AffineLifecycle {
                 target,
                 direction,
@@ -1910,42 +1971,38 @@ impl<'a> LiveSession<'a> {
         buff: f64,
         center: bool,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.arrange_family_with_options(
+            family,
+            &crate::FamilyArrangeOptions::new(direction_x, direction_y, buff, center),
+        )
+    }
+
+    /// Stage sequential layout observations and publish one atomic family edit.
+    pub fn arrange_family_with_options(
+        &mut self,
+        family: &MobjectFamily,
+        options: &crate::FamilyArrangeOptions,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
-        let mut plan = FamilyArrangePlan::begin(&self.store.borrow(), family.node_id())
-            .map_err(LiveSessionError::Mobject)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let mut plan =
+            FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::Mobject)?;
         plan.observe_leaf_bounds(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-            if !self.session.semantic_object_is_reachable(leaf) {
-                return mobject.layout_bounds();
-            }
-            self.effective_layout(&mobject).map_or_else(
-                |error| Err(error.to_string()),
-                |layout| {
-                    Ok(Some(Bounds2D64 {
-                        min_x: layout.center.0 - layout.width * 0.5,
-                        min_y: layout.center.1 - layout.height * 0.5,
-                        max_x: layout.center.0 + layout.width * 0.5,
-                        max_y: layout.center.1 + layout.height * 0.5,
-                    }))
-                },
-            )
+            self.family_member_bounds(&mobject)
+                .map_err(|e| e.to_string())
         })
         .map_err(LiveSessionError::Mobject)?;
-        let shifts = plan
-            .finish(direction_x, direction_y, buff, center)
-            .map_err(LiveSessionError::Mobject)?
-            .into_iter()
-            .flat_map(FamilyTranslation::into_shifts)
-            .collect::<Vec<_>>();
-        let mut transaction = SemanticMutationTransaction::new();
-        for (leaf, x, y) in shifts {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
-            let mut translation = self.authored(&mobject)?.transform.translation;
-            translation.x += x;
-            translation.y += y;
-            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
-        }
+        let transaction = plan
+            .transaction(|leaf| {
+                let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
+                self.placement_authored_transform(&mobject)
+                    .map_err(|e| e.to_string())?;
+                self.authored(&mobject)
+                    .map(|s| s.transform.translation)
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(LiveSessionError::Mobject)?;
         self.apply(transaction)
     }
 
@@ -1960,6 +2017,24 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         let x = authoring_render_f64("move_to.x", x).map_err(LiveSessionError::Mobject)?;
         let y = authoring_render_f64("move_to.y", y).map_err(LiveSessionError::Mobject)?;
+        let authored = self.authored(mobject)?;
+        let authored_transform = self.placement_authored_transform(mobject)?;
+        let publication = self.session.publication_context();
+        let layout = self.layout_at_transform(mobject, authored_transform, publication)?;
+        let mut translation = authored.transform.translation;
+        translation.x =
+            authoring_render_f64("move_to translation.x", translation.x + x - layout.center.0)
+                .map_err(LiveSessionError::Mobject)?;
+        translation.y =
+            authoring_render_f64("move_to translation.y", translation.y + y - layout.center.1)
+                .map_err(LiveSessionError::Mobject)?;
+        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+    }
+
+    fn placement_authored_transform(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Transform2D, LiveSessionError> {
         let authored = self.authored(mobject)?;
         let authored_transform = Transform2D {
             translation: authored
@@ -1978,7 +2053,6 @@ impl<'a> LiveSession<'a> {
                 .lower_xy_f32()
                 .map_err(|error| LiveSessionError::Mobject(error.to_string()))?,
         };
-        let publication = self.session.publication_context();
         let store = self.store.borrow();
         match self
             .session
@@ -1998,17 +2072,7 @@ impl<'a> LiveSession<'a> {
             Err(error) => return Err(error.into()),
         }
         drop(store);
-        // A detached target has no execution row. Its authored state was created
-        // through this session, so this is the exact coherent layout basis.
-        let layout = self.layout_at_transform(mobject, authored_transform, publication)?;
-        let mut translation = authored.transform.translation;
-        translation.x =
-            authoring_render_f64("move_to translation.x", translation.x + x - layout.center.0)
-                .map_err(LiveSessionError::Mobject)?;
-        translation.y =
-            authoring_render_f64("move_to translation.y", translation.y + y - layout.center.1)
-                .map_err(LiveSessionError::Mobject)?;
-        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+        Ok(authored_transform)
     }
 
     /// Multiply an object's authored affine scale through the shared live
@@ -3855,7 +3919,7 @@ mod tests {
         for nested_family in [false, true] {
             let scene = Scene::new();
             let shape = scene.circle(0.5).unwrap();
-            let family = scene.family(&[&shape]).unwrap();
+            let family = scene.family(&[(&shape).into()]).unwrap();
             let mut session = scene.execution_session().unwrap();
             let mut live = scene.live(&mut session);
             let outer = live
@@ -4538,8 +4602,10 @@ mod recursive_composition_tests {
         let mut second_target = second.target_editor().unwrap();
         first_target.set_translation(3.0, 0.0).unwrap();
         second_target.set_translation(6.0, 0.0).unwrap();
-        let source = scene.family(&[&first, &second]).unwrap();
-        let target = scene.family(&[&first_target, &second_target]).unwrap();
+        let source = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let target = scene
+            .family(&[(&first_target).into(), (&second_target).into()])
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let segment = live
@@ -4567,7 +4633,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let mut live = scene.live(&mut session);
@@ -4587,11 +4653,65 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn live_family_arrange_centers_unique_detached_and_reachable_members() {
+        for mounted in [false, true] {
+            let mut scene = Scene::new();
+            let first = scene.circle(0.2).unwrap();
+            let mut second = scene.circle(0.2).unwrap();
+            second.shift(2.0, 0.0).unwrap();
+            let unrelated = scene.square(1.0).unwrap();
+            let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+            let outer = scene.family(&[(&first).into()]).unwrap();
+            scene
+                .store()
+                .borrow_mut()
+                .add_member(outer.node_id(), nested.node_id())
+                .unwrap();
+            scene.add(&unrelated).unwrap();
+            if mounted {
+                scene.add(&first).unwrap();
+                scene.add(&second).unwrap();
+            }
+            let mut session = scene.execution_session().unwrap();
+            let mut live = scene.live(&mut session);
+            let before = live.session.publication_context();
+            let unrelated_before = live.effective(&unrelated).unwrap();
+
+            assert!(live
+                .arrange_family(&outer, 1.0, 0.0, f64::NAN, true)
+                .is_err());
+            assert_eq!(live.session.publication_context(), before);
+            assert_eq!(first.center().unwrap(), (0.0, 0.0));
+            assert_eq!(second.center().unwrap(), (2.0, 0.0));
+
+            live.arrange_family(&outer, 1.0, 0.0, 0.2, true).unwrap();
+            assert_eq!(
+                live.session.publication_context().scene_revision(),
+                before.scene_revision().checked_next().unwrap()
+            );
+            assert!((first.center().unwrap().0 + 1.0).abs() < 1e-6);
+            assert!((second.center().unwrap().0 - 1.0).abs() < 1e-6);
+            let unrelated_after = live.effective(&unrelated).unwrap();
+            assert_eq!(unrelated_after.transform, unrelated_before.transform);
+            assert_eq!(unrelated_after.style, unrelated_before.style);
+            assert_eq!(unrelated_after.appearance, unrelated_before.appearance);
+            if mounted {
+                assert!(
+                    (live.effective(&first).unwrap().transform.translation.x + 1.0).abs() < 1e-6
+                );
+                assert!(
+                    (live.effective(&second).unwrap().transform.translation.x - 1.0).abs() < 1e-6
+                );
+            }
+        }
+    }
+
+    #[test]
     fn family_fade_preserves_family_membership_and_ordered_lifecycle() {
         let scene = Scene::new();
         let label = scene.text(crate::Text::new("Fade")).unwrap();
         let shape = scene.circle(0.25).unwrap();
-        let family = scene.family(&[&label, &shape]).unwrap();
+        let family = scene.family(&[(&label).into(), (&shape).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let fade_in = live
@@ -4654,7 +4774,9 @@ mod recursive_composition_tests {
         let mut scene = Scene::new();
         let fading_text = scene.text(crate::Text::new("old")).unwrap();
         let fading_shape = scene.square(0.5).unwrap();
-        let family = scene.family(&[&fading_text, &fading_shape]).unwrap();
+        let family = scene
+            .family(&[(&fading_text).into(), (&fading_shape).into()])
+            .unwrap();
         scene
             .add_many(&[MobjectFamilyMember::Family(&family)])
             .unwrap();
@@ -4695,7 +4817,7 @@ mod recursive_composition_tests {
     fn family_fade_rejects_overlapping_text_write_before_publication() {
         let mut scene = Scene::new();
         let label = scene.text(crate::Text::new("same")).unwrap();
-        let family = scene.family(&[&label]).unwrap();
+        let family = scene.family(&[(&label).into()]).unwrap();
         scene
             .add_many(&[MobjectFamilyMember::Family(&family)])
             .unwrap();
@@ -4741,7 +4863,7 @@ mod recursive_composition_tests {
         let target = first.target_editor().unwrap();
         scene.add(&first).unwrap();
         scene.add(&second).unwrap();
-        let source = scene.family(&[&first, &second]).unwrap();
+        let source = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let nested = {
             let mut transaction = SemanticMutationTransaction::new();
             let inner = transaction.create_node(noon_core::SemanticNodeCreation::family());
@@ -4807,8 +4929,10 @@ mod recursive_composition_tests {
         let mut second_target = second.target_editor().unwrap();
         first_target.set_translation(2.0, 0.0).unwrap();
         second_target.set_translation(4.0, 0.0).unwrap();
-        let source = scene.family(&[&first, &second]).unwrap();
-        let target = scene.family(&[&first_target, &second_target]).unwrap();
+        let source = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let target = scene
+            .family(&[(&first_target).into(), (&second_target).into()])
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Sequence,
@@ -4848,7 +4972,7 @@ mod recursive_composition_tests {
         let second = scene.square(1.0).unwrap();
         scene.add(&first).unwrap();
         scene.add(&second).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let request = AnimationCompositionRequest::Composition {
@@ -4884,7 +5008,7 @@ mod recursive_composition_tests {
         right.set_translation(2.0, 0.0).unwrap();
         scene.add(&left).unwrap();
         scene.add(&right).unwrap();
-        let family = scene.family(&[&left, &right]).unwrap();
+        let family = scene.family(&[(&left).into(), (&right).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let segment = live
@@ -4972,7 +5096,7 @@ mod recursive_composition_tests {
         let mut first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         first.set_fill_opacity(0.35).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         family.prepare_subset_display().unwrap();
         assert_eq!(first.state().unwrap().style.fill_opacity, 0.0);
         assert_eq!(second.state().unwrap().style.fill_opacity, 0.0);
@@ -5026,7 +5150,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         family.prepare_subset_display().unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
@@ -5070,7 +5194,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         family.prepare_subset_display().unwrap();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
@@ -5117,7 +5241,9 @@ mod recursive_composition_tests {
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let third = scene.square(1.0).unwrap();
-        let family = scene.family(&[&first, &second, &third]).unwrap();
+        let family = scene
+            .family(&[(&first).into(), (&second).into(), (&third).into()])
+            .unwrap();
         family.prepare_subset_display().unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
@@ -5181,7 +5307,7 @@ mod recursive_composition_tests {
         let second = scene.square(1.0).unwrap();
         scene.add(&first).unwrap();
         scene.add(&second).unwrap();
-        let family = scene.family(&[&first, &second]).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let result = scene
@@ -5256,7 +5382,7 @@ mod recursive_composition_tests {
         let mut first = scene.square(1.0).unwrap();
         first.set_fill_opacity(1.0).unwrap();
         let nested_member = scene.square(1.0).unwrap();
-        let nested = scene.family(&[&nested_member]).unwrap();
+        let nested = scene.family(&[(&nested_member).into()]).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
         transaction.add_member(outer, first.node_id());
@@ -5293,7 +5419,7 @@ mod recursive_composition_tests {
         let scene = Scene::new();
         let left = scene.text(crate::Text::new("A")).unwrap();
         let right = scene.text(crate::Text::new("BCDE")).unwrap();
-        let family = scene.family(&[&left, &right]).unwrap();
+        let family = scene.family(&[(&left).into(), (&right).into()]).unwrap();
         let mut session = scene.execution_session().unwrap();
 
         let conflicting = AnimationCompositionRequest::Composition {
