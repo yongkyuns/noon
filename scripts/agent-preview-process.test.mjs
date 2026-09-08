@@ -300,3 +300,79 @@ test("invalid inputs fail before spawn", async () => {
     await assert.rejects(runBoundedChild({ command: process.execPath, cwd: os.tmpdir(), ...extra }));
   }
 });
+
+for (const { name, budget, bytes, expected, overflow } of [
+  { name: "malformed UTF-8 at the raw budget", budget: 128,
+    bytes: Buffer.alloc(128, 0xff), expected: "\ufffd".repeat(42), overflow: false },
+  { name: "two-byte scalar cut at one byte", budget: 1,
+    bytes: Buffer.from("é"), expected: "", overflow: true },
+  { name: "three-byte scalar cut at two bytes", budget: 2,
+    bytes: Buffer.from("€"), expected: "", overflow: true },
+  { name: "four-byte scalar cut at three bytes", budget: 3,
+    bytes: Buffer.from("🙂"), expected: "\ufffd", overflow: true },
+  { name: "expanded prefix followed by an astral scalar", budget: 7,
+    bytes: Buffer.concat([Buffer.from([0xff]), Buffer.from("🙂xy")]),
+    expected: "\ufffd🙂", overflow: false },
+]) {
+  test(`diagnostic UTF-8 budget: ${name}`, linux, async () => {
+    await withTempDir(async (cwd) => {
+      const result = await within(runBoundedChild({
+        command: process.execPath, cwd,
+        args: ["-e", `
+          const fs = require('node:fs');
+          process.on('SIGTERM', () => {});
+          const bytes = Buffer.from(${JSON.stringify([...bytes])});
+          fs.writeSync(1, bytes);
+          fs.writeSync(2, bytes);
+        `],
+        maxOutputBytes: budget, timeoutMs: 2_000, killGraceMs: 80,
+      }));
+      for (const stream of ["stdout", "stderr"]) {
+        assert.ok(Buffer.byteLength(result[stream], "utf8") <= budget,
+          `${stream} must remain within the UTF-8 byte budget after decoding`);
+        assert.equal(result[stream], expected);
+        assert.equal(result[`${stream}Truncated`], true);
+      }
+      // Raw overflow terminates execution; final diagnostic truncation alone
+      // must not invent a process termination that did not happen.
+      assert.equal(result.terminationReason, overflow ? "output_limit" : null);
+      assert.equal(result.cleanup.stdioClosed, true);
+    });
+  });
+}
+
+test("diagnostic budget preserves valid split multibyte output and empty streams", linux, async () => {
+  await withTempDir(async (cwd) => {
+    const text = "é€🙂";
+    const result = await within(runBoundedChild({
+      command: process.execPath, cwd,
+      args: ["-e", `
+        const fs = require('node:fs');
+        const bytes = Buffer.from(${JSON.stringify(text)});
+        fs.writeSync(1, bytes.subarray(0, 1));
+        setTimeout(() => fs.writeSync(1, bytes.subarray(1)), 30);
+      `],
+      maxOutputBytes: Buffer.byteLength(text), timeoutMs: 2_000,
+    }));
+    assert.equal(result.stdout, text);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdoutTruncated, false);
+    assert.equal(result.stderrTruncated, false);
+    assert.equal(result.terminationReason, null);
+  });
+});
+
+test("diagnostic truncation flags and budgets are independent per stream", linux, async () => {
+  await withTempDir(async (cwd) => {
+    const result = await within(runBoundedChild({
+      command: process.execPath, cwd,
+      args: ["-e", "const fs = require('node:fs'); fs.writeSync(2, 'ok'); fs.writeSync(1, 'x'.repeat(129));"],
+      maxOutputBytes: 128, timeoutMs: 2_000, killGraceMs: 80,
+    }));
+    assert.equal(result.stdout, "x".repeat(128));
+    assert.equal(result.stderr, "ok");
+    assert.equal(result.stdoutTruncated, true);
+    assert.equal(result.stderrTruncated, false);
+    assert.equal(result.terminationReason, "output_limit");
+  });
+});
