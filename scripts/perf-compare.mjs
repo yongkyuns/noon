@@ -48,6 +48,8 @@ function compareFrames(before, after) {
 }
 
 function compareAuthoring(before, after) {
+  assert.equal(before.schemaVersion, 2, "authoring baseline must use the shared profiler schema");
+  assert.equal(after.schemaVersion, 2, "authoring candidate must use the shared profiler schema");
   const candidateCases = new Map(after.cases.map((item) => [String(item.workload.objects), item]));
   const rows = [];
   for (const oldCase of before.cases) {
@@ -55,11 +57,11 @@ function compareAuthoring(before, after) {
     const next = candidateCases.get(key);
     if (!next) continue;
     const metrics = [
-      ["unchanged visible p95 ms", oldCase.warmUnchanged?.timeToVisibleMs?.p95, next.warmUnchanged?.timeToVisibleMs?.p95],
-      ["local edit visible p95 ms", oldCase.oneObjectEdit?.timeToVisibleMs?.p95, next.oneObjectEdit?.timeToVisibleMs?.p95],
-      ["scrub p95 ms", oldCase.scrub?.timeToVisibleMs?.p95, next.scrub?.timeToVisibleMs?.p95],
-      ["serialize p95 ms", oldCase.oneObjectEdit?.serializeMs?.p95, next.oneObjectEdit?.serializeMs?.p95],
-      ["reconcile p95 ms", oldCase.oneObjectEdit?.reconcileMs?.p95, next.oneObjectEdit?.reconcileMs?.p95],
+      ["unchanged rerun p95 ms", oldCase.warmUnchanged?.totalRoundTripMs?.p95, next.warmUnchanged?.totalRoundTripMs?.p95],
+      ["source edit rerun p95 ms", oldCase.oneObjectSourceEdit?.totalRoundTripMs?.p95, next.oneObjectSourceEdit?.totalRoundTripMs?.p95],
+      ["seek control p95 ms", oldCase.scrub?.controlRoundTripMs?.p95, next.scrub?.controlRoundTripMs?.p95],
+      ["source edit authoring p95 ms", oldCase.oneObjectSourceEdit?.authoringRoundTripMs?.p95, next.oneObjectSourceEdit?.authoringRoundTripMs?.p95],
+      ["source edit attachment p95 ms", oldCase.oneObjectSourceEdit?.attachAndPresentRoundTripMs?.p95, next.oneObjectSourceEdit?.attachAndPresentRoundTripMs?.p95],
     ];
     for (const [metric, oldValue, newValue] of metrics) {
       pushMetric(rows, `${Number(key).toLocaleString()} objects`, metric, oldValue, newValue, false);

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { evaluateBudget } from "./perf-corpus-budget.mjs";
 
 const { chromium } = playwright;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -50,7 +51,6 @@ try {
     const query = new URLSearchParams({
       source: definition.source,
       context: JSON.stringify(definition.context ?? {}),
-      cameraHeight: String(definition.cameraHeight ?? 6),
       warmup: String(warmup),
       frames: String(frames),
       targetHz: String(targetHz),
@@ -74,7 +74,7 @@ try {
     console.log(
       `${format(report.cadence.effective?.effectiveFps)} FPS, ` +
         `p95 ${format(report.cadence.frameIntervalMs?.p95)} ms, ` +
-        `${evaluation.passed ? "budget ok" : "BUDGET FAIL"}`,
+        `${evaluation.passed ? "budget ok" : evaluation.complete ? "BUDGET FAIL" : "BUDGET INCOMPLETE"}`,
     );
     await page.close();
   }
@@ -102,24 +102,6 @@ try {
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
-}
-
-function evaluateBudget(report, budget) {
-  if (budget === null) return { passed: true, gated: false, checks: [] };
-  const actual = {
-    frameIntervalP95Ms: report.cadence.frameIntervalMs?.p95,
-    frameIntervalP99Ms: report.cadence.frameIntervalMs?.p99,
-    longFrameRateMax: report.cadence.effective?.longFrameRate,
-    cpuFrameP95Ms: report.cpu.frameMs?.p95,
-    gpuP95Ms: report.gpu?.p95,
-  };
-  const checks = Object.entries(budget).map(([metric, limit]) => ({
-    metric,
-    limit,
-    actual: actual[metric] ?? null,
-    passed: actual[metric] == null || actual[metric] <= limit,
-  }));
-  return { passed: checks.every((check) => check.passed), gated: true, checks };
 }
 
 async function waitForServer() {

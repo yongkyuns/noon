@@ -396,12 +396,15 @@ export class AuthoringExecutionClient {
     });
   }
 
-  async sampleToAuthoredTime(timeSeconds) {
+  // Exact samples are strict by default. stopAtSourceCompletion lets bounded
+  // consumers finish at an earlier source endpoint; the response reports its
+  // actual time and sourceCompleted without replaying any callback.
+  async sampleToAuthoredTime(timeSeconds, options = {}) {
     return this.#withStablePlayer((player, mode) => {
       if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
         throw new Error("external authored-time sampling requires semantic execution mode");
       }
-      return player.sampleToAuthoredTime(timeSeconds);
+      return player.sampleToAuthoredTime(timeSeconds, options);
     });
   }
 

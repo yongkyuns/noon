@@ -134,7 +134,7 @@ async function waitForInitialScene(page) {
 async function setEditorSource(page, source) {
   const editor = page.locator("#scene-editor-panel .cm-content");
   await editor.click();
-  await page.keyboard.press("Control+A");
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await page.keyboard.insertText(source);
   await page.waitForFunction(
     (expected) => document.querySelector("#python-scene-source")?.value === expected,

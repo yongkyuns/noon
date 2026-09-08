@@ -244,12 +244,14 @@ test("external sample pacing reaches the continuation endpoint as an absolute sa
   await started;
 
   assert.equal(authoring.attachments[0].options.pacing, "external_samples");
-  const sampled = await client.sampleToAuthoredTime(1.25);
+  const sampled = await client.sampleToAuthoredTime(1.25, { stopAtSourceCompletion: true });
   assert.equal(sampled.time, 0);
   const request = authoring.attachments[0].controlPort.peer.messages.findLast(
     (message) => message.type === "sample_to_authored_time",
   );
   assert.equal(request.time, 1.25);
+  assert.equal(request.stopAtSourceCompletion, true);
+  await assert.rejects(client.sampleToAuthoredTime(2, { stopAtSourceCompletion: "yes" }), /must be a boolean/);
   client.terminate();
 });
 

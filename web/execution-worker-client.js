@@ -1055,13 +1055,16 @@ export class ExecutionWorkerClient {
     return result.debugFrame;
   }
 
-  async sampleToAuthoredTime(timeSeconds) {
+  async sampleToAuthoredTime(timeSeconds, { stopAtSourceCompletion = false } = {}) {
     this.#requireSemanticMode("external authored-time sampling");
     if (this.#semanticPacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES) {
       throw new Error("external authored-time sampling requires external sample pacing");
     }
     const time = validateAuthoredSampleTime(timeSeconds);
-    const result = await this.#requestEngine("sample_to_authored_time", { time });
+    if (typeof stopAtSourceCompletion !== "boolean") {
+      throw new TypeError("stopAtSourceCompletion must be a boolean");
+    }
+    const result = await this.#requestEngine("sample_to_authored_time", { time, stopAtSourceCompletion });
     this.#rememberPlaying(result);
     return result;
   }

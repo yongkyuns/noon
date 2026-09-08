@@ -12,7 +12,6 @@ const retainedExecutionWebPaths = new Set([
   "web/execution-worker-smoke.html",
   "web/render-gpu-diagnostics.js",
   "web/retained-execution-engine-worker.js",
-  "web/scene-identity.js",
 ]);
 
 const retainedExecutionRustPaths = new Set([

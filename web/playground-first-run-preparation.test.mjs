@@ -68,20 +68,14 @@ assert.match(
 );
 assert.match(
   runtimeReadyBody,
-  /await nextPlayer\.startRetainedCanonical\(sceneSpecJson,/,
-  "canonical retained first runs must attach directly after authoring selects retained mode",
+  /await nextPlayer\.startSemanticExecution\(semanticExecution,/,
+  "first runs must attach the authored shared session after preparation",
 );
-assert.match(
-  runtimeReadyBody,
-  /await nextPlayer\.start\(sceneJson,/,
-  "legacy first runs must attach directly after authoring selects legacy mode",
-);
-const retainedStart = runtimeReadyBody.indexOf("await nextPlayer.startRetainedCanonical(sceneSpecJson,");
-const legacyStart = runtimeReadyBody.indexOf("await nextPlayer.start(sceneJson,");
+const semanticStart = runtimeReadyBody.indexOf("await nextPlayer.startSemanticExecution(semanticExecution,");
 const playerPublish = runtimeReadyBody.indexOf("player = nextPlayer;");
 assert.ok(
-  retainedStart >= 0 && legacyStart >= 0 && playerPublish > retainedStart && playerPublish > legacyStart,
-  "the prepared candidate must remain unpublished until the selected authored engine is ready",
+  semanticStart >= 0 && playerPublish > semanticStart,
+  "the prepared candidate must remain unpublished until the shared engine is ready",
 );
 assert.match(
   runtimeReadyBody,
