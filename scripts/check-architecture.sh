@@ -13,7 +13,7 @@ and crate-private export guardrails against the current working tree.
 BASE defaults to origin/master, is printed and resolved once, and must exist
 locally. Pass HEAD explicitly for working-tree-only checks. No fetch, merge-base
 selection, HEAD^ fallback, dependency download or compilation is performed.
-Requires Bash, Git, Python 3, Cargo (repository toolchain), grep, sed, wc and tr.
+Requires Bash, Git, Python 3.10+, Cargo (repository toolchain), grep, sed, wc and tr.
 EOF
 }
 if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then

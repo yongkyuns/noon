@@ -83,6 +83,7 @@ with tempfile.TemporaryDirectory(prefix='noon architecture gate ') as directory:
         ('core ownership', 'crates/noon-core/src/lib.rs', '\ninclude!("other.rs");\n', 'noon-core module ownership ratchet:'),
         ('renderer host', 'crates/noon-render-wgpu/src/new host.rs', 'use winit::event_loop;\n', 'renderer host-boundary ratchet failed'),
         ('performance frontend', 'web/perf-profile.js', '\nconst bad = demoSceneJson();\n', 'active perf frontend ratchet:'),
+        ('crate-private export', 'crates/noon-web/src/lib.rs', 'pub use legacy::*;\n', 'ScenePlayer must remain crate-private'),
         ('migration growth', 'crates/noon-runtime/src/new.rs', 'struct SceneDocument;\n', 'architecture ratchet:'),
         ('identity authority', 'crates/noon-core/src/duplicate.rs', 'struct SemanticNodeId;\n', 'SemanticNodeId definition must exist exactly once'),
         ('structural consumer', 'crates/noon-web/src/consumer.rs', 'use crate::legacy::ScenePlayer;\n', 'ScenePlayer consumer outside migration allowlist'),
