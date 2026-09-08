@@ -14,6 +14,7 @@ mod direct_execution_smoke;
 mod execution_canvas;
 mod execution_transport;
 mod execution_wake;
+#[cfg(any(target_arch = "wasm32", test))]
 mod geometry_export;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 mod gpu_diagnostics;

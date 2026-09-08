@@ -1,4 +1,5 @@
 use super::*;
+use noon_core::Vec2;
 
 fn scene_with_circle() -> (CanonicalAuthoringScene, noon::Mobject) {
     let mut scene = CanonicalAuthoringScene::default();

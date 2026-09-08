@@ -64,12 +64,7 @@ _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
 
 
 def _json(value: object) -> str:
-    # This is a deliberate migration seam for #367. The canonical context owns
-    # the scene, while the existing typed/semantic handles still expose their
-    # stable snapshot/spec accessors here. Replace these bind/update/finalize
-    # payloads with typed WASM handle arguments once the context API can consume
-    # those handles directly; JSON must remain a boundary/debug/export format,
-    # not a per-frame mutation API.
+    # Encode tokens for the existing host-callback bridge.
     return json.dumps(value, separators=(",", ":"), allow_nan=False)
 
 
@@ -79,7 +74,7 @@ def _context(scene: _ir.Scene):
         return context
     if _create_context is None:
         raise RuntimeError(
-            "canonical SceneSpec authoring requires the Noon browser Rust/WASM context"
+            "shared semantic authoring requires the Noon browser Rust/WASM context"
         )
     context = _create_context()
     scene._canonical_authoring_context = context
@@ -2476,8 +2471,8 @@ def _to_document(self):
             snapshot["id"] = object_id
             objects[self._object_positions[object_id]] = snapshot
     # Native/Typst Text has no geometry projection. The legacy document remains
-    # an explicit geometry-only export while the canonical export carries mixed
-    # content, so omit identity-only text rows and their legacy tracks here.
+    # an explicit geometry-only diagnostic, so omit identity-only text rows
+    # and their legacy tracks here.
     text_ids = set(getattr(self, "_semantic_text_handles", {}))
     if text_ids:
         document["objects"] = [
@@ -2746,29 +2741,6 @@ def _bind_text(
     return _bind_mobject(self, scene, key=key)
 
 
-def _camera_object_id(scene: _base.Scene) -> str:
-    camera = getattr(scene, "camera", None)
-    frame = getattr(camera, "frame", None)
-    if frame is None:
-        return ""
-    try:
-        return str(int(frame.id))
-    except (AttributeError, TypeError, ValueError):
-        return ""
-
-
-def _to_scene_spec(self: _base.Scene) -> dict[str, Any]:
-    """Finalize directly from the per-scene canonical Rust authoring context."""
-
-    context = _context(self)
-    scene_spec_json = context.sceneSpecJson(
-        _json(list(self._tracks)),
-        _json([]),
-        _camera_object_id(self),
-    )
-    return json.loads(str(scene_spec_json))
-
-
 def install() -> None:
     """Install the canonical per-scene Rust authoring context as the production path."""
 
@@ -2783,7 +2755,6 @@ def install() -> None:
     _ir.Scene._authoring_checkpoint = _authoring_checkpoint
     _ir.Scene._restore_authoring_checkpoint = _restore_authoring_checkpoint
     _typst._RetainedTextMobject._bind_to_scene = _bind_text
-    _base.Scene.to_scene_spec = _to_scene_spec
     _base.Mobject._bind_to_scene = _bind_mobject
     _base.Scene._bind_camera_frame = _bind_camera_frame
     _base.Scene.play = _play

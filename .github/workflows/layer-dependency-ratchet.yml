@@ -22,8 +22,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Report metadata prerequisites
+        run: |
+          python3 --version
+          cargo --version
+
       - name: Validate ratchet scripts
-        run: bash -n scripts/layer-dependency-ratchet.sh scripts/layer-dependency-ratchet.test.sh
+        run: |
+          bash -n scripts/layer-dependency-ratchet.sh
+          bash -n scripts/layer-dependency-ratchet.test.sh
 
       - name: Prove ratchet catches forbidden edges
         run: bash scripts/layer-dependency-ratchet.test.sh

@@ -101,7 +101,8 @@ class SharedAuthoringSmoke(Scene):
         def reject_export(*_args, **_kwargs):
             raise AssertionError("semantic execution must not export legacy scene state")
         self.to_document = reject_export
-        self.to_scene_spec = reject_export
+        assert not hasattr(self, "to_scene_spec")
+        assert not hasattr(self._canonical_authoring_context, "sceneSpecJson")
 `;
 
 const persistedSceneSource = `from noon import *
@@ -986,7 +987,7 @@ ${corruption}
 def reject_export(*args, **kwargs):
     raise AssertionError("normal shared finalization invoked the document exporter")
 scene.to_document = reject_export
-scene.to_scene_spec = reject_export
+assert not hasattr(scene, "to_scene_spec")
 result = scene
 `;
       try {
