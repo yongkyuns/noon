@@ -14,6 +14,8 @@ import _manim_compat as compat
 compat.install()
 import _manim_phase_b
 import _manim_semantic_handles as handles
+import _manim_live_family as live_family
+live_family.install()
 
 class Handle:
     def __init__(self, slot, generation=1):
@@ -62,7 +64,6 @@ def leaf(slot, generation=1):
     obj = object.__new__(compat.Circle)
     obj._semantic_handle = Handle(slot, generation)
     return obj
-
 def forbidden_raw():
     raise AssertionError("live construction bypassed the canonical owner")
 handles._create_family_handle = forbidden_raw
