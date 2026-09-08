@@ -44,7 +44,13 @@ pub fn session() -> Result<ExecutionSession, String> {
             .run_time(1.0)
             .rate_func(RateFunction::Linear),
     )?;
-    scene.execution_session_with_animation_root(&rotation)
+    let mut session = scene.execution_session()?;
+    let mut live = scene.live(&mut session);
+    let segment = live.play_animation(&rotation).map_err(|e| e.to_string())?;
+    live.advance_segment_to(segment, segment.end_time())
+        .map_err(|e| e.to_string())?;
+    live.complete_segment(segment).map_err(|e| e.to_string())?;
+    Ok(session)
 }
 
 #[cfg(test)]
