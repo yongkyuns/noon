@@ -6,26 +6,28 @@ cd "$ROOT"
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/check.sh [fast|full|rust|fmt-lint|test|web]
+Usage: bash scripts/check.sh [fast|full|rust|fmt-lint|test|web|architecture] [BASE]
 
-  fast      Architecture checks, format/check/clippy plus workspace library tests.
-  full      Full Rust gate plus the browser build/validation entrypoint.
-  rust      Architecture checks, format/check/clippy plus all workspace tests.
-  fmt-lint  Architecture checks plus format/check/clippy only.
-  test      All workspace tests only.
-  web       Browser build/validation only.
+  fast          Architecture gate, format/check/clippy, workspace library tests.
+  full          Architecture gate, full Rust gate, browser build/validation.
+  rust          Architecture gate, format/check/clippy, all workspace tests.
+  fmt-lint      Architecture gate, format/check/clippy only.
+  test          Architecture gate, all workspace tests.
+  web           Architecture gate, browser build/validation.
+  architecture  All cheap architecture guardrails, without compilation.
 
-The repository's extended GitHub workflows additionally run browser, parity,
-golden, differential, and platform-specific checks where appropriate.
+BASE defaults to origin/master and must exist locally; no automatic fetch or
+fallback. Pass HEAD explicitly to check only the current working-tree changes.
+The candidate includes staged edits, unstaged edits and nonignored untracked
+files at their current working-tree contents; the real Git index is unchanged.
+
+See .github/ci/README.md for prerequisites, focused iteration commands and timing.
+Extended GitHub browser, parity, golden, differential, performance and platform
+checks remain required where appropriate; this local gate does not replace them.
 EOF
 }
 
-architecture_checks() {
-  bash scripts/renderer-host-boundary-ratchet.sh
-}
-
 fmt_lint() {
-  architecture_checks
   cargo fmt --all -- --check
   cargo check --workspace --all-targets --all-features
   cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -45,34 +47,31 @@ web_check() {
 
 mode="${1:-fast}"
 case "$mode" in
-  fast)
-    fmt_lint
-    fast_tests
-    ;;
-  full)
-    fmt_lint
-    all_tests
-    web_check
-    ;;
-  rust)
-    fmt_lint
-    all_tests
-    ;;
-  fmt-lint)
-    fmt_lint
-    ;;
-  test)
-    all_tests
-    ;;
-  web)
-    web_check
-    ;;
   -h|--help|help)
     usage
+    exit 0
+    ;;
+  fast|full|rust|fmt-lint|test|web|architecture)
     ;;
   *)
     echo "unknown check mode: $mode" >&2
     usage >&2
     exit 2
     ;;
+esac
+if (( $# > 2 )); then
+  usage >&2
+  exit 2
+fi
+
+# Every public validation mode runs the same guards before compiling anything.
+bash scripts/check-architecture.sh "${2-origin/master}"
+case "$mode" in
+  fast) fmt_lint; fast_tests ;;
+  full) fmt_lint; all_tests; web_check ;;
+  rust) fmt_lint; all_tests ;;
+  fmt-lint) fmt_lint ;;
+  test) all_tests ;;
+  web) web_check ;;
+  architecture) : ;;
 esac
