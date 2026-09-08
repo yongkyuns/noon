@@ -233,7 +233,6 @@ def _membership_leaf_bindings(
             reservation = _TypedBindingReservation(
                 member._object,
                 scene._object_keys[member._object.id],
-                None,
                 reuse_existing_identity=True,
             )
         else:
