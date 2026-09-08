@@ -1227,6 +1227,23 @@ try {
     await stopSampledSource(page);
   }
 
+  const scaleSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_scale_in_place.py"), "utf8",
+  );
+  await startSampledSource(page, scaleSource, "scene-shared-scale-in-place", 960, 540);
+  try {
+    const duration = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(1), authored]);
+      return completed.duration;
+    });
+    assert.equal(duration, 1);
+    const edge = renderedWorldPixel(await page.locator("#scene-shared-scale-in-place").screenshot(), 1.8, 0);
+    assert.ok(edge.blue > edge.red + 30, "ScaleInPlace did not capture the completed translation");
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const rotatingSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_rotating.py"), "utf8",
   );
@@ -3146,6 +3163,24 @@ result = scene
     assert.equal(rotated.authoredDuration, 5);
     assert.equal(rotated.objectCount, 1);
     assert.equal(rotated.presented, true);
+
+    await rasterPage.reload({ waitUntil: "load" });
+    await rasterPage.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+    await rasterPage.evaluate(async () => {
+      await window.noonHostRaster.ready();
+      await window.noonHostRaster.load(`from noon import *
+class LateFailure(Scene):
+    def construct(self):
+        self.add(Circle())
+        self.wait(0.1)
+        raise ValueError("intentional raster continuation failure")
+`, 1);
+    });
+    await assert.rejects(
+      rasterPage.evaluate(() => window.noonHostRaster.renderThrough(1, [0, 0.1])),
+      /intentional raster continuation failure/,
+      "a failed source continuation must reject its pending sample with the original error",
+    );
   } finally {
     await rasterPage.close();
   }

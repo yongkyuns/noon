@@ -11,6 +11,7 @@ const {
   createDirectOrdinaryCallbackSparseReadsSmokeRenderer,
   createDirectFocusOnSmokeRenderer,
   createDirectRotatingSmokeRenderer,
+  createDirectScaleInPlaceSmokeRenderer,
   createDirectLinePassingFlashSmokeRenderer,
   createDirectOrdinaryBecomeSemanticsSmokeRenderer,
   createDirectOrdinaryCompositionContinuationSmokeRenderer,
@@ -131,6 +132,30 @@ async function directLiveGeometryConstructionProof(expectedBackend) {
         dot.red <= dot.green + 30 || annulus.red <= annulus.blue + 30 ||
         annulus.green <= annulus.blue + 30 || Math.min(underline.red, underline.green, underline.blue) <= 150) {
       throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directScaleInPlaceProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectScaleInPlaceSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    for (const time of [250, 1000]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+    }
+    const edge = await sampleRenderedColor(canvas, 1.8, 0);
+    const metrics = { backend: renderer.rendererBackend(), time: renderer.time(), edge };
+    if (metrics.backend !== expectedBackend || metrics.time !== 1 || edge.blue < edge.red + 30) {
+      throw new Error(`direct scale-in-place mismatch: ${JSON.stringify(metrics)}`);
     }
     return metrics;
   } finally {
@@ -2335,6 +2360,7 @@ async function start() {
   metrics.liveGeometryConstruction = await directLiveGeometryConstructionProof(expectedBackend);
   metrics.focusOn = await directFocusOnProof(expectedBackend);
   metrics.rotating = await directRotatingProof(expectedBackend);
+  metrics.scaleInPlace = await directScaleInPlaceProof(expectedBackend);
   metrics.linePassingFlash = await directLinePassingFlashProof(expectedBackend);
   metrics.ordinaryBecomeSemantics = await directOrdinaryBecomeSemanticsProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);

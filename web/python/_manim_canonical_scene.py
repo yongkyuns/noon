@@ -1620,7 +1620,7 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
             return "parallel", args, None
         if isinstance(animation, (_animate._AlignedGroupAnimationBuilder, _animate.Indicate)):
             return "parallel", args, None
-        if type(animation) in (_rotate.Rotate, _rotate.Rotating, _rotate.FocusOn):
+        if type(animation) in (_rotate.Rotate, _rotate.Rotating, _rotate.FocusOn, _options.ScaleInPlace):
             return "parallel", args, None
         affine = _canonical_affine_animation(scene, animation)
         if affine is not None and affine[0]._scene is None:
@@ -2049,6 +2049,23 @@ def _build_canonical_composition_candidate(
             nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
+            return
+        if type(animation) is _options.ScaleInPlace:
+            # Resolve options before creating a target. Copy/scale and effective
+            # play-begin state belong to the shared semantic operations.
+            _canonical_composition_child_options(animation, child_kwargs)
+            source = animation.source
+            if isinstance(source, _compat.Group):
+                if not _compat._leaf_mobjects(source) or any(
+                    member._scene is not self for member in _compat._leaf_mobjects(source)
+                ):
+                    raise NotImplementedError("ScaleInPlace family must belong to this Scene")
+            elif source._scene not in (None, self):
+                raise ValueError("ScaleInPlace target belongs to another Scene")
+            target = source._copy_for_animate_target()
+            target.scale(animation.scale_factor)
+            transform = _base.Transform(source, target, **animation.anim_args)
+            append_leaf(builder, transform, child_kwargs)
             return
         if _canonical_tracker_builder(animation):
             tracker = animation.tracker
