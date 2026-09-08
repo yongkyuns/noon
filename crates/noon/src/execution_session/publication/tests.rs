@@ -742,3 +742,62 @@ fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_
         CallbackAdvance::Ready(_)
     ));
 }
+
+#[test]
+fn live_updater_revision_preserves_target_preorder_and_future_barriers() {
+    use crate::{CallbackAdvance, HostCallbackId};
+    let mut store = SemanticStore::new();
+    let nodes = (0..2)
+        .map(|_| {
+            let node =
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 1.0,
+                }));
+            store.attach_to_scene(node).unwrap();
+            node
+        })
+        .collect::<Vec<_>>();
+    let mut initial = SemanticMutationTransaction::new();
+    for &node in &nodes {
+        initial.add_updater(node, HostCallbackId::new(1), 0.0, None);
+    }
+    initial.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    for time in [0.0, 1.0] {
+        let CallbackAdvance::HostRequired { overlay, .. } =
+            session.advance_to_callback_barrier(time).unwrap()
+        else {
+            panic!("active phase")
+        };
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+    }
+    let mut revision = SemanticMutationTransaction::new();
+    revision.clear_updaters(nodes[0], 1.0);
+    revision.add_updater(nodes[0], HostCallbackId::new(2), 2.0, None);
+    session
+        .apply_semantic_transaction(&mut store, revision)
+        .unwrap();
+    let CallbackAdvance::HostRequired {
+        overlay,
+        invocations,
+    } = session.advance_to_callback_barrier(3.0).unwrap()
+    else {
+        panic!("activation barrier")
+    };
+    assert_eq!(overlay.time(), 2.0);
+    assert_eq!(
+        invocations
+            .iter()
+            .map(|item| (item.target(), item.callback_id()))
+            .collect::<Vec<_>>(),
+        vec![
+            (nodes[0], HostCallbackId::new(2)),
+            (nodes[1], HostCallbackId::new(1))
+        ]
+    );
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+}

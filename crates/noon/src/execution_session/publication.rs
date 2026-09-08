@@ -418,8 +418,6 @@ impl ExecutionSession {
                 .map_err(ExecutionSessionPublicationError::Lowering)?;
                 (publication, None)
             };
-        let revised_schedule = revised_callbacks
-            .map(|plan| super::callback::CallbackSchedule::at_publication(plan, self.frame().time));
         let preparation_stats = publication.stats();
         let order_patches = order_root
             .map(|root| lower_root_order_patches(&prepared, root))
@@ -524,8 +522,9 @@ impl ExecutionSession {
                 store.scene_revision(),
             )
             .expect("runtime publication was fully preflighted before semantic commit");
-        if let Some(schedule) = revised_schedule {
-            self.callback_schedule = schedule;
+        if let Some(revision) = revised_callbacks {
+            self.callback_schedule
+                .apply_revision(revision, self.frame().time);
             self.last_callback_receipt = None;
         }
         apply_execution_slot_membership_changes(&mut self.slots, &exited, &entered)

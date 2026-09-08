@@ -266,7 +266,7 @@ pub fn prepare_semantic_updater_publication(
 ) -> Result<
     (
         PreparedSemanticPublication,
-        Option<super::SemanticHostCallbackPlan>,
+        Option<super::SemanticHostCallbackRevision>,
     ),
     SemanticPublicationLoweringError,
 > {

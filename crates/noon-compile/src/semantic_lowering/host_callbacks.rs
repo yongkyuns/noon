@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ops::Bound::{Excluded, Unbounded};
 
 use noon_core::{
     HostCallbackId, PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeId,
@@ -14,9 +15,14 @@ use noon_core::{
 pub struct SemanticHostCallbackOccurrence {
     target: SemanticNodeId,
     activation: SemanticUpdaterRegistration,
+    order: usize,
 }
 
 impl SemanticHostCallbackOccurrence {
+    pub const fn order(self) -> usize {
+        self.order
+    }
+
     pub const fn callback_id(self) -> HostCallbackId {
         self.activation.callback()
     }
@@ -59,38 +65,159 @@ impl SemanticHostCallbackEvent {
     }
 }
 
-/// Compiler-owned schedule for semantic host callback occurrences.
-///
-/// Events are sorted once during lowering. Runtime selection can advance across
-/// crossed boundaries and maintain its ordered active set without scanning dormant
-/// registration history on every frame.
+impl Eq for SemanticHostCallbackEvent {}
+
+impl Ord for SemanticHostCallbackEvent {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.time
+            .total_cmp(&other.time)
+            .then_with(|| event_kind_order(self.kind).cmp(&event_kind_order(other.kind)))
+            .then_with(|| self.occurrence_index.cmp(&other.occurrence_index))
+    }
+}
+impl PartialOrd for SemanticHostCallbackEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Compiler-owned callback data and derived indices. Live changes replace only
+/// affected target registrations; unrelated history is neither read nor copied.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SemanticHostCallbackPlan {
-    occurrences: Vec<SemanticHostCallbackOccurrence>,
-    events: Vec<SemanticHostCallbackEvent>,
+    occurrences: BTreeMap<usize, SemanticHostCallbackOccurrence>,
+    events: BTreeSet<SemanticHostCallbackEvent>,
+    activations: BTreeSet<SemanticHostCallbackEvent>,
+    targets: HashMap<SemanticNodeId, (usize, Vec<usize>)>,
+    next_index: usize,
+}
+
+/// Preflighted target-local compiler delta. Commit only after semantic and runtime
+/// validation succeeds. It contains no copy of unrelated callback history.
+#[derive(Debug)]
+pub struct SemanticHostCallbackRevision {
+    targets: Vec<(SemanticNodeId, Vec<SemanticUpdaterRegistration>)>,
+}
+
+impl SemanticHostCallbackRevision {
+    pub fn targets(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.targets.iter().map(|(target, _)| *target)
+    }
 }
 
 impl SemanticHostCallbackPlan {
-    pub fn occurrences(&self) -> &[SemanticHostCallbackOccurrence] {
-        &self.occurrences
+    pub fn occurrences(&self) -> impl ExactSizeIterator<Item = &SemanticHostCallbackOccurrence> {
+        self.occurrences.values()
     }
-
-    pub fn events(&self) -> &[SemanticHostCallbackEvent] {
+    pub fn occurrence(&self, index: usize) -> SemanticHostCallbackOccurrence {
+        self.occurrences[&index]
+    }
+    pub fn target_occurrences(&self, target: SemanticNodeId) -> impl Iterator<Item = usize> + '_ {
+        self.targets
+            .get(&target)
+            .into_iter()
+            .flat_map(|(_, indices)| indices.iter().copied())
+    }
+    pub fn events(&self) -> &BTreeSet<SemanticHostCallbackEvent> {
         &self.events
     }
-
     pub fn is_empty(&self) -> bool {
         self.occurrences.is_empty()
     }
 
-    /// Relower only callback history, not scene geometry, at a live publication.
+    fn after(time: Option<f64>) -> std::ops::Bound<SemanticHostCallbackEvent> {
+        time.map_or(Unbounded, |time| {
+            Excluded(SemanticHostCallbackEvent {
+                time: if time == 0.0 { 0.0 } else { time },
+                occurrence_index: usize::MAX,
+                kind: SemanticHostCallbackEventKind::Deactivate,
+            })
+        })
+    }
+    pub fn events_after(
+        &self,
+        time: Option<f64>,
+    ) -> impl Iterator<Item = SemanticHostCallbackEvent> + '_ {
+        self.events.range((Self::after(time), Unbounded)).copied()
+    }
+    pub fn next_activation_after(&self, time: Option<f64>) -> Option<f64> {
+        self.activations
+            .range((Self::after(time), Unbounded))
+            .next()
+            .map(|event| event.time)
+    }
+
+    fn occurrence_events(
+        index: usize,
+        activation: SemanticUpdaterRegistration,
+    ) -> impl Iterator<Item = SemanticHostCallbackEvent> {
+        let event = |time: f64, kind| SemanticHostCallbackEvent {
+            time: if time == 0.0 { 0.0 } else { time },
+            occurrence_index: index,
+            kind,
+        };
+        std::iter::once(event(
+            activation.active_from(),
+            SemanticHostCallbackEventKind::Activate,
+        ))
+        .chain(
+            activation
+                .inactive_from()
+                .map(|time| event(time, SemanticHostCallbackEventKind::Deactivate)),
+        )
+    }
+
+    fn insert(&mut self, target: SemanticNodeId, activation: SemanticUpdaterRegistration) {
+        let (order, indices) = self.targets.get_mut(&target).expect("indexed target");
+        let index = self.next_index;
+        self.next_index += 1;
+        indices.push(index);
+        self.occurrences.insert(
+            index,
+            SemanticHostCallbackOccurrence {
+                target,
+                activation,
+                order: *order,
+            },
+        );
+        for event in Self::occurrence_events(index, activation) {
+            self.events.insert(event);
+            if event.kind == SemanticHostCallbackEventKind::Activate
+                && activation
+                    .inactive_from()
+                    .is_none_or(|end| end > event.time)
+            {
+                self.activations.insert(event);
+            }
+        }
+    }
+
+    /// Apply a previously prepared delta without scanning dormant history.
+    pub fn apply_revision(&mut self, revision: SemanticHostCallbackRevision) {
+        for (target, registrations) in revision.targets {
+            let indices =
+                std::mem::take(&mut self.targets.get_mut(&target).expect("preflighted target").1);
+            for index in indices {
+                let old = self.occurrences.remove(&index).expect("indexed occurrence");
+                for event in Self::occurrence_events(index, old.activation) {
+                    self.events.remove(&event);
+                    self.activations.remove(&event);
+                }
+            }
+            for registration in registrations {
+                self.insert(target, registration);
+            }
+        }
+    }
+
+    /// Prepare only changed target histories, not unrelated callbacks or geometry.
     /// The first live subset retains target preorder from initial lowering and
     /// therefore admits registration edits only on already indexed targets.
     pub(super) fn prepare_registration_revision(
         &self,
         prepared: &PreparedSemanticMutationTransaction<'_>,
         current_time: f64,
-    ) -> Result<Option<Self>, super::SemanticPublicationLoweringError> {
+    ) -> Result<Option<SemanticHostCallbackRevision>, super::SemanticPublicationLoweringError> {
         use super::SemanticPublicationLoweringError as Error;
         let mut changed = HashSet::new();
         for (index, mutation) in prepared.mutations().iter().enumerate() {
@@ -119,57 +246,38 @@ impl SemanticHostCallbackPlan {
             let target = target
                 .existing()
                 .ok_or(Error::UnsupportedMutation { index })?;
-            if let Some(staged) = prepared.proposed_updater_registrations(target) {
-                if staged
-                    != prepared
-                        .store()
-                        .node(target)
-                        .expect("validated target")
-                        .host_updaters()
-                {
-                    changed.insert(target);
-                }
-            }
+            changed.insert(target);
         }
+        changed.retain(|&target| {
+            prepared
+                .proposed_updater_registrations(target)
+                .is_some_and(|staged| {
+                    staged
+                        != prepared
+                            .store()
+                            .node(target)
+                            .expect("validated target")
+                            .host_updaters()
+                })
+        });
         if changed.is_empty() {
             return Ok(None);
         }
-        let indexed = self
-            .occurrences
-            .iter()
-            .map(|item| item.target)
-            .collect::<HashSet<_>>();
-        for &target in &changed {
-            if !indexed.contains(&target) {
+        let mut targets = Vec::with_capacity(changed.len());
+        for target in changed {
+            if !self.targets.contains_key(&target) {
                 return Err(Error::UpdaterTargetNotIndexed { target });
             }
-        }
-        let mut replacements = HashMap::new();
-        for target in changed {
-            replacements.insert(
+            targets.push((
                 target,
                 prepared
                     .proposed_updater_registrations(target)
-                    .expect("changed target has staged registrations"),
-            );
+                    .expect("changed target has staged registrations")
+                    .to_vec(),
+            ));
         }
-        let mut emitted = HashSet::new();
-        let mut occurrences = Vec::new();
-        for occurrence in &self.occurrences {
-            if let Some(registrations) = replacements.get(&occurrence.target) {
-                if emitted.insert(occurrence.target) {
-                    occurrences.extend(registrations.iter().copied().map(|activation| {
-                        SemanticHostCallbackOccurrence {
-                            target: occurrence.target,
-                            activation,
-                        }
-                    }));
-                }
-            } else {
-                occurrences.push(*occurrence);
-            }
-        }
-        Ok(Some(index_callback_occurrences(occurrences)))
+        targets.sort_by_key(|(target, _)| self.targets[target].0);
+        Ok(Some(SemanticHostCallbackRevision { targets }))
     }
 }
 
@@ -177,7 +285,7 @@ pub(super) fn lower_semantic_host_callbacks(
     store: &SemanticStore,
     roots: &[SemanticNodeId],
 ) -> SemanticHostCallbackPlan {
-    let mut occurrences = Vec::new();
+    let mut plan = SemanticHostCallbackPlan::default();
     let mut seen = HashSet::new();
     let mut pending = roots.iter().rev().copied().collect::<Vec<_>>();
     while let Some(target) = pending.pop() {
@@ -187,50 +295,18 @@ pub(super) fn lower_semantic_host_callbacks(
         let node = store
             .node(target)
             .expect("semantic lowering roots and members must remain live");
-        occurrences.extend(
-            node.host_updaters()
-                .iter()
-                .copied()
-                .map(|activation| SemanticHostCallbackOccurrence { target, activation }),
-        );
+        if !node.host_updaters().is_empty() {
+            let order = plan.targets.len();
+            plan.targets.insert(target, (order, Vec::new()));
+            for &activation in node.host_updaters() {
+                plan.insert(target, activation);
+            }
+        }
         if matches!(node.kind(), SemanticNodeKind::Family) {
             pending.extend(node.members().into_iter().rev());
         }
     }
-
-    index_callback_occurrences(occurrences)
-}
-
-fn index_callback_occurrences(
-    occurrences: Vec<SemanticHostCallbackOccurrence>,
-) -> SemanticHostCallbackPlan {
-    let mut events = Vec::with_capacity(occurrences.len().saturating_mul(2));
-    for (occurrence_index, occurrence) in occurrences.iter().enumerate() {
-        let activation = occurrence.activation();
-        events.push(SemanticHostCallbackEvent {
-            time: activation.active_from(),
-            occurrence_index,
-            kind: SemanticHostCallbackEventKind::Activate,
-        });
-        if let Some(time) = activation.inactive_from() {
-            events.push(SemanticHostCallbackEvent {
-                time,
-                occurrence_index,
-                kind: SemanticHostCallbackEventKind::Deactivate,
-            });
-        }
-    }
-    events.sort_by(|left, right| {
-        left.time
-            .total_cmp(&right.time)
-            .then_with(|| event_kind_order(left.kind).cmp(&event_kind_order(right.kind)))
-            .then_with(|| left.occurrence_index.cmp(&right.occurrence_index))
-    });
-
-    SemanticHostCallbackPlan {
-        occurrences,
-        events,
-    }
+    plan
 }
 
 const fn event_kind_order(kind: SemanticHostCallbackEventKind) -> u8 {
@@ -288,7 +364,6 @@ mod tests {
 
         assert_eq!(
             plan.occurrences()
-                .iter()
                 .map(|occurrence| (occurrence.target(), occurrence.callback_id()))
                 .collect::<Vec<_>>(),
             vec![
@@ -353,7 +428,7 @@ mod tests {
         let plan = lowered.host_callbacks();
 
         assert_eq!(plan.occurrences().len(), 1);
-        assert_eq!(plan.occurrences()[0].target(), selected);
+        assert_eq!(plan.occurrence(0).target(), selected);
         assert!(index.execution_object_id(selected_object).is_some());
     }
 
@@ -412,9 +487,15 @@ mod tests {
                 .len(),
             1
         );
+        assert_eq!(revised.targets.len(), 1);
+        assert_eq!(revised.targets[0].0, first);
+        assert_eq!(revised.targets[0].1.len(), 2);
+        let mut updated = original.clone();
+        updated.apply_revision(revised);
+        let mut ordered = updated.occurrences().copied().collect::<Vec<_>>();
+        ordered.sort_by_key(|item| item.order());
         assert_eq!(
-            revised
-                .occurrences()
+            ordered
                 .iter()
                 .map(|item| (item.target(), item.callback_id()))
                 .collect::<Vec<_>>(),
@@ -427,5 +508,36 @@ mod tests {
         drop(prepared);
         assert_eq!(store.scene_revision(), before);
         assert_eq!(original.occurrences().len(), 2);
+    }
+    #[test]
+    fn live_registration_delta_keeps_unrelated_callback_history_and_ids() {
+        let mut store = SemanticStore::new();
+        let roots = (0..1024)
+            .map(|_| {
+                let target = object(&mut store, 1.0);
+                add_updater(&mut store, target, 7, 100.0);
+                target
+            })
+            .collect::<Vec<_>>();
+        let mut plan = lower_semantic_host_callbacks(&store, &roots);
+        let unrelated_index = plan.target_occurrences(roots[1023]).next().unwrap();
+        let unrelated = plan.occurrence(unrelated_index);
+        let mut tx = SemanticMutationTransaction::new();
+        tx.add_updater(roots[0], HostCallbackId::new(8), 2.0, None);
+        let prepared = tx.prepare(&mut store).unwrap();
+        let revision = plan
+            .prepare_registration_revision(&prepared, 2.0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(revision.targets.len(), 1);
+        assert_eq!(
+            revision.targets[0].1.len(),
+            2,
+            "preflight owns only the changed target's history"
+        );
+        plan.apply_revision(revision);
+        assert_eq!(plan.occurrence(unrelated_index), unrelated);
+        assert_eq!(plan.next_activation_after(Some(2.0)), Some(100.0));
+        assert_eq!(plan.occurrences().len(), 1025);
     }
 }

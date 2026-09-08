@@ -203,16 +203,20 @@ phases, retroactive edits, mixed structural/registration transactions, and first
 registration on a target absent from the initial callback index are rejected.
 The latter two remain explicitly unsupported; they are not silently replayed.
 
-This first bounded registration publication rebuilds the callback-only index in
-O(R log R) time and O(R) temporary storage, where R is retained callback occurrence
-history. It does not traverse or relower unrelated scene geometry, reset the
-runtime, or add new per-frame work. It is not an O(1) registration edit. More
-incremental callback-index editing remains under the shared live-session work
-owned by #969; no temporary frontend schedule or compatibility authority is added.
+Registration publication prepares only changed target histories, then updates
+indexed callback occurrences/events and active membership after semantic/runtime
+preflight succeeds. For K registrations on affected targets and R total retained
+registrations, callback index updates take O(K log R) time and O(K) temporary
+storage. Unrelated target IDs and histories are retained. Geometry is not relowered
+and callback history is not replayed. Initial lowering still establishes target
+preorder; first registration on unindexed targets and structural reordering remain
+follow-ups under #969.
 
 The native `ordinary_live_updater_lifecycle` example and the direct Rust/WASM
 pixel probe execute the same sequential remove/reverse/remove program as the
 unchanged Python RotationUpdater gallery example. The full-gallery browser gate
+requires runtime completion for every ready source (no unsupported-runtime skip).
+Linux Firefox runs with an Xvfb display to expose its software WebGL surface. It
 executes every ready source and explicitly disables JSPI for the four cases
 identified by the public audit. This complements, rather than replaces, the
 canonical raster/timeline qualification and performance gates.

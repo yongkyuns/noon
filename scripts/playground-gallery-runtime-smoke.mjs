@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import playwright from 'playwright';
+import { playgroundLaunchOptions } from './playground-browser-support.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,8 +46,7 @@ try {
   for (const id of affected) assert.ok(entries.some(e => e.id === id), `${id} is no longer selectable`);
   const engine = playwright[browserName];
   assert.ok(engine, `unknown browser ${browserName}`);
-  browser = await engine.launch({ headless: true, ...(browserName === 'chromium' ?
-    { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage'] } : {}) });
+  browser = await engine.launch(playgroundLaunchOptions(browserName));
   const options = profile === 'android' ? playwright.devices['Pixel 7'] : profile.startsWith('mobile') ?
     playwright.devices['iPhone 13'] : { viewport: { width: 1280, height: 900 }, deviceScaleFactor: profile.endsWith('dpr2') ? 2 : 1 };
   const queue = entries.map(entry => ({ entry, noJspi: false }));
