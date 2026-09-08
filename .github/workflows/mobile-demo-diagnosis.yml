@@ -1,0 +1,89 @@
+name: Mobile demo diagnosis (temporary)
+on:
+  push:
+    branches: [codex/mobile-demo-diagnosis]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install --with-deps webkit chromium
+      - name: Save source snapshot for focused local tests
+        run: |
+          mkdir -p mobile-diagnosis
+          git archive HEAD | gzip > mobile-diagnosis/source.tar.gz
+      - name: Exercise public demo with mobile WebKit and Chromium
+        run: |
+          timeout --signal=TERM --kill-after=10s 420s node --input-type=module <<'JS'
+          import { chromium, webkit, devices } from 'playwright';
+          import { writeFile } from 'node:fs/promises';
+          const base = 'https://yongkyuns.github.io/noon/';
+          const revision = await fetch(`${base}build-info.json?diagnosis=${Date.now()}`, {headers:{'Cache-Control':'no-cache'}}).then(async r=>({status:r.status,body:await r.text()}));
+          console.log('PUBLIC_REVISION', JSON.stringify(revision));
+          const results = [];
+          for (const [name, engine, device, host] of [
+            ['webkit-mobile-auto', webkit, devices['iPhone 13'], null],
+            ['webkit-mobile-main', webkit, devices['iPhone 13'], 'main-thread'],
+            ['chromium-mobile-auto', chromium, devices['Pixel 7'], null],
+          ]) {
+            const browser = await engine.launch({headless:true, ...(engine===chromium?{args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']}: {})});
+            const context = await browser.newContext({...device});
+            const page = await context.newPage();
+            const result = {name,revision,errors:[],consoleErrors:[],failedRequests:[],scenes:[]};
+            page.on('pageerror', e=>result.errors.push(String(e)));
+            page.on('console', m=>{if(m.type()==='error')result.consoleErrors.push(m.text())});
+            page.on('requestfailed', r=>result.failedRequests.push({url:r.url(),error:r.failure()}));
+            try {
+              const url = new URL(base);
+              if(host) url.searchParams.set('renderHost',host);
+              await page.goto(url.href, {waitUntil:'domcontentloaded',timeout:30000});
+              await page.waitForFunction(()=>window.__noonExampleGallery!==undefined,null,{timeout:30000});
+              for(const example of [null,'parity-create-circle','compatible-text-write']) {
+                if(example) await page.evaluate(id=>{void window.__noonExampleGallery.select(id)},example);
+                await page.waitForFunction(()=>{
+                  const p=document.querySelector('#patch-status');
+                  return p?.dataset.state==='error'||p?.dataset.state==='applied';
+                },null,{timeout:45000});
+                result.scenes.push(await page.evaluate(()=>({
+                  selected:window.__noonExampleGallery?.selectedExampleId,
+                  inFlight:window.__noonExampleGallery?.runInFlight,
+                  patch:{...document.querySelector('#patch-status')?.dataset},
+                  patchText:document.querySelector('#patch-status')?.value,
+                  status:document.querySelector('#status-text')?.textContent,
+                  metrics:window.__noonExampleGallery?.executionMetrics(),
+                })));
+                if(result.scenes.at(-1).patch.state==='error') break;
+                await page.waitForFunction(()=>!window.__noonExampleGallery.runInFlight,null,{timeout:45000});
+              }
+            } catch(e) {result.exception=String(e)}
+            try {
+              result.final=await page.evaluate(()=>({
+                body:document.body.innerText.slice(-10000),
+                userAgent:navigator.userAgent,
+                jspi:typeof WebAssembly.promising,
+                gpu:typeof navigator.gpu,
+                isolated:crossOriginIsolated,
+                patch:{...document.querySelector('#patch-status')?.dataset},
+                patchText:document.querySelector('#patch-status')?.value,
+                metrics:window.__noonExampleGallery?.executionMetrics(),
+              }));
+              await page.screenshot({path:`mobile-diagnosis/${name}.png`});
+            } catch(e) {result.captureError=String(e)}
+            console.log('MOBILE_RESULT',JSON.stringify(result));
+            results.push(result);
+            await writeFile('mobile-diagnosis/results.json',JSON.stringify(results,null,2));
+            await browser.close();
+          }
+          JS
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mobile-demo-diagnosis
+          path: mobile-diagnosis
+          retention-days: 3
