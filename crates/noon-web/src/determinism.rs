@@ -1,9 +1,11 @@
 //! Renderer-independent frame snapshots used by deterministic replay tests and tools.
 
 use noon_compile::{CompileError, CompiledScene};
+#[cfg(test)]
 use noon_core::ObjectContentRef;
 use noon_ir::{decode_scene, IrError};
 use noon_runtime::{EvaluationError, FrameState, SlottedSceneInstance};
+#[cfg(test)]
 use serde_json::{json, Value};
 
 fn normalize_playhead(time: f64) -> f64 {
@@ -19,7 +21,8 @@ fn normalize_playhead(time: f64) -> f64 {
 /// The f64 playhead is rounded to picosecond precision so mathematically equivalent
 /// timestamp construction paths do not create false mismatches; evaluated scene
 /// properties remain unrounded.
-pub fn normalized_frame_value(frame: &FrameState) -> Value {
+#[cfg(test)]
+pub(crate) fn normalized_frame_value(frame: &FrameState) -> Value {
     let objects = frame
         .objects
         .iter()
@@ -57,11 +60,6 @@ pub fn normalized_frame_value(frame: &FrameState) -> Value {
     })
 }
 
-pub fn normalized_frame_json(frame: &FrameState) -> String {
-    serde_json::to_string(&normalized_frame_value(frame))
-        .expect("normalized frame contains only JSON-serializable values")
-}
-
 fn normalized_frames_equal(left: &FrameState, right: &FrameState) -> bool {
     normalize_playhead(left.time) == normalize_playhead(right.time)
         && left.objects == right.objects
@@ -69,6 +67,8 @@ fn normalized_frames_equal(left: &FrameState, right: &FrameState) -> bool {
         && left.reveals == right.reveals
         && left.morphs == right.morphs
         && left.render_geometries == right.render_geometries
+        && left.render_transforms == right.render_transforms
+        && left.family_animations == right.family_animations
 }
 
 #[derive(Debug)]
@@ -112,28 +112,6 @@ fn runtime_from_scene_json(scene_json: &str) -> Result<SlottedSceneInstance, Rep
     let definition = decode_scene(scene_json)?;
     let compiled = CompiledScene::compile(&definition)?;
     Ok(SlottedSceneInstance::new(compiled))
-}
-
-/// Evaluate a scene by seeking directly to `time` and return its normalized frame.
-pub fn scene_snapshot_json(scene_json: &str, time: f64) -> Result<String, ReplayRuntimeError> {
-    let mut runtime = runtime_from_scene_json(scene_json)?;
-    runtime.seek(time)?;
-    Ok(normalized_frame_json(runtime.frame()))
-}
-
-/// Evaluate a scene through the supplied playhead sequence and return the final frame.
-///
-/// The sequence may move backward. This intentionally exercises the same
-/// `advance_to` rewind behavior used by interactive scrubbing.
-pub fn playback_snapshot_json(
-    scene_json: &str,
-    times: &[f64],
-) -> Result<String, ReplayRuntimeError> {
-    let mut runtime = runtime_from_scene_json(scene_json)?;
-    for &time in times {
-        runtime.advance_to(time)?;
-    }
-    Ok(normalized_frame_json(runtime.frame()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -291,5 +269,26 @@ mod wasm {
     ) -> Result<(), JsValue> {
         let targets: Vec<f64> = serde_json::from_str(targets_json).map_err(js_error)?;
         verify_scene_replay(scene_json, &targets, forward_sample_count as usize).map_err(js_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_frames_equal;
+
+    #[test]
+    fn replay_equality_includes_the_effective_renderer_coordinate_frame() {
+        let session = noon::example_scenes::exact_property_tracks::session().unwrap();
+        let expected = session.frame();
+        let mut actual = expected.clone();
+        assert!(normalized_frames_equal(&actual, expected));
+
+        // A derived point-morph coordinate frame can differ while the semantic
+        // object transform stays unchanged. The renderer consumes this override.
+        let mut render_transform = actual.objects[0].transform;
+        render_transform.translation.x += 1.0;
+        actual.render_transforms[0] = Some(render_transform);
+        assert_eq!(actual.objects, expected.objects);
+        assert!(!normalized_frames_equal(&actual, expected));
     }
 }
