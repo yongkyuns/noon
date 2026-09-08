@@ -57,6 +57,28 @@ pub enum SemanticAnimationCompletion {
     Release,
 }
 
+/// A returning leaf releases its driver at the captured source rather than
+/// committing its destination. Group finish completes each child at its own
+/// alpha one, independently of the outer composition's rate function.
+pub(super) fn completion_at_endpoint(
+    completion: SemanticAnimationCompletion,
+    easing: RateFunction,
+) -> SemanticAnimationCompletion {
+    if easing.evaluate(1.0) == 0.0
+        && matches!(
+            completion,
+            SemanticAnimationCompletion::Property { .. }
+                | SemanticAnimationCompletion::Fill { .. }
+                | SemanticAnimationCompletion::Stroke { .. }
+                | SemanticAnimationCompletion::ContentMorph { .. }
+        )
+    {
+        SemanticAnimationCompletion::Release
+    } else {
+        completion
+    }
+}
+
 /// One existing execution-timeline channel lowered from an activated semantic animation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticAffineAnimationTrack {
@@ -913,7 +935,7 @@ fn push_published_channel(
         target: leaf.target,
         execution_object_id: leaf.execution_object_id,
         property: channel.property,
-        completion: channel.completion,
+        completion: completion_at_endpoint(channel.completion, leaf.timing.easing),
         values: channel.values,
         timing: leaf.timing,
         time_map: leaf.time_map.clone(),

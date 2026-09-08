@@ -2920,6 +2920,138 @@ mod tests {
     }
 
     #[test]
+    fn returning_transform_completion_preserves_the_source_across_activation_paths_and_nested_timing(
+    ) {
+        for mode in ["predeclared", "prepared", "mapped"] {
+            let mut scene = Scene::new();
+            let mut source = scene.circle(0.4).unwrap();
+            source.set_translation(1.25, -0.75).unwrap();
+            source.set_fill(0.1, 0.2, 0.3, 0.4).unwrap();
+            let mut target = source.target_editor().unwrap();
+            target.set_translation(3.25, 1.25).unwrap();
+            target.set_fill(0.8, 0.7, 0.6, 0.9).unwrap();
+            scene.add(&source).unwrap();
+            let original = source.state().unwrap();
+            let options = AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::ThereAndBack);
+            let animation = if mode != "predeclared" {
+                None
+            } else {
+                Some(
+                    scene
+                        .declare_transform_to(&source, &target, options)
+                        .unwrap(),
+                )
+            };
+            let mut session = scene.execution_session().unwrap();
+            let mut live = scene.live(&mut session);
+            let segment = if let Some(animation) = animation {
+                live.play_animation(&animation).unwrap()
+            } else if mode == "mapped" {
+                live.declare_and_activate_transform_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    &[TransformToRequest::new(
+                        &source,
+                        &target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )],
+                    options,
+                    AnimationOptions::new(),
+                )
+                .unwrap()
+            } else {
+                live.declare_and_activate_transform_to(&source, &target, options)
+                    .unwrap()
+            };
+            live.advance_segment_to(segment, 0.5).unwrap();
+            assert_eq!(
+                live.effective(&source).unwrap().transform.translation,
+                noon_core::Vec2::new(3.25, 1.25)
+            );
+            live.advance_segment_to(segment, 1.0).unwrap();
+            let before_completion = live.effective(&source).unwrap();
+            live.complete_segment(segment).unwrap();
+            let mut expected = original;
+            if mode == "mapped" {
+                let target_state = target.state().unwrap();
+                expected.transform = target_state.transform;
+                expected.style = target_state.style;
+            }
+            assert_eq!(live.authored(&source).unwrap(), expected);
+            let after_completion = live.effective(&source).unwrap();
+            assert_eq!(after_completion.transform, before_completion.transform);
+            assert_eq!(after_completion.style, before_completion.style);
+            live.set_translation(&source, -2.0, 0.0).unwrap();
+            assert_eq!(
+                live.effective(&source).unwrap().transform.translation.x,
+                -2.0
+            );
+        }
+    }
+
+    #[test]
+    fn returning_sequence_completion_keeps_the_preceding_leaf_endpoint() {
+        let mut scene = Scene::new();
+        let source = scene.circle(0.4).unwrap();
+        let mut first = source.target_editor().unwrap();
+        first.set_translation(2.0, 1.0).unwrap();
+        first.set_fill(0.2, 0.3, 0.4, 0.5).unwrap();
+        let mut second = first.target_editor().unwrap();
+        second.set_translation(4.0, 3.0).unwrap();
+        second.set_fill(0.8, 0.7, 0.6, 0.9).unwrap();
+        scene.add(&source).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Sequence,
+                &[
+                    TransformToRequest::new(
+                        &source,
+                        &first,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    ),
+                    TransformToRequest::new(
+                        &source,
+                        &second,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::ThereAndBack),
+                    ),
+                ],
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        live.advance_segment_to(segment, 1.5).unwrap();
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation,
+            noon_core::Vec2::new(4.0, 3.0)
+        );
+        live.advance_segment_to(segment, 2.0).unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(
+            live.authored(&source).unwrap().transform,
+            first.state().unwrap().transform
+        );
+        assert_eq!(
+            live.authored(&source).unwrap().style,
+            first.state().unwrap().style
+        );
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation,
+            noon_core::Vec2::new(2.0, 1.0)
+        );
+    }
+
+    #[test]
     fn completion_reconciles_the_endpoint_before_the_next_live_segment() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
