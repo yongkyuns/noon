@@ -359,6 +359,8 @@
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
       "expected_duration": 3,
+      "qualification_mode": "shared-live",
+      "expected_object_count": 2,
       "thumbnail": "thumbnails/manim/generated/using-focus-on.png",
       "thumbnail_alt": "Exact-source Manim UsingFocusOn",
       "thumbnail_time": 2.5,

@@ -1569,7 +1569,7 @@ def _canonical_composition_shape(scene: _base.Scene, args: tuple[object, ...]):
             return "parallel", args, None
         if isinstance(animation, (_animate._AlignedGroupAnimationBuilder, _animate.Indicate)):
             return "parallel", args, None
-        if type(animation) in (_rotate.Rotate, _rotate.FocusOn):
+        if type(animation) in (_rotate.Rotate, _rotate.Rotating, _rotate.FocusOn):
             return "parallel", args, None
         affine = _canonical_affine_animation(scene, animation)
         if affine is not None and affine[0]._scene is None:
@@ -2436,17 +2436,26 @@ def _build_canonical_composition_candidate(
                 method = builder.appendPointTransformTo if point_correspondence else builder.appendTransformTo
                 method(source_handle, target_handle, float(child.run_time), str(child.rate_func))
             return
-        if type(animation) is _rotate.Rotate:
+        if type(animation) in (_rotate.Rotate, _rotate.Rotating):
             target = animation.mobject
             if not isinstance(target, _base.Mobject) or getattr(target, "_semantic_handle", None) is None:
                 raise NotImplementedError("canonical Rotate requires a typed Mobject")
             child = _canonical_composition_child_options(animation, child_kwargs)
             angle = float(animation.angle) * _rotate._axis_sign(animation.axis)
-            if target._scene is None:
-                reservation = reserve(target)
-                builder.appendRotate(str(reservation.object.id), target._semantic_handle, angle, float(child.run_time), str(child.rate_func))
+            if animation.about_point is not None:
+                point = _compat._as_vec2(animation.about_point)
+                pivot_kind, pivot_x, pivot_y = "point", point.x, point.y
+            elif animation.about_edge is not None:
+                edge = _compat._as_vec2(animation.about_edge)
+                pivot_kind, pivot_x, pivot_y = "edge", edge.x, edge.y
             else:
-                builder.appendBoundRotate(target._semantic_handle, angle, float(child.run_time), str(child.rate_func))
+                pivot_kind, pivot_x, pivot_y = "center", 0.0, 0.0
+            entering_id = str(reserve(target).object.id) if target._scene is None else None
+            builder.appendManimRotate(
+                entering_id, target._semantic_handle, angle,
+                pivot_kind, float(pivot_x), float(pivot_y),
+                float(child.run_time), str(child.rate_func),
+            )
             return
         raise NotImplementedError(f"canonical composition does not support {type(animation).__name__}")
 

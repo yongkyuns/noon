@@ -309,7 +309,11 @@ pub enum SemanticAnimationIntent {
     },
     /// Rotate one centered 2D object along an angular path. This remains distinct
     /// from TransformTo point correspondence even when both share affine endpoints.
-    Rotate { target: SemanticNodeId, angle: f64 },
+    Rotate {
+        target: SemanticNodeId,
+        angle: f64,
+        hold_origin: bool,
+    },
     /// Fade one semantic leaf through the shared runtime appearance channel.
     /// Membership entry/exit is applied atomically by live activation/completion.
     Fade {
@@ -1003,6 +1007,17 @@ impl SemanticStore {
         angle: f64,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_rotate_animation_with_origin_constraint(target, angle, false, options)
+    }
+
+    /// Hold the activation-time world origin while following the angular path.
+    pub fn insert_semantic_rotate_animation_with_origin_constraint(
+        &mut self,
+        target: SemanticNodeId,
+        angle: f64,
+        hold_origin: bool,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
         if !angle.is_finite() {
@@ -1011,7 +1026,11 @@ impl SemanticStore {
         validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
-                SemanticAnimationIntent::Rotate { target, angle },
+                SemanticAnimationIntent::Rotate {
+                    target,
+                    angle,
+                    hold_origin,
+                },
                 options,
             )),
         )

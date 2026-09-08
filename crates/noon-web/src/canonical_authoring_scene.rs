@@ -114,6 +114,7 @@ enum OrdinaryCompositionChild {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
         angle: f64,
+        pivot: Option<noon::ManimRotationPivot>,
         options: noon_core::AnimationOptions,
     },
     ValueTracker {
@@ -1543,12 +1544,21 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::Rotate {
                     target,
                     angle,
+                    pivot,
                     options,
                     ..
-                } => noon::AnimationCompositionRequest::Rotate {
-                    target,
-                    angle: *angle,
-                    options: *options,
+                } => match pivot {
+                    Some(pivot) => noon::AnimationCompositionRequest::ManimRotate {
+                        target,
+                        angle: *angle,
+                        pivot: *pivot,
+                        options: *options,
+                    },
+                    None => noon::AnimationCompositionRequest::Rotate {
+                        target,
+                        angle: *angle,
+                        options: *options,
+                    },
                 },
                 OrdinaryCompositionChild::ValueTracker {
                     tracker,
@@ -2123,6 +2133,7 @@ impl CanonicalAuthoringScene {
                     target,
                     angle,
                     options,
+                    ..
                 } => {
                     if !angle.is_finite() {
                         return Err("ordinary Rotate angle must be finite".into());
@@ -3402,6 +3413,7 @@ mod wasm {
                 entering_id,
                 target: target.semantic_mobject().clone(),
                 angle,
+                pivot: None,
                 options: noon_core::AnimationOptions::new()
                     .run_time(child_run_time)
                     .rate_func(rate_function),
@@ -3653,6 +3665,39 @@ mod wasm {
             rate_function: &str,
         ) -> Result<(), JsValue> {
             self.push_rotate(None, target, angle, child_run_time, rate_function)
+        }
+
+        /// Inert request: the native live session validates the effective pivot.
+        #[allow(clippy::too_many_arguments)]
+        #[wasm_bindgen(js_name = appendManimRotate)]
+        pub fn append_manim_rotate(
+            &mut self,
+            object_id: Option<String>,
+            target: &crate::WasmAuthoringMobjectHandle,
+            angle: f64,
+            pivot_kind: &str,
+            pivot_x: f64,
+            pivot_y: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<(), JsValue> {
+            let pivot = match pivot_kind {
+                "center" => noon::ManimRotationPivot::Center,
+                "point" => noon::ManimRotationPivot::Point(pivot_x, pivot_y),
+                "edge" => noon::ManimRotationPivot::Edge(pivot_x, pivot_y),
+                _ => return Err(js_error("unknown procedural rotation pivot kind")),
+            };
+            self.children.push(OrdinaryCompositionChild::Rotate {
+                entering_id: object_id
+                    .as_deref()
+                    .map(|id| parse_object_id("object ID", id))
+                    .transpose()?,
+                target: target.semantic_mobject().clone(),
+                angle,
+                pivot: Some(pivot),
+                options: Self::optional_options(child_run_time, rate_function)?,
+            });
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = appendWait)]
@@ -8256,6 +8301,7 @@ mod tests {
                 entering_id: None,
                 target: square.clone(),
                 angle: std::f64::consts::PI,
+                pivot: None,
                 options,
             },
             OrdinaryCompositionChild::ValueTracker {
@@ -8281,6 +8327,7 @@ mod tests {
                 entering_id: None,
                 target: square.clone(),
                 angle: std::f64::consts::PI,
+                pivot: None,
                 options,
             },
             OrdinaryCompositionChild::ValueTracker {
@@ -8326,6 +8373,7 @@ mod tests {
                 entering_id: None,
                 target: rotating.clone(),
                 angle: std::f64::consts::PI,
+                pivot: None,
                 options: child,
             },
             bound_transform_child(&moving, moving_target, child),

@@ -65,6 +65,7 @@ pub enum SemanticTransactionAnimationIntent {
     Rotate {
         target: SemanticTransactionNodeRef,
         angle: f64,
+        hold_origin: bool,
     },
     Fade {
         target: SemanticTransactionNodeRef,
@@ -200,12 +201,15 @@ impl SemanticTransactionAnimation {
                 target_state: (*target_state).into(),
                 interpolation: *interpolation,
             },
-            SemanticAnimationIntent::Rotate { target, angle } => {
-                SemanticTransactionAnimationIntent::Rotate {
-                    target: (*target).into(),
-                    angle: *angle,
-                }
-            }
+            SemanticAnimationIntent::Rotate {
+                target,
+                angle,
+                hold_origin,
+            } => SemanticTransactionAnimationIntent::Rotate {
+                target: (*target).into(),
+                angle: *angle,
+                hold_origin: *hold_origin,
+            },
             SemanticAnimationIntent::Indicate {
                 target,
                 scale_factor,
@@ -326,12 +330,15 @@ impl SemanticTransactionAnimation {
                 target_state: resolve_node_ref(*target_state, committed),
                 interpolation: *interpolation,
             },
-            SemanticTransactionAnimationIntent::Rotate { target, angle } => {
-                SemanticAnimationIntent::Rotate {
-                    target: resolve_node_ref(*target, committed),
-                    angle: *angle,
-                }
-            }
+            SemanticTransactionAnimationIntent::Rotate {
+                target,
+                angle,
+                hold_origin,
+            } => SemanticAnimationIntent::Rotate {
+                target: resolve_node_ref(*target, committed),
+                angle: *angle,
+                hold_origin: *hold_origin,
+            },
             SemanticTransactionAnimationIntent::Indicate {
                 target,
                 scale_factor,
@@ -549,7 +556,7 @@ pub(super) fn preflight_transaction_animation(
                 });
             }
         }
-        SemanticTransactionAnimationIntent::Rotate { target, angle } => {
+        SemanticTransactionAnimationIntent::Rotate { target, angle, .. } => {
             catalog.ensure_animation_target(*target, index)?;
             catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
             if !angle.is_finite() {
@@ -772,8 +779,8 @@ pub(super) fn commit_add_animation(
                 options,
             )
             .expect("preflighted semantic animation insertion must remain valid while transaction owns the store"),
-        SemanticAnimationIntent::Rotate { target, angle } => store
-            .insert_semantic_rotate_animation(*target, *angle, options)
+        SemanticAnimationIntent::Rotate { target, angle, hold_origin } => store
+            .insert_semantic_rotate_animation_with_origin_constraint(*target, *angle, *hold_origin, options)
             .expect("preflighted semantic Rotate insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Indicate {
             target,

@@ -158,6 +158,7 @@ pub(crate) enum SemanticCompositionRequest {
     Rotate {
         target: SemanticNodeId,
         angle: f64,
+        hold_origin: bool,
         options: AnimationOptions,
     },
     ValueTracker {
@@ -2098,10 +2099,16 @@ impl ExecutionSession {
             SemanticCompositionRequest::Rotate {
                 target,
                 angle,
+                hold_origin,
                 options,
             } => {
                 admit(*target, declaration, admitted)?;
-                Ok(declaration.create_rotate_animation(*target, *angle, *options))
+                Ok(declaration.create_rotate_animation_with_origin_constraint(
+                    *target,
+                    *angle,
+                    *hold_origin,
+                    *options,
+                ))
             }
             SemanticCompositionRequest::ValueTracker {
                 signal,
@@ -2203,11 +2210,11 @@ impl ExecutionSession {
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *options))
             }
-            SemanticCompositionRequest::Rotate { target, angle, options } => {
+            SemanticCompositionRequest::Rotate { target, angle, hold_origin, options } => {
                 if !self.reachability.is_object_reachable(*target) {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
-                Ok(declaration.create_rotate_animation(*target, *angle, *options))
+                Ok(declaration.create_rotate_animation_with_origin_constraint(*target, *angle, *hold_origin, *options))
             }
             SemanticCompositionRequest::ValueTracker { signal, target, options } => {
                 Ok(declaration.create_scalar_animation(*signal, *target, *options))
