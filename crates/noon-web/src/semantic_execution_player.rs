@@ -912,40 +912,6 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_add(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .add(mobject)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_remove(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .remove(mobject)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-    }
-
     /// Publish one already validated scene-membership batch through the active
     /// semantic session. The player retains no membership or painter-order mirror.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1019,41 +985,6 @@ impl SemanticExecutionPlayer {
         Ok(end_time)
     }
 
-    /// Atomically declare and activate one ordinary affine transform in the
-    /// live session, then retain its normal continuation segment.
-    ///
-    /// The declaration belongs to the shared semantic store.  This wrapper
-    /// owns no target snapshot or timeline cursor; callers drive and complete
-    /// the returned segment through the existing live methods below.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_declare_and_activate_transform_to(
-        &mut self,
-        source: &noon::Mobject,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        let segment = noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .declare_and_activate_transform_to(source, target, options)
-        .map_err(|error| error.to_string())?;
-        let end_time = segment.end_time();
-        self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
-            .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
-        Ok(end_time)
-    }
-
     /// Atomically declare and activate one shared affine appearance lifecycle.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_declare_and_activate_affine_lifecycle(
@@ -1075,125 +1006,6 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .declare_and_activate_affine_lifecycle(target, direction, endpoint, options)
-        .map_err(|error| error.to_string())?;
-        let end_time = segment.end_time();
-        self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
-            .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
-        Ok(end_time)
-    }
-
-    /// Atomically declare and activate one shared affine fade, retaining its
-    /// ordinary continuation segment in this one session-owned player.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_declare_and_activate_fade(
-        &mut self,
-        target: &noon::Mobject,
-        direction: noon_core::SemanticFadeDirection,
-        endpoint: noon::FadeEndpoint,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        let segment = noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .declare_and_activate_fade_with_endpoint(target, direction, endpoint, options)
-        .map_err(|error| error.to_string())?;
-        let end_time = segment.end_time();
-        self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
-            .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
-        Ok(end_time)
-    }
-
-    /// Atomically introduce one detached leaf and retain its shared Create segment.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_declare_and_activate_create(
-        &mut self,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        let segment = noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .declare_and_activate_create(target, options)
-        .map_err(|error| error.to_string())?;
-        let end_time = segment.end_time();
-        self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
-            .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
-        Ok(end_time)
-    }
-
-    /// Atomically admit one detached leaf and retain its shared Uncreate segment.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_declare_and_activate_uncreate(
-        &mut self,
-        target: &noon::Mobject,
-        options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        let segment = noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .declare_and_activate_uncreate(target, options)
-        .map_err(|error| error.to_string())?;
-        let end_time = segment.end_time();
-        self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
-            .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
-        Ok(end_time)
-    }
-
-    /// Atomically introduce detached leaves through one shared flat Parallel Create segment.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_declare_and_activate_create_parallel(
-        &mut self,
-        children: &[(&noon::Mobject, noon_core::AnimationOptions)],
-        play_options: noon_core::AnimationOptions,
-    ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        let segment = noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .declare_and_activate_create_parallel(children, play_options)
         .map_err(|error| error.to_string())?;
         let end_time = segment.end_time();
         self.clock = self
@@ -1248,38 +1060,6 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
-        self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
-        Ok(end_time)
-    }
-
-    /// Atomically append and activate one canonical scalar tracker interval,
-    /// retaining its ordinary continuation segment in this player.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_declare_and_activate_value_tracker(
-        &mut self,
-        tracker: &noon::ValueTracker,
-        target: f64,
-        duration: f64,
-        rate_func: noon_core::RateFunction,
-    ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        let segment = noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .declare_and_activate_value_tracker(tracker, target, duration, rate_func)
-        .map_err(|error| error.to_string())?;
-        let end_time = segment.end_time();
-        self.clock = self
-            .live_clock_at(self.session.frame().time, end_time, true)
-            .expect("validated scalar segment must produce a valid presentation clock");
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
@@ -2579,13 +2359,17 @@ mod tests {
         let initial = player.delta(true).unwrap().unwrap();
         assert_eq!(initial.retained.objects[1].slot.generation, 0);
         mirror.apply(initial.retained).unwrap();
-        player.live_remove(&toggled).unwrap();
+        player
+            .live_edit_membership(noon::SceneMembershipRequest::Remove(&[(&toggled).into()]))
+            .unwrap();
         let retired = player.delta(false).unwrap().unwrap();
         assert!(!retired.retained.snapshot);
         assert!(retired.retained.objects.is_empty());
         assert_eq!(retired.retained.removed_slots.len(), 1);
         mirror.apply(retired.retained).unwrap();
-        player.live_add(&toggled).unwrap();
+        player
+            .live_edit_membership(noon::SceneMembershipRequest::Add(&[(&toggled).into()]))
+            .unwrap();
         assert!(player.session.execution_slot_for_frame_index(1).is_some());
         let snapshot = player.delta(false).unwrap().unwrap();
         assert!(!snapshot.retained.snapshot);
@@ -2732,12 +2516,15 @@ mod tests {
         .unwrap();
 
         let endpoint = player
-            .live_declare_and_activate_transform_to(
-                &circle,
-                &target,
-                AnimationOptions::new()
-                    .run_time(2.0)
-                    .rate_func(RateFunction::Linear),
+            .live_declare_and_activate_composition(
+                &noon::AnimationCompositionRequest::TransformTo(noon::TransformToRequest::new(
+                    &circle,
+                    &target,
+                    AnimationOptions::new()
+                        .run_time(2.0)
+                        .rate_func(RateFunction::Linear),
+                )),
+                noon_core::AnimationOptions::new(),
             )
             .unwrap();
         assert_eq!(endpoint, 2.0);
@@ -2809,12 +2596,15 @@ mod tests {
         .unwrap();
 
         player
-            .live_declare_and_activate_transform_to(
-                &circle,
-                &target,
-                AnimationOptions::new()
-                    .run_time(2.0)
-                    .rate_func(RateFunction::Linear),
+            .live_declare_and_activate_composition(
+                &noon::AnimationCompositionRequest::TransformTo(noon::TransformToRequest::new(
+                    &circle,
+                    &target,
+                    AnimationOptions::new()
+                        .run_time(2.0)
+                        .rate_func(RateFunction::Linear),
+                )),
+                noon_core::AnimationOptions::new(),
             )
             .unwrap();
         let midpoint = player.live_drive_segment_to_authored_time(1.25).unwrap();
@@ -2870,12 +2660,15 @@ mod tests {
         )
         .unwrap();
         player
-            .live_declare_and_activate_transform_to(
-                &circle,
-                &target,
-                AnimationOptions::new()
-                    .run_time(1.0)
-                    .rate_func(RateFunction::Linear),
+            .live_declare_and_activate_composition(
+                &noon::AnimationCompositionRequest::TransformTo(noon::TransformToRequest::new(
+                    &circle,
+                    &target,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )),
+                noon_core::AnimationOptions::new(),
             )
             .unwrap();
 
@@ -3398,13 +3191,16 @@ mod tests {
 
         assert_eq!(
             player
-                .live_declare_and_activate_fade(
-                    &label,
-                    noon_core::SemanticFadeDirection::In,
-                    noon::FadeEndpoint::default(),
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear),
+                .live_declare_and_activate_composition(
+                    &noon::AnimationCompositionRequest::Fade {
+                        target: &label,
+                        direction: noon_core::SemanticFadeDirection::In,
+                        endpoint: noon::FadeEndpoint::default(),
+                        options: AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear)
+                    },
+                    noon_core::AnimationOptions::new()
                 )
                 .unwrap(),
             1.5,
