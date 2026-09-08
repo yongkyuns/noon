@@ -723,6 +723,14 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     : continuationOnly
     ? (frame) => requestContinuationCallback(continuation, frame)
     : (frame) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame);
+  if (request.replaceExistingEndpoint) {
+    if (continuationOnly || (continuation?.contextId === request.contextId && !continuation.terminal)) {
+      throw new Error("cannot replace an endpoint while source continuation is active");
+    }
+    // Reconnect the control/render ports around the same runtime lease. Stop on
+    // this owner before leasing again; cross-port stop messages are not ordered.
+    for (const existing of [...entry.endpoints]) existing.stop();
+  }
   let endpoint;
   endpoint = await attachSemanticEngine(
     entry.context,
@@ -1030,6 +1038,9 @@ function validateRequest(request) {
     return;
   }
   if (request.type === "attach_semantic_execution") {
+    if (request.replaceExistingEndpoint !== undefined && typeof request.replaceExistingEndpoint !== "boolean") {
+      throw new Error("semantic endpoint replacement must be a boolean");
+    }
     if (typeof request.contextId !== "string" || !request.contextId ||
         !(request.controlPort instanceof MessagePort) || !(request.renderPort instanceof MessagePort)) {
       throw new Error("semantic attachment requires a context and two ports");

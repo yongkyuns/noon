@@ -555,3 +555,33 @@ test("shared recovery remains retryable after a transient render startup error",
   assert.equal(request(recovered, "resize").width, 640);
   client.terminate();
 });
+
+test("cancelled shared preparation cannot roll back a replacement startup generation", async () => {
+  const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const capture = promise => promise.catch(error => error);
+  const firstPrepare = capture(client.prepare({ transportMode: "transferable" }));
+  const firstStart = capture(client.startSemanticExecution("first", authoring));
+  client.terminate();
+  const nextPrepare = capture(client.prepare({ transportMode: "transferable" }));
+  const replacement = renderWorker();
+  const nextStart = capture(client.startSemanticExecution("replacement", authoring));
+  try {
+    for (const error of await Promise.all([firstPrepare, firstStart])) {
+      assert.match(error.message, /terminated/);
+    }
+    assert.equal(replacement.terminated, false, "stale failure must not destroy the new renderer");
+    await assert.rejects(client.startSemanticExecution("overlapping", authoring), /already started/);
+    replyRender(replacement, "prepare", "prepared");
+    await nextPrepare;
+    await waitForRequest(replacement, "start_engine");
+    replyRender(replacement, "start_engine", "engine_started");
+    const ready = await nextStart;
+    assert.equal(ready.engine.semantic, true);
+    assert.deepEqual(authoring.attachments.map(entry => entry.contextId), ["replacement"]);
+  } finally {
+    client.terminate();
+    await Promise.all([nextPrepare, nextStart]);
+  }
+});

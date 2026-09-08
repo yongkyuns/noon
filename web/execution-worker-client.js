@@ -18,11 +18,10 @@ const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const WORKER_OWNERS = Object.freeze(["engine", "render"]);
 const EXECUTION_MODE_LEGACY = "legacy";
-const EXECUTION_MODE_RETAINED = "retained";
+const RENDER_MODE_RETAINED = "retained";
 const EXECUTION_MODE_SEMANTIC = "semantic";
 const SEMANTIC_PACING_REALTIME = "realtime";
 const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
-const SCENE_SPEC_VERSION = 1;
 const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 const LIFECYCLE_CANCELLED_MESSAGE =
   "execution worker client was terminated during an asynchronous operation";
@@ -49,7 +48,6 @@ export class ExecutionWorkerClient {
   #session = 0;
   #mode = EXECUTION_MODE_LEGACY;
   #sceneJson = null;
-  #sceneSpecJson = null;
   #loopDurationSeconds = 4;
   #transportMode = null;
   #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
@@ -204,22 +202,6 @@ export class ExecutionWorkerClient {
     });
   }
 
-  async startRetainedCanonical(sceneSpecJson, options = {}) {
-    const loopDurationSeconds = options.loopDurationSeconds ?? 4;
-    const transportMode =
-      options.transportMode ?? this.#transportMode ?? selectExecutionTransportMode();
-    const sharedSlotCapacity =
-      options.sharedSlotCapacity ??
-      (this.#renderPrepared === null ? DEFAULT_SHARED_SLOT_CAPACITY : this.#sharedSlotCapacity);
-    validateSceneSpecJson(sceneSpecJson);
-    return this.#startMode(
-      EXECUTION_MODE_RETAINED,
-      null,
-      { loopDurationSeconds, transportMode, sharedSlotCapacity },
-      sceneSpecJson,
-    );
-  }
-
   async startSemanticExecution(contextId, authoringClient, options = {}) {
     validateSemanticContextId(contextId);
     validateSemanticAuthoringClient(authoringClient);
@@ -273,10 +255,12 @@ export class ExecutionWorkerClient {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
     }
+    const generation = this.#lifecycleGeneration;
     const reservation = {};
     this.#preparedStartReservation = reservation;
     try {
       await this.#renderPrepared;
+      this.#assertLifecycleCurrent(generation);
       this.#configureStart(
         EXECUTION_MODE_SEMANTIC,
         null,
@@ -297,7 +281,7 @@ export class ExecutionWorkerClient {
         {
           port: render.port2,
           transportMode: this.#transportMode,
-          mode: EXECUTION_MODE_RETAINED,
+          mode: RENDER_MODE_RETAINED,
         },
         [render.port2],
       );
@@ -323,6 +307,7 @@ export class ExecutionWorkerClient {
         }),
       );
       const ready = await this.#ready;
+      this.#assertLifecycleCurrent(generation);
       this.#renderPrepared = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
@@ -334,6 +319,7 @@ export class ExecutionWorkerClient {
       this.#fatalOwner = null;
       return ready;
     } catch (error) {
+      this.#assertLifecycleCurrent(generation);
       this.#renderPrepared = null;
       this.#rollbackFailedStart(error, true);
       throw error;
@@ -352,7 +338,6 @@ export class ExecutionWorkerClient {
       transportMode,
       sharedSlotCapacity,
     },
-    sceneSpecJson = null,
   ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
@@ -361,20 +346,8 @@ export class ExecutionWorkerClient {
     if (preparedRender && this.#renderPrepared === null) {
       throw new Error("ExecutionWorkerClient render owner is not in a prepared state");
     }
-    validateExecutionMode(mode);
-    if (mode === EXECUTION_MODE_LEGACY) {
-      validateSceneJson(sceneJson);
-      if (sceneSpecJson !== null) {
-        throw new Error("legacy execution must not include canonical retained authoring");
-      }
-    } else if (mode === EXECUTION_MODE_RETAINED) {
-      validateSceneSpecJson(sceneSpecJson);
-      if (sceneJson !== null) {
-        throw new Error("retained execution accepts only canonical SceneSpec authoring");
-      }
-    } else {
-      throw new Error("semantic execution starts through startSemanticExecution");
-    }
+    if (mode !== EXECUTION_MODE_LEGACY) throw new Error("semantic execution uses startSemanticExecution");
+    validateSceneJson(sceneJson);
     validateLoopDurationSeconds(loopDurationSeconds);
     validateTransportMode(transportMode);
     const slotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
@@ -400,7 +373,6 @@ export class ExecutionWorkerClient {
           mode,
           sceneJson,
           loopDurationSeconds,
-          sceneSpecJson,
         );
       } finally {
         if (this.#preparedStartReservation === reservation) {
@@ -429,7 +401,6 @@ export class ExecutionWorkerClient {
         loopDurationSeconds,
         transportMode,
         slotCapacity,
-        sceneSpecJson,
       );
       const { width: initialWidth, height: initialHeight } = this.#prepareCanvasDimensions();
 
@@ -438,7 +409,7 @@ export class ExecutionWorkerClient {
         const channel = new MessageChannel();
         const offscreen = this.#canvas.transferControlToOffscreen();
         canvasTransferred = true;
-        this.#engineWorker = this.#createEngineWorker(mode);
+        this.#engineWorker = this.#createEngineWorker();
         this.#renderWorker = this.#createRenderWorker();
 
         const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
@@ -464,19 +435,13 @@ export class ExecutionWorkerClient {
         this.#postEngineInit(
           this.#engineWorker,
           channel.port1,
-          mode,
           sceneJson,
           loopDurationSeconds,
           this.#session,
-          sceneSpecJson,
         );
         const ready = await this.#ready;
         this.#playing = true;
         this.#fatalOwner = null;
-        if (mode === EXECUTION_MODE_RETAINED) {
-          this.#hostAuthoringClient = null;
-          this.#hostCallbacks = null;
-        }
         return ready;
       } catch (error) {
         this.#rollbackFailedStart(error, canvasTransferred);
@@ -493,7 +458,6 @@ export class ExecutionWorkerClient {
     mode,
     sceneJson,
     loopDurationSeconds,
-    sceneSpecJson = null,
   ) {
     this.#configureStart(
       mode,
@@ -501,11 +465,10 @@ export class ExecutionWorkerClient {
       loopDurationSeconds,
       this.#transportMode,
       this.#sharedSlotCapacity,
-      sceneSpecJson,
     );
     try {
       const channel = new MessageChannel();
-      this.#engineWorker = this.#createEngineWorker(mode);
+      this.#engineWorker = this.#createEngineWorker();
       const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
       const renderReady = this.#request(
         this.#renderWorker,
@@ -528,20 +491,14 @@ export class ExecutionWorkerClient {
       this.#postEngineInit(
         this.#engineWorker,
         channel.port1,
-        mode,
         sceneJson,
         loopDurationSeconds,
         this.#session,
-        sceneSpecJson,
       );
       const ready = await this.#ready;
       this.#renderPrepared = null;
       this.#playing = true;
       this.#fatalOwner = null;
-      if (mode === EXECUTION_MODE_RETAINED) {
-        this.#hostAuthoringClient = null;
-        this.#hostCallbacks = null;
-      }
       return ready;
     } catch (error) {
       this.#renderPrepared = null;
@@ -556,11 +513,9 @@ export class ExecutionWorkerClient {
     loopDurationSeconds,
     transportMode,
     sharedSlotCapacity,
-    sceneSpecJson = null,
   ) {
     this.#mode = mode;
     this.#sceneJson = sceneJson;
-    this.#sceneSpecJson = mode === EXECUTION_MODE_RETAINED ? sceneSpecJson : null;
     this.#loopDurationSeconds = loopDurationSeconds;
     this.#transportMode = transportMode;
     this.#sharedSlotCapacity = sharedSlotCapacity;
@@ -649,6 +604,7 @@ export class ExecutionWorkerClient {
       callbackSessionId,
       continuationGeneration = null,
       renderCommand,
+      replaceExistingEndpoint = false,
     },
   ) {
     this.#requireStarted();
@@ -676,13 +632,13 @@ export class ExecutionWorkerClient {
         contextId,
         control.port2,
         render.port1,
-        this.#semanticAttachmentOptions(
+        { ...this.#semanticAttachmentOptions(
           duration,
           nextSession,
           callbackSessionId,
           continuationGeneration,
           continuationGeneration === null ? !wasPlaying : false,
-        ),
+        ), replaceExistingEndpoint },
       );
       [candidateReady] = await Promise.all([candidateReadyPromise, attached]);
       this.#assertLifecycleCurrent(generation);
@@ -717,7 +673,7 @@ export class ExecutionWorkerClient {
         {
           port: render.port2,
           transportMode: this.#transportMode,
-          mode: EXECUTION_MODE_RETAINED,
+          mode: RENDER_MODE_RETAINED,
         },
         [render.port2],
       ).catch((error) => {
@@ -735,7 +691,6 @@ export class ExecutionWorkerClient {
       this.#playing = continuationGeneration === null ? wasPlaying : true;
       this.#mode = EXECUTION_MODE_SEMANTIC;
       this.#sceneJson = null;
-      this.#sceneSpecJson = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
@@ -932,9 +887,7 @@ export class ExecutionWorkerClient {
     const hasAuthoring =
       this.#mode === EXECUTION_MODE_LEGACY
         ? this.#sceneJson !== null
-        : this.#mode === EXECUTION_MODE_RETAINED
-          ? this.#sceneSpecJson !== null
-          : this.#semanticContextId !== null && this.#semanticAuthoringClient !== null;
+        : this.#semanticContextId !== null && this.#semanticAuthoringClient !== null;
     if (!hasAuthoring || this.#transportMode === null) {
       throw new Error("ExecutionWorkerClient has not been started");
     }
@@ -956,6 +909,7 @@ export class ExecutionWorkerClient {
           loopDurationSeconds: this.#loopDurationSeconds,
           callbackSessionId: this.#semanticCallbackSessionId,
           renderCommand: "rebuild_engine",
+          replaceExistingEndpoint: true,
         },
       );
     }
@@ -988,7 +942,7 @@ export class ExecutionWorkerClient {
         throw error;
       });
       this.#session = checkedNextSession(this.#session);
-      this.#engineWorker = this.#createEngineWorker(mode);
+      this.#engineWorker = this.#createEngineWorker();
       const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
       const nextReady = Promise.all([engineReady, renderAttached]).then(([engine, render]) => ({
         engine,
@@ -1000,11 +954,9 @@ export class ExecutionWorkerClient {
       this.#postEngineInit(
         this.#engineWorker,
         channel.port1,
-        mode,
         this.#sceneJson,
         this.#loopDurationSeconds,
         this.#session,
-        this.#sceneSpecJson,
       );
 
       const ready = await nextReady;
@@ -1035,7 +987,6 @@ export class ExecutionWorkerClient {
   async #restartAll() {
     const mode = this.#mode;
     const sceneJson = this.#sceneJson;
-    const sceneSpecJson = this.#sceneSpecJson;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
     const sharedSlotCapacity = this.#sharedSlotCapacity;
@@ -1064,7 +1015,6 @@ export class ExecutionWorkerClient {
             mode,
             sceneJson,
             { loopDurationSeconds, transportMode, sharedSlotCapacity },
-            sceneSpecJson,
           );
     if (!wasPlaying && mode !== EXECUTION_MODE_SEMANTIC) {
       const paused = await this.#requestEngine("pause", {});
@@ -1398,13 +1348,7 @@ export class ExecutionWorkerClient {
     throw new Error("execution render host must be selected before renderer startup");
   }
 
-  #createEngineWorker(mode) {
-    if (mode === EXECUTION_MODE_RETAINED) {
-      return new Worker(new URL("./retained-execution-engine-worker.js", import.meta.url), {
-        type: "module",
-        name: "noon-mixed-retained-engine",
-      });
-    }
+  #createEngineWorker() {
     return new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
       type: "module",
       name: "noon-engine",
@@ -1414,11 +1358,9 @@ export class ExecutionWorkerClient {
   #postEngineInit(
     worker,
     port,
-    mode,
     sceneJson,
     loopDurationSeconds,
     session = this.#session,
-    sceneSpecJson = null,
   ) {
     const payload = {
       port,
@@ -1427,13 +1369,8 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity: this.#sharedSlotCapacity,
       session,
     };
-    if (mode === EXECUTION_MODE_RETAINED) {
-      validateSceneSpecJson(sceneSpecJson);
-      payload.sceneSpecJson = sceneSpecJson;
-    } else {
-      validateSceneJson(sceneJson);
-      payload.sceneJson = sceneJson;
-    }
+    validateSceneJson(sceneJson);
+    payload.sceneJson = sceneJson;
     worker.postMessage(engineEnvelope("init", payload), [port]);
   }
 
@@ -1548,17 +1485,6 @@ function validateWorkerOwner(owner) {
   }
 }
 
-function validateExecutionMode(mode) {
-  if (
-    mode !== EXECUTION_MODE_LEGACY &&
-    mode !== EXECUTION_MODE_RETAINED &&
-    mode !== EXECUTION_MODE_SEMANTIC
-  ) {
-    throw new TypeError(`unsupported execution mode ${mode}`);
-  }
-  return mode;
-}
-
 function validateSemanticContextId(contextId) {
   if (typeof contextId !== "string" || contextId.trim() === "") {
     throw new TypeError("semantic execution context ID must be a non-empty string");
@@ -1621,53 +1547,6 @@ function validateSceneJson(sceneJson) {
   if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
     throw new TypeError("scene must be non-empty JSON text");
   }
-}
-
-function validateSceneSpecJson(sceneSpecJson) {
-  if (typeof sceneSpecJson !== "string" || sceneSpecJson.trim() === "") {
-    throw new TypeError("canonical SceneSpec must be non-empty JSON text");
-  }
-  let sceneSpec;
-  try {
-    sceneSpec = JSON.parse(sceneSpecJson);
-  } catch (error) {
-    throw new TypeError(`canonical SceneSpec must be valid JSON: ${error}`);
-  }
-  if (!sceneSpec || typeof sceneSpec !== "object" || Array.isArray(sceneSpec)) {
-    throw new TypeError("canonical SceneSpec must be an object");
-  }
-  if (sceneSpec.version !== SCENE_SPEC_VERSION) {
-    throw new TypeError(`unsupported canonical SceneSpec version ${sceneSpec.version}`);
-  }
-  if (!Array.isArray(sceneSpec.objects) || !Array.isArray(sceneSpec.tracks)) {
-    throw new TypeError("canonical SceneSpec must contain object and track arrays");
-  }
-  const objectIds = new Set();
-  for (const object of sceneSpec.objects) {
-    if (
-      !object ||
-      typeof object !== "object" ||
-      Array.isArray(object) ||
-      !Number.isSafeInteger(object.id) ||
-      object.id < 0
-    ) {
-      throw new TypeError("canonical SceneSpec object has an invalid object ID");
-    }
-    if (objectIds.has(object.id)) {
-      throw new TypeError("canonical SceneSpec has duplicate object IDs");
-    }
-    objectIds.add(object.id);
-  }
-  if (
-    sceneSpec.camera_object !== null &&
-    sceneSpec.camera_object !== undefined &&
-    (!Number.isSafeInteger(sceneSpec.camera_object) ||
-      sceneSpec.camera_object < 0 ||
-      !objectIds.has(sceneSpec.camera_object))
-  ) {
-    throw new TypeError("canonical SceneSpec has an invalid camera object");
-  }
-  return sceneSpec;
 }
 
 function validateLoopDurationSeconds(loopDurationSeconds) {

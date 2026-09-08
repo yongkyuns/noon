@@ -96,7 +96,6 @@ globalThis.window = { devicePixelRatio: 1 };
 const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
 
 const SCENE_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
-const SCENE_SPEC_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
 
 function envelope(channel, type, payload = {}) {
   return { channel, protocolVersion: 1, type, ...payload };
@@ -116,28 +115,6 @@ function emitLegacyReady(offset) {
     envelope("noon.render", "ready", {
       transportMode: "transferable",
       backend: "WebGL2",
-    }),
-  );
-  return { engine, render };
-}
-
-function emitUnifiedRetainedReady(offset) {
-  const engine = workerByName(offset, "noon-mixed-retained-engine");
-  const render = workerByName(offset, "noon-render");
-  engine.emitMessage(
-    envelope("noon.engine", "ready", {
-      transportMode: "transferable",
-      retained: true,
-      mixed: true,
-      canonical: true,
-    }),
-  );
-  render.emitMessage(
-    envelope("noon.render", "ready", {
-      transportMode: "transferable",
-      backend: "WebGL2",
-      retained: true,
-      mixed: true,
     }),
   );
   return { engine, render };
@@ -166,48 +143,5 @@ test("legacy constructor failure rolls back transferred canvas and retry succeed
   emitLegacyReady(retryOffset);
   const ready = await retry;
   assert.equal(ready.session, 2, "failed startup generation must not be reused");
-  client.terminate();
-});
-
-test("canonical retained startup failure rolls back transferred canvas and retry succeeds", async () => {
-  const original = new FakeCanvas();
-  const errors = [];
-  const client = new ExecutionWorkerClient(original, {
-    onError(error, owner) {
-      errors.push(`${owner}: ${error.message}`);
-    },
-  });
-  const offset = FakeWorker.instances.length;
-  const started = client.startRetainedCanonical(SCENE_SPEC_JSON, {
-    transportMode: "transferable",
-  });
-  const engine = workerByName(offset, "noon-mixed-retained-engine");
-  const render = workerByName(offset, "noon-render");
-  engine.emitMessage(
-    envelope("noon.engine", "ready", {
-      transportMode: "transferable",
-      retained: true,
-      mixed: true,
-      canonical: true,
-    }),
-  );
-  render.emitError("canonical retained render startup crashed");
-
-  await assert.rejects(started, /canonical retained render startup crashed/);
-  assert.equal(engine.terminated, true);
-  assert.equal(render.terminated, true);
-  assert.equal(original.transferred, true);
-  assert.notEqual(client.canvas, original);
-  assert.equal(original.replacement, client.canvas);
-  assert.equal(client.canvas.transferred, false);
-  assert.deepEqual(errors, ["render: canonical retained render startup crashed"]);
-
-  const retryOffset = FakeWorker.instances.length;
-  const retry = client.startRetainedCanonical(SCENE_SPEC_JSON, {
-    transportMode: "transferable",
-  });
-  emitUnifiedRetainedReady(retryOffset);
-  const ready = await retry;
-  assert.equal(ready.session, 2, "failed retained startup generation must not be reused");
   client.terminate();
 });
