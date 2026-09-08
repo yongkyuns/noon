@@ -94,5 +94,16 @@ fn main() -> Result<(), String> {
             0.0, 0.1, 0.3, 0.5, 0.9, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5,
         ],
     )?;
+    let mut session = example_scenes::specialized_geometry::session()?;
+    let times = [0.0, 0.5, 1.0];
+    let mut frames = Vec::new();
+    for time in times {
+        session.advance_to(time).map_err(|e| e.to_string())?;
+        frames.push(execution_frame_value(&session));
+    }
+    println!(
+        "{}",
+        json!({ "name": "specialized_geometry", "times": times, "frames": frames })
+    );
     Ok(())
 }

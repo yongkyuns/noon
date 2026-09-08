@@ -12,6 +12,10 @@ diagnostics = ["dep:serde_json"]
 name = "cross_language_parity"
 required-features = ["diagnostics"]
 
+[[example]]
+name = "manim_elbow_oracle"
+required-features = ["diagnostics"]
+
 [dependencies]
 serde_json = { version = "1", optional = true }
 noon-compile = { path = "../noon-compile" }

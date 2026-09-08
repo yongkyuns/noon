@@ -1,11 +1,6 @@
 {
   "deletion_issue": "#959",
-  "rewritten_imports": {
-    "crates/noon-web/examples/manim_elbow_oracle.rs": {
-      "noon::legacy::Elbow": 1,
-      "noon::legacy::IntoSnapshot": 1
-    }
-  },
+  "rewritten_imports": {},
   "token_budgets": {
     "crates/noon/src/legacy/semantic_snapshot.rs": {
       "ObjectSnapshot": 6,

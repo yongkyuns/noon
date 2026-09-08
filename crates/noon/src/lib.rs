@@ -5,7 +5,6 @@
 
 #![forbid(unsafe_code)]
 
-mod analytic_geometry_authoring;
 mod animation_authoring;
 mod arc_authoring;
 mod camera_authoring;
@@ -24,16 +23,13 @@ pub use rotation_authoring::ManimRotationPivot;
 mod geometry_authoring;
 mod host_callbacks;
 pub mod legacy;
-mod line_matcher_authoring;
 mod live_program;
 mod live_session;
 mod native_signal_authoring;
-mod polygram_authoring;
 mod rounded_rectangle_authoring;
 mod scalar_authoring;
 mod sector_authoring;
 pub mod semantic_mobject;
-mod shape_matcher_authoring;
 mod text_authoring;
 
 pub use animation_authoring::DeclaredAnimation;

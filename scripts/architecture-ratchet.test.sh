@@ -17,6 +17,10 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 config = json.loads(path.read_text())
+# Synthetic historical imports qualify the mechanism after real consumers vanish.
+config['rewritten_imports']['crates/noon-web/examples/import_relocation_fixture.rs'] = {
+    'noon::legacy::Elbow': 1, 'noon::legacy::IntoSnapshot': 1,
+}
 config.pop('regression_fixtures', None)
 path.write_text(json.dumps(config, indent=2) + '\n')
 PY
@@ -306,13 +310,13 @@ fi
 # imports. It grants no new file, alias, glob, or non-import namespace access.
 reset_to_base
 mkdir -p crates/noon-web/src crates/noon-web/examples crates/noon/src/legacy
-cat > crates/noon-web/examples/manim_elbow_oracle.rs <<'EOF'
+cat > crates/noon-web/examples/import_relocation_fixture.rs <<'EOF'
 use noon::{Elbow, IntoSnapshot, ReactiveTimelineScene};
 EOF
-git add crates/noon-web/examples/manim_elbow_oracle.rs
+git add crates/noon-web/examples/import_relocation_fixture.rs
 git commit -qm "existing unqualified import consumer"
 IMPORT_BASE="$(git rev-parse HEAD)"
-cat > crates/noon-web/examples/manim_elbow_oracle.rs <<'EOF'
+cat > crates/noon-web/examples/import_relocation_fixture.rs <<'EOF'
 use noon::legacy::{
     Elbow,
     IntoSnapshot,
@@ -321,7 +325,7 @@ use noon::ReactiveTimelineScene;
 EOF
 bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null
 for import in 'use noon::legacy::{Elbow as Hidden, IntoSnapshot};' 'use noon::legacy::*;' 'use noon::legacy::{Elbow, Unknown};' 'use noon::{legacy::{Elbow as Hidden, IntoSnapshot}};' 'use noon::legacy;' 'use noon::{legacy};' 'use noon::legacy as old;' 'use noon::r#legacy::Elbow;' 'use noon::legacy::Elbow @ unsupported;'; do
-  printf '%s\n' "$import" > crates/noon-web/examples/manim_elbow_oracle.rs
+  printf '%s\n' "$import" > crates/noon-web/examples/import_relocation_fixture.rs
   if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
     echo "architecture ratchet test failed: accepted unreviewed import $import" >&2
     exit 1
