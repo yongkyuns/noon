@@ -41,7 +41,6 @@ mod retained_text_family_transport;
 #[cfg(feature = "renderer")]
 mod retained_typst_canvas;
 mod semantic_execution_player;
-mod semantic_snapshot;
 
 pub use authoring_facade::*;
 #[cfg(target_arch = "wasm32")]

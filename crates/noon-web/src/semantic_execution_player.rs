@@ -2378,7 +2378,7 @@ impl SemanticExecutionPlayer {
     /// Explicit read-only diagnostics; never used to drive or reconstruct execution.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = debugFrameJson))]
     pub fn debug_frame_json(&self) -> String {
-        crate::semantic_snapshot::execution_frame_value(&self.session).to_string()
+        noon::diagnostics::execution_frame_value(&self.session).to_string()
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = resourceBundleBytes))]

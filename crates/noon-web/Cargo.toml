@@ -18,7 +18,7 @@ renderer = [
 
 [dependencies]
 ciborium = "0.2"
-noon = { path = "../noon" }
+noon = { path = "../noon", features = ["diagnostics"] }
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }

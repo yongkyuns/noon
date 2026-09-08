@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { createReadStream } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { serveRepository } from "./browser-test-server.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
@@ -30,20 +29,7 @@ assert.equal(reference.frame_rate, manifest.reference.frame_rate);
 // sample cadence and reuses its actual pixels/current-runtime diagnostics.
 const port = Number(process.env.NOON_SHARED_PLAYBACK_PORT ?? "4194");
 const baseUrl = `http://127.0.0.1:${port}`;
-const contentTypes = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript",
-  ".wasm": "application/wasm", ".json": "application/json", ".py": "text/x-python" };
-const server = createServer(async (request, response) => {
-  try {
-    const relative = decodeURIComponent(new URL(request.url, baseUrl).pathname).replace(/^\/+/, "");
-    const resolved = path.resolve(repoRoot, relative);
-    if (!resolved.startsWith(`${repoRoot}${path.sep}`)) { response.writeHead(403).end(); return; }
-    if (!(await stat(resolved)).isFile()) { response.writeHead(404).end(); return; }
-    response.setHeader("Content-Type", contentTypes[path.extname(resolved)] ?? "application/octet-stream");
-    createReadStream(resolved).on("error", () => response.destroy()).pipe(response);
-  } catch (error) {
-    response.writeHead(error.code === "ENOENT" ? 404 : 500).end(String(error));
-  }
-});
+const server = await serveRepository(repoRoot, port);
 
 function effectiveFrame(frame) {
   assert.equal(frame?.engine, "noon", "missing shared-runtime capture");
@@ -105,8 +91,6 @@ async function qualifyFixture(page, fixture, backend) {
 const results = [];
 const failures = [];
 try {
-  // Listen failure (including a port collision) rejects before any browser opens.
-  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
   for (const backend of backends) {
     const browser = await chromium.launch({ channel: "chromium", headless: true, args: browserArgs(backend) });
     try {
@@ -143,6 +127,5 @@ try {
   console.log(`Shared playback cadence report: ${reportPath}`);
   assert.equal(failures.length, 0, failures.join("\n"));
 } finally {
-  server.closeAllConnections();
-  await new Promise((resolve) => server.close(resolve));
+  await server.close();
 }

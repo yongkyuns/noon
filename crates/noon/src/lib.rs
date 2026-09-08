@@ -11,6 +11,8 @@ mod arc_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
 mod dashed_line_authoring;
+#[cfg(feature = "diagnostics")]
+pub mod diagnostics;
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;

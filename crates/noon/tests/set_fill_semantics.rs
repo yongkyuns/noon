@@ -1,41 +1,55 @@
-use noon::legacy::{Circle, IntoSnapshot, Scene, GREEN, PINK, RED};
+use noon::{AnimationOptions, Color, RateFunction, Scene, Style};
 
-#[test]
-fn shape_set_fill_keeps_stroke_and_object_opacity_independent() {
-    let snapshot = Circle::default()
-        .set_stroke(Some(GREEN), Some(4.0))
-        .set_fill(Some(RED), Some(0.25))
-        .into_snapshot();
-
-    let fill = snapshot.style.fill.expect("circle fill remains enabled");
-    assert_eq!(fill.red, RED.red);
-    assert_eq!(fill.green, RED.green);
-    assert_eq!(fill.blue, RED.blue);
-    assert_eq!(fill.alpha, 0.25);
-    assert_eq!(snapshot.style.stroke, Some(GREEN));
-    assert_eq!(snapshot.style.opacity, 1.0);
+fn assert_paint(style: Style, color: Color, alpha: f32) {
+    let fill = style.fill.expect("fill remains enabled");
+    assert_eq!(
+        (fill.red, fill.green, fill.blue, fill.alpha),
+        (color.red, color.green, color.blue, alpha)
+    );
+    assert_eq!(style.stroke, Some(Color::GREEN));
+    assert_eq!(style.stroke_width, 0.04);
+    assert_eq!(style.opacity, 1.0);
 }
 
 #[test]
-fn animate_set_fill_keeps_stroke_and_object_opacity_independent() {
+fn authored_and_animated_fill_keep_stroke_and_object_opacity_independent() {
     let mut scene = Scene::new();
-    let circle = scene.add(
-        Circle::default()
-            .set_stroke(Some(GREEN), Some(4.0))
-            .set_fill(Some(RED), Some(0.25)),
-    );
-
-    scene
-        .play(circle.animate().set_fill(Some(PINK), Some(0.5)))
-        .run_time(1.0)
+    let mut circle = scene.circle(1.0).unwrap();
+    let red = Color::RED;
+    let green = Color::GREEN;
+    let pink = Color::PINK;
+    circle
+        .set_stroke_color(green.red.into(), green.green.into(), green.blue.into(), 1.0)
         .unwrap();
-
-    let target = scene.snapshot(circle).unwrap();
-    let fill = target.style.fill.expect("animated target keeps a fill");
-    assert_eq!(fill.red, PINK.red);
-    assert_eq!(fill.green, PINK.green);
-    assert_eq!(fill.blue, PINK.blue);
-    assert_eq!(fill.alpha, 0.5);
-    assert_eq!(target.style.stroke, Some(GREEN));
-    assert_eq!(target.style.opacity, 1.0);
+    circle
+        .set_fill(red.red.into(), red.green.into(), red.blue.into(), 0.25)
+        .unwrap();
+    scene.add(&circle).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    assert_paint(session.frame().objects[0].style, red, 0.25);
+    let id = session.frame().objects[0].id;
+    let mut live = scene.live(&mut session);
+    let target = live.target_editor(&circle).unwrap();
+    live.set_fill(
+        &target,
+        pink.red.into(),
+        pink.green.into(),
+        pink.blue.into(),
+        0.5,
+    )
+    .unwrap();
+    let segment = live
+        .declare_and_activate_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    live.advance_segment_to(segment, 1.0).unwrap();
+    live.complete_segment(segment).unwrap();
+    assert_paint(live.effective(&circle).unwrap().style, pink, 0.5);
+    assert_eq!(session.frame().objects[0].id, id);
+    assert_paint(session.frame().objects[0].style, pink, 0.5);
 }
