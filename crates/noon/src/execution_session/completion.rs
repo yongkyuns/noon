@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use noon_compile::{
     ExecutionPatch, PreparedScalarSignalTimelineError, SemanticAnimationCompletion,
@@ -311,13 +311,28 @@ impl ExecutionSession {
             semantic.replace_style(*object, style.clone());
         }
 
-        for entry in entries {
+        // A sequential composition may release several tracks for one domain.
+        // Reconcile every execution track, but publish only its final authored
+        // endpoint once, just as completed style domains are merged above.
+        let final_property_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match &entry.completion {
+                SemanticAnimationCompletion::Property { property, .. } => {
+                    Some(((entry.semantic_object, *property), index))
+                }
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Property { property, value } => {
                     if !matches!(
                         property,
                         SemanticObjectProperty::ObjectOpacity | SemanticObjectProperty::StrokeWidth
-                    ) {
+                    ) && final_property_entries.get(&(entry.semantic_object, *property))
+                        == Some(&index)
+                    {
                         semantic.set_property(entry.semantic_object, *property, value.clone());
                     }
                 }

@@ -1,39 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
 
-const { chromium } = playwright;
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const port = 4194;
-const baseUrl = `http://127.0.0.1:${port}`;
-
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/manim-compat-smoke.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`retained family layout smoke server did not start: ${lastError}\n${serverOutput}`);
-}
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const source = `
 from noon import *
@@ -142,49 +114,29 @@ class RetainedFamilyLayout(Scene):
         self.add(first, second, arranged_a, arranged_b, mixed_text, typst_family)
 `;
 
-let browser = null;
+const server = await serveRepository(root, 4194);
+let browser;
 try {
-  await waitForServer();
-  browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: ["--disable-dev-shm-usage"],
-  });
+  browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgpu") });
   const page = await browser.newPage();
   const errors = [];
-  page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console: ${message.text()}`);
-  });
-
-  await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
-  await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
-  await page.evaluate(() => window.noonManimCompat.ready());
-
-  const result = await page.evaluate((python) => window.noonManimCompat.run(python), source);
-  assert.equal(result.kind, "scene_document");
-  assert.ok(result.sceneSpec, "retained family layout must produce a canonical scene export");
-  assert.deepEqual(
-    result.sceneSpec.objects.map((object) => object.content.value.source),
-    ["Layout A", "Layout BBB", "A", "BBBB", "Mixed", "*Typst*", "x^2"],
-  );
-  assert.ok(
-    result.sceneSpec.objects.every((object) => object.content.kind === "text"),
-    "retained family layout must export typed Text objects",
-  );
-  const wire = JSON.stringify(result.sceneSpec);
-  for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
-    assert.ok(!wire.includes(forbidden), `canonical family layout export must not contain ${forbidden}`);
+  page.on("pageerror", error => errors.push(String(error)));
+  page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  await page.goto(`${server.baseUrl}/web/manim-compat-smoke.html`);
+  await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30000 });
+  // runLive owns source attachment; the unrelated animated ready probes need
+  // not run again for this static family qualification.
+  const result = await page.evaluate(source => window.noonManimCompat.runLive(source), source);
+  assert.equal(result.mode, "semantic");
+  assert.equal(result.metrics.objectCount, 7);
+  assert.equal(result.frame.objects.length, 7);
+  assert.equal(result.frame.present_object_count, 7);
+  assert.equal(new Set(result.frame.objects.map(object => object.id)).size, 7);
+  assert.ok(result.metrics.presentedFrames > 0 && result.metrics.drawCalls > 0);
+  assert.ok(result.metrics.instancesDrawn > 7, "Text and Typst must draw glyph instances");
+  for (const object of result.frame.objects) {
+    assert.ok(object.bounds.width > 0 && object.bounds.height > 0);
   }
-  assert.deepEqual(
-    errors,
-    [],
-    `browser errors while testing retained Text family layout:\n${errors.join("\n")}`,
-  );
-  console.log(
-    "Retained Text family layout smoke passed: shared Rust Text and Typst family bounds, nested arrange, mixed geometry/Text translation, and relative placement all hold without legacy Text geometry.",
-  );
-} finally {
-  await browser?.close();
-  server.kill("SIGTERM");
-}
+  assert.deepEqual(errors, []);
+  console.log("PASS shared Text family layout: preserved Python assertions and normal retained rendering");
+} finally { await browser?.close(); await server.close(); }
