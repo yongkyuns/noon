@@ -3,6 +3,92 @@
 Implementation tooling for #1265, not another architecture or roadmap. The engine
 contract remains `docs/architecture.md`.
 
+## Local architecture and iteration gate
+
+The #1272 R3/R4 guardrails are owned by #961. The ordinary local command remains
+`bash scripts/check.sh fast`; it now runs the common architecture gate before any
+compilation. For architecture-only feedback or an explicit comparison base:
+
+```sh
+bash scripts/check.sh architecture origin/master
+bash scripts/check.sh fast origin/master
+# Equivalent architecture-only entrypoint:
+bash scripts/check-architecture.sh origin/master
+```
+
+This composes the existing layer, core-module, renderer-host, active-perf and
+migration/identity ratchets plus the crate-private export check. All `check.sh`
+modes run it before their existing work. Prerequisites: Bash, Git, Python 3.10+,
+Cargo using `rust-toolchain.toml`, and grep/sed/wc/tr/mktemp. Install the repository
+toolchain explicitly before offline use. Dependency inspection uses
+`cargo metadata --no-deps --format-version 1 --offline`; it does not compile or
+download dependencies. All declared **normal/build/dev** edges obey the existing
+layer policy, including aliases, workspace inheritance, optional and inactive
+target dependencies. Missing/malformed metadata is an error, not an empty graph.
+
+### Comparison and candidate
+
+The optional final argument is an existing commit/ref, defaulting to
+`origin/master`, printed and resolved once. There is no automatic fetch, merge-base
+selection or `HEAD`/`HEAD^` fallback. Missing refs and unavailable shallow history
+fail: obtain the intended history explicitly and rerun. Supply
+`"$(git merge-base origin/master HEAD)"` explicitly for a branch-point comparison,
+or `HEAD` deliberately for working-tree-only checks (also valid on a first commit).
+The latter does not check earlier commits on the branch.
+
+The candidate is the **current working tree**, not an index-only/pre-commit
+snapshot. Staged edits/additions, unstaged edits and nonignored untracked files are
+checked at their current contents. A staged version subsequently overwritten by
+an unstaged edit is not separately validated. Git-based scans exclude ignored
+untracked output, but include explicitly staged ignored files; existing stricter
+source-directory scans remain intact. A disposable intent-to-add Git index makes
+untracked files visible to existing structural scans. The real index, worktree,
+refs and history are untouched, and the temporary index is cleaned on success or
+failure. Run on a stable working tree, not concurrent editor writes.
+
+CI supplies the exact PR base or push-before SHA. Manual Architecture Ratchets
+runs require an explicit `base` input. Existing regression suites remain, with
+real-Cargo and common-entrypoint negative fixtures for staged/untracked violations,
+malformed manifests, missing bases, shallow history and index preservation.
+
+### Focused iteration and timing
+
+After the architecture gate, use the relevant existing test path:
+
+```sh
+# Shared semantics and authoring.
+cargo test -p noon-core -p noon --lib --all-features
+# Compiler/runtime.
+cargo test -p noon-compile -p noon-runtime --lib --all-features
+# Native and browser platform compilation.
+cargo check -p noon-native
+cargo check -p noon-web --target wasm32-unknown-unknown
+# Rust/Python adapter parity after building the browser package and installing
+# the browser-test dependencies used by CI.
+node scripts/cross-language-parity.mjs
+```
+
+These are explicit iteration commands, not change-based task selection. Use
+`bash scripts/check.sh fast BASE` for the normal local gate and
+`bash scripts/check.sh full BASE` when required before merge. Existing native/WASM
+feature, browser, parity, golden, differential, performance and platform workflows
+remain qualification requirements; focused passes do not replace them.
+
+Each architecture guard reports wall time. Run the regression suites with:
+
+```sh
+bash scripts/layer-dependency-ratchet.test.sh
+python3 scripts/test_check_entrypoint.py
+bash scripts/check-architecture.test.sh
+```
+
+The Python entrypoint suite uses test doubles only for ordering/failure propagation;
+the shell suite invokes real guards and real Cargo and reports representative
+clean/staged/untracked edit-to-result timings. Record checkout, toolchain, command,
+candidate and cache state when comparing development latency. Fixture times measure
+guard feedback, not Rust recompilation or a claimed speedup. Cold/warm compiler and
+mixed-change measurements remain #1265 work; no checks are omitted to claim faster CI.
+
 ## Completed-attempt timings
 
 Run the collector with Node 22+ and a GitHub token with Actions read access:
