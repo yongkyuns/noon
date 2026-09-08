@@ -1,25 +1,37 @@
-name: Mobile capture trace (temporary)
+name: Mobile pixel qualification (temporary)
 on:
   push:
     branches: [codex/mobile-review-iteration]
 permissions:
-  contents: read
+  contents: write
   actions: read
 concurrency:
   group: mobile-review-iteration
   cancel-in-progress: true
 jobs:
   qualify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: macos-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
-      - name: Preserve diagnostic instrumentation
-        run: cp mobile-capture-trace.py "$RUNNER_TEMP/mobile-capture-trace.py"
+      - name: Save reviewed capture correction
+        run: cp mobile-capture.patch "$RUNNER_TEMP/mobile-capture.patch"
       - uses: actions/checkout@v7
         with:
           ref: d857c51dcd79f12f221daa3daeca7608165154a4
-      - name: Use immutable integrated runtime
+      - name: Commit source-only capture correction
+        run: |
+          set -euo pipefail
+          git apply --index "$RUNNER_TEMP/mobile-capture.patch"
+          git diff --cached --check
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git commit -m 'Compare mobile rendered pixels with the complete empty canvas capture'
+          git push origin HEAD:refs/heads/codex/mobile-capture-candidate
+          mkdir -p mobile-review-evidence
+          git rev-parse HEAD > mobile-review-evidence/source-sha.txt
+          git archive HEAD | gzip > mobile-review-evidence/source.tar.gz
+      - name: Use immutable integrated runtime and regenerate Python assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -27,18 +39,21 @@ jobs:
           mkdir -p web/pkg
           cp -a "$RUNNER_TEMP/runtime/pkg/." web/pkg/
           node scripts/build-python-worker.mjs
-          python3 "$RUNNER_TEMP/mobile-capture-trace.py"
       - name: Install pinned WebKit
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install --with-deps webkit
-      - name: Preserve exact intermediate and final captures before assertions
+          npx playwright install webkit
+      - name: Require intermediate and final pixels plus public source contracts
         env:
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-review-evidence
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-review-evidence/first
+        run: node scripts/playground-main-thread-mobile-smoke.mjs
+      - name: Repeat with fresh browser contexts
+        env:
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-review-evidence/repeat
         run: node scripts/playground-main-thread-mobile-smoke.mjs
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mobile-capture-trace
+          name: mobile-capture-qualified
           path: mobile-review-evidence
           retention-days: 7
