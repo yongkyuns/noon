@@ -6,7 +6,7 @@ use crate::semantic_mobject::{
 use crate::Mobject;
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectProperty, SemanticStore,
+    SemanticObjectProperty, SemanticStore, SemanticVec3,
 };
 use std::{
     cell::RefCell,
@@ -107,7 +107,7 @@ impl FamilyTranslation {
 /// recentering, and resulting per-member translations are computed here.
 #[derive(Clone, Debug)]
 #[doc(hidden)]
-pub struct FamilyArrangePlan {
+pub(crate) struct FamilyArrangePlan {
     members: Vec<FamilyArrangeMember>,
     next_member: usize,
 }
@@ -188,10 +188,6 @@ impl FamilyArrangePlan {
         Ok(())
     }
 
-    pub fn member_count(&self) -> usize {
-        self.members.len()
-    }
-
     pub fn members(&self) -> impl Iterator<Item = (SemanticNodeId, &[SemanticNodeId])> {
         self.members
             .iter()
@@ -222,6 +218,39 @@ impl FamilyArrangePlan {
             self.accept_member_bounds(member, aggregate)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn transaction<F>(
+        &self,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        center: bool,
+        mut authored_translation: F,
+    ) -> Result<SemanticMutationTransaction, String>
+    where
+        F: FnMut(SemanticNodeId) -> Result<SemanticVec3, String>,
+    {
+        let shifts = self
+            .finish(direction_x, direction_y, buff, center)?
+            .into_iter()
+            .flat_map(FamilyTranslation::into_shifts);
+        // A leaf may occur under several direct members. Accumulate those
+        // ordered translations before publishing one final property per identity.
+        let mut translations = BTreeMap::new();
+        for (leaf, x, y) in shifts {
+            let translation = match translations.entry(leaf) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry.insert(authored_translation(leaf)?),
+            };
+            translation.x += x;
+            translation.y += y;
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        for (leaf, translation) in translations {
+            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+        }
+        Ok(transaction)
     }
 
     pub fn finish(
@@ -471,31 +500,12 @@ impl MobjectFamily {
         plan.observe_leaf_bounds(|leaf| {
             crate::Mobject::from_node(Rc::clone(&self.store), leaf)?.layout_bounds()
         })?;
-        let shifts = plan
-            .finish(direction_x, direction_y, buff, center)?
-            .into_iter()
-            .flat_map(FamilyTranslation::into_shifts)
-            .collect::<Vec<_>>();
-        // A leaf may occur under several direct members. Accumulate those
-        // ordered translations before publishing one final property per identity.
-        let mut translations = BTreeMap::new();
-        for (leaf, x, y) in shifts {
-            let translation = match translations.entry(leaf) {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => entry.insert(
-                    crate::Mobject::from_node(Rc::clone(&self.store), leaf)?
-                        .state()?
-                        .transform
-                        .translation,
-                ),
-            };
-            translation.x += x;
-            translation.y += y;
-        }
-        let mut transaction = SemanticMutationTransaction::new();
-        for (leaf, translation) in translations {
-            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
-        }
+        let transaction = plan.transaction(direction_x, direction_y, buff, center, |leaf| {
+            Ok(crate::Mobject::from_node(Rc::clone(&self.store), leaf)?
+                .state()?
+                .transform
+                .translation)
+        })?;
         transaction
             .apply(&mut self.store.borrow_mut())
             .map(|_| ())

@@ -26,6 +26,7 @@ const {
   createDirectOrdinaryCompositionSmokeRenderer,
   createDirectMixedScalarCompositionSmokeRenderer,
   createDirectFamilyTransformIndicateSmokeRenderer,
+  createDirectFamilyArrangementSmokeRenderer,
   createDirectDrawBorderThenFillSmokeRenderer,
   createDirectOrdinarySubsetDisplaySmokeRenderer,
   createDirectOrdinaryMembershipSmokeRenderer,
@@ -1324,6 +1325,41 @@ async function directFamilyTransformIndicateProof(expectedBackend) {
   }
 }
 
+async function directFamilyArrangementProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectFamilyArrangementSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    for (const [wallTime, first, second] of [
+      [0, [-2, 0], [1.3, 0]],
+      [500, [-3.65, 0.7], [-0.35, 0.7]],
+    ]) {
+      renderer.advanceDirectRealtime(wallTime);
+      await settleDirectPublication(renderer, wallTime);
+      const blue = await sampleRenderedColor(canvas, ...first);
+      const yellow = await sampleRenderedColor(canvas, ...second);
+      if (blue.blue <= blue.red + 30 || yellow.red <= yellow.blue + 30) {
+        throw new Error(`direct family arrangement missed shared members: ${JSON.stringify({wallTime, blue, yellow})}`);
+      }
+      samples.push({ wallTime, blue, yellow });
+    }
+    renderer.advanceDirectRealtime(1000);
+    const wake = await settleDirectPublication(renderer, 1000);
+    if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 1
+        || renderer.objectCount() !== 2 || wake.cadence !== "idle") {
+      throw new Error("direct family arrangement did not finish one coherent continuation");
+    }
+    return samples;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directDrawBorderThenFillProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectDrawBorderThenFillSmokeRenderer(canvas);
@@ -2386,6 +2422,7 @@ async function start() {
   metrics.timedComposition = await directTimedCompositionProof(expectedBackend);
   metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);
   metrics.familyTransformIndicate = await directFamilyTransformIndicateProof(expectedBackend);
+  metrics.familyArrangement = await directFamilyArrangementProof(expectedBackend);
   metrics.drawBorderThenFill = await directDrawBorderThenFillProof(expectedBackend);
   metrics.ordinaryMembership = await directOrdinaryMembershipProof(expectedBackend);
   metrics.ordinarySubsetDisplay = await directOrdinarySubsetDisplayProof(expectedBackend);

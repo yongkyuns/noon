@@ -36,8 +36,7 @@ pub use compact_value_authoring::semantic_object_state_from_compact;
 pub use execution_segment::*;
 pub use execution_session::*;
 pub use family_authoring::{
-    semantic_family_leaf_ids, FamilyArrangePlan, FamilyTranslation, MobjectFamily,
-    MobjectFamilyMember,
+    semantic_family_leaf_ids, FamilyTranslation, MobjectFamily, MobjectFamilyMember,
 };
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::*;
