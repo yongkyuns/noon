@@ -1,4 +1,4 @@
-name: Mobile pixel qualification (temporary)
+name: Mobile final qualification (temporary)
 on:
   push:
     branches: [codex/mobile-review-iteration]
@@ -12,30 +12,42 @@ jobs:
   qualify:
     runs-on: macos-latest
     timeout-minutes: 12
+    env:
+      BASE: 85cbf71bcea286e76a952c7fb9752b79030819f3
     steps:
       - uses: actions/checkout@v7
-      - name: Save reviewed capture correction
-        run: cp mobile-capture.patch "$RUNNER_TEMP/mobile-capture.patch"
+      - name: Save reviewed corrections
+        run: cp mobile-final-iteration.patch "$RUNNER_TEMP/mobile-final-iteration.patch"
       - uses: actions/checkout@v7
         with:
-          ref: d857c51dcd79f12f221daa3daeca7608165154a4
-      - name: Commit source-only capture correction
+          ref: 267877350617871e3cb1dfdd7541f4a1d96a7bd0
+          fetch-depth: 100
+      - name: Integrate current master and qualify source-only corrections
         run: |
           set -euo pipefail
-          git apply --index "$RUNNER_TEMP/mobile-capture.patch"
-          git diff --cached --check
           git config user.name 'Yongkyun Shin'
           git config user.email 'yongkyuns@gmail.com'
-          git commit -m 'Compare mobile rendered pixels with the complete empty canvas capture'
-          git push origin HEAD:refs/heads/codex/mobile-capture-candidate
+          git fetch origin "$BASE"
+          git merge --no-edit "$BASE"
+          git apply --index "$RUNNER_TEMP/mobile-final-iteration.patch"
+          git diff --cached --check
+          python3 -m unittest discover -s web/python -p 'test_*.py'
+          node --test web/python-worker-source.test.mjs web/authoring-client.test.mjs
+          bash scripts/architecture-ratchet.sh "$BASE"
+          git commit -m 'Qualify initial mobile playback and conservatively retain custom scene operations'
+          git push origin HEAD:refs/heads/codex/mobile-final-candidate
           mkdir -p mobile-review-evidence
           git rev-parse HEAD > mobile-review-evidence/source-sha.txt
           git archive HEAD | gzip > mobile-review-evidence/source.tar.gz
-      - name: Use immutable integrated runtime and regenerate Python assets
+      - name: Reuse exact-base compiled runtime, regenerate changed Python assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download 34175323387 --repo yongkyuns/noon --name playground-cross-browser-web-runtime --dir "$RUNNER_TEMP/runtime"
+          set -euo pipefail
+          gh api "repos/yongkyuns/noon/actions/runs?head_sha=$BASE&event=push&per_page=100" > mobile-review-evidence/base-runs.json
+          run=$(python3 -c 'import json; d=json.load(open("mobile-review-evidence/base-runs.json")); print(next(r["id"] for r in d["workflow_runs"] if r["name"] == "Playground cross-browser matrix"))')
+          gh run download "$run" --repo yongkyuns/noon --name playground-cross-browser-web-runtime --dir "$RUNNER_TEMP/runtime"
+          git diff --exit-code "$BASE" HEAD -- crates Cargo.toml Cargo.lock
           mkdir -p web/pkg
           cp -a "$RUNNER_TEMP/runtime/pkg/." web/pkg/
           node scripts/build-python-worker.mjs
@@ -43,17 +55,17 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install webkit
-      - name: Require intermediate and final pixels plus public source contracts
+      - name: Require actual autoplay, intermediate/final pixels and source contracts
         env:
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-review-evidence/first
         run: node scripts/playground-main-thread-mobile-smoke.mjs
-      - name: Repeat with fresh browser contexts
+      - name: Repeat in fresh browser contexts
         env:
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: mobile-review-evidence/repeat
         run: node scripts/playground-main-thread-mobile-smoke.mjs
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mobile-capture-qualified
+          name: mobile-final-qualified
           path: mobile-review-evidence
           retention-days: 7

@@ -1,0 +1,233 @@
+diff --git a/docs/mobile-web-rendering.md b/docs/mobile-web-rendering.md
+--- a/docs/mobile-web-rendering.md
++++ b/docs/mobile-web-rendering.md
+@@ -152,3 +152,31 @@ forced hosting and automatic hosting with JSPI deliberately absent, requires a
+ visible intermediate SquareToCircle frame and the final FadeOut removal at the
+ actual authored time, and retains Text, edit/rerun and resize coverage. Browser
+ emulation does not establish physical-device iOS qualification.
++
++
++### Review hardening and qualification
++
++Portable execution admits only the ordinary `play`, `wait`, `add`, `remove` and
++`clear` methods, checked on the instance after `setup()` without invoking authored
++properties. Instance/class overrides, custom attribute lookup, method replacement
++and explicit `__dict__` access retain the original synchronous path. In particular,
++an overridden membership method must not hide an uncompiled suspension barrier.
++
++Static, explicitly async and export-only input bypasses Python AST preparation.
++Eligible synchronous constructs still pay a one-time source preparation cost; this
++is not a claim of literally identical startup cost for every source size. No
++source analysis or new Python work is added to the renderer's per-frame loop.
++
++The mobile test exercises the real initial autoplay. It briefly holds the worker
++module's network response to capture an empty canvas, then releases the unchanged
++worker and observes intermediate rendering. This avoids mistaking a replacement's
++blocked metrics request (old-context retirement waits behind the new construct)
++for missing intermediate frames. Pixel comparisons use the complete empty canvas,
++including fractional clipping edges, rather than assuming its top-left pixel is
++the renderer's background color. Existing pixel and authored-time thresholds stay
++unchanged. Test artifacts retain the empty, intermediate and final captures.
++
++The same browser test also runs setup-installed overrides, property and dynamic
++lookup, and explicit async source through the public editor and Run path. The
++source compiler's unit tests cover ordering, cancellation, globals/defaults/closure
++preservation, unsupported source rejection and the no-AST fast paths.
+diff --git a/scripts/playground-main-thread-mobile-smoke.mjs b/scripts/playground-main-thread-mobile-smoke.mjs
+--- a/scripts/playground-main-thread-mobile-smoke.mjs
++++ b/scripts/playground-main-thread-mobile-smoke.mjs
+@@ -95,6 +95,7 @@ function changedPixels(bytes, backgroundBytes) {
+ let browser = null;
+ let activePage = null;
+ let activeErrors = [];
++let releasePendingStartup = null;
+ try {
+   await waitForServer();
+   browser = await webkit.launch({ headless: true });
+@@ -104,15 +105,25 @@ try {
+     { name: "automatic-no-jspi", host: null, disableJspi: true },
+   ]) {
+     const context = await browser.newContext({ ...devices["iPhone 13"] });
+-    if (variant.disableJspi) {
+-      await context.route("**/python-worker.js", async (route) => {
+-        const response = await route.fetch();
+-        await route.fulfill({ response, body:
+-          "delete WebAssembly.promising; delete WebAssembly.Suspending;\n" +
+-          "if (typeof WebAssembly.promising !== 'undefined' || typeof WebAssembly.Suspending !== 'undefined') throw new Error('JSPI test precondition failed');\n" + await response.text(),
+-        });
++    // Hold only the worker module response while recording the empty canvas.
++    // This preserves the real startup autoplay while making its first execution
++    // observable; clicking Run after preload would measure a replacement whose
++    // metrics wait for the previous Python context to retire.
++    let releaseStartup;
++    const startup = new Promise((resolve) => { releaseStartup = resolve; });
++    releasePendingStartup = releaseStartup;
++    await context.route("**/python-worker.js", async (route) => {
++      const response = await route.fetch();
++      await startup;
++      if (!variant.disableJspi) {
++        await route.fulfill({ response });
++        return;
++      }
++      await route.fulfill({ response, body:
++        "delete WebAssembly.promising; delete WebAssembly.Suspending;\n" +
++        "if (typeof WebAssembly.promising !== 'undefined' || typeof WebAssembly.Suspending !== 'undefined') throw new Error('JSPI test precondition failed');\n" + await response.text(),
+       });
+-    }
++    });
+     const page = await context.newPage();
+     activePage = page;
+     const pageErrors = [];
+@@ -125,7 +136,7 @@ try {
+ 
+     await page.goto(
+       `${baseUrl}/web/index.html?example=parity-square-to-circle${variant.host ? `&renderHost=${variant.host}` : ""}`,
+-      { waitUntil: "load" },
++      { waitUntil: "domcontentloaded" },
+     );
+     // Neutralize only CSS chrome, keeping border widths and canvas dimensions.
+     // Otherwise a rounded decorative border is miscounted as engine geometry.
+@@ -134,8 +145,6 @@ try {
+       "box-shadow: none !important; background: #000 !important; }",
+     });
+     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+-    await waitForIdle(page);
+-
+     await page.locator("#scene").scrollIntoViewIfNeeded();
+     // Capture the empty canvas at the same bounds. Fractional CSS clipping can
+     // include an edge pixel of the surrounding pane; it is not the clear color.
+@@ -143,14 +152,9 @@ try {
+     const background = await page.locator("#scene").screenshot();
+     await writeFile(path.join(artifactDir, `${variant.name}-background.png`), background);
+ 
+-    // Observe the first execution, not a metrics call blocked by retirement of a
+-    // previous Python context. Context retirement is serialized behind an active
+-    // construct, even though its replacement renderer is already presenting.
+-    // The unmodified SquareToCircle must visibly animate and then FadeOut.
+-    await page.evaluate(() => {
+-      window.__mobileRun = window.__noonExampleGallery.run();
+-      window.__mobileRun.catch(() => {});
+-    });
++    // Release the unchanged worker and observe automatic initial playback.
++    releaseStartup();
++    releasePendingStartup = null;
+     let metrics;
+     const samples = [];
+     let observation = null;
+@@ -183,7 +187,7 @@ try {
+     const intermediate = await page.locator("#scene").screenshot();
+     await writeFile(path.join(artifactDir, `${variant.name}-intermediate.png`), intermediate);
+     assert.ok(changedPixels(intermediate, background) > 20, "mobile intermediate frame is blank");
+-    await page.evaluate(() => window.__mobileRun);
++    await waitForIdle(page);
+     await assertApplied(page, "parity-square-to-circle");
+     const final = await page.locator("#scene").screenshot();
+     await writeFile(path.join(artifactDir, `${variant.name}-final.png`), final);
+@@ -326,6 +330,7 @@ class ExplicitAsync(Scene):
+   await activePage?.screenshot({ path: path.join(artifactDir, "failure.png"), timeout: 5_000 }).catch(() => {});
+   throw error;
+ } finally {
++  releasePendingStartup?.();
+   await browser?.close();
+   server.kill("SIGTERM");
+ }
+diff --git a/web/python/_manim_canonical_scene.py b/web/python/_manim_canonical_scene.py
+--- a/web/python/_manim_canonical_scene.py
++++ b/web/python/_manim_canonical_scene.py
+@@ -587,7 +587,10 @@ async def execute_construct(
+ 
+                 # Inspect the instance after setup(), without executing getters.
+                 # Overrides and dynamic lookup retain the original call path.
+-                if has_portable_scene_methods(scene, _play, _canonical_wait):
++                if has_portable_scene_methods(
++                    scene, play=_play, wait=_canonical_wait,
++                    add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
++                ):
+                     portable_construct = bind_portable_construct(
+                         scene.construct, portable_constructs
+                     )
+diff --git a/web/python/_manim_source_execution.py b/web/python/_manim_source_execution.py
+--- a/web/python/_manim_source_execution.py
++++ b/web/python/_manim_source_execution.py
+@@ -60,6 +60,9 @@ class _ConstructBody(ast.NodeTransformer):
+ 
+     def visit_Attribute(self, node: ast.Attribute):
+         if isinstance(node.value, ast.Name) and node.value.id == self.receiver:
++            if (node.attr.startswith("__") or
++                    (node.attr in _SCENE_CALLS and isinstance(node.ctx, (ast.Store, ast.Del)))):
++                self.unsupported = True
+             if node.attr in {"play", "wait"}:
+                 # Aliasing, storing, passing, or using a barrier's return value
+                 # requires the original synchronous/explicit async execution.
+@@ -188,7 +191,7 @@ def bind_portable_construct(
+     return MethodType(portable, method.__self__)
+ 
+ 
+-def has_portable_scene_methods(scene: object, play: FunctionType, wait: FunctionType) -> bool:
++def has_portable_scene_methods(scene: object, **methods: FunctionType) -> bool:
+     """Admit only ordinary method lookup, without invoking authored descriptors.
+ 
+     Class-only checks miss instance overrides installed by setup(). Dynamic
+@@ -196,6 +199,6 @@ def has_portable_scene_methods(scene: object, play: FunctionType, wait: Function
+     """
+     return (
+         type(scene).__getattribute__ is object.__getattribute__
+-        and inspect.getattr_static(scene, "play", None) is play
+-        and inspect.getattr_static(scene, "wait", None) is wait
++        and all(inspect.getattr_static(scene, name, None) is method
++                for name, method in methods.items())
+     )
+diff --git a/web/python/test_manim_source_execution.py b/web/python/test_manim_source_execution.py
+--- a/web/python/test_manim_source_execution.py
++++ b/web/python/test_manim_source_execution.py
+@@ -133,6 +133,9 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
+             "self.play(1)\nself.helper()",
+             "self.play(1)\nsuper().construct()",
+             "self.play(1)\nself.play = replacement",
++            "self.play(1)\nself.add = replacement",
++            "self.play(1)\ndel self.clear",
++            "self.play(1)\nself.__dict__['wait'] = replacement",
+             "self.play(1)\nyield 2",
+             "self.play(1)\nf = lambda: self.wait(1)",
+             "self.play(1)\ndef helper():\n    self.wait(1)",
+@@ -184,16 +187,16 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
+             def play(self, *args): pass
+             def wait(self, *args): pass
+         scene = Base()
+-        self.assertTrue(has_portable_scene_methods(scene, Base.play, Base.wait))
++        self.assertTrue(has_portable_scene_methods(scene, play=Base.play, wait=Base.wait))
+         for name in ("play", "wait"):
+             for replacement in (lambda *args: None, getattr(Base(), name)):
+                 with self.subTest(name=name, replacement=replacement):
+                     scene = Base()
+                     setattr(scene, name, replacement)
+-                    self.assertFalse(has_portable_scene_methods(scene, Base.play, Base.wait))
++                    self.assertFalse(has_portable_scene_methods(scene, play=Base.play, wait=Base.wait))
+         class Override(Base):
+             def wait(self, *args): pass
+-        self.assertFalse(has_portable_scene_methods(Override(), Base.play, Base.wait))
++        self.assertFalse(has_portable_scene_methods(Override(), play=Base.play, wait=Base.wait))
+ 
+     def test_admission_does_not_invoke_descriptors_or_dynamic_lookup(self):
+         effects = []
+@@ -210,5 +213,19 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
+                 effects.append(name)
+                 return super().__getattribute__(name)
+         for scene in (Descriptor(), Dynamic()):
+-            self.assertFalse(has_portable_scene_methods(scene, Base.play, Base.wait))
++            self.assertFalse(has_portable_scene_methods(scene, play=Base.play, wait=Base.wait))
+         self.assertEqual(effects, [])
++
++    def test_membership_overrides_cannot_hide_uncompiled_barriers(self):
++        class Base:
++            def play(self, *args): pass
++            def wait(self, *args): pass
++            def add(self, *args): pass
++            def remove(self, *args): pass
++            def clear(self, *args): pass
++        methods = {name: getattr(Base, name) for name in ("play", "wait", "add", "remove", "clear")}
++        self.assertTrue(has_portable_scene_methods(Base(), **methods))
++        for name in ("add", "remove", "clear"):
++            with self.subTest(name=name):
++                overridden = type("Example", (Base,), {name: lambda self: self.wait(1)})
++                self.assertFalse(has_portable_scene_methods(overridden(), **methods))
