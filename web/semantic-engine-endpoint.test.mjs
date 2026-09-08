@@ -601,45 +601,54 @@ test("one external sample crosses continuation segments with the returned player
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("external sampling acknowledges source completion after a clean segment boundary", { timeout: 2_000 }, async () => {
-  let endpoint;
-  let stage = 0;
-  const f = fixture("transferable", null, {
-    generation: 33,
-    onComplete: () => {
-      stage += 1;
-      if (stage === 1) endpoint.startContinuation(33);
-      else void endpoint.publishContinuationResult(33);
-    },
-  }, { pacing: "external_samples" });
-  f.render.port2.on("message", (message) => {
-    if (message.type !== "execution_delta") return;
-    for (const type of ["execution_ack", "execution_presented"]) {
-      f.render.port2.postMessage({ type, session: message.session, sequence: message.sequence });
-    }
+for (const [time, stopAtSourceCompletion] of [[2, false], [3, true], [3, false]]) {
+  test(`external sampling completion: time=${time}, stop=${stopAtSourceCompletion}`, { timeout: 2_000 }, async () => {
+    let endpoint;
+    let stage = 0;
+    const f = fixture("transferable", null, {
+      generation: 33,
+      onError: () => {},
+      onComplete: () => {
+        stage += 1;
+        if (stage === 1) endpoint.startContinuation(33);
+        else void endpoint.publishContinuationResult(33);
+      },
+    }, { pacing: "external_samples" });
+    f.render.port2.on("message", (message) => {
+      if (message.type !== "execution_delta") return;
+      for (const type of ["execution_ack", "execution_presented"]) {
+        f.render.port2.postMessage({ type, session: message.session, sequence: message.sequence });
+      }
+    });
+    f.player.driveLiveSegmentToAuthoredTime = () => {
+      f.player.seekDeltaJson(stage + 1);
+      return { callbackPhaseJson: null, reachedEndpoint: true };
+    };
+    // No visual change at the continuation boundary is valid and is not EOF.
+    f.player.drainDeltaJson = () => null;
+    try {
+      const ready = next(f.control.port2);
+      endpoint = await f.attach();
+      await ready;
+      const result = await request(f.control.port2, "sample_to_authored_time", 64, { time, stopAtSourceCompletion });
+      if (time > 2 && !stopAtSourceCompletion) {
+        assert.equal(result.type, "error");
+        assert.match(result.message, /before external sample/);
+        return;
+      }
+      assert.equal(result.sourceCompleted, true);
+      assert.equal(result.type, "sample_to_authored_time");
+      assert.equal(result.time, 2);
+      assert.equal(result.playing, false);
+      assert.equal(f.stats().completedSegments, 2);
+      assert.equal(f.stats().resumed, 1);
+      const beforeDebug = f.stats();
+      const debug = await request(f.control.port2, "debug_frame", 65);
+      assert.deepEqual(debug.debugFrame, { time: 2, source: "returned" });
+      assert.deepEqual(f.stats(), beforeDebug, "completed-source diagnostics use the returned owner");
+    } finally { endpoint?.stop(); f.close(); }
   });
-  f.player.driveLiveSegmentToAuthoredTime = () => {
-    f.player.seekDeltaJson(stage + 1);
-    return { callbackPhaseJson: null, reachedEndpoint: true };
-  };
-  // No visual change at the continuation boundary is valid and is not EOF.
-  f.player.drainDeltaJson = () => null;
-  try {
-    const ready = next(f.control.port2);
-    endpoint = await f.attach();
-    await ready;
-    const result = await request(f.control.port2, "sample_to_authored_time", 64, { time: 2 });
-    assert.equal(result.type, "sample_to_authored_time");
-    assert.equal(result.time, 2);
-    assert.equal(result.playing, false);
-    assert.equal(f.stats().completedSegments, 2);
-    assert.equal(f.stats().resumed, 1);
-    const beforeDebug = f.stats();
-    const debug = await request(f.control.port2, "debug_frame", 65);
-    assert.deepEqual(debug.debugFrame, { time: 2, source: "returned" });
-    assert.deepEqual(f.stats(), beforeDebug, "completed-source diagnostics use the returned owner");
-  } finally { endpoint?.stop(); f.close(); }
-});
+}
 
 test("continuation sends coherent intermediate publications before its endpoint", async () => {
   const f = fixture("transferable", null, {
