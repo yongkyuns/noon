@@ -156,18 +156,23 @@ const FILL_AND_COMPOSITE_OPACITY: HostCallbackId = HostCallbackId::new(9);
 const MOVE_MATCH_DOT: HostCallbackId = HostCallbackId::new(10);
 const MATCH_LINE_ENDPOINTS: HostCallbackId = HostCallbackId::new(11);
 
-fn ordered_affine_callbacks() -> Result<RustHostCallbackTable, Box<dyn Error>> {
+fn ordered_affine_callbacks(
+    fill_opacity: Option<f32>,
+) -> Result<RustHostCallbackTable, Box<dyn Error>> {
     let mut callbacks = RustHostCallbackTable::new();
     callbacks.insert(SET_Y, |context| {
         let mut transform = context.target_state().transform;
         transform.translation.y = 1.0;
         context.set_target_transform(transform)
     })?;
-    callbacks.insert(SET_OPACITY, |context| {
+    callbacks.insert(SET_OPACITY, move |context| {
         let prior_y = context.target_state().transform.translation.y;
         let mut style = context.target_state().style;
         // The visible result depends on reading SET_Y from this same phase overlay.
         style.opacity = if prior_y == 1.0 { 0.5 } else { 0.0 };
+        if let (Some(fill), Some(alpha)) = (style.fill.as_mut(), fill_opacity) {
+            fill.alpha = alpha;
+        }
         context.set_target_style(style)
     })?;
     Ok(callbacks)
@@ -202,7 +207,7 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
             .rate_func(RateFunction::Linear),
     )?;
 
-    let mut callbacks = ordered_affine_callbacks()?;
+    let mut callbacks = ordered_affine_callbacks(None)?;
     callbacks.insert(ACCUMULATE_DT, |context| {
         let mut transform = context.target_state().transform;
         transform.translation.y += context.delta_time() as f32;
@@ -1089,8 +1094,27 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 let paint = live
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(paint.fill_opacity(), 1.0);
+                assert_eq!(paint.fill_opacity(), 0.75);
                 assert_eq!(paint.stroke_opacity(), 1.0);
+                // Captured callback alpha must survive RGB edits; absolute
+                // opacity edits must not multiply its intrinsic alpha again.
+                let copied = live
+                    .target_editor(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                live.set_color(&copied, 1.0, 0.0, 0.0, 1.0)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(copied.fill_opacity()?, 0.75);
+                live.set_fill_opacity(&copied, 0.5)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(copied.fill_opacity()?, 0.5);
+                live.set_stroke_opacity(&copied, 0.25)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(copied.stroke_opacity()?, 0.25);
+                live.set_opacity(&copied, 0.4)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(copied.fill_opacity()?, 0.4);
+                assert_eq!(copied.stroke_opacity()?, 0.4);
+                assert_eq!(copied.state()?.style.object_opacity, 0.5);
                 let layout = live
                     .effective_family_layout(&self.family)
                     .map_err(|error| error.to_string())?;
@@ -1148,7 +1172,7 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
 ///
 /// The blue circle moves to `(2, 0)` over one second. At each compiler-selected
 /// phase, callback A moves the effective row to `y=1`; callback B observes A's
-/// write and sets object opacity to `0.5`. The returned callable table owns only
+/// write, sets fill alpha to `0.75`, and sets object opacity to `0.5`. The returned callable table owns only
 /// opaque Rust functions; the program/session retains schedule and timeline state.
 pub fn ordinary_callback_continuation_program() -> Result<
     (
@@ -1167,7 +1191,7 @@ pub fn ordinary_callback_continuation_program() -> Result<
         .family(&[(&circle).into()])
         .map_err(|error| error.to_string())?;
 
-    let callbacks = ordered_affine_callbacks().map_err(|error| error.to_string())?;
+    let callbacks = ordered_affine_callbacks(Some(0.75)).map_err(|error| error.to_string())?;
     {
         let mut store = scene.store().borrow_mut();
         callbacks

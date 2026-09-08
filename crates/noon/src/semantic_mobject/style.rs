@@ -44,6 +44,30 @@ pub(crate) trait PaintStyleEdit {
     fn set_fill_opacity(&mut self, opacity: f64);
 }
 
+// A captured effective solid paint can carry alpha in its color as well as
+// its semantic multiplier. Preserve their product on RGB edits; absolute
+// Manim opacity writes normalize the intrinsic alpha before setting it.
+fn replace_paint_color(
+    paint: &mut Option<SemanticPaint>,
+    opacity: &mut f64,
+    color: Color,
+    opacity_when_enabled: f64,
+) {
+    *opacity = match paint {
+        None => opacity_when_enabled,
+        Some(SemanticPaint::Solid(previous)) => f64::from(previous.alpha) * *opacity,
+        Some(SemanticPaint::Resource(_)) => *opacity,
+    };
+    *paint = Some(SemanticPaint::Solid(color));
+}
+
+fn set_paint_opacity(paint: &mut Option<SemanticPaint>, multiplier: &mut f64, opacity: f64) {
+    if let SemanticPaint::Solid(color) = paint.get_or_insert(SemanticPaint::Solid(Color::WHITE)) {
+        color.alpha = 1.0;
+    }
+    *multiplier = opacity;
+}
+
 impl PaintStyleEdit for SemanticStyle {
     fn has_fill(&self) -> bool {
         self.fill.is_some()
@@ -54,24 +78,25 @@ impl PaintStyleEdit for SemanticStyle {
     }
 
     fn set_fill_color(&mut self, color: Color, opacity_when_enabled: f64) {
-        if self.fill.is_none() {
-            self.fill_opacity = opacity_when_enabled;
-        }
-        self.fill = Some(SemanticPaint::Solid(color));
+        replace_paint_color(
+            &mut self.fill,
+            &mut self.fill_opacity,
+            color,
+            opacity_when_enabled,
+        );
     }
 
     fn set_stroke_color(&mut self, color: Color, opacity_when_enabled: f64) {
-        if self.stroke.is_none() {
-            self.stroke_opacity = opacity_when_enabled;
-        }
-        self.stroke = Some(SemanticPaint::Solid(color));
+        replace_paint_color(
+            &mut self.stroke,
+            &mut self.stroke_opacity,
+            color,
+            opacity_when_enabled,
+        );
     }
 
     fn set_fill_opacity(&mut self, opacity: f64) {
-        if self.fill.is_none() {
-            self.fill = Some(SemanticPaint::Solid(Color::WHITE));
-        }
-        self.fill_opacity = opacity;
+        set_paint_opacity(&mut self.fill, &mut self.fill_opacity, opacity);
     }
 }
 
@@ -177,10 +202,10 @@ pub(crate) fn edit_fill<S: PaintStyleEdit>(
 pub(crate) fn edit_manim_opacity(style: &mut SemanticStyle, opacity: f64) -> Result<(), String> {
     let opacity = unit_opacity("opacity", opacity)?;
     if style.fill.is_some() {
-        style.fill_opacity = opacity;
+        set_paint_opacity(&mut style.fill, &mut style.fill_opacity, opacity);
     }
     if style.stroke.is_some() {
-        style.stroke_opacity = opacity;
+        set_paint_opacity(&mut style.stroke, &mut style.stroke_opacity, opacity);
     }
     Ok(())
 }
@@ -204,10 +229,7 @@ pub(crate) fn edit_stroke_color<S: PaintStyleEdit>(
 
 pub(crate) fn edit_stroke_opacity(style: &mut SemanticStyle, opacity: f64) -> Result<(), String> {
     let opacity = unit_opacity("stroke opacity", opacity)?;
-    if style.stroke.is_none() {
-        style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
-    }
-    style.stroke_opacity = opacity;
+    set_paint_opacity(&mut style.stroke, &mut style.stroke_opacity, opacity);
     Ok(())
 }
 
@@ -376,6 +398,89 @@ impl Mobject {
 #[cfg(test)]
 mod opacity_tests {
     use super::*;
+
+    #[test]
+    fn authored_paint_edits_agree_with_effective_edits_for_intrinsic_alpha() {
+        let mut authored = SemanticStyle {
+            fill: Some(SemanticPaint::Solid(Color::rgba(0.1, 0.2, 0.3, 0.5))),
+            fill_opacity: 0.25,
+            stroke: Some(SemanticPaint::Solid(Color::rgba(0.4, 0.5, 0.6, 0.0))),
+            stroke_opacity: 0.75,
+            object_opacity: 0.3,
+            ..SemanticStyle::default()
+        };
+        let mut absolute = authored.clone();
+        edit_fill_opacity(&mut absolute, 0.6).unwrap();
+        edit_stroke_opacity(&mut absolute, 0.4).unwrap();
+        assert_eq!(
+            manim_paint_opacity(absolute.fill.as_ref(), absolute.fill_opacity).unwrap(),
+            0.6
+        );
+        assert_eq!(
+            manim_paint_opacity(absolute.stroke.as_ref(), absolute.stroke_opacity).unwrap(),
+            0.4
+        );
+        let mut combined = authored.clone();
+        edit_manim_opacity(&mut combined, 0.2).unwrap();
+        assert_eq!(
+            manim_paint_opacity(combined.fill.as_ref(), combined.fill_opacity).unwrap(),
+            0.2
+        );
+        assert_eq!(
+            manim_paint_opacity(combined.stroke.as_ref(), combined.stroke_opacity).unwrap(),
+            0.2
+        );
+        let mut effective = Style {
+            fill: solid_color_with_opacity(authored.fill.as_ref(), authored.fill_opacity),
+            stroke: solid_color_with_opacity(authored.stroke.as_ref(), authored.stroke_opacity),
+            opacity: authored.object_opacity as f32,
+            ..Style::default()
+        };
+        edit_color(&mut authored, 0.8, 0.4, 0.2, 0.9).unwrap();
+        edit_color(&mut effective, 0.8, 0.4, 0.2, 0.9).unwrap();
+        assert_eq!(
+            solid_color_with_opacity(authored.fill.as_ref(), authored.fill_opacity),
+            effective.fill
+        );
+        assert_eq!(
+            solid_color_with_opacity(authored.stroke.as_ref(), authored.stroke_opacity),
+            effective.stroke
+        );
+        assert_eq!(authored.fill_opacity, 0.125);
+        assert_eq!(authored.stroke_opacity, 0.0);
+
+        edit_fill_opacity(&mut authored, 0.6).unwrap();
+        edit_fill_opacity(&mut effective, 0.6).unwrap();
+        assert_eq!(
+            solid_color_with_opacity(authored.fill.as_ref(), authored.fill_opacity),
+            effective.fill
+        );
+        edit_stroke_opacity(&mut authored, 0.4).unwrap();
+        assert_eq!(
+            manim_paint_opacity(authored.stroke.as_ref(), authored.stroke_opacity).unwrap(),
+            0.4
+        );
+        edit_manim_opacity(&mut authored, 0.2).unwrap();
+        assert_eq!(
+            manim_paint_opacity(authored.fill.as_ref(), authored.fill_opacity).unwrap(),
+            0.2
+        );
+        assert_eq!(
+            manim_paint_opacity(authored.stroke.as_ref(), authored.stroke_opacity).unwrap(),
+            0.2
+        );
+        assert_eq!(authored.object_opacity, 0.3);
+
+        let mut resource = SemanticStyle {
+            fill: Some(SemanticPaint::Resource(7)),
+            stroke: None,
+            ..SemanticStyle::default()
+        };
+        edit_manim_opacity(&mut resource, 0.4).unwrap();
+        assert_eq!(resource.fill, Some(SemanticPaint::Resource(7)));
+        assert_eq!(resource.fill_opacity, 0.4);
+        assert_eq!(resource.stroke, None);
+    }
 
     #[test]
     fn paint_opacity_observes_intrinsic_alpha_and_disabled_paints() {
