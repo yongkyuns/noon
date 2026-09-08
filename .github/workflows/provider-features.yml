@@ -1,0 +1,113 @@
+name: Provider feature isolation
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'crates/**/Cargo.toml'
+      - 'crates/noon/src/**'
+      - 'crates/noon-typst/**'
+      - 'crates/noon-text-native/**'
+      - 'fixtures/provider-consumer/**'
+      - 'scripts/provider-features.py'
+      - 'scripts/provider_features_test.py'
+      - '.github/workflows/provider-features.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-features-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: '2'
+  NOON_PROVIDER_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+
+jobs:
+  consumers:
+    name: ${{ matrix.config }} / ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [minimal, native-text, native-bundled, typst, product]
+        target: [x86_64-unknown-linux-gnu, wasm32-unknown-unknown]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the repository Rust toolchain and host test fonts
+        run: |
+          rustup show
+          rustup target add wasm32-unknown-unknown
+          rustup component add rustfmt clippy
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-dejavu-core
+      - name: Cache registry sources only (never measured compiler output)
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: provider-sources-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: provider-sources-${{ runner.os }}-
+      - name: Test graph assertions and fixture formatting
+        run: |
+          python3 scripts/provider_features_test.py
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml -- --check
+      - name: Qualify isolated consumer and measure cold/warm geometry builds
+        run: >-
+          python3 scripts/provider-features.py
+          --config '${{ matrix.config }}'
+          --target '${{ matrix.target }}'
+          --output '${{ runner.temp }}/provider-results'
+      - name: Publish evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: provider-${{ matrix.config }}-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/provider-results/*.json
+            ${{ runner.temp }}/provider-results/*.txt
+            ${{ runner.temp }}/provider-results/Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+  baseline:
+    name: Base geometry costs / ${{ matrix.target }}
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, wasm32-unknown-unknown]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .provider-baseline
+      - name: Install the repository Rust toolchain
+        run: |
+          rustup show
+          rustup target add wasm32-unknown-unknown
+      - name: Measure identical defaults-disabled geometry on PR base
+        run: >-
+          python3 scripts/provider-features.py
+          --config minimal --baseline .provider-baseline
+          --target '${{ matrix.target }}'
+          --output '${{ runner.temp }}/provider-baseline-results'
+      - name: Publish baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: provider-baseline-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/provider-baseline-results/*.json
+            ${{ runner.temp }}/provider-baseline-results/*.txt
+            ${{ runner.temp }}/provider-baseline-results/Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
