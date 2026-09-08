@@ -52,18 +52,13 @@ assert.doesNotMatch(
 );
 assert.match(
   authoringExecutionClient,
-  /player\.switchToRetainedCanonical\(/,
-  "legacy to retained authoring must switch the persistent execution owner in place using canonical SceneSpec",
+  /this\.#player\.switchToSemanticExecution\(/,
+  "authoring reruns must attach shared sessions through the persistent execution owner",
 );
-assert.match(
+assert.doesNotMatch(
   authoringExecutionClient,
-  /player\.rebuildRetainedCanonical\(/,
-  "retained authoring edits must rebuild on the persistent execution owner using canonical SceneSpec",
-);
-assert.match(
-  authoringExecutionClient,
-  /player\.switchToLegacy\(/,
-  "retained to legacy authoring must switch the persistent execution owner in place",
+  /switchToLegacy|switchToRetainedCanonical|rebuildRetainedCanonical/,
+  "shared authoring must not regain migration engine dispatch",
 );
 
 assert.match(

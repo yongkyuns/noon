@@ -93,8 +93,6 @@ globalThis.MessageChannel = FakeMessageChannel;
 globalThis.Worker = FakeWorker;
 globalThis.window = { devicePixelRatio: 1 };
 
-const { AuthoringExecutionClient, AUTHORING_EXECUTION_LEGACY } =
-  await import("./authoring-execution-client.js");
 const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
 
 const SCENE_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
@@ -212,46 +210,4 @@ test("canonical retained startup failure rolls back transferred canvas and retry
   const ready = await retry;
   assert.equal(ready.session, 2, "failed retained startup generation must not be reused");
   client.terminate();
-});
-
-test("authoring router adopts a low-level replacement after failed initial start", async () => {
-  const original = new FakeCanvas();
-  const router = new AuthoringExecutionClient(original);
-  FakeWorker.failNextName = "noon-render";
-
-  await assert.rejects(
-    router.start(SCENE_JSON, { transportMode: "transferable" }),
-    /noon-render constructor failed/,
-  );
-  assert.notEqual(router.canvas, original);
-  assert.equal(original.replacement, router.canvas);
-
-  const retryOffset = FakeWorker.instances.length;
-  const retry = router.start(SCENE_JSON, { transportMode: "transferable" });
-  emitLegacyReady(retryOffset);
-  await retry;
-  assert.equal(router.mode, AUTHORING_EXECUTION_LEGACY);
-  router.terminate();
-});
-
-test("authoring restart remains retryable after transient startup failure", async () => {
-  const router = new AuthoringExecutionClient(new FakeCanvas());
-  const initialOffset = FakeWorker.instances.length;
-  const initial = router.start(SCENE_JSON, { transportMode: "transferable" });
-  emitLegacyReady(initialOffset);
-  await initial;
-
-  const beforeFailure = router.canvas;
-  FakeWorker.failNextName = "noon-render";
-  await assert.rejects(router.restart(), /noon-render constructor failed/);
-  assert.notEqual(router.canvas, beforeFailure);
-  assert.equal(router.canvas.transferred, false);
-
-  const retryOffset = FakeWorker.instances.length;
-  const retry = router.restart();
-  emitLegacyReady(retryOffset);
-  const ready = await retry;
-  assert.equal(ready.session, 3, "restart retry must advance past the failed generation");
-  assert.equal(router.mode, AUTHORING_EXECUTION_LEGACY);
-  router.terminate();
 });
