@@ -11,6 +11,11 @@ const DEFAULT_LIMITS = Object.freeze({
 const BUILD_KEYS = ["engineRevision", "wasmSha256", "workerSha256", "buildId"];
 const FRAME_KEYS = ["png", "requestedTime", "publishedTime", "backend", "sceneRevision", "frameRevision"];
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+// Buffer instances can shadow .buffer/.length/.byteLength with data or getters.
+// Read native slots for backing-store rejection, quota checks and allocation.
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const typedArrayBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer").get;
+const typedArrayByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength").get;
 
 export class ArtifactError extends Error {
   constructor(code, message) { super(message); this.name = "ArtifactError"; this.code = code; }
@@ -90,7 +95,7 @@ function pngDimensions(png, limits) {
 function copyBytes(bytes) {
   // Buffer.from(smallBuffer) can use a shared pool. Returning its .buffer could
   // expose another stored frame's allocation. Use independent ArrayBuffers.
-  const copy = Buffer.alloc(bytes.length);
+  const copy = Buffer.alloc(typedArrayByteLength.call(bytes));
   copy.set(bytes);
   return copy;
 }
@@ -190,13 +195,15 @@ export class FrameArtifactStore {
       frameRevision: revision(frame.frameRevision, "frameRevision"),
     });
     const png = frame.png;
-    check(Buffer.isBuffer(png) && !types.isSharedArrayBuffer(png.buffer), "INVALID_INPUT", "png must be an unshared Buffer");
+    check(types.isUint8Array(png) && Buffer.isBuffer(png) &&
+      !types.isSharedArrayBuffer(typedArrayBuffer.call(png)), "INVALID_INPUT", "png must be an unshared Buffer");
     const now = this.#now();
     this.#active(scope);
-    check(png.length > 0 && png.length <= this.#limits.maxArtifactBytes, "PAYLOAD_LIMIT", "frame exceeds encoded byte limit");
+    const byteLength = typedArrayByteLength.call(png);
+    check(byteLength > 0 && byteLength <= this.#limits.maxArtifactBytes, "PAYLOAD_LIMIT", "frame exceeds encoded byte limit");
     check(scope.frames.size < this.#limits.maxFramesPerScope && this.#count < this.#limits.maxArtifacts,
       "FRAME_LIMIT", "retained frame count limit reached");
-    check(png.length <= this.#limits.maxTotalBytes - this.#bytes, "STORAGE_LIMIT", "retained byte limit reached");
+    check(byteLength <= this.#limits.maxTotalBytes - this.#bytes, "STORAGE_LIMIT", "retained byte limit reached");
     const owned = copyBytes(png);
     const dimensions = pngDimensions(owned, this.#limits);
     const id = randomUUID();

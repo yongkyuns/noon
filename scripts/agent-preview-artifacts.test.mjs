@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import { deflateSync } from "node:zlib";
 import { ArtifactError, FrameArtifactStore } from "./agent-preview-artifacts.mjs";
 
@@ -269,4 +270,87 @@ test("repeated independent scopes recover all configured capacity", () => {
     scope.close(); assert.deepEqual(store.stats(), empty);
   }
   store.dispose();
+});
+
+// Review regression: instance properties are not evidence of a Buffer's backing
+// store or encoded size. No worker/race timing is needed to test admission.
+for (const shadow of ["data", "accessor"]) {
+  test(`shared backing is rejected with a shadowed buffer ${shadow} property, including other realms`, () => {
+    for (const shared of [new SharedArrayBuffer(PNG.length + 8),
+      runInNewContext(`new SharedArrayBuffer(${PNG.length + 8})`)]) {
+      const { store, scope } = setup();
+      const retained = scope.putFrame(frame());
+      const before = store.stats();
+      const png = Buffer.from(shared, 4, PNG.length);
+      png.set(PNG);
+      let reads = 0;
+      Object.defineProperty(png, "buffer", shadow === "data"
+        ? { value: new ArrayBuffer(0) }
+        : { get() { reads++; return new ArrayBuffer(0); } });
+      assert.throws(() => scope.putFrame(frame({ png })), code("INVALID_INPUT"));
+      assert.equal(reads, 0);
+      assert.deepEqual(store.stats(), before);
+      assert.deepEqual(scope.getFrame(retained.id).png, PNG);
+      assert.ok(scope.putFrame(frame()));
+      store.dispose();
+    }
+  });
+}
+
+for (const [limits, expected] of [
+  [{ maxArtifactBytes: PNG.length - 1 }, "PAYLOAD_LIMIT"],
+  [{ maxTotalBytes: PNG.length - 1 }, "STORAGE_LIMIT"],
+]) {
+  test(`${expected} cannot be bypassed by changing shadowed lengths between checks and copy`, () => {
+    const { store, scope } = setup(limits);
+    const before = store.stats();
+    const png = Buffer.from(PNG);
+    let reads = 0;
+    Object.defineProperties(png, {
+      length: { get() { return ++reads <= 3 ? PNG.length - 1 : PNG.length; } },
+      byteLength: { get() { throw new Error("must not read instance byteLength"); } },
+    });
+    assert.throws(() => scope.putFrame(frame({ png })), code(expected));
+    assert.equal(reads, 0);
+    assert.deepEqual(store.stats(), before);
+  });
+}
+
+test("unshared subviews use intrinsic bytes without invoking shadowed properties or methods", () => {
+  const { store, scope } = setup({ maxArtifactBytes: PNG.length, maxTotalBytes: PNG.length });
+  const backing = Buffer.alloc(PNG.length + 16, 255);
+  backing.set(PNG, 8);
+  const png = backing.subarray(8, 8 + PNG.length);
+  let reads = 0;
+  for (const key of ["buffer", "length", "byteLength", "byteOffset", "copy", "subarray", Symbol.iterator]) {
+    Object.defineProperty(png, key, { get() { reads++; throw new Error("must not read instance properties"); } });
+  }
+  const descriptor = scope.putFrame(frame({ png }));
+  assert.equal(reads, 0);
+  assert.equal(descriptor.byteLength, PNG.length);
+  assert.equal(descriptor.sha256, createHash("sha256").update(PNG).digest("hex"));
+  assert.deepEqual(scope.getFrame(descriptor.id).png, PNG);
+  backing.fill(0);
+  assert.deepEqual(scope.getFrame(descriptor.id).png, PNG);
+  assert.equal(store.stats().encodedBytes, PNG.length);
+});
+
+test("Buffer lookalikes and proxies fail as INVALID_INPUT without invoking traps", () => {
+  const { store, scope } = setup();
+  const before = store.stats();
+  const forged = Object.create(Buffer.prototype, {
+    buffer: { value: new ArrayBuffer(PNG.length) }, length: { value: PNG.length },
+  });
+  for (let index = 0; index < PNG.length; index++) forged[index] = PNG[index];
+  let traps = 0;
+  const proxy = new Proxy(Buffer.from(PNG), {
+    get() { traps++; throw new Error("must not read a proxy"); },
+    getPrototypeOf() { traps++; throw new Error("must not inspect a proxy prototype"); },
+  });
+  for (const png of [forged, proxy, new Uint8Array(PNG), new DataView(new ArrayBuffer(8))]) {
+    assert.throws(() => scope.putFrame(frame({ png })), code("INVALID_INPUT"));
+    assert.deepEqual(store.stats(), before);
+  }
+  assert.equal(traps, 0);
+  assert.ok(scope.putFrame(frame()));
 });
