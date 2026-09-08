@@ -54,7 +54,16 @@ class ManimRotatingAnimationTests(unittest.TestCase):
             import _manim_updaters
             _manim_updaters.install()
             import noon
-            assert type(noon.Rotating(target)) is Rotating
+            assert noon.Rotating is Rotating
+            from noon import Group, Rotate
+            family = Group.__new__(Group)
+            for kind in (Rotate, Rotating):
+                try:
+                    kind(family)
+                except NotImplementedError as error:
+                    assert "family pivot" in str(error)
+                else:
+                    raise AssertionError("unsupported family rotation constructed a fallback animation")
             """
         )
 

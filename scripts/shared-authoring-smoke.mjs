@@ -1250,6 +1250,26 @@ try {
     await stopSampledSource(page);
   }
 
+  const rotatingDefaultsSource = await readFile(
+    path.join(repoRoot, "web/python/examples/manim_parity_rotating_centered.py"), "utf8",
+  );
+  await startSampledSource(page, rotatingDefaultsSource, "scene-shared-rotating-defaults", 960, 540);
+  try {
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.625));
+    const canvas = page.locator("#scene-shared-rotating-defaults");
+    const diagonal = renderedWorldPixel(await canvas.screenshot(), 0.95, 0);
+    assert.ok(diagonal.blue > diagonal.red + 30, "default Rotating did not follow its linear full-turn path");
+    const duration = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(5), authored]);
+      return completed.duration;
+    });
+    assert.equal(duration, 5);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const focusSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_focus_on.py"), "utf8",
   );

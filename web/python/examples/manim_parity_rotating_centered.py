@@ -4,14 +4,13 @@
 
 from noon import *
 
-scene = Scene()
-square = Square(
-    side_length=1.5,
-    fill_color=BLUE,
-    fill_opacity=0.7,
-    stroke_opacity=0.0,
-)
-scene.add(square)
-scene.play(Rotating(square))
-
-result = scene
+class RotatingCentered(Scene):
+    def construct(self):
+        square = Square(
+            side_length=1.5,
+            fill_color=BLUE,
+            fill_opacity=0.7,
+            stroke_opacity=0.0,
+        )
+        self.add(square)
+        self.play(Rotating(square))
