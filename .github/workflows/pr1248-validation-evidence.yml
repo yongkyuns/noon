@@ -1,0 +1,102 @@
+name: PR1248 exact-source validation (temporary)
+on:
+  push:
+    branches: [codex/pr1248-validation-evidence]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  validate:
+    name: ${{ matrix.case }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: android-gallery
+            os: ubuntu-latest
+            browser: chromium
+            profile: android
+            backend: ''
+          - case: macos-webkit-gallery
+            os: macos-latest
+            browser: webkit
+            profile: mobile-dpr2
+            backend: ''
+          - case: direct-webgpu-pixels
+            os: ubuntu-latest
+            browser: chromium
+            profile: desktop-dpr1
+            backend: webgpu
+          - case: direct-webgl-pixels
+            os: ubuntu-latest
+            browser: chromium
+            profile: desktop-dpr1
+            backend: webgl
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 8b18c24842a45dce453a1dc418c7868e6b3c1e9d
+      - name: Install pinned browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Verify and download the exact integrated CI package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validation-evidence
+          git rev-parse HEAD > validation-evidence/source-sha.txt
+          test "$(git rev-parse HEAD)" = 8b18c24842a45dce453a1dc418c7868e6b3c1e9d
+          gh api repos/yongkyuns/noon/actions/runs/34229854758 > validation-evidence/runtime-run.json
+          python3 -c 'import json; r=json.load(open("validation-evidence/runtime-run.json")); assert r["head_sha"] == "09787bc6d725f6e6a7e83f92d233aadac856c58b"'
+          complete=false
+          for attempt in {1..32}; do
+            state=$(gh api repos/yongkyuns/noon/actions/jobs/102072974597 --jq '.status')
+            if [ "$state" = completed ]; then complete=true; break; fi
+            sleep 15
+          done
+          test "$complete" = true
+          test "$(gh api repos/yongkyuns/noon/actions/jobs/102072974597 --jq '.conclusion')" = success
+          gh api repos/yongkyuns/noon/actions/jobs/102072974597/logs > validation-evidence/runtime-build.log
+          grep -q 8b18c24842a45dce453a1dc418c7868e6b3c1e9d validation-evidence/runtime-build.log
+          gh run download 34229854758 --repo yongkyuns/noon --name playground-cross-browser-web-runtime --dir web
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          paths = [Path('web/pkg/noon_web.js'), Path('web/pkg/noon_web_bg.wasm'), Path('web/python-worker.js')]
+          paths += sorted(Path('web/python').glob('compat-bundle.*.json'))
+          assert len(paths) > 3
+          Path('validation-evidence/runtime-sha256.json').write_text(json.dumps({str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}, indent=2))
+          PY
+      - name: Full gallery including no-JSPI controls
+        if: matrix.backend == ''
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: validation-evidence/gallery
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Repeat full gallery in fresh browser contexts
+        if: matrix.backend == ''
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: validation-evidence/gallery-repeat
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Direct shared Rust/WASM updater lifecycle pixels
+        if: matrix.backend != ''
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
+        run: node scripts/browser-smoke.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pr1248-${{ matrix.case }}
+          path: |
+            validation-evidence
+            browser-smoke-artifacts
+          if-no-files-found: error
+          retention-days: 7
