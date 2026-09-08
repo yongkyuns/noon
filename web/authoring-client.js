@@ -80,41 +80,6 @@ export class PythonAuthoringClient {
     return result;
   }
 
-  async runCallbackPhase(sessionId, frame, sequence) {
-    if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
-      throw new TypeError("callback session ID must be a non-negative safe integer");
-    }
-    if (!isRecord(frame)) {
-      throw new TypeError("callback frame must be an object");
-    }
-    if (!Number.isSafeInteger(sequence) || sequence < 0) {
-      throw new TypeError("callback patch sequence must be a non-negative safe integer");
-    }
-    await this.ready();
-    const requestId = this.#beginRequest();
-    const result = this.#resultFor(requestId);
-    this.#worker.postMessage(
-      envelope("callback_phase", {
-        requestId,
-        sessionId,
-        frame,
-        sequence,
-      }),
-    );
-    return result;
-  }
-
-  async attachEnginePort(port) {
-    if (!(port instanceof MessagePort)) {
-      throw new TypeError("engine host attachment requires a MessagePort");
-    }
-    await this.ready();
-    const requestId = this.#beginRequest();
-    const result = this.#resultFor(requestId);
-    this.#worker.postMessage(envelope("attach_engine_port", { requestId, port }), [port]);
-    return result;
-  }
-
   async attachSemanticExecution(
     contextId,
     controlPort,
@@ -312,18 +277,6 @@ export class PythonAuthoringClient {
 
       if (message.type === "semantic_continuation_registered") {
         this.#handleSemanticContinuation(message);
-        return;
-      }
-
-      if (message.type === "callback_result") {
-        this.#settle(message.requestId, ({ resolve }) => {
-          resolve(parsePatchBatchJson(message.patchBatchJson));
-        });
-        return;
-      }
-
-      if (message.type === "host_port_attached") {
-        this.#settle(message.requestId, ({ resolve }) => resolve(message));
         return;
       }
 

@@ -15,14 +15,11 @@ import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyod
 
 const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 6;
-const HOST_CHANNEL = "noon.host-callback";
-const HOST_PROTOCOL_VERSION = 1;
 const AUTHORING_STARTUP_METRICS_VERSION = 1;
 const moduleGraphReadyAt = performance.now();
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
-let engineHostPort = null;
 const semanticContexts = new Map();
 let nextSemanticContext = 0;
 let nextContinuationGeneration = 1;
@@ -664,26 +661,6 @@ async function handleRequest(request) {
       post("semantic_execution_released", { requestId });
       return;
     }
-    if (request.type === "callback_phase") {
-      const patchBatchJson = await runCallbackPhase(
-        pyodide,
-        request.sessionId,
-        request.frame,
-        request.sequence,
-      );
-      post("callback_result", { requestId, patchBatchJson });
-      return;
-    }
-    if (request.type === "attach_engine_port") {
-      engineHostPort?.close?.();
-      engineHostPort = request.port;
-      engineHostPort.addEventListener("message", (event) => {
-        requestQueue = requestQueue.then(() => handleHostRequest(event.data));
-      });
-      engineHostPort.start();
-      post("host_port_attached", { requestId });
-      return;
-    }
     throw new Error(`Unsupported Python authoring request: ${request.type}`);
   } catch (error) {
     if (request?.type === "attach_semantic_execution") {
@@ -767,21 +744,6 @@ function retireSemanticContext(token, entry) {
       .catch((error) => postError(null, error));
     // Python may still retain this same wrapper on a reusable Scene. Dropping
     // our registry reference lets wasm-bindgen finalize it after all owners leave.
-  }
-}
-
-async function handleHostRequest(request) {
-  let requestId = null;
-  let generation = null;
-  try {
-    validateHostRequest(request);
-    requestId = request.requestId;
-    generation = request.generation;
-    const pyodide = await pyodidePromise;
-    const patchBatchJson = await runCallbackPhase(pyodide, request.sessionId, request.frame, request.sequence);
-    postHost("callback_result", { requestId, generation, patchBatchJson });
-  } catch (error) {
-    postHost("error", { requestId, generation, message: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -930,31 +892,6 @@ json.dumps(
   }
 }
 
-async function runCallbackPhase(pyodide, sessionId, frame, sequence) {
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_callback_session", sessionId);
-  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
-  globals.set("__noon_callback_sequence", sequence);
-  try {
-    return await pyodide.runPythonAsync(
-      `
-import json
-import _manim_updaters
-_manim_updaters.run_callback_phase(
-    int(__noon_callback_session),
-    json.loads(__noon_callback_frame_json),
-    int(__noon_callback_sequence),
-)
-`,
-      { globals },
-    );
-  } finally {
-    globals.destroy();
-  }
-}
-
 async function runCanonicalCallbackPhase(pyodide, sessionId, frame) {
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
@@ -1021,18 +958,6 @@ function validateRequest(request) {
     }
     return;
   }
-  if (request.type === "callback_phase") {
-    if (!Number.isSafeInteger(request.sessionId) || request.sessionId < 0) {
-      throw new Error("Python callback request has an invalid session ID");
-    }
-    if (!Number.isSafeInteger(request.sequence) || request.sequence < 0) {
-      throw new Error("Python callback request has an invalid patch sequence");
-    }
-    if (!isRecord(request.frame)) {
-      throw new Error("Python callback request must contain a frame object");
-    }
-    return;
-  }
   if (request.type === "release_semantic_execution") {
     if (typeof request.contextId !== "string" || !request.contextId) throw new Error("invalid semantic context token");
     return;
@@ -1084,29 +1009,7 @@ function validateRequest(request) {
     }
     return;
   }
-  if (request.type === "attach_engine_port") {
-    if (!(request.port instanceof MessagePort)) {
-      throw new Error("Python host attachment requires a MessagePort");
-    }
-    return;
-  }
   throw new Error(`Unsupported Python authoring request: ${request.type}`);
-}
-
-function validateHostRequest(request) {
-  if (!isRecord(request) || request.channel !== HOST_CHANNEL ||
-      request.protocolVersion !== HOST_PROTOCOL_VERSION || request.type !== "callback_phase" ||
-      !Number.isSafeInteger(request.requestId) || request.requestId < 0 ||
-      !Number.isSafeInteger(request.generation) || request.generation < 0 ||
-      !Number.isSafeInteger(request.sessionId) || request.sessionId < 0 ||
-      !Number.isSafeInteger(request.sequence) || request.sequence < 0 || !isRecord(request.frame)) {
-    throw new Error("invalid engine host callback request");
-  }
-}
-
-function postHost(type, payload = {}) {
-  if (engineHostPort === null) return;
-  engineHostPort.postMessage({ channel: HOST_CHANNEL, protocolVersion: HOST_PROTOCOL_VERSION, type, ...payload });
 }
 
 function post(type, payload = {}) {
