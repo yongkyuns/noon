@@ -45,7 +45,6 @@ async function handleMainMessage(message) {
         await initialize(message);
         return;
       case "replace_scene":
-      case "reconcile_scene":
       case "set_loop_duration":
       case "pause":
       case "resume":
@@ -313,20 +312,6 @@ function executeControl(message) {
       latestTick = null;
       sendDeltaOrThrow(delta);
       respond(message.requestId, runtimeResult("replace_scene"));
-      return;
-    }
-    case "reconcile_scene": {
-      validateOptionalLoopDuration(message.loopDurationSeconds);
-      clearHostCallbacks();
-      const result = JSON.parse(player.reconcileSceneDeltaJson(message.sceneJson));
-      applyOptionalLoopDuration(message.loopDurationSeconds);
-      if (result.delta !== null && result.delta !== undefined) {
-        sendDeltaOrThrow(result.delta);
-      }
-      respond(message.requestId, {
-        ...runtimeResult("reconcile_scene"),
-        incremental: result.incremental,
-      });
       return;
     }
     case "set_loop_duration": {
