@@ -56,6 +56,26 @@ try {
   let next = 0;
   async function check({ entry, noJspi }) {
     const context = await browser.newContext({ ...options });
+    // Observe the existing authoring protocol without editing user source or
+    // changing engine clocks. Renderer metrics describe the last presentation,
+    // which can precede an authored static wait's completion.
+    await context.addInitScript(() => {
+      window.__galleryAuthoringResults = [];
+      window.Worker = new Proxy(window.Worker, {
+        construct(target, args, newTarget) {
+          const worker = Reflect.construct(target, args, newTarget);
+          worker.addEventListener('message', ({ data }) => {
+            if (data?.channel === 'noon.authoring' && data.type === 'result') {
+              try {
+                const result = JSON.parse(data.resultJson);
+                if (result.kind === 'scene_document') window.__galleryAuthoringResults.push(result);
+              } catch (error) { window.__galleryAuthoringCaptureError = String(error); }
+            }
+          });
+          return worker;
+        },
+      });
+    });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: browser.version(), errors: [], samples: [] };
@@ -97,8 +117,15 @@ try {
       const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
       result.finalMetrics = metrics;
       assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
-      if (entry.expected_duration != null) assert.ok(Math.abs(metrics.metrics.time - entry.expected_duration) < 1e-6,
-        `authored duration ${metrics.metrics.time} differs from ${entry.expected_duration}`);
+      const authoring = await page.evaluate(() => ({
+        result: window.__galleryAuthoringResults.at(-1), error: window.__galleryAuthoringCaptureError,
+      }));
+      assert.equal(authoring.error, undefined);
+      assert.ok(authoring.result?.semantic_execution, 'missing final shared authoring result');
+      result.authoredDuration = authoring.result.duration;
+      assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
+      if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
+        `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
       if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
       assert.deepEqual(result.errors, []);
       if (external) assert.equal((await json(`build-info.json?t=${Date.now()}`)).commit, revision.commit, 'public revision changed during gallery validation');
