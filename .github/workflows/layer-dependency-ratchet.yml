@@ -22,8 +22,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Use stable Rust and verify scanner prerequisites
+        run: |
+          rustup default stable
+          cargo --version
+          python3 --version
+
       - name: Validate ratchet scripts
-        run: bash -n scripts/layer-dependency-ratchet.sh scripts/layer-dependency-ratchet.test.sh
+        run: |
+          bash -n scripts/layer-dependency-ratchet.sh scripts/layer-dependency-ratchet.test.sh
+          python3 -m py_compile scripts/layer_dependency_ratchet.py scripts/layer_dependency_ratchet_test.py
 
       - name: Prove ratchet catches forbidden edges
         run: bash scripts/layer-dependency-ratchet.test.sh
