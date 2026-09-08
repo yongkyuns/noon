@@ -596,3 +596,208 @@ fn authored_publication_is_rejected_while_required_callback_is_pending() {
     assert_eq!(session.frame(), &frame);
     session.fail_required_callback_phase(token).unwrap();
 }
+
+#[test]
+fn live_updater_removal_replacement_and_freeze_keep_one_runtime() {
+    use crate::{HostCallbackId, RustHostCallbackTable};
+    let mut store = SemanticStore::new();
+    let node = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(node).unwrap();
+    for _ in 0..1024 {
+        let sibling =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.1,
+            }));
+        store.attach_to_scene(sibling).unwrap();
+    }
+    let forth = HostCallbackId::new(7);
+    let back = HostCallbackId::new(8);
+    let mut callbacks = RustHostCallbackTable::new();
+    for (id, sign) in [(forth, 1.0), (back, -1.0)] {
+        callbacks
+            .insert(id, move |context| {
+                let mut transform = context.target_state().transform;
+                transform.translation.x += sign * context.delta_time() as f32;
+                context.set_target_transform(transform)
+            })
+            .unwrap();
+    }
+    callbacks
+        .add_updater(&mut store, node, forth, 0.0, None)
+        .unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    let runtime = session.runtime_identity();
+    callbacks.advance_to(&mut session, 2.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 2.0);
+    session.take_frame_changes();
+    let before = session.publication_context();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.remove_updater(node, forth, 2.0);
+    tx.add_updater(node, back, 2.0, None);
+    session.apply_semantic_transaction(&mut store, tx).unwrap();
+    assert_eq!(session.runtime_identity(), runtime);
+    assert_eq!(session.frame().time, 2.0);
+    assert_eq!(session.frame().objects[0].transform.translation.x, 2.0);
+    assert_eq!(
+        session.publication_context().scene_revision(),
+        before.scene_revision().checked_next().unwrap()
+    );
+    assert!(session.take_frame_changes().is_empty());
+    assert_eq!(
+        session
+            .last_structural_publication_stats()
+            .preparation
+            .object_states_lowered,
+        0
+    );
+    assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.runtime.last_patch_stats().objects_recomputed, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
+    callbacks.advance_to(&mut session, 3.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 1.0);
+    let mut clear = SemanticMutationTransaction::new();
+    clear.clear_updaters(node, 3.0);
+    session
+        .apply_semantic_transaction(&mut store, clear)
+        .unwrap();
+    callbacks.advance_to(&mut session, 4.0).unwrap();
+    assert_eq!(
+        session.frame().objects[0].transform.translation.x,
+        1.0,
+        "removal must freeze the last effective value, not restore authored state"
+    );
+    assert_eq!(session.runtime_identity(), runtime);
+    assert_eq!(
+        session.wake_state().timeline(),
+        noon_runtime::TimelineWakeState::Quiescent
+    );
+    let before = session.publication_context();
+    let mut noop = SemanticMutationTransaction::new();
+    noop.remove_updater(node, back, 4.0);
+    session
+        .apply_semantic_transaction(&mut store, noop)
+        .unwrap();
+    assert_eq!(session.publication_context(), before);
+}
+
+#[test]
+fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_atomically() {
+    use crate::{CallbackAdvance, HostCallbackId};
+    let mut store = SemanticStore::new();
+    let node = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(node).unwrap();
+    let other = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(other).unwrap();
+    let mut initial = SemanticMutationTransaction::new();
+    initial.add_updater(node, HostCallbackId::new(1), 0.0, None);
+    initial.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    let CallbackAdvance::HostRequired { overlay, .. } =
+        session.advance_to_callback_barrier(0.0).unwrap()
+    else {
+        panic!("initial phase")
+    };
+    let before = session.publication_context();
+    let mut remove = SemanticMutationTransaction::new();
+    remove.clear_updaters(node, 0.0);
+    assert!(matches!(
+        session.apply_semantic_transaction(&mut store, remove),
+        Err(ExecutionSessionPublicationError::RequiredCallbackPending)
+    ));
+    assert_eq!(store.scene_revision(), before.scene_revision());
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+    let CallbackAdvance::HostRequired { overlay, .. } =
+        session.advance_to_callback_barrier(1.0).unwrap()
+    else {
+        panic!("next phase")
+    };
+    let stale = overlay.clone().finish();
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+    let before = session.publication_context();
+    for (target, time) in [(node, 0.5), (other, 1.0)] {
+        let mut tx = SemanticMutationTransaction::new();
+        tx.add_updater(target, HostCallbackId::new(2), time, None);
+        assert!(session.apply_semantic_transaction(&mut store, tx).is_err());
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(store.scene_revision(), before.scene_revision());
+    }
+    let mut remove = SemanticMutationTransaction::new();
+    remove.clear_updaters(node, 1.0);
+    session
+        .apply_semantic_transaction(&mut store, remove)
+        .unwrap();
+    assert!(session.commit_required_callback_phase(stale).is_err());
+    assert!(matches!(
+        session.advance_to_callback_barrier(1.0).unwrap(),
+        CallbackAdvance::Ready(_)
+    ));
+}
+
+#[test]
+fn live_updater_revision_preserves_target_preorder_and_future_barriers() {
+    use crate::{CallbackAdvance, HostCallbackId};
+    let mut store = SemanticStore::new();
+    let nodes = (0..2)
+        .map(|_| {
+            let node =
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 1.0,
+                }));
+            store.attach_to_scene(node).unwrap();
+            node
+        })
+        .collect::<Vec<_>>();
+    let mut initial = SemanticMutationTransaction::new();
+    for &node in &nodes {
+        initial.add_updater(node, HostCallbackId::new(1), 0.0, None);
+    }
+    initial.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    for time in [0.0, 1.0] {
+        let CallbackAdvance::HostRequired { overlay, .. } =
+            session.advance_to_callback_barrier(time).unwrap()
+        else {
+            panic!("active phase")
+        };
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+    }
+    let mut revision = SemanticMutationTransaction::new();
+    revision.clear_updaters(nodes[0], 1.0);
+    revision.add_updater(nodes[0], HostCallbackId::new(2), 2.0, None);
+    session
+        .apply_semantic_transaction(&mut store, revision)
+        .unwrap();
+    let CallbackAdvance::HostRequired {
+        overlay,
+        invocations,
+    } = session.advance_to_callback_barrier(3.0).unwrap()
+    else {
+        panic!("activation barrier")
+    };
+    assert_eq!(overlay.time(), 2.0);
+    assert_eq!(
+        invocations
+            .iter()
+            .map(|item| (item.target(), item.callback_id()))
+            .collect::<Vec<_>>(),
+        vec![
+            (nodes[0], HostCallbackId::new(2)),
+            (nodes[1], HostCallbackId::new(1))
+        ]
+    );
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+}

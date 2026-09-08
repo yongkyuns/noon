@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -62,32 +63,6 @@ async function waitForServer() {
   throw new Error(`Playground matrix server did not start: ${lastError}\n${serverOutput}`);
 }
 
-function launchOptions() {
-  if (browserName === "chromium") {
-    return {
-      headless: true,
-      args: [
-        "--disable-features=WebGPU",
-        "--enable-unsafe-swiftshader",
-        "--ignore-gpu-blocklist",
-        "--use-gl=angle",
-        "--use-angle=swiftshader",
-        "--disable-gpu-sandbox",
-        "--disable-dev-shm-usage",
-      ],
-    };
-  }
-  if (browserName === "firefox") {
-    return {
-      headless: true,
-      firefoxUserPrefs: {
-        "webgl.disabled": false,
-        "webgl.force-enabled": true,
-      },
-    };
-  }
-  return { headless: true };
-}
 
 async function baselineCapabilities(page) {
   return page.evaluate(() => ({
@@ -335,7 +310,7 @@ let finalRuntime = null;
 
 try {
   await waitForServer();
-  browser = await browserType.launch(launchOptions());
+  browser = await browserType.launch(playgroundLaunchOptions(browserName));
   const context = await browser.newContext({
     viewport: profile.viewport,
     deviceScaleFactor: profile.deviceScaleFactor,

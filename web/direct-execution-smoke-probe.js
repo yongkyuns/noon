@@ -1,5 +1,6 @@
 const {
   createDirectAffineCallbackSmokeRenderer,
+  createDirectLiveUpdaterLifecycleSmokeRenderer,
   createDirectCallbackPaintSmokeRenderer,
   createDirectLineMatchSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
@@ -134,6 +135,43 @@ async function directLiveGeometryConstructionProof(expectedBackend) {
         dot.red <= dot.green + 30 || annulus.red <= annulus.blue + 30 ||
         annulus.green <= annulus.blue + 30 || Math.min(underline.red, underline.green, underline.blue) <= 150) {
       throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directLiveUpdaterLifecycleProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectLiveUpdaterLifecycleSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    let final;
+    for (const milliseconds of [1000, 2000, 3000, 4000, 4500]) {
+      renderer.advanceDirectRealtime(milliseconds);
+      final = await settleDirectPublication(renderer, milliseconds);
+      const expectedAngle = milliseconds <= 2000 ? milliseconds / 1000
+        : milliseconds <= 4000 ? (4000 - milliseconds) / 1000 : 0;
+      const color = await sampleRenderedColor(canvas,
+        -0.6 * Math.cos(expectedAngle), -0.6 * Math.sin(expectedAngle));
+      const time = renderer.time();
+      samples.push({ time, expectedAngle, color });
+      if (Math.abs(time - milliseconds / 1000) > 1e-6 ||
+          Math.min(color.red, color.green) <= color.blue + 30) {
+        throw new Error(`live updater reversal/freeze pixel mismatch: ${JSON.stringify(samples)}`);
+      }
+    }
+    const metrics = { backend: renderer.rendererBackend(), time: renderer.time(),
+      objects: renderer.objectCount(), cadence: final.cadence, samples };
+    if (metrics.backend !== expectedBackend || metrics.objects !== 2 ||
+        metrics.time !== 4.5 || metrics.cadence !== "idle") {
+      throw new Error(`live updater lifecycle did not settle: ${JSON.stringify(metrics)}`);
     }
     return metrics;
   } finally {
@@ -2458,6 +2496,7 @@ async function start() {
   metrics.focusOn = await directFocusOnProof(expectedBackend);
   metrics.rotating = await directRotatingProof(expectedBackend);
   metrics.scaleInPlace = await directScaleInPlaceProof(expectedBackend);
+  metrics.liveUpdaterLifecycle = await directLiveUpdaterLifecycleProof(expectedBackend);
   metrics.linePassingFlash = await directLinePassingFlashProof(expectedBackend);
   metrics.ordinaryBecomeSemantics = await directOrdinaryBecomeSemanticsProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);

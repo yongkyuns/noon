@@ -763,11 +763,13 @@ import _manim_updaters
 from _manim_canonical_scene import (
     execute_construct,
     await_source_barrier,
+    await_module_source_barrier,
     execution_context,
     materialize_legacy_geometry,
 )
 from _manim_source_execution import (
-    BARRIER_GLOBAL, compile_authoring_source, authoring_source_scope,
+    BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL, compile_authoring_source,
+    authoring_source_scope, execute_authoring_module,
 )
 from noon import Scene
 
@@ -780,8 +782,10 @@ __noon_code, __noon_portable_constructs = compile_authoring_source(
 )
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
+if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
+    __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
 with authoring_source_scope(export_document=bool(__noon_export_document)):
-    exec(__noon_code, __noon_namespace)
+    await execute_authoring_module(__noon_code, __noon_namespace)
 
 if "result" in __noon_namespace:
     __noon_result = __noon_namespace["result"]
