@@ -11,7 +11,6 @@ use noon_core::Vec2;
 use noon_typst::TypstMode;
 
 #[cfg(feature = "native-text")]
-
 pub(crate) fn native_text_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: Text,
@@ -34,7 +33,6 @@ pub(crate) fn native_text_state(
 }
 
 #[cfg(feature = "typst")]
-
 pub(crate) fn typst_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: Typst,
@@ -43,7 +41,6 @@ pub(crate) fn typst_state(
 }
 
 #[cfg(feature = "typst")]
-
 pub(crate) fn math_typst_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: MathTypst,
@@ -105,7 +102,6 @@ impl crate::Mobject {
 }
 
 #[cfg(feature = "typst")]
-
 fn typst_spec_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: super::TypstSpec,

@@ -37,9 +37,9 @@ use crate::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
     LiveSession, Mobject, RateFunction, RustHostCallbackTable, Scene,
-    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
-    StrokeJoin, StrokeWidthMode, TransformToRequest, ValueTracker, Vec2, VectorPath,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticNodeId, SemanticPaint,
+    SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
+    TransformToRequest, ValueTracker, Vec2, VectorPath,
 };
 
 /// Direct counterpart of Manim's DifferentRotations example.
@@ -369,7 +369,7 @@ pub fn live_line_callback_rotation(
             2.0,
             None,
         )?;
-        let mut close_windows = SemanticMutationTransaction::new();
+        let mut close_windows = noon_core::SemanticMutationTransaction::new();
         close_windows.remove_updater(moving.node_id(), ROTATE_LINE_FORWARD, 2.0);
         close_windows.remove_updater(moving.node_id(), ROTATE_LINE_BACKWARD, 4.0);
         close_windows.apply(&mut store)?;

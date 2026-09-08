@@ -13,7 +13,7 @@ edits, error categories and failure/recovery with missing or invalid fonts.
 | `minimal` | none | Neither compiler, shaper nor font bundle |
 | `native-text` | `native-text` | Native shaping; explicit font input, no Typst or font bundle |
 | `native-bundled` | `native-text,bundled-fonts` | Native shaping and font bundle; no Typst compiler |
-| `typst` | `typst` | Typst layout; explicit fonts, no native provider or font bundle |
+| `typst` | `typst` | Typst layout and base compiler assets; explicit fonts, no native provider or typography font bundle |
 | `product` | default features | Both providers and bundled fonts, as before |
 
 Run from the repository root (Python 3, the pinned Rust toolchain, Clippy, and the
@@ -38,7 +38,13 @@ and renderer workflows remain responsible for that qualification.
 
 The runner retains the active normal/build dependency tree, feature tree, exact
 resolved lockfile, Rust version and measurement JSON. It fails on malformed or
-empty graph output and rejects forbidden provider/asset packages. A lockfile can
+empty graph output and rejects forbidden provider/asset packages and activated
+font features. Typst itself requires the base `typst-assets` package (ICC, ICU,
+HTML and PDF resources, including PDF standard-font data). The Typst-only cell
+therefore asserts that `typst-assets/fonts` is **disabled**, rather than falsely
+claiming that all upstream assets disappear. Minimal and native-text-only cells
+exclude the entire assets package; native-bundled must enable its `fonts` feature
+without selecting the Typst compiler. A lockfile can
 mention inactive optional packages; the **active tree** is the isolation proof,
 not text search over the lockfile or `cargo metadata`'s package inventory.
 

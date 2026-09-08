@@ -419,7 +419,6 @@ impl Text {
 }
 
 #[cfg(feature = "native-text")]
-
 fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringError> {
     #[cfg(feature = "bundled-fonts")]
     for data in typst_assets::fonts() {
@@ -557,21 +556,18 @@ impl RetainedScene {
     }
 
     #[cfg(feature = "native-text")]
-
     pub fn add_text(&mut self, object: Text) -> Result<RetainedMobject, TextAuthoringError> {
         let object = object.compile(self)?;
         Ok(self.push_object(object))
     }
 
     #[cfg(feature = "typst")]
-
     pub fn add_typst(&mut self, object: Typst) -> Result<RetainedMobject, TextAuthoringError> {
         let object = object.compile(self)?;
         Ok(self.push_object(object))
     }
 
     #[cfg(feature = "typst")]
-
     pub fn add_math_typst(
         &mut self,
         object: MathTypst,
@@ -619,7 +615,6 @@ impl RetainedScene {
     }
 
     #[cfg(feature = "native-text")]
-
     fn import_native_text_artifact(
         &mut self,
         artifact: NativeTextResourceArtifact,
@@ -629,7 +624,6 @@ impl RetainedScene {
     }
 
     #[cfg(feature = "typst")]
-
     fn import_typst_artifact(
         &mut self,
         artifact: TypstResourceArtifact,

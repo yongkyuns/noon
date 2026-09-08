@@ -223,6 +223,10 @@ constructors. `bundled-fonts` supplies the existing font assets, but does not
 activate either compiler by itself. Native shaping with supplied fonts needs
 only `features = ["native-text"]`; Typst with supplied fonts needs only
 `features = ["typst"]`. Add `bundled-fonts` for family-based convenience lookup.
+Typst still requires its upstream base assets (including PDF standard-font data);
+disabling bundles excludes its optional typography font families, not those base
+compiler resources. Geometry-only and native-text-only builds exclude Typst's
+assets package entirely.
 
 Supply native font bytes via `NativeFontFace::new(family, bytes, face_index)` and
 `Text::with_font_face(face)`. Supply Typst font buffers via

@@ -36,11 +36,19 @@ def check_graph(config: str, text: str) -> set[str]:
         raise ValueError(f"unknown provider configuration: {config}")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     names: set[str] = set()
+    features: dict[str, set[str]] = {}
     for line in lines:
-        match = re.match(r"^([A-Za-z0-9_-]+) v[0-9][^ ]*(?: |$)", line)
+        # `{f}` is the activated feature set, unlike the feature definitions in
+        # cargo metadata. Keep the delimiter explicit so missing data fails closed.
+        match = re.fullmatch(
+            r"([A-Za-z0-9_-]+) v[0-9][^ ]*(?: \(.*\))? features=([^ ]*)(?: \(\*\))?",
+            line,
+        )
         if not match:
             raise ValueError(f"unreadable Cargo tree line: {line!r}")
-        names.add(match.group(1))
+        name, enabled = match.groups()
+        names.add(name)
+        features.setdefault(name, set()).update(filter(None, enabled.split(",")))
     required = set(COMMON)
     if config in {"native-text", "native-bundled", "product"}:
         required |= {"noon-text-native", "swash"}
@@ -57,8 +65,13 @@ def check_graph(config: str, text: str) -> set[str]:
         forbidden |= {name for name in names if name == "noon-typst" or name == "typst" or name.startswith("typst-")}
         if config == "native-bundled":
             forbidden.discard("typst-assets")
-    if config not in {"native-bundled", "product"}:
+    if config in {"minimal", "native-text"}:
         forbidden.add("typst-assets")
+    # Typst requires the base typst-assets package (ICC/ICU/HTML/PDF resources).
+    # Its optional typography font bundle is controlled separately by `fonts`.
+    bundled = "fonts" in features.get("typst-assets", set())
+    if bundled != (config in {"native-bundled", "product"}):
+        raise ValueError(f"{config}: unexpected typst-assets/fonts enabled={bundled}")
     missing, unexpected = required - names, forbidden & names
     if missing or unexpected:
         raise ValueError(f"{config}: missing={sorted(missing)}, forbidden={sorted(unexpected)}")
@@ -114,14 +127,15 @@ def main() -> None:
         common += ["--features", CONFIGS[args.config]]
     run(["cargo", "fetch", "--manifest-path", str(manifest), "--target", args.target], env=env)
     common += ["--locked"]
-    run(["cargo", "tree", *common, "-e", "normal,build", "--prefix", "none", "--format", "{p}"], env=env, output=output / "packages.txt")
+    run(["cargo", "tree", *common, "-e", "normal,build", "--prefix", "none", "--format", "{p} features={f}"], env=env, output=output / "packages.txt")
+    run(["cargo", "tree", *common, "-e", "normal,build,features"], env=env, output=output / "features.txt")
+    run(["rustc", "-vV"], env=env, output=output / "rustc.txt")
+    shutil.copyfile(manifest.parent / "Cargo.lock", output / "Cargo.lock")
     graph = (output / "packages.txt").read_text()
     if not args.baseline:
         packages = check_graph(args.config, graph)
     else:
         packages = {line.split()[0] for line in graph.splitlines() if line.strip()}
-    run(["cargo", "tree", *common, "-e", "normal,build,features"], env=env, output=output / "features.txt")
-    run(["rustc", "-vV"], env=env, output=output / "rustc.txt")
     command = ["cargo", "build", *common, "--bin", "noon-provider-consumer"]
     cold = run(command, env=env)
     warm = run(command, env=env)
