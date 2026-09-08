@@ -1,127 +1,107 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import playwright from "playwright";
-import pngjs from "pngjs";
+import { PNG } from "pngjs";
+import { serveRepository } from "./browser-test-server.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
 
-const { chromium } = playwright;
-const { PNG } = pngjs;
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_PAINTER_ORDER_PORT ?? "4197");
-const baseUrl = `http://127.0.0.1:${port}`;
-
-const generated = spawnSync(
-  "python3",
-  [
-    "-c",
-    [
-      "import sys",
-      "sys.path.insert(0, 'web/python')",
-      "namespace = {}",
-      "source_path = 'web/python/examples/painter_order_overlap.py'",
-      "source = open(source_path, encoding='utf-8').read()",
-      "exec(compile(source, source_path, 'exec'), namespace)",
-      "print(namespace['result'].to_json())",
-    ].join("; "),
-  ],
-  { cwd: repoRoot, encoding: "utf8" },
-);
-if (generated.status !== 0) {
-  throw new Error(`Unable to generate painter-order scene:\n${generated.stdout}\n${generated.stderr}`);
-}
-const sceneJson = generated.stdout.trim();
-assert.ok(sceneJson.length > 0, "painter-order scene JSON is empty");
-
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => { serverOutput += chunk; });
-server.stderr.on("data", (chunk) => { serverOutput += chunk; });
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/browser-smoke.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Painter-order server did not start: ${lastError}\n${serverOutput}`);
-}
-
-let browser = null;
+const source = await readFile(path.join(repoRoot, "web/python/examples/painter_order_overlap.py"), "utf8");
+const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });
+let browser;
 try {
-  await waitForServer();
-  browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: [
-      "--enable-unsafe-webgpu",
-      "--enable-unsafe-swiftshader",
-      "--use-webgpu-adapter=swiftshader",
-      "--use-gpu-in-tests",
-      "--ignore-gpu-blocklist",
-      "--enable-features=Vulkan",
-      "--use-gl=angle",
-      "--use-angle=swiftshader",
-      "--use-vulkan=swiftshader",
-      "--disable-gpu-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-  const page = await browser.newPage({ viewport: { width: 1000, height: 600 } });
-  await page.goto(`${baseUrl}/web/browser-smoke.html`, { waitUntil: "load" });
-  await page.waitForFunction(() => window.noonSmoke?.state.ready === true, null, {
-    timeout: 30_000,
-  });
-
-  const initial = await page.evaluate(() => window.noonSmoke.metrics());
-  assert.equal(initial.error, null, `WebGPU harness initialization failed: ${initial.error}`);
-  assert.equal(initial.rendererBackend, "WebGPU", "painter-order smoke must exercise WebGPU");
-
-  const loaded = await page.evaluate((json) => window.noonSmoke.loadScene(json), sceneJson);
-  assert.equal(loaded.objectCount, 3, "painter-order fixture must contain exactly three objects");
-  const metrics = await page.evaluate(() => window.noonSmoke.renderAt(0.5));
-  assert.equal(metrics.error, null, `painter-order runtime error: ${metrics.error}`);
-  assert.ok(metrics.drawCalls >= 3, "mixed painter-order fixture should cross renderer pipelines");
-
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
-  const screenshot = await page.locator("#scene").screenshot();
-  const png = PNG.sync.read(screenshot);
-  const centerX = Math.floor(png.width / 2);
-  const centerY = Math.floor(png.height / 2);
-  const samples = [];
-  for (let dy = -2; dy <= 2; dy += 1) {
-    for (let dx = -2; dx <= 2; dx += 1) {
-      const offset = ((centerY + dy) * png.width + centerX + dx) * 4;
-      samples.push([png.data[offset], png.data[offset + 1], png.data[offset + 2]]);
+  browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgpu") });
+  for (const label of ["Rust", "Python"]) {
+    const page = await browser.newPage({ viewport: { width: 1000, height: 600 } });
+    const errors = [];
+    page.on("pageerror", error => errors.push(String(error)));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
+    const metrics = await page.evaluate(async ({ label, source }) => {
+      const canvas = document.querySelector("#scene");
+      canvas.width = 960; canvas.height = 540;
+      canvas.style.width = "960px"; canvas.style.height = "540px";
+      if (label === "Rust") {
+        const wasm = await import("./pkg/noon_web.js");
+        await wasm.default();
+        const renderer = await wasm.createDirectPainterOrderSmokeRenderer(canvas.transferControlToOffscreen());
+        window.painterRenderer = renderer;
+        renderer.seekDirect(0.5);
+        let presented = false;
+        for (let attempt = 0; attempt < 60 && !presented; attempt++) {
+          presented = renderer.render();
+          if (!presented) await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+        if (!presented) throw new Error("direct painter-order frame was not presented");
+        return { objectCount: renderer.objectCount(), drawCalls: renderer.lastDrawCalls(),
+          rendererBackend: renderer.rendererBackend(), time: renderer.time() };
+      }
+      const { PythonAuthoringClient } = await import("./authoring-client.js");
+      const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+      const authoring = new PythonAuthoringClient();
+      const execution = new AuthoringExecutionClient(canvas);
+      window.painterExecution = execution; window.painterAuthoring = authoring;
+      const authored = await authoring.run(source, {});
+      if (!authored.semanticExecution || authored.duration !== 1) throw new Error("missing shared painter-order execution");
+      await execution.startSemanticExecution(authored.semanticExecution, {
+        authoringClient: authoring, initiallyPaused: true, transportMode: "transferable",
+        loopDurationSeconds: authored.duration,
+      });
+      await execution.pause();
+      const before = (await execution.metrics()).metrics.presentedFrames;
+      await execution.seek(0.5);
+      let metrics;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        metrics = (await execution.metrics()).metrics;
+        if (metrics.presentedFrames > before) break;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+      }
+      if (metrics.presentedFrames <= before) throw new Error("Python painter-order seek was not presented");
+      return { ...metrics, rendererBackend: execution.rendererBackend };
+    }, { label, source });
+    assert.equal(metrics.rendererBackend, "WebGPU", `${label} must exercise WebGPU`);
+    assert.equal(metrics.objectCount, 3, `${label} must retain all three objects`);
+    assert.ok(Math.abs(metrics.time - 0.5) < 1e-6, `${label} must sample the animation midpoint`);
+    assert.ok(metrics.drawCalls >= 3, `${label} must cross renderer pipelines`);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
+    const screenshot = await page.locator("#scene").screenshot();
+    const png = PNG.sync.read(screenshot);
+    const centerX = Math.floor(png.width / 2);
+    const centerY = Math.floor(png.height / 2);
+    const samples = [];
+    for (let dy = -2; dy <= 2; dy += 1) {
+      for (let dx = -2; dx <= 2; dx += 1) {
+        const offset = ((centerY + dy) * png.width + centerX + dx) * 4;
+        samples.push([png.data[offset], png.data[offset + 1], png.data[offset + 2]]);
+      }
     }
+    const mean = samples.reduce(
+      (sum, rgb) => [sum[0] + rgb[0], sum[1] + rgb[1], sum[2] + rgb[2]],
+      [0, 0, 0],
+    ).map((value) => value / samples.length);
+    const [red, green, blue] = mean;
+    assert.ok(
+      green > red + 25 && green > blue + 25,
+      `center pixel is not green-top painter order: rgb=${mean.map((value) => value.toFixed(1)).join(",")}`,
+    );
+    console.log(
+      `${label} WebGPU painter-order pixel oracle passed: center rgb=${mean.map((value) => value.toFixed(1)).join(",")}`,
+    );
+    assert.deepEqual(errors, [], `${label} browser errors`);
+    await page.evaluate(() => {
+      window.painterExecution?.terminate();
+      window.painterAuthoring?.terminate();
+      window.painterRenderer?.free();
+    });
+    await page.close();
   }
-  const mean = samples.reduce(
-    (sum, rgb) => [sum[0] + rgb[0], sum[1] + rgb[1], sum[2] + rgb[2]],
-    [0, 0, 0],
-  ).map((value) => value / samples.length);
-  const [red, green, blue] = mean;
-  assert.ok(
-    green > red + 25 && green > blue + 25,
-    `center pixel is not green-top painter order: rgb=${mean.map((value) => value.toFixed(1)).join(",")}`,
-  );
-  console.log(
-    `WebGPU painter-order pixel oracle passed: center rgb=${mean.map((value) => value.toFixed(1)).join(",")}`,
-  );
 } finally {
   await browser?.close();
-  server.kill("SIGTERM");
+  await server.close();
 }
 
 // Keep a compact sustained timestamp-query regression in the existing WebGPU
