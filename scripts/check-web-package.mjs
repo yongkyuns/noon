@@ -242,6 +242,8 @@ const expectedTypeSurface = [
   "manimColor(): WasmManimColor",
   "queryMobjectLineEndpoints(handle: WasmAuthoringMobjectHandle): WasmManimLineEndpoints",
   "queryMobjectColor(handle: WasmAuthoringMobjectHandle): WasmManimColor",
+  "queryMobjectFillOpacity(handle: WasmAuthoringMobjectHandle): number",
+  "queryMobjectStrokeOpacity(handle: WasmAuthoringMobjectHandle): number",
 
   "resumeExecutionPlayer(): SemanticExecutionPlayer",
   "export class WasmMobjectLayoutObservation",

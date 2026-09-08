@@ -287,6 +287,8 @@ def _typed_manim_observation(
     value: object,
     handle_method: str,
     context_method: str,
+    *,
+    handle_property: bool = False,
 ):
     """Read one narrow Manim observation from its current Rust authority.
 
@@ -316,7 +318,8 @@ def _typed_manim_observation(
     handle = _handle_for(value)
     if handle is None:
         raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
-    return getattr(handle, handle_method)()
+    observation = getattr(handle, handle_method)
+    return observation if handle_property else observation()
 
 
 def _manim_line_endpoints_observation(value: object):
@@ -1661,19 +1664,28 @@ def _set_object_opacity(
     return self
 
 
+def _paint_opacity_observation(value: object, layer: str):
+    # The callback row is Rust-published state plus preceding ordered writes.
+    # Reading it is a scalar projection, with no geometry or extra WASM call.
+    from _manim_updaters import _canonical_row
+
+    phase = _canonical_row(value)
+    if phase is not None:
+        paint = getattr(phase[2].style, layer)
+        return 0.0 if paint is None else float(paint[3])
+    return _typed_manim_observation(
+        value, f"{layer}Opacity", f"queryMobject{layer.title()}Opacity", handle_property=True
+    )
+
+
 def _get_fill_opacity(self: _compat.VMobject) -> float:
-    handle = _handle_for(self)
-    if handle is None:
-        return _ORIGINAL_GET_FILL_OPACITY(self)
-    return float(handle.fillOpacity)
+    observed = _paint_opacity_observation(self, "fill")
+    return _ORIGINAL_GET_FILL_OPACITY(self) if observed is None else float(observed)
 
 
 def _get_stroke_opacity(self: _compat.VMobject) -> float:
-    handle = _handle_for(self)
-    if handle is None:
-        return _ORIGINAL_GET_STROKE_OPACITY(self)
-    return float(handle.strokeOpacity)
-
+    observed = _paint_opacity_observation(self, "stroke")
+    return _ORIGINAL_GET_STROKE_OPACITY(self) if observed is None else float(observed)
 
 
 def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):

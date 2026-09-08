@@ -242,6 +242,8 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
     source.set_stroke_color(0.9, 0.9, 0.9, 0.75)?;
     source.set_stroke_opacity(0.75)?;
     source.set_stroke_width(0.12)?;
+    assert_eq!(source.fill_opacity()?, 0.25);
+    assert_eq!(source.stroke_opacity()?, 0.75);
     scene.add(&source)?;
 
     let mut target = source.target_editor()?;
@@ -1084,6 +1086,11 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 .map_err(|error| error.to_string())
             }
             1 => {
+                let paint = live
+                    .effective(&self.circle)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(paint.fill_opacity(), 1.0);
+                assert_eq!(paint.stroke_opacity(), 1.0);
                 let layout = live
                     .effective_family_layout(&self.family)
                     .map_err(|error| error.to_string())?;
