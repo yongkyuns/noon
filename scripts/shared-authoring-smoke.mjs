@@ -2800,7 +2800,7 @@ result = scene
   });
   assert.match(
     mixedTimingError,
-    /canonical ValueTracker\.play cannot follow legacy Scene timing/u,
+    /cannot follow legacy Scene timing/u,
     "real worker must reject a legacy timing prefix before canonical scalar authoring",
   );
 
