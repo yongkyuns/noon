@@ -78,11 +78,17 @@ class Demo(Scene):
             run_time=0.75,
             rate_func=linear,
         )
-        # Masked target edits remain explicit export coverage during #959 migration.
         self.play(circle.animate.set_y(1.5), run_time=0.4, rate_func=linear)
         self.play(FadeIn(Circle(radius=0.2, color=GREEN)), run_time=0.25)
 
-        # Group fades remain explicit export coverage until shared lifecycle migration (#959).
+`;
+
+// Group fades still require incremental shared lifecycle support (#959).
+const groupFadeExportSource = `
+from noon import *
+
+class GroupFadeExport(Scene):
+    def construct(self):
         intro = VGroup(
             Circle(radius=0.18, color=BLUE),
             Square(side_length=0.36, color=PINK),
@@ -433,24 +439,21 @@ try {
   assert.equal(handleOwnership.memberCount, 3, "failed cross-store operations leave membership intact");
 
   const foundation = await page.evaluate(
-    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     foundationSource,
   );
-  assert.equal(foundation.kind, "scene_document");
-  assert.equal(foundation.document.objects.length, 5, "introducer animations should auto-bind objects");
+  assert.ok(Math.abs(foundation.duration - 2.65) < 1e-9);
+  assert.equal(foundation.metrics.objectCount, 3, "introducer animations bind objects through shared membership");
+  assert.ok(foundation.metrics.presentedFrames > 0);
+  assert.ok(Math.abs(foundation.frame.objects[0].center[1] - 1.5) < 1e-6);
+  assert.ok(foundation.frame.objects.slice(0, 2).every(object => object.reveal === 1));
 
-  const foundationProperties = foundation.document.tracks.map((track) => track.property);
-  assert.equal(foundationProperties.filter((property) => property === "presence").length, 7);
-  assert.equal(foundationProperties.filter((property) => property === "reveal").length, 2);
-  assert.ok(foundationProperties.includes("transform"), "animate.shift should lower to transform");
-
-  const revealTracks = foundation.document.tracks.filter((track) => track.property === "reveal");
-  assert.ok(
-    revealTracks.every((track) => track.timing.easing === "smooth"),
-    "rate_func=smooth should lower to the shared smooth semantic ID",
+  const groupFades = await page.evaluate(
+    pythonSource => window.noonManimCompat.run(pythonSource), groupFadeExportSource,
   );
-  const transform = foundation.document.tracks.find((track) => track.property === "transform");
-  assert.equal(transform.timing.easing, "linear");
+  assert.equal(groupFades.document.objects.length, 2);
+  assert.equal(groupFades.document.tracks.filter(track => track.property === "presence").length, 4);
+  assert.equal(groupFades.duration, 0.5);
 
   const uncreate = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),

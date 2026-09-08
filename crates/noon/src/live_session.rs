@@ -2029,20 +2029,12 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let x = authoring_render_f64("move_to.x", x).map_err(LiveSessionError::Mobject)?;
-        let y = authoring_render_f64("move_to.y", y).map_err(LiveSessionError::Mobject)?;
-        let authored = self.authored(mobject)?;
-        let authored_transform = self.placement_authored_transform(mobject)?;
-        let publication = self.session.publication_context();
-        let layout = self.layout_at_transform(mobject, authored_transform, publication)?;
-        let mut translation = authored.transform.translation;
-        translation.x =
-            authoring_render_f64("move_to translation.x", translation.x + x - layout.center.0)
-                .map_err(LiveSessionError::Mobject)?;
-        translation.y =
-            authoring_render_f64("move_to translation.y", translation.y + y - layout.center.1)
-                .map_err(LiveSessionError::Mobject)?;
-        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
+        self.move_to(
+            mobject,
+            LiveLayoutTarget::Point(x, y),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
     }
 
     fn placement_authored_transform(
@@ -2731,6 +2723,66 @@ mod tests {
         ));
         assert_eq!(live.session.frame().objects.len(), 1);
         assert!(live.session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn move_to_uses_shared_edges_masks_and_atomic_detached_target_edits() {
+        let mut scene = Scene::new();
+        let mut source = scene.rectangle(4.0, 2.0).unwrap();
+        source.set_translation(2.0, -1.0).unwrap();
+        let mut reference = scene.rectangle(2.0, 4.0).unwrap();
+        reference.set_translation(-3.0, 3.0).unwrap();
+        scene.add(&source).unwrap();
+        scene.add(&reference).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        live.session.take_frame_changes();
+        let result = live
+            .move_to(
+                &source,
+                LiveLayoutTarget::Point(99.0, 5.0),
+                (0.0, 1.0),
+                (0.0, 1.0),
+            )
+            .unwrap();
+        assert_eq!(result.impacts().len(), 1);
+        assert_eq!(live.effective_layout(&source).unwrap().center, (2.0, 4.0));
+        assert_eq!(
+            live.effective_layout(&reference).unwrap().center,
+            (-3.0, 3.0)
+        );
+        let target = live.target_editor(&source).unwrap();
+        live.session.take_frame_changes();
+        live.move_to(
+            &target,
+            LiveLayoutTarget::Mobject(&reference),
+            (0.0, 1.0),
+            (0.5, 1.0),
+        )
+        .unwrap();
+        assert_eq!(target.center().unwrap(), (-0.5, 4.0));
+        assert_eq!(live.effective_layout(&source).unwrap().center, (2.0, 4.0));
+        assert!(live.session.take_frame_changes().is_empty());
+        let publication = live.session.publication_context();
+        assert!(live
+            .move_to(
+                &target,
+                LiveLayoutTarget::Point(1.0, 2.0),
+                (0.0, 0.0),
+                (f64::NAN, 1.0)
+            )
+            .is_err());
+        let foreign = Scene::new().circle(1.0).unwrap();
+        assert!(live
+            .move_to(
+                &target,
+                LiveLayoutTarget::Mobject(&foreign),
+                (0.0, 0.0),
+                (1.0, 1.0)
+            )
+            .is_err());
+        assert_eq!(live.session.publication_context(), publication);
+        assert_eq!(target.center().unwrap(), (-0.5, 4.0));
     }
 
     #[test]

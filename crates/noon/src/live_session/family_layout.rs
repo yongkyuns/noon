@@ -84,6 +84,33 @@ impl LiveSession<'_> {
             .map_err(LiveSessionError::Mobject)
     }
 
+    /// Move one live object or detached target using shared edge/mask semantics.
+    /// Reads only the source and destination bounds and publishes one translation.
+    pub fn move_to(
+        &mut self,
+        mobject: &Mobject,
+        target: LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let transform = self.placement_authored_transform(mobject)?;
+        let bounds = mobject
+            .layout_bounds_at(transform)
+            .map_err(LiveSessionError::Mobject)?
+            .unwrap_or_else(|| {
+                Bounds2D64::point(
+                    f64::from(transform.translation.x),
+                    f64::from(transform.translation.y),
+                )
+            });
+        self.place_layout_members(
+            vec![mobject.node_id()],
+            Some(bounds),
+            target,
+            RelativePlacement::Move { edge, mask },
+        )
+    }
+
     pub fn move_family_to(
         &mut self,
         family: &MobjectFamily,

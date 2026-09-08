@@ -1032,10 +1032,12 @@ def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     return self
 
 
-def _canonical_move_to(self: _base.Mobject, point: object) -> _base.Mobject:
+def _canonical_move_to(self: _base.Mobject, point: object, *args: object, **kwargs: object) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_MOVE_TO(self, point)
+        return _ORIGINAL_MOVE_TO(self, point, *args, **kwargs)
+    if args or kwargs:
+        raise NotImplementedError("callback move_to currently supports center point placement only")
     _, _, row = value
     return _canonical_shift(self, _base._as_vec2(point) - row.center())
 
