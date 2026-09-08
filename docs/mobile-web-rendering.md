@@ -116,3 +116,67 @@ This change intentionally does not:
 The existing `RotationUpdater` live-lifecycle gap remains owned by the updater/gallery roadmap (#252); it is not coupled to render-host selection.
 
 Playwright WebKit provides required regression coverage for the host fallback, but real-device iOS Safari remains useful additional qualification. If future browsers make worker-hosted rendering usable, the capability selection will naturally prefer the worker path again without a user-agent rule.
+
+
+## Python continuation portability
+
+A usable render host does not establish that an interpreter can suspend. Issue
+#1207 reproduced a fatal Pyodide JSPI `SuspendError` on mobile WebKit even with the
+main-thread renderer forced. The minimal `run_sync(Promise.resolve(...))` control
+also failed without Noon. Browsers without JSPI reject that synchronous path.
+
+The browser source loader now compiles eligible ordinary `construct` methods with
+direct, statement-position `self.play(...)` / `self.wait(...)` calls to the existing
+async continuation contract. It executes the original module once, then binds the
+selected portable function code to the original globals, defaults and closure.
+Module, class, decorator and default-value effects are not replayed. `setup()` runs
+before selecting the current method. Reference examples and editor source are not
+rewritten, and explicit document exports still execute the original function.
+
+This is Python host control flow, not animation lowering: the same Rust operations,
+segment admission, authored-time clock, callback protocol, completion receipt and
+renderer own every frame. There is no endpoint-only or legacy-document fallback.
+The source coroutine yields only at its actual canonical barrier. An unexpected
+indirect barrier rejects before that operation can mutate the shared scene.
+
+The portable compilation is intentionally bounded. Aliased/returned barriers,
+scene escapes to helpers, custom scene-method calls, decorators, generators and
+nested functions retain original synchronous execution. Those patterns still need
+working JSPI, or explicitly async code that awaits its barriers. Arbitrary Python
+blocking I/O and synchronous callback reads are not made portable by this repair.
+Unhandled interpreter-fatal rejections now use the existing fatal authoring channel,
+reject pending work and close the failed worker instead of leaving Run pending.
+
+The main-thread mobile regression uses a real mobile/touch browser profile, checks
+forced hosting and automatic hosting with JSPI deliberately absent, requires a
+visible intermediate SquareToCircle frame and the final FadeOut removal at the
+actual authored time, and retains Text, edit/rerun and resize coverage. Browser
+emulation does not establish physical-device iOS qualification.
+
+
+### Review hardening and qualification
+
+Portable execution admits only the ordinary `play`, `wait`, `add`, `remove` and
+`clear` methods, checked on the instance after `setup()` without invoking authored
+properties. Instance/class overrides, custom attribute lookup, method replacement
+and explicit `__dict__` access retain the original synchronous path. In particular,
+an overridden membership method must not hide an uncompiled suspension barrier.
+
+Static, explicitly async and export-only input bypasses Python AST preparation.
+Eligible synchronous constructs still pay a one-time source preparation cost; this
+is not a claim of literally identical startup cost for every source size. No
+source analysis or new Python work is added to the renderer's per-frame loop.
+
+The mobile test exercises the real initial autoplay. It briefly holds the worker
+module's network response to capture an empty canvas, then releases the unchanged
+worker and observes intermediate rendering. This avoids mistaking a replacement's
+blocked metrics request (old-context retirement waits behind the new construct)
+for missing intermediate frames. Pixel comparisons use the complete empty canvas,
+including fractional clipping edges, rather than assuming its top-left pixel is
+the renderer's background color. Existing pixel and authored-time thresholds stay
+unchanged. Test artifacts retain the empty, intermediate and final captures.
+
+The same browser test also runs setup-installed overrides, property and dynamic
+lookup, and explicit async source through the public editor and Run path. The
+source compiler's unit tests cover ordering, cancellation, globals/defaults/closure
+preservation, unsupported source rejection and the no-AST fast paths.

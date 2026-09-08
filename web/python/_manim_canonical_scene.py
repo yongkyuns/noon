@@ -56,6 +56,8 @@ _ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
 _ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
 _SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
+_PORTABLE_CONSTRUCT_MODE = "_noon_portable_construct_mode"
+_PORTABLE_BARRIER_CALL = "_noon_portable_barrier_call"
 _EXPORT_DOCUMENT_CONSTRUCT = "_noon_export_document_construct"
 _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
     "_noon_default_synchronous_continuation_candidate"
@@ -561,7 +563,7 @@ def _semantic_continuation_active(scene: _base.Scene) -> bool:
 
 
 async def execute_construct(
-    scene: _base.Scene, *, export_document: bool = False
+    scene: _base.Scene, *, export_document: bool = False, portable_constructs=None
 ) -> None:
     """Run one Scene construct lifecycle with its canonical continuation mode."""
     if export_document and inspect.iscoroutinefunction(scene.construct):
@@ -577,6 +579,21 @@ async def execute_construct(
     try:
         scene.setup()
         try:
+            portable_construct = None
+            if canonical and portable_constructs and not export_document:
+                from _manim_source_execution import (
+                    bind_portable_construct, has_portable_scene_methods,
+                )
+
+                # Inspect the instance after setup(), without executing getters.
+                # Overrides and dynamic lookup retain the original call path.
+                if has_portable_scene_methods(
+                    scene, play=_play, wait=_canonical_wait,
+                    add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
+                ):
+                    portable_construct = bind_portable_construct(
+                        scene.construct, portable_constructs
+                    )
             if export_document:
                 # #959 owns this explicit codec/export boundary. Ordinary supported
                 # operations retain their existing Rust endpoint helpers here; they
@@ -586,6 +603,15 @@ async def execute_construct(
                     scene.construct()
                 finally:
                     setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
+            elif portable_construct is not None:
+                _begin_async_continuation_construct(scene)
+                setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
+                try:
+                    await portable_construct()
+                finally:
+                    setattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
+                    setattr(scene, _PORTABLE_BARRIER_CALL, False)
+                    _finish_async_continuation_construct(scene)
             elif inspect.iscoroutinefunction(scene.construct):
                 _begin_async_continuation_construct(scene)
                 try:
@@ -607,6 +633,33 @@ async def execute_construct(
             scene.tear_down()
     finally:
         _reactive._leave_authoring_scene(token)
+
+
+def _require_portable_barrier_admission(scene: _base.Scene) -> None:
+    if (getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
+            and not getattr(scene, _PORTABLE_BARRIER_CALL, False)):
+        raise RuntimeError(
+            "indirect synchronous Scene.play/wait cannot suspend in a portable construct; "
+            "use explicit async construct and await the helper's barriers"
+        )
+
+
+async def await_source_barrier(method, /, *args, **kwargs):
+    """Yield at one compiled host call, using the existing canonical awaitable."""
+    scene = getattr(method, "__self__", None)
+    if (not isinstance(scene, _base.Scene)
+            or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
+            or getattr(method, "__func__", None) not in (_play, _canonical_wait)):
+        raise RuntimeError("portable barrier must be the current Scene's canonical play/wait")
+    setattr(scene, _PORTABLE_BARRIER_CALL, True)
+    try:
+        pending = method(*args, **kwargs)
+    finally:
+        # Callbacks and helpers must not inherit admission to a different call.
+        setattr(scene, _PORTABLE_BARRIER_CALL, False)
+    if isinstance(pending, _SemanticContinuationAwaitable):
+        return await pending
+    return pending
 
 
 class _SemanticContinuationAwaitable:
@@ -753,6 +806,7 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
 def _canonical_wait(
     scene: _base.Scene, duration: float = 1.0
 ) -> _base.Scene | _SemanticContinuationAwaitable:
+    _require_portable_barrier_admission(scene)
     if getattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False):
         authority, _ = _timing_authority(scene)
         if authority == "canonical":
@@ -2563,6 +2617,7 @@ def _play_canonical_composition(
 
 
 def _play(self, *args, **kwargs):
+    _require_portable_barrier_admission(self)
     # Grow/Spin/Shrink are shared Rust lifecycle operations even while an
     # explicit export document is being authored. Only the other compatibility
     # animations use the document codec below.

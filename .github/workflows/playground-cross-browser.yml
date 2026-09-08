@@ -117,7 +117,7 @@ jobs:
           key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
       - name: Install browser E2E dependencies
         run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps ${{ matrix.browser }}
       - name: Test examples browser presentation
         env:
