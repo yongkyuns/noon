@@ -2977,31 +2977,31 @@ class SelectedAlignment(Scene):
     });
   }
 
-  // A legacy wait before the first canonical scalar play must fail in the real
-  // authoring worker. The #959 bridge may select one cursor, never merge them.
-  const mixedTimingError = await page.evaluate(async () => {
-    const source = `from noon import Circle, RIGHT, Scene, linear
-
+  // A top-level wait and later scalar play use the same shared Rust cursor.
+  const topLevelScalarSource = `from noon import Circle, Scene, linear
 scene = Scene()
 circle = Circle(radius=0.4)
 scene.add(circle)
 progress = scene.value_tracker(0.0)
 scene.wait(1.0)
+assert scene.time == 1.0
 scene.play(progress.animate(run_time=2.0, rate_func=linear).set_value(4.0))
+assert scene.time == 3.0
+assert progress.get_value() == 4.0
 result = scene
 `;
-    try {
-      await window.sharedAuthoringSmoke.authoring.run(source, {});
-    } catch (error) {
-      return String(error);
-    }
-    throw new Error("mixed legacy/canonical timing unexpectedly authored a scene");
-  });
-  assert.match(
-    mixedTimingError,
-    /cannot follow legacy Scene timing/u,
-    "real worker must reject a legacy timing prefix before canonical scalar authoring",
-  );
+  await startSampledSource(page, topLevelScalarSource, "scene-top-level-wait-scalar");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3);
+    assert.equal(result.metrics.objectCount, 1);
+  } finally {
+    await stopSampledSource(page);
+  }
 
   // Opaque callbacks must progress forward through the required Rust barrier.
   // The exact callback publication for the first ordered target is observed
