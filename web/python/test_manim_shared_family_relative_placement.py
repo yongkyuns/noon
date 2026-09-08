@@ -46,6 +46,10 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                 def targetEditor(self):
                     return self.cloneHandle()
 
+                def layoutAnchor(self, index=None):
+                    assert index is None
+                    return self
+
                 def shift(self, x, y):
                     self.shift_calls.append((float(x), float(y)))
                     translation = self.snapshot[\"transform\"][\"translation\"]
@@ -71,11 +75,13 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                     self.store.finishes += 1
 
 
-                def nextToPoint(self, *args):
-                    self.store.next_to_point.append(tuple(float(value) for value in args))
+                def nextToPoint(self, px, py, aligner, *args):
+                    assert aligner.members == self.members
+                    self.store.next_to_point.append(tuple(float(value) for value in (px, py, *args)))
                     return self._apply(2.0, -1.0)
 
-                def nextToFamily(self, target, *args):
+                def nextTo(self, target, aligner, *args):
+                    assert aligner.members == self.members
                     self.store.next_to_family.append(tuple(float(value) for value in args))
                     assert len(target.members) == 1
                     return self._apply(3.0, 0.5)
@@ -102,6 +108,10 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                     self.identity = store.allocate()
                     store.entities[self.identity] = self
                     self.members = []
+
+                def layoutAnchor(self, index=None):
+                    assert index is None
+                    return self.layout()
 
                 def layout(self):
                     return FakeLayoutObservation(self.store, [self.store.entities[key] for key in self.members])
