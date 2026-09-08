@@ -7,10 +7,38 @@ import unittest
 from _manim_source_execution import (
     BARRIER_GLOBAL, bind_portable_construct, compile_authoring_source,
     has_portable_scene_methods,
+    authoring_source_scope, current_source_invocation,
 )
 
 
 class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_source_invocation_restores_mode_and_cleanup_after_failure(self):
+        cleanups = []
+        self.assertIsNone(current_source_invocation())
+        with authoring_source_scope():
+            ordinary = current_source_invocation()
+            self.assertFalse(ordinary.export_document)
+            ordinary.cleanup.callback(cleanups.append, "ordinary")
+            with self.assertRaisesRegex(RuntimeError, "source failed"):
+                with authoring_source_scope(export_document=True):
+                    exported = current_source_invocation()
+                    self.assertTrue(exported.export_document)
+                    exported.cleanup.callback(cleanups.append, "export")
+                    await asyncio.sleep(0)
+                    raise RuntimeError("source failed")
+            self.assertIs(current_source_invocation(), ordinary)
+            self.assertEqual(cleanups, ["export"])
+        self.assertEqual(cleanups, ["export", "ordinary"])
+        self.assertIsNone(current_source_invocation())
+
+    async def test_source_invocation_modes_are_isolated_between_tasks(self):
+        async def observe(export_document):
+            with authoring_source_scope(export_document=export_document):
+                await asyncio.sleep(0)
+                return current_source_invocation().export_document
+        self.assertEqual(await asyncio.gather(observe(True), observe(False)), [True, False])
+        self.assertIsNone(current_source_invocation())
+
     def compile_scene(self, source, namespace=None):
         namespace = {} if namespace is None else namespace
         code, pairs = compile_authoring_source(textwrap.dedent(source))

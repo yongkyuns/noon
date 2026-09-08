@@ -1073,6 +1073,65 @@ result = scene
   }
   assert.equal(rejectedFinalizations.recovered, true);
 
+  // Top-level source and helper calls share the existing wait/play continuation.
+  // Selecting result must not implicitly run its construct again.
+  const topLevelSource = `from noon import *
+class SelectedScene(Scene):
+    def construct(self):
+        raise AssertionError("prebuilt result construct ran twice")
+result = SelectedScene()
+def author(scene):
+    scene.wait(0.25)
+    assert scene.time == 0.25
+    circle = Circle(0.4).set_fill(BLUE, opacity=1)
+    scene.add(circle)
+    scene.play(circle.animate.shift(RIGHT), run_time=0.5, rate_func=linear)
+    assert abs(circle.get_center().x - 1) < 1e-6
+    assert scene.time == 0.75
+    scene.wait(0.25)
+author(result)
+`;
+  await startSampledSource(page, topLevelSource, "scene-top-level-wait-play");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(1), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 1);
+    assert.equal(result.metrics.objectCount, 1);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const topLevelExample = await readFile(
+    path.join(repoRoot, "web/python/examples/top_level_family_arrangement.py"), "utf8",
+  );
+  await startSampledSource(page, topLevelExample, "scene-top-level-family-arrangement");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(1), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 1);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const topLevelExport = await page.evaluate(async () => {
+    const result = await window.sharedAuthoringSmoke.authoring.run(
+      "from noon import *\nresult = Scene()\ncircle = Circle(0.4)\nresult.add(circle)\nresult.wait(0.25)\nresult.play(circle.animate.shift(RIGHT), run_time=0.5, rate_func=linear)\nresult.wait(0.25)",
+      {}, { exportDocument: true, onSemanticContinuation() {
+        throw new Error("top-level export leased a continuation");
+      } },
+    );
+    return { duration: result.duration, objects: result.document.objects.length,
+      semantic: Object.hasOwn(result, "semanticExecution") };
+  });
+  assert.deepEqual(topLevelExport, { duration: 1, objects: 1, semantic: false });
+
   // A supported ordinary segment must fail at its JSPI capability gate instead
   // of silently using endpoint-only execution. The restore request verifies the
   // same worker-resident context never activated a player or advanced time.
@@ -2918,31 +2977,31 @@ class SelectedAlignment(Scene):
     });
   }
 
-  // A legacy wait before the first canonical scalar play must fail in the real
-  // authoring worker. The #959 bridge may select one cursor, never merge them.
-  const mixedTimingError = await page.evaluate(async () => {
-    const source = `from noon import Circle, RIGHT, Scene, linear
-
+  // A top-level wait and later scalar play use the same shared Rust cursor.
+  const topLevelScalarSource = `from noon import Circle, Scene, linear
 scene = Scene()
 circle = Circle(radius=0.4)
 scene.add(circle)
 progress = scene.value_tracker(0.0)
 scene.wait(1.0)
+assert scene.time == 1.0
 scene.play(progress.animate(run_time=2.0, rate_func=linear).set_value(4.0))
+assert scene.time == 3.0
+assert progress.get_value() == 4.0
 result = scene
 `;
-    try {
-      await window.sharedAuthoringSmoke.authoring.run(source, {});
-    } catch (error) {
-      return String(error);
-    }
-    throw new Error("mixed legacy/canonical timing unexpectedly authored a scene");
-  });
-  assert.match(
-    mixedTimingError,
-    /cannot follow legacy Scene timing/u,
-    "real worker must reject a legacy timing prefix before canonical scalar authoring",
-  );
+  await startSampledSource(page, topLevelScalarSource, "scene-top-level-wait-scalar");
+  try {
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3), authored]);
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.equal(result.duration, 3);
+    assert.equal(result.metrics.objectCount, 1);
+  } finally {
+    await stopSampledSource(page);
+  }
 
   // Opaque callbacks must progress forward through the required Rust barrier.
   // The exact callback publication for the first ordered target is observed
