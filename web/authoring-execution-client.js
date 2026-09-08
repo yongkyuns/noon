@@ -387,6 +387,15 @@ export class AuthoringExecutionClient {
     });
   }
 
+  async debugFrame() {
+    return this.#withStablePlayer((player, mode) => {
+      if (mode !== AUTHORING_EXECUTION_SEMANTIC) {
+        throw new Error("shared execution diagnostics require semantic execution mode");
+      }
+      return player.debugFrame();
+    });
+  }
+
   async sampleToAuthoredTime(timeSeconds) {
     return this.#withStablePlayer((player, mode) => {
       if (mode !== AUTHORING_EXECUTION_SEMANTIC) {

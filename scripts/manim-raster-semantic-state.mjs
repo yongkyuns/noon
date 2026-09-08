@@ -1,64 +1,21 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import playwright from "playwright";
-
-const { chromium } = playwright;
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const manifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
-const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-const reference = manifest.reference;
-const fixtureSources = new Map();
-for (const fixture of manifest.fixtures) {
-  const relativeSource = fixture.source ?? reference.source;
-  if (!fixtureSources.has(relativeSource)) {
-    fixtureSources.set(relativeSource, await readFile(path.join(repoRoot, relativeSource), "utf8"));
-  }
-}
-
-function fixtureSourceFor(fixture) {
-  const relativeSource = fixture.source ?? reference.source;
-  const source = fixtureSources.get(relativeSource);
-  assert.ok(source, `${fixture.id}: missing canonical source ${relativeSource}`);
-  return source;
-}
-
-function fixtureSourcePathFor(fixture) {
-  return path.join(repoRoot, fixture.source ?? reference.source);
-}
-const artifactRoot = path.resolve(
-  repoRoot,
-  process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
-);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const artifactRoot = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts");
 const reportPath = path.join(artifactRoot, "report.json");
 const semanticRoot = path.join(artifactRoot, "semantic");
-const manimSemanticPath = path.join(semanticRoot, "manim-all-frames.json");
-const semanticIndexPath = path.join(semanticRoot, "index.json");
-const port = Number(process.env.NOON_MANIM_SEMANTIC_PORT ?? "4193");
-const baseUrl = `http://127.0.0.1:${port}`;
-
-function runChecked(command, args) {
-  const result = spawnSync(command, args, {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status !== 0) {
-    throw new Error(
-      `${command} ${args.join(" ")} failed (${result.status})\n${result.stdout}\n${result.stderr}`,
-    );
-  }
-  return result;
-}
-
-function noonSourceFor(fixture) {
-  const adapted = fixtureSourceFor(fixture).replace("from manim import *", "from noon import *");
-  return `${adapted}\n\nresult = ${fixture.scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
-}
+const manifest = JSON.parse(await readFile(path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8"));
+const reference = manifest.reference;
+const report = JSON.parse(await readFile(reportPath, "utf8"));
+// The raster pass already generated this oracle and captured the shared runtime
+// at each screenshot. This step only compares artifacts; it never runs a scene.
+const manimSemantic = JSON.parse(await readFile(path.join(semanticRoot, "manim-all-frames.json"), "utf8"));
+assert.equal(manimSemantic.manim_version, reference.version);
+assert.equal(manimSemantic.frame_rate, reference.frame_rate);
+const semanticByFixture = new Map(manimSemantic.fixtures.map(fixture => [fixture.id, fixture]));
 
 function maxAbs(values) {
   return values.length === 0 ? 0 : Math.max(...values.map((value) => Math.abs(value)));
@@ -155,162 +112,54 @@ function compareSemanticStates(referenceState, noonState) {
   };
 }
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/manim-compat-smoke.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
+const index = [];
+for (const fixtureReport of report.fixtures) {
+  const fixture = manifest.fixtures.find(entry => entry.id === fixtureReport.id);
+  assert.ok(fixture, `${fixtureReport.id}: raster fixture missing from manifest`);
+  const manimFixture = semanticByFixture.get(fixture.id);
+  assert.ok(manimFixture, `${fixture.id}: missing Manim semantic fixture`);
+  assert.equal(manimFixture.frame_count, fixtureReport.manim.frameCount);
+  const entries = [];
+  for (const [backend, backendReport] of Object.entries(fixtureReport.backends)) {
+    assert.ok(!backendReport.error, `${fixture.id}/${backend}: raster execution failed`);
+    for (const sample of backendReport.samples) {
+      const referenceState = manimFixture.frames[sample.frameIndex];
+      const noonState = sample.debugFrame;
+      assert.ok(referenceState, `${fixture.id}: missing reference frame ${sample.frameIndex}`);
+      assert.ok(noonState?.publication, `${fixture.id}/${backend}: missing shared runtime capture`);
+      assert.ok(Math.abs(Number(referenceState.time) - Number(sample.time)) < 1e-9);
+      assert.ok(Math.abs(Number(noonState.time) - Number(sample.time)) < 1e-9);
+      const comparison = compareSemanticStates(referenceState, noonState);
+      const label = `frame-${String(sample.frameIndex).padStart(4, "0")}`;
+      const relativePath = path.join("semantic", backend, fixture.id, `${label}.json`);
+      const outputPath = path.join(artifactRoot, relativePath);
+      await mkdir(path.dirname(outputPath), { recursive: true });
+      await writeFile(outputPath, `${JSON.stringify({
+        fixture: fixture.id, scene: fixture.scene, backend,
+        frameIndex: sample.frameIndex, time: sample.time,
+        manim: referenceState, noon: noonState, comparison,
+      }, null, 2)}\n`);
+      const summary = {
+        path: relativePath.split(path.sep).join("/"), pairing: comparison.pairing,
+        objectCountDelta: comparison.objectCountDelta,
+        maxCenterDelta: comparison.maxCenterDelta, maxBoundsDelta: comparison.maxBoundsDelta,
+        maxFillRgbaDelta: comparison.maxFillRgbaDelta, maxStrokeRgbaDelta: comparison.maxStrokeRgbaDelta,
+        maxStrokeWidthDelta: comparison.maxStrokeWidthDelta,
+        paintPresenceMismatches: comparison.paintPresenceMismatches,
+      };
+      sample.semantic = summary;
+      entries.push({ backend, frameIndex: sample.frameIndex, time: sample.time, ...summary });
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`semantic-state server did not start: ${lastError}\n${serverOutput}`);
+  index.push({ id: fixture.id, scene: fixture.scene, samples: entries });
 }
-
-await mkdir(semanticRoot, { recursive: true });
-runChecked("python3", [
-  path.join("scripts", "manim-raster-semantic-reference.py"),
-  "--manifest",
-  manifestPath,
-  "--output",
-  manimSemanticPath,
-]);
-
-try {
-  await waitForServer();
-  const report = JSON.parse(await readFile(reportPath, "utf8"));
-  const manimSemantic = JSON.parse(await readFile(manimSemanticPath, "utf8"));
-  assert.equal(manimSemantic.manim_version, reference.version, "semantic Manim version");
-  assert.equal(manimSemantic.frame_rate, reference.frame_rate, "semantic Manim frame rate");
-  const semanticByFixture = new Map(
-    manimSemantic.fixtures.map((fixture) => [fixture.id, fixture]),
-  );
-
-  const browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: ["--disable-dev-shm-usage"],
-  });
-  const index = [];
-  try {
-    const page = await browser.newPage();
-    await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
-    await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
-    await page.evaluate(() => window.noonManimCompat.ready());
-
-    for (const fixtureReport of report.fixtures) {
-      const fixture = manifest.fixtures.find((entry) => entry.id === fixtureReport.id);
-      assert.ok(fixture, `${fixtureReport.id}: raster fixture missing from manifest`);
-      const authored = await page.evaluate(
-        (source) => window.noonManimCompat.run(source),
-        noonSourceFor(fixture),
-      );
-      assert.equal(authored.kind, "scene_document", `${fixture.id}: Noon semantic authoring result`);
-      assert.equal(authored.duration, fixture.expected_duration, `${fixture.id}: Noon semantic duration`);
-      const sceneJson = JSON.stringify(authored.document);
-      const manimFixture = semanticByFixture.get(fixture.id);
-      assert.ok(manimFixture, `${fixture.id}: missing Manim semantic fixture`);
-      assert.equal(
-        manimFixture.frame_count,
-        fixtureReport.manim.frameCount,
-        `${fixture.id}: semantic/raster Manim frame count`,
-      );
-
-      const firstBackend = Object.values(fixtureReport.backends)[0];
-      const entries = [];
-      for (const sample of firstBackend.samples) {
-        const referenceState = manimFixture.frames[sample.frameIndex];
-        assert.ok(referenceState, `${fixture.id}: missing semantic frame ${sample.frameIndex}`);
-        assert.ok(
-          Math.abs(Number(referenceState.time) - Number(sample.time)) < 1e-9,
-          `${fixture.id}: semantic/raster time mismatch at frame ${sample.frameIndex}`,
-        );
-        const noonState = await page.evaluate(
-          ({ json, time }) => window.noonManimCompat.semanticFrame(json, time),
-          { json: sceneJson, time: sample.time },
-        );
-        const comparison = compareSemanticStates(referenceState, noonState);
-        const label = `frame-${String(sample.frameIndex).padStart(4, "0")}`;
-        const relativePath = path.join("semantic", fixture.id, `${label}.json`);
-        const outputPath = path.join(artifactRoot, relativePath);
-        await mkdir(path.dirname(outputPath), { recursive: true });
-        await writeFile(
-          outputPath,
-          `${JSON.stringify(
-            {
-              fixture: fixture.id,
-              scene: fixture.scene,
-              frameIndex: sample.frameIndex,
-              time: sample.time,
-              manim: referenceState,
-              noon: noonState,
-              comparison,
-            },
-            null,
-            2,
-          )}\n`,
-        );
-        const summary = {
-          path: relativePath.split(path.sep).join("/"),
-          pairing: comparison.pairing,
-          objectCountDelta: comparison.objectCountDelta,
-          maxCenterDelta: comparison.maxCenterDelta,
-          maxBoundsDelta: comparison.maxBoundsDelta,
-          maxFillRgbaDelta: comparison.maxFillRgbaDelta,
-          maxStrokeRgbaDelta: comparison.maxStrokeRgbaDelta,
-          maxStrokeWidthDelta: comparison.maxStrokeWidthDelta,
-          paintPresenceMismatches: comparison.paintPresenceMismatches,
-        };
-        for (const backendReport of Object.values(fixtureReport.backends)) {
-          const backendSample = backendReport.samples.find(
-            (entry) => entry.frameIndex === sample.frameIndex,
-          );
-          assert.ok(backendSample, `${fixture.id}: backend missing frame ${sample.frameIndex}`);
-          backendSample.semantic = summary;
-        }
-        entries.push({ frameIndex: sample.frameIndex, time: sample.time, ...summary });
-      }
-      index.push({ id: fixture.id, scene: fixture.scene, samples: entries });
-    }
-  } finally {
-    await browser.close();
-  }
-
-  report.semantic = {
-    schemaVersion: 1,
-    pairing: "top-level-render-order",
-    manimAllFrames: "semantic/manim-all-frames.json",
-    index: "semantic/index.json",
-    note:
-      "Semantic deltas are diagnostic. Existing Manim semantic differential tests and raster tolerances remain the blocking compatibility gates.",
-  };
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
-  await writeFile(
-    semanticIndexPath,
-    `${JSON.stringify(
-      {
-        schemaVersion: 1,
-        manimVersion: reference.version,
-        frameRate: reference.frame_rate,
-        fixtures: index,
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  console.log(`Attached semantic state to ${index.length} Manim raster fixtures`);
-} finally {
-  server.kill("SIGTERM");
-}
+report.semantic = {
+  schemaVersion: 2, pairing: "top-level-render-order",
+  manimAllFrames: "semantic/manim-all-frames.json", index: "semantic/index.json",
+  note: "Read-only shared runtime captures from the raster checkpoints. Semantic deltas are diagnostic; existing raster tolerances remain the blocking gate.",
+};
+await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+await writeFile(path.join(semanticRoot, "index.json"), `${JSON.stringify({
+  schemaVersion: 2, manimVersion: reference.version, frameRate: reference.frame_rate, fixtures: index,
+}, null, 2)}\n`);
+console.log(`Attached captured semantic state to ${index.length} Manim raster fixtures`);

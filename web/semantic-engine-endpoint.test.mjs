@@ -39,6 +39,7 @@ function fixture(
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
+    debugFrameJson: () => JSON.stringify({ time, source: "active" }),
     initialCallbackPhaseJson: () => null,
     resourceBundleBytes: () => { resourceBundles += 1; return new Uint8Array([1]); },
     tickCallbackPhaseJson: () => null,
@@ -95,6 +96,7 @@ function fixture(
     resumeExecutionPlayer: () => { resumed += 1; return player; },
     returnExecutionPlayer: (value) => { returned += 1; returnedPlayer = value; },
     liveHandoffDuration: () => Math.max(time, 1),
+    liveDebugFrameJson: () => JSON.stringify({ time, source: "returned" }),
     drainReturnedPublicationJson: () => player.drainDeltaJson(),
   };
   return { control, render, player, stats: () => ({
@@ -533,6 +535,10 @@ test("external sample pacing ignores render ticks and resolves after exact prese
     });
     assert.equal((await sampled).time, 0.5);
     assert.deepEqual(f.stats().authoredSampleTimes, [0.5]);
+    const beforeDebug = f.stats();
+    const debug = await request(f.control.port2, "debug_frame", 63);
+    assert.deepEqual(debug.debugFrame, { time: 0.5, source: "active" });
+    assert.deepEqual(f.stats(), beforeDebug, "diagnostics must not seek, publish, or replace execution");
 
     const backward = await request(
       f.control.port2, "sample_to_authored_time", 62, { time: 0.25 },
@@ -628,6 +634,10 @@ test("external sampling acknowledges source completion after a clean segment bou
     assert.equal(result.playing, false);
     assert.equal(f.stats().completedSegments, 2);
     assert.equal(f.stats().resumed, 1);
+    const beforeDebug = f.stats();
+    const debug = await request(f.control.port2, "debug_frame", 65);
+    assert.deepEqual(debug.debugFrame, { time: 2, source: "returned" });
+    assert.deepEqual(f.stats(), beforeDebug, "completed-source diagnostics use the returned owner");
   } finally { endpoint?.stop(); f.close(); }
 });
 

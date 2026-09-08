@@ -611,6 +611,7 @@ export async function attachSemanticEngine(
       while (controls.length && writable()) {
       const message = controls.shift();
       let rendererObservation = null;
+      let debugFrame;
       try {
         switch (message.type) {
           case "pause":
@@ -656,6 +657,11 @@ export async function attachSemanticEngine(
             observeExecutionWake(performance.now());
             break;
           }
+          case "debug_frame":
+            debugFrame = JSON.parse(player === null
+              ? context.liveDebugFrameJson()
+              : player.debugFrameJson());
+            break;
           case "sample_to_authored_time": {
             if (callbackFault !== null) throw callbackFault;
             latestTick = null;
@@ -676,6 +682,7 @@ export async function attachSemanticEngine(
           requestId: message.requestId,
           ...state(message.type),
           ...(rendererObservation === null ? {} : { rendererObservation }),
+          ...(debugFrame === undefined ? {} : { debugFrame }),
         });
       } catch (error) {
         if (message.type === "sample_to_authored_time" && continuation !== null) {
@@ -793,7 +800,7 @@ export async function attachSemanticEngine(
         }
         if (![
           "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
-          "sample_to_authored_time",
+          "sample_to_authored_time", "debug_frame",
           "native_state_input", "native_event",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
