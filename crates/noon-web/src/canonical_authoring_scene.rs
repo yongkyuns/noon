@@ -36,6 +36,10 @@ struct SceneMembershipBatch {
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone)]
 enum OrdinaryCompositionChild {
+    FocusOn {
+        focus: noon::FocusOnOptions,
+        options: noon_core::AnimationOptions,
+    },
     TransformTo {
         entering_id: Option<ObjectId>,
         source: noon::Mobject,
@@ -1406,6 +1410,12 @@ impl CanonicalAuthoringScene {
             );
         fn request(child: &OrdinaryCompositionChild) -> noon::AnimationCompositionRequest<'_> {
             match child {
+                OrdinaryCompositionChild::FocusOn { focus, options } => {
+                    noon::AnimationCompositionRequest::FocusOn {
+                        focus: *focus,
+                        options: *options,
+                    }
+                }
                 OrdinaryCompositionChild::TransformTo {
                     source,
                     target,
@@ -1720,7 +1730,8 @@ impl CanonicalAuthoringScene {
                         output.push((*id, target));
                     }
                 }
-                OrdinaryCompositionChild::Wait { .. } => {}
+                OrdinaryCompositionChild::FocusOn { .. }
+                | OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
@@ -1796,6 +1807,9 @@ impl CanonicalAuthoringScene {
         let mut entering_nodes = BTreeSet::new();
         for child in children {
             let (entering_id, target, options) = match child {
+                // Value-only requests have no wrapper identity to validate. Shared
+                // transaction preparation validates construction and animation options.
+                OrdinaryCompositionChild::FocusOn { .. } => continue,
                 OrdinaryCompositionChild::Wait { duration } => {
                     if !duration.is_finite() || *duration < 0.0 {
                         return Err(
@@ -3748,6 +3762,33 @@ mod wasm {
                     indication: noon::IndicateOptions::new(scale_factor, color),
                     options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
                 });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFocusOn)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_focus_on(
+            &mut self,
+            x: f64,
+            y: f64,
+            opacity: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+        ) -> Result<(), JsValue> {
+            let color =
+                callback_color("focus color", Some(red), Some(green), Some(blue), Some(1.0))?
+                    .expect("all focus color channels supplied");
+            self.children.push(OrdinaryCompositionChild::FocusOn {
+                focus: noon::FocusOnOptions {
+                    point: (x, y),
+                    opacity,
+                    color,
+                },
+                options: Self::optional_options(child_run_time, rate_function)?,
+            });
             Ok(())
         }
 
@@ -7426,6 +7467,42 @@ mod tests {
                 .translation,
             Vec2::new(2.0, -1.0),
         );
+    }
+
+    #[test]
+    fn focus_on_creates_and_removes_a_spotlight_without_wrapper_identity() {
+        let mut context = CanonicalAuthoringScene::default();
+        let revision = context.scene.store().borrow().scene_revision();
+        let options = AnimationOptions::new().rate_func(RateFunction::Linear);
+        let child = |opacity| OrdinaryCompositionChild::FocusOn {
+            focus: noon::FocusOnOptions {
+                opacity,
+                ..noon::FocusOnOptions::new((2.0, 1.0))
+            },
+            options,
+        };
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &[child(-1.0)],
+                options,
+                AnimationOptions::new()
+            )
+            .is_err());
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &[child(0.2)],
+                    options,
+                    AnimationOptions::new()
+                )
+                .unwrap(),
+            2.0
+        );
+        assert!(context.members().unwrap().is_empty());
+        assert!(context.bindings.is_empty());
     }
 
     #[test]

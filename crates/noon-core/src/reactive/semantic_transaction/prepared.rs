@@ -45,6 +45,7 @@ pub struct PreparedSemanticMutationTransaction<'a> {
     transaction: SemanticMutationTransaction,
     preflight: SemanticTransactionPreflight,
     next_revision: Option<SceneRevision>,
+    planned_nodes: HashMap<SemanticLocalNodeToken, SemanticNodeId>,
 }
 
 impl<'a> PreparedSemanticMutationTransaction<'a> {
@@ -63,17 +64,43 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         } else {
             None
         };
+        let tokens = transaction.mutations.iter().filter_map(|mutation| match mutation {
+            SemanticMutation::AddNode { token, .. } if !preflight.removed_pending.contains(token) => Some(*token),
+            SemanticMutation::AddAnimation { token, animation }
+                if !preflight.removed_pending.contains(token) && !animation.intent().node_references().any(|reference|
+                    matches!(reference, SemanticTransactionNodeRef::Pending(dependency) if preflight.removed_pending.contains(&dependency))) => Some(*token),
+            _ => None,
+        });
+        let planned_nodes = tokens.zip(store.preview_node_allocations()).collect();
         Ok(Self {
             store,
             transaction,
             preflight,
             next_revision,
+            planned_nodes,
         })
     }
 
     /// The published store, held read-only while this batch is staged.
     pub fn store(&self) -> &SemanticStore {
         self.store
+    }
+
+    /// Allocator-derived identity for fallible execution preparation under this
+    /// exclusive borrow. Pending identities are not published handles and must not
+    /// escape preparation; commit verifies and returns the same allocator result.
+    pub fn planned_node_id(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Option<SemanticNodeId> {
+        let node = node.into();
+        if self.node_is_removed(node) {
+            return None;
+        }
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self.store.node(node).map(|_| node),
+            SemanticTransactionNodeRef::Pending(token) => self.planned_nodes.get(&token).copied(),
+        }
     }
 
     /// Re-preflight this still-unpublished batch with compiler-derived scalar tracks.
@@ -405,6 +432,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             transaction,
             preflight,
             next_revision,
+            planned_nodes,
         } = self;
         let mut impacts = Vec::with_capacity(transaction.mutations.len());
         let mut written_slots = HashSet::with_capacity(transaction.mutations.len());
@@ -413,10 +441,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         for mutation in &transaction.mutations {
             match mutation {
                 SemanticMutation::AddNode { token, creation } => {
-                    if preflight.removed_pending.contains(token) {
+                    if !planned_nodes.contains_key(token) {
                         continue;
                     }
                     let (node, source_identity) = commit_add_node(store, creation.clone());
+                    assert_eq!(
+                        planned_nodes.get(token),
+                        Some(&node),
+                        "prepared allocator identity changed"
+                    );
                     committed_nodes.insert(*token, node);
                     written_slots.insert(node);
                     if let Some(source_identity) = source_identity {
@@ -424,15 +457,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     }
                 }
                 SemanticMutation::AddAnimation { token, animation } => {
-                    if preflight.removed_pending.contains(token)
-                        || animation.intent().node_references().any(|reference| {
-                            matches!(reference, SemanticTransactionNodeRef::Pending(dependency) if preflight.removed_pending.contains(&dependency))
-                        })
-                    {
+                    if !planned_nodes.contains_key(token) {
                         continue;
                     }
                     let state = animation.resolve(&committed_nodes);
                     let node = commit_add_animation(store, &state);
+                    assert_eq!(
+                        planned_nodes.get(token),
+                        Some(&node),
+                        "prepared allocator identity changed"
+                    );
                     committed_nodes.insert(*token, node);
                     written_slots.insert(node);
                 }

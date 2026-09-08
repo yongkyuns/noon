@@ -629,22 +629,40 @@ impl SemanticStore {
         id
     }
 
+    /// Read the next identities from this store's allocator without consuming slots.
+    /// Only a prepared transaction holding exclusive store access may rely on these.
+    pub(crate) fn preview_node_allocations(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        let mut free = self.free_head;
+        let mut appended = self.slots.len();
+        std::iter::from_fn(move || {
+            Some(if let Some(index) = free {
+                let slot = &self.slots[index as usize];
+                free = slot.next_free;
+                SemanticNodeId::new(index, slot.generation)
+            } else {
+                let index =
+                    u32::try_from(appended).expect("Noon semantic node slot space exhausted");
+                appended += 1;
+                SemanticNodeId::new(index, 0)
+            })
+        })
+    }
+
     fn insert_kind(&mut self, kind: SemanticNodeKind) -> SemanticNodeId {
-        let (slot_index, generation) = if let Some(slot_index) = self.free_head {
-            let slot = &mut self.slots[slot_index as usize];
-            self.free_head = slot.next_free.take();
-            (slot_index, slot.generation)
+        let id = self
+            .preview_node_allocations()
+            .next()
+            .expect("allocator has a next identity");
+        let slot_index = id.slot();
+        if let Some(index) = self.free_head {
+            self.free_head = self.slots[index as usize].next_free.take();
         } else {
-            let slot_index =
-                u32::try_from(self.slots.len()).expect("Noon semantic node slot space exhausted");
             self.slots.push(SemanticSlot {
                 generation: 0,
                 node: None,
                 next_free: None,
             });
-            (slot_index, 0)
-        };
-        let id = SemanticNodeId::new(slot_index, generation);
+        }
         self.slots[slot_index as usize].node = Some(SemanticNode {
             id,
             kind,

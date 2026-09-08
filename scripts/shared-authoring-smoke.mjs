@@ -1226,6 +1226,33 @@ try {
     await stopSampledSource(page);
   }
 
+  const focusSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_focus_on.py"), "utf8",
+  );
+  await startSampledSource(page, focusSource, "scene-shared-focus-on", 960, 540);
+  try {
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(1.25));
+    const canvas = page.locator("#scene-shared-focus-on");
+    const screenshot = await canvas.screenshot();
+    const middle = renderedWorldPixel(screenshot, 1, 0.5);
+    const outside = renderedWorldPixel(screenshot, -6, 3);
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
+    assert.ok(cyan(middle) && !cyan(outside), "shared FocusOn did not shrink its spotlight");
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(2.5), authored]);
+      return completed.duration;
+    });
+    assert.equal(result, 2.5);
+    const final = await canvas.screenshot();
+    assert.ok(!cyan(renderedWorldPixel(final, 1, 0.5)), "FocusOn left its spotlight visible");
+    const square = renderedWorldPixel(final, -3, -2);
+    assert.ok(square.blue > square.red + 30, "FocusOn removed unrelated scene content");
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const passingFlashSource = await readFile(
     path.join(repoRoot, "web/python/examples/line_passing_flash.py"), "utf8",
   );

@@ -243,6 +243,10 @@ pub struct TransformToRequest<'a> {
 /// runtime state, or a second scene representation.
 #[derive(Clone)]
 pub enum AnimationCompositionRequest<'a> {
+    FocusOn {
+        focus: crate::FocusOnOptions,
+        options: AnimationOptions,
+    },
     TransformTo(TransformToRequest<'a>),
     FamilyTransformTo {
         source: &'a MobjectFamily,
@@ -1112,6 +1116,18 @@ impl<'a> LiveSession<'a> {
         )
     }
 
+    /// Construct, animate and remove a fixed-point spotlight in one shared session.
+    pub fn declare_and_activate_focus_on(
+        &mut self,
+        focus: crate::FocusOnOptions,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::FocusOn { focus, options },
+            AnimationOptions::new(),
+        )
+    }
+
     /// Flash one exact analytic Line through fixed transient membership.
     pub fn declare_and_activate_passing_flash(
         &mut self,
@@ -1388,6 +1404,10 @@ impl<'a> LiveSession<'a> {
     ) -> Result<crate::execution_session::SemanticCompositionRequest, LiveSessionError> {
         use crate::execution_session::SemanticCompositionRequest as Request;
         Ok(match request {
+            AnimationCompositionRequest::FocusOn { focus, options } => Request::FocusOn {
+                focus: *focus,
+                options: *options,
+            },
             AnimationCompositionRequest::TransformTo(child) => {
                 self.require_mobject(child.source)?;
                 self.require_mobject(child.target_state)?;

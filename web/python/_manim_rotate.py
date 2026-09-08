@@ -9,8 +9,8 @@ support and are rejected until the runtime can represent them exactly.
 
 ``FocusOn`` is likewise deterministic: Manim transforms a transparent frame-sized Dot
 into a zero-radius grey spotlight at the requested point and removes it at completion.
-Noon lowers that temporary object to an ordinary retained Transform plus a presence
-lifecycle edge. None of these animations requires Python on the frame-critical path.
+Shared Rust constructs and stages that spotlight with ordinary transform and membership
+operations. Python keeps only the inert request and argument coercion.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ class FocusOn:
 
     The supported subset is exact for explicit fixed points and for leaf Mobjects whose
     center stays fixed for the duration of the FocusOn play. Moving focus targets require
-    updater semantics and are deliberately rejected by the top-level mixed-animation gate.
+    updater semantics and remain outside this fixed-point request.
     """
 
     def __init__(
@@ -159,26 +159,17 @@ class FocusOn:
         if not math.isfinite(run_time_value) or run_time_value <= 0.0:
             raise ValueError("FocusOn run_time must be finite and positive")
 
-        # ManimCE v0.21 creates Dot(radius=frame_x_radius + frame_y_radius,
-        # stroke_width=0, fill_color=color, fill_opacity=0) at the origin.
-        radius = _base.DEFAULT_FRAME_WIDTH / 2.0 + _base.DEFAULT_FRAME_HEIGHT / 2.0
-        transparent = _base.Color(color.red, color.green, color.blue, 0.0)
-        source = _base.Circle(
-            radius=radius,
-            fill=transparent,
-            stroke=transparent,
-            stroke_width=0.0,
-        )
-        target = source.copy()
-        target.scale(0.0)
-        target.move_to(point)
-        target.set_fill(color, opacity=opacity_value)
-
+        if any(kwargs.get(name) is False for name in ("introducer", "remover")):
+            raise NotImplementedError("FocusOn has fixed transient membership")
+        if kwargs.get("lag_ratio", 0.0) != 0.0 or kwargs.get("reverse_rate_function", False):
+            raise NotImplementedError("FocusOn does not support lag or rate reversal")
+        if _UNSUPPORTED_PATH_OPTIONS.intersection(kwargs):
+            raise NotImplementedError("FocusOn does not support path overrides")
+        if not all(math.isfinite(float(value)) for value in point):
+            raise ValueError("FocusOn point must be finite")
         self.focus_point = point
         self.opacity = opacity_value
         self.color = color
-        self.mobject = source
-        self.target = target
         self.anim_args = dict(kwargs)
         self.anim_args["run_time"] = run_time_value
 
@@ -315,48 +306,8 @@ def _schedule_rotate(
     )
 
 
-def _schedule_focus_on(
-    scene: _compat.Scene,
-    animation: FocusOn,
-    *,
-    start_time: float,
-    duration: float,
-    easing: str,
-) -> None:
-    source = animation.mobject
-    if source._scene is not scene or source._object is None:
-        raise ValueError("FocusOn temporary object must be bound before scheduling")
-
-    if animation.focus_mobject is not None:
-        current = animation.focus_mobject.get_center()
-        if not _points_close(current, animation.focus_point):
-            raise NotImplementedError(
-                "FocusOn currently requires a fixed focus Mobject center during the animation"
-            )
-
-    _compat._BaseScene.play(
-        scene,
-        _base.Transform(source, animation.target),
-        run_time=duration,
-        start_time=start_time,
-        easing=easing,
-    )
-    obj = source._object
-    end_time = start_time + duration
-    scene._add_presence_track(
-        obj,
-        True,
-        False,
-        end_time,
-        key=f"@focus-on:{scene._object_keys[obj.id]}:{start_time:g}.hide",
-    )
-    scene._compat_top_level = [
-        value for value in scene._compat_top_level if id(value) != id(source)
-    ]
-
-
 def _builder_source(animation: object) -> object | None:
-    if isinstance(animation, (Rotate, FocusOn)):
+    if isinstance(animation, Rotate):
         return animation.mobject
     return _ORIGINAL_BUILDER_SOURCE(animation)
 
@@ -372,7 +323,7 @@ def _procedural_scene_play(
     lag_ratio: float | None = None,
     **kwargs: Any,
 ) -> _compat.Scene:
-    if not any(isinstance(animation, (Rotate, FocusOn)) for animation in animations):
+    if not any(isinstance(animation, Rotate) for animation in animations):
         return _ORIGINAL_SCENE_PLAY(
             self,
             *animations,
@@ -393,11 +344,6 @@ def _procedural_scene_play(
     if kwargs:
         unsupported = ", ".join(sorted(kwargs))
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
-    if any(isinstance(animation, FocusOn) for animation in animations) and len(animations) != 1:
-        raise NotImplementedError(
-            "FocusOn mixed with another top-level animation requires dynamic focus-target composition semantics"
-        )
-
     play_run_time = run_time if run_time is not None else duration
     if play_run_time is not None:
         play_run_time = float(play_run_time)
@@ -421,7 +367,7 @@ def _procedural_scene_play(
     max_end = base_start
     try:
         for animation in animations:
-            if isinstance(animation, (Rotate, FocusOn)):
+            if isinstance(animation, Rotate):
                 _animate._bind_for_animation(
                     self,
                     animation.mobject,
@@ -435,22 +381,13 @@ def _procedural_scene_play(
                     play_rate_func=rate_func,
                     play_lag_ratio=lag_ratio,
                 )
-                if isinstance(animation, Rotate):
-                    _schedule_rotate(
-                        self,
-                        animation,
-                        start_time=base_start,
-                        duration=resolved.run_time,
-                        easing=resolved.rate_func,
-                    )
-                else:
-                    _schedule_focus_on(
-                        self,
-                        animation,
-                        start_time=base_start,
-                        duration=resolved.run_time,
-                        easing=resolved.rate_func,
-                    )
+                _schedule_rotate(
+                    self,
+                    animation,
+                    start_time=base_start,
+                    duration=resolved.run_time,
+                    easing=resolved.rate_func,
+                )
                 end = base_start + resolved.run_time
             else:
                 _ORIGINAL_SCENE_PLAY(
@@ -497,7 +434,6 @@ def install() -> None:
 
     # Composition imports this module before capturing Scene.play, so nested Rotate
     # and Rotating leaves share the same timing resolver and rollback path as top-level
-    # plays. FocusOn intentionally remains top-level-only until dynamic target
-    # composition has a retained representation.
+    # plays. FocusOn uses the ordinary shared composition path.
     _animate._builder_source = _builder_source
     _compat.Scene.play = _procedural_scene_play

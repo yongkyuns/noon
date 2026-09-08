@@ -428,7 +428,7 @@ impl ExecutionSession {
                 .as_ref()
                 .is_some_and(|items| !items.is_empty())
         {
-            conservative_patches.extend(publication.conservative_existing_entry_patches());
+            conservative_patches.extend(publication.conservative_entry_patches(&prepared));
         }
         conservative_patches.extend(order_patches.iter().flatten().cloned());
         conservative_patches.extend(execution_suffix.iter().cloned());
