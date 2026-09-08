@@ -350,7 +350,7 @@ where
                 }
                 continue;
             }
-            PreparedSemanticScheduledAnimationPayload::Rotate { angle } => {
+            PreparedSemanticScheduledAnimationPayload::Rotate { angle, hold_origin } => {
                 if leaf.options.lag_ratio != 0.0
                     || leaf.options.path_arc != 0.0
                     || leaf.options.remover
@@ -372,8 +372,13 @@ where
                     &mut captures,
                     &mut effective_properties,
                 )?;
-                super::affine::lower_rotation_channel(source, from, angle)
-                    .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?
+                let channels =
+                    super::affine::lower_rotation_channels(source, from, angle, hold_origin)
+                        .map_err(|issue| prepared_payload_error(leaf, leaf.target, issue))?;
+                for channel in channels {
+                    push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+                continue;
             }
             PreparedSemanticScheduledAnimationPayload::Indicate {
                 scale_factor,

@@ -17,6 +17,8 @@ mod execution_segment;
 mod execution_session;
 mod family_authoring;
 mod focus_on_authoring;
+mod rotation_authoring;
+pub use rotation_authoring::ManimRotationPivot;
 mod geometry_authoring;
 mod host_callbacks;
 pub mod legacy;

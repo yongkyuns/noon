@@ -92,6 +92,7 @@ pub enum SemanticScheduledAnimationPayload {
     },
     Rotate {
         angle: f64,
+        hold_origin: bool,
     },
     Fade {
         direction: SemanticFadeDirection,
@@ -207,6 +208,7 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     },
     Rotate {
         angle: f64,
+        hold_origin: bool,
     },
     Fade {
         direction: SemanticFadeDirection,
@@ -611,8 +613,8 @@ fn published_payload(
         ScheduledAnimationPayload::PassingFlash { time_width } => {
             SemanticScheduledAnimationPayload::PassingFlash { time_width }
         }
-        ScheduledAnimationPayload::Rotate { angle } => {
-            SemanticScheduledAnimationPayload::Rotate { angle }
+        ScheduledAnimationPayload::Rotate { angle, hold_origin } => {
+            SemanticScheduledAnimationPayload::Rotate { angle, hold_origin }
         }
         ScheduledAnimationPayload::Indicate {
             scale_factor,
@@ -677,8 +679,8 @@ fn prepared_payload(
         ScheduledAnimationPayload::PassingFlash { time_width } => {
             PreparedSemanticScheduledAnimationPayload::PassingFlash { time_width }
         }
-        ScheduledAnimationPayload::Rotate { angle } => {
-            PreparedSemanticScheduledAnimationPayload::Rotate { angle }
+        ScheduledAnimationPayload::Rotate { angle, hold_origin } => {
+            PreparedSemanticScheduledAnimationPayload::Rotate { angle, hold_origin }
         }
         ScheduledAnimationPayload::Indicate {
             scale_factor,
@@ -773,6 +775,7 @@ enum AnimationDeclarationIntent<R> {
     Rotate {
         target: R,
         angle: f64,
+        hold_origin: bool,
     },
     Fade {
         target: R,
@@ -975,13 +978,18 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     time_width: *time_width,
                 }
             }
-            SemanticAnimationIntent::Rotate { target, angle } => {
+            SemanticAnimationIntent::Rotate {
+                target,
+                angle,
+                hold_origin,
+            } => {
                 self.store
                     .semantic_object_state_checked(*target)
                     .map_err(SemanticAnimationError::Target)?;
                 AnimationDeclarationIntent::Rotate {
                     target: *target,
                     angle: *angle,
+                    hold_origin: *hold_origin,
                 }
             }
             SemanticAnimationIntent::Fade {
@@ -1175,12 +1183,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             time_width: *time_width,
                         }
                     }
-                    SemanticAnimationIntent::Rotate { target, angle } => {
-                        AnimationDeclarationIntent::Rotate {
-                            target: (*target).into(),
-                            angle: *angle,
-                        }
-                    }
+                    SemanticAnimationIntent::Rotate {
+                        target,
+                        angle,
+                        hold_origin,
+                    } => AnimationDeclarationIntent::Rotate {
+                        target: (*target).into(),
+                        angle: *angle,
+                        hold_origin: *hold_origin,
+                    },
                     SemanticAnimationIntent::Fade {
                         target,
                         direction,
@@ -1293,12 +1304,15 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             time_width: *time_width,
                         }
                     }
-                    SemanticTransactionAnimationIntent::Rotate { target, angle } => {
-                        AnimationDeclarationIntent::Rotate {
-                            target: *target,
-                            angle: *angle,
-                        }
-                    }
+                    SemanticTransactionAnimationIntent::Rotate {
+                        target,
+                        angle,
+                        hold_origin,
+                    } => AnimationDeclarationIntent::Rotate {
+                        target: *target,
+                        angle: *angle,
+                        hold_origin: *hold_origin,
+                    },
                     SemanticTransactionAnimationIntent::Fade {
                         target,
                         direction,
@@ -1488,6 +1502,7 @@ enum ScheduledAnimationPayload<R> {
     },
     Rotate {
         angle: f64,
+        hold_origin: bool,
     },
     Fade {
         direction: SemanticFadeDirection,
@@ -1871,7 +1886,11 @@ where
                 },
             })
         }
-        AnimationDeclarationIntent::Rotate { target, angle } => {
+        AnimationDeclarationIntent::Rotate {
+            target,
+            angle,
+            hold_origin,
+        } => {
             let execution_object_id = lookup
                 .execution_object_id(target)
                 .or_else(|| lookup.entering_execution_object_id(target))
@@ -1885,7 +1904,7 @@ where
                 kind: PlannedAnimationKind::Leaf {
                     target,
                     execution_object_id,
-                    payload: ScheduledAnimationPayload::Rotate { angle },
+                    payload: ScheduledAnimationPayload::Rotate { angle, hold_origin },
                     options,
                 },
             })

@@ -10,6 +10,7 @@ const {
   createDirectOrdinaryAffinePlaySmokeRenderer,
   createDirectOrdinaryCallbackSparseReadsSmokeRenderer,
   createDirectFocusOnSmokeRenderer,
+  createDirectRotatingSmokeRenderer,
   createDirectLinePassingFlashSmokeRenderer,
   createDirectOrdinaryBecomeSemanticsSmokeRenderer,
   createDirectOrdinaryCompositionContinuationSmokeRenderer,
@@ -130,6 +131,37 @@ async function directLiveGeometryConstructionProof(expectedBackend) {
         dot.red <= dot.green + 30 || annulus.red <= annulus.blue + 30 ||
         annulus.green <= annulus.blue + 30 || Math.min(underline.red, underline.green, underline.blue) <= 150) {
       throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directRotatingProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectRotatingSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    for (const time of [250, 750]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+    }
+    const vertical = await sampleRenderedColor(canvas, 2, 2);
+    const horizontal = await sampleRenderedColor(canvas, 3, 1);
+    for (const time of [2250, 3250, 3500]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+    }
+    const final = await sampleRenderedColor(canvas, 2, 2);
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
+    const metrics = { backend: renderer.rendererBackend(), time: renderer.time(), vertical, horizontal, final };
+    if (metrics.backend !== expectedBackend || metrics.time !== 3.5 || !cyan(vertical) || cyan(horizontal) || !cyan(final)) {
+      throw new Error(`direct procedural rotation was incorrect: ${JSON.stringify(metrics)}`);
     }
     return metrics;
   } finally {
@@ -2302,6 +2334,7 @@ async function start() {
   metrics.specializedGeometry = await directSpecializedGeometryProof(expectedBackend);
   metrics.liveGeometryConstruction = await directLiveGeometryConstructionProof(expectedBackend);
   metrics.focusOn = await directFocusOnProof(expectedBackend);
+  metrics.rotating = await directRotatingProof(expectedBackend);
   metrics.linePassingFlash = await directLinePassingFlashProof(expectedBackend);
   metrics.ordinaryBecomeSemantics = await directOrdinaryBecomeSemanticsProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);

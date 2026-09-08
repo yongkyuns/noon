@@ -725,6 +725,17 @@ impl SemanticMutationTransaction {
         angle: f64,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
+        self.create_rotate_animation_with_origin_constraint(target, angle, false, options)
+    }
+
+    /// Stage an angular path that optionally holds its activation-time world origin.
+    pub fn create_rotate_animation_with_origin_constraint(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        angle: f64,
+        hold_origin: bool,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
         let token = self.allocate_local_node_token();
         self.mutations.push(SemanticMutation::AddAnimation {
             token,
@@ -732,6 +743,7 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::Rotate {
                     target: target.into(),
                     angle,
+                    hold_origin,
                 },
                 options,
             ),

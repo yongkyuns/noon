@@ -1431,6 +1431,13 @@ def _install_rotating_breadth() -> None:
     original_scene_play = compat.Scene.play
 
     class Rotating:
+        def __new__(cls, mobject: object, *args: Any, **kwargs: Any):
+            # Leaf requests use the shared Rust path. #959 owns deletion of the
+            # remaining family/projection source-execution implementation below.
+            if not isinstance(mobject, compat.Group):
+                return rotate.Rotating(mobject, *args, **kwargs)
+            return super().__new__(cls)
+
         def __init__(
             self,
             mobject: object,
@@ -1648,24 +1655,6 @@ def _install_rotating_breadth() -> None:
         duration: float,
         easing: str,
     ) -> list[tuple[_base.Mobject, _base.Mobject]]:
-        if not isinstance(animation.mobject, compat.Group):
-            exact = rotate.Rotating(
-                animation.mobject,
-                angle=animation.angle,
-                axis=animation.axis,
-                about_point=animation.about_point,
-                about_edge=animation.about_edge,
-                run_time=duration,
-                rate_func=rates.linear,
-            )
-            rotate._schedule_rotate(
-                scene,
-                exact,
-                start_time=start_time,
-                duration=duration,
-                easing=easing,
-            )
-            return []
         return schedule_family(
             scene,
             animation,

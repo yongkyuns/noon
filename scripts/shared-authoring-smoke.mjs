@@ -1226,6 +1226,30 @@ try {
     await stopSampledSource(page);
   }
 
+  const rotatingSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_rotating.py"), "utf8",
+  );
+  await startSampledSource(page, rotatingSource, "scene-shared-rotating", 960, 540);
+  try {
+    await page.evaluate(async () =>
+      window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(0.75));
+    const canvas = page.locator("#scene-shared-rotating");
+    const screenshot = await canvas.screenshot();
+    const cyan = (pixel) => pixel.green > pixel.red + 30 && pixel.blue > pixel.red + 30;
+    assert.ok(cyan(renderedWorldPixel(screenshot, 2, 2)) && !cyan(renderedWorldPixel(screenshot, 3, 1)),
+      "shared Rotating lost its deferred pivot or linear angular path");
+    const duration = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const [, completed] = await Promise.all([execution.sampleToAuthoredTime(3.5), authored]);
+      return completed.duration;
+    });
+    assert.equal(duration, 3.5);
+    assert.ok(cyan(renderedWorldPixel(await canvas.screenshot(), 2, 2)),
+      "shared Rotate lost its signed quarter-turn endpoint");
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const focusSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_focus_on.py"), "utf8",
   );

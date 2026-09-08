@@ -588,3 +588,12 @@ pub async fn create_direct_focus_on_smoke_renderer(
     let program = noon::example_scenes::ordinary_focus_on::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
+
+/// Centered procedural angular paths executed by the normal direct Rust host.
+#[wasm_bindgen(js_name = createDirectRotatingSmokeRenderer)]
+pub async fn create_direct_rotating_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::ordinary_rotating::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
