@@ -17,6 +17,8 @@ pub mod example_scenes;
 mod execution_segment;
 mod execution_session;
 mod family_authoring;
+mod family_layout;
+pub use family_layout::{FamilyLayout, FamilyLayoutTarget};
 mod focus_on_authoring;
 mod rotation_authoring;
 pub use rotation_authoring::ManimRotationPivot;
@@ -35,9 +37,7 @@ pub use animation_authoring::DeclaredAnimation;
 pub use compact_value_authoring::semantic_object_state_from_compact;
 pub use execution_segment::*;
 pub use execution_session::*;
-pub use family_authoring::{
-    semantic_family_leaf_ids, FamilyTranslation, MobjectFamily, MobjectFamilyMember,
-};
+pub use family_authoring::{semantic_family_leaf_ids, MobjectFamily, MobjectFamilyMember};
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::*;
 pub use live_program::*;

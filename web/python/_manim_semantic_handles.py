@@ -1676,13 +1676,11 @@ def _shared_family_layout(value: object, *, mutation: bool = False):
     return family_handle.layout(), leaves, leaf_handles
 
 
-def _apply_family_translation(
+def _sync_family_transforms(
     self: _compat.Group,
-    translation: object,
     leaves: list[_base.Mobject],
     leaf_handles: list[object],
 ) -> _compat.Group:
-    translation.apply()
     for member, handle in zip(leaves, leaf_handles):
         _sync_bound_transform(member, handle)
     return self
@@ -1704,8 +1702,8 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     if not hasattr(session, "shiftBy"):
         return _ORIGINAL_GROUP_SHIFT(self, direction)
     offset = _base._as_vec2(direction)
-    translation = session.shiftBy(offset.x, offset.y)
-    return _apply_family_translation(self, translation, leaves, leaf_handles)
+    session.shiftBy(offset.x, offset.y)
+    return _sync_family_transforms(self, leaves, leaf_handles)
 
 
 def _group_move_to(
@@ -1721,29 +1719,32 @@ def _group_move_to(
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
 
-    translation = None
+    applied = False
     if isinstance(point_or_mobject, _compat.Group):
         target_shared = _shared_family_layout(point_or_mobject)
         if target_shared is not None and hasattr(session, "moveToFamily"):
             target_session = target_shared[0]
-            translation = session.moveToFamily(
+            session.moveToFamily(
                 target_session, edge.x, edge.y, mask.x, mask.y
             )
+            applied = True
     elif _alignment_is_mobject(point_or_mobject):
         target_adapter = _family_layout_leaf_adapter(point_or_mobject)
         if target_adapter is not None and hasattr(session, "moveToMobject"):
-            translation = session.moveToMobject(
+            session.moveToMobject(
                 target_adapter, edge.x, edge.y, mask.x, mask.y
             )
+            applied = True
     elif hasattr(session, "moveToPoint"):
         point = _base._as_vec2(point_or_mobject)
-        translation = session.moveToPoint(
+        session.moveToPoint(
             point.x, point.y, edge.x, edge.y, mask.x, mask.y
         )
+        applied = True
 
-    if translation is None:
+    if not applied:
         return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
-    return _apply_family_translation(self, translation, leaves, leaf_handles)
+    return _sync_family_transforms(self, leaves, leaf_handles)
 
 
 
@@ -1788,11 +1789,11 @@ def _group_next_to(
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
 
-    translation = None
+    applied = False
     if isinstance(mobject_or_point, _compat.Group):
         target_shared = _shared_family_layout(mobject_or_point)
         if target_shared is not None and hasattr(session, "nextToFamily"):
-            translation = session.nextToFamily(
+            session.nextToFamily(
                 target_shared[0],
                 vector.x,
                 vector.y,
@@ -1802,10 +1803,11 @@ def _group_next_to(
                 mask.x,
                 mask.y,
             )
+            applied = True
     elif _alignment_is_mobject(mobject_or_point):
         target_adapter = _family_layout_leaf_adapter(mobject_or_point)
         if target_adapter is not None and hasattr(session, "nextToMobject"):
-            translation = session.nextToMobject(
+            session.nextToMobject(
                 target_adapter,
                 vector.x,
                 vector.y,
@@ -1815,9 +1817,10 @@ def _group_next_to(
                 mask.x,
                 mask.y,
             )
+            applied = True
     elif hasattr(session, "nextToPoint"):
         point = _base._as_vec2(mobject_or_point)
-        translation = session.nextToPoint(
+        session.nextToPoint(
             point.x,
             point.y,
             vector.x,
@@ -1828,8 +1831,9 @@ def _group_next_to(
             mask.x,
             mask.y,
         )
+        applied = True
 
-    if translation is None:
+    if not applied:
         return _ORIGINAL_GROUP_NEXT_TO(
             self,
             mobject_or_point,
@@ -1840,7 +1844,7 @@ def _group_next_to(
             index_of_submobject_to_align,
             coor_mask,
         )
-    return _apply_family_translation(self, translation, leaves, leaf_handles)
+    return _sync_family_transforms(self, leaves, leaf_handles)
 
 
 def _group_align_to(
@@ -1854,22 +1858,25 @@ def _group_align_to(
     session, leaves, leaf_handles = shared
     axis = _base._as_vec2(direction)
 
-    translation = None
+    applied = False
     if isinstance(mobject_or_point, _compat.Group):
         target_shared = _shared_family_layout(mobject_or_point)
         if target_shared is not None and hasattr(session, "alignToFamily"):
-            translation = session.alignToFamily(target_shared[0], axis.x, axis.y)
+            session.alignToFamily(target_shared[0], axis.x, axis.y)
+            applied = True
     elif _alignment_is_mobject(mobject_or_point):
         target_adapter = _family_layout_leaf_adapter(mobject_or_point)
         if target_adapter is not None and hasattr(session, "alignToMobject"):
-            translation = session.alignToMobject(target_adapter, axis.x, axis.y)
+            session.alignToMobject(target_adapter, axis.x, axis.y)
+            applied = True
     elif hasattr(session, "alignToPoint"):
         point = _base._as_vec2(mobject_or_point)
-        translation = session.alignToPoint(point.x, point.y, axis.x, axis.y)
+        session.alignToPoint(point.x, point.y, axis.x, axis.y)
+        applied = True
 
-    if translation is None:
+    if not applied:
         return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
-    return _apply_family_translation(self, translation, leaves, leaf_handles)
+    return _sync_family_transforms(self, leaves, leaf_handles)
 
 
 

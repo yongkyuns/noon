@@ -152,7 +152,7 @@
       "id": "group-layout-bounds",
       "surface": "Deterministic Group/VGroup aggregate bounds, center, width/height, and critical-point queries",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "noon::MobjectFamily::layout_bounds/WasmAuthoringFamilyHandle::layout"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "MobjectFamily::layout/FamilyLayout"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_compat_bounds_for"}],
       "reason": "Rust reads recursive membership and aggregate bounds from SemanticStore in one query. Python only checks wrapper eligibility; it cannot feed per-leaf bounds or construct a partial observation."
     },
@@ -160,15 +160,15 @@
       "id": "group-translation",
       "surface": "Deterministic Group/VGroup shift/move_to/center/set_x/set_y translation",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout::shift_by/move_to_*/WasmAuthoringFamilyTranslation::apply"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_shift/_group_move_to/_apply_family_translation"}],
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "FamilyLayout::shift/move_to"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_shift/_group_move_to/_sync_family_transforms"}],
       "reason": "Rust computes the translation from shared bounds and commits every observed leaf through one alias-aware semantic transaction. Python only coerces arguments and synchronizes the existing legacy export projection."
     },
     {
       "id": "group-relative-placement",
       "surface": "Deterministic Group/VGroup next_to/align_to without explicit submobject selection",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout::next_to_*/align_to_*/WasmAuthoringFamilyTranslation"},
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "FamilyLayout::next_to/align_to"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_next_to/_group_align_to"}],
       "reason": "Rust resolves family/leaf/point critical points, Manim's unnormalized next_to direction and buffer, align_to axis masking, and the authoritative recursive leaf mutation order. Python only coerces host arguments and selects the target handle kind."
     },
@@ -177,7 +177,7 @@
       "surface": "Group/VGroup next_to submobject_to_align/index_of_submobject_to_align selection and arrange forwarded placement kwargs",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_next_to fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/WasmAuthoringFamilyTranslation and noon::MobjectFamily::arrange"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "noon::FamilyLayout and noon::MobjectFamily::arrange"},
       "reason": "Default family relative placement and ordinary arrange sequencing are shared-Rust-owned, but explicit wrapper/member aligner selection and forwarded arrange placement kwargs still resolve in Python.",
       "replacement": "Expose shared family-member selection handles and route forwarded arrange alignment policy through the shared family placement API.",
       "migration_issue": "#61"

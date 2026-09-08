@@ -5,6 +5,7 @@ pub mod automatic_wait_text;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
 pub mod family_arrangement;
+pub mod family_placement;
 pub mod family_transform_indicate;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;

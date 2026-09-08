@@ -104,16 +104,26 @@ fn main() -> Result<(), String> {
         example_scenes::family_arrangement::program()?,
         &[0.0, 0.25, 0.5, 0.75, 1.0],
     )?;
-    let mut session = example_scenes::specialized_geometry::session()?;
-    let times = [0.0, 0.5, 1.0];
-    let mut frames = Vec::new();
-    for time in times {
-        session.advance_to(time).map_err(|e| e.to_string())?;
-        frames.push(execution_frame_value(&session));
+    for (name, mut session) in [
+        (
+            "specialized_geometry",
+            example_scenes::specialized_geometry::session()?,
+        ),
+        (
+            "ordinary_family_placement",
+            example_scenes::family_placement::session()?,
+        ),
+    ] {
+        let times = [0.0, 0.5, 1.0];
+        let mut frames = Vec::new();
+        for time in times {
+            session.advance_to(time).map_err(|e| e.to_string())?;
+            frames.push(execution_frame_value(&session));
+        }
+        println!(
+            "{}",
+            json!({ "name": name, "times": times, "frames": frames })
+        );
     }
-    println!(
-        "{}",
-        json!({ "name": "specialized_geometry", "times": times, "frames": frames })
-    );
     Ok(())
 }

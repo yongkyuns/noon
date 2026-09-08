@@ -1,4 +1,4 @@
-use noon::{semantic_family_leaf_ids, FamilyTranslation, Mobject, MobjectFamily, Scene};
+use noon::{semantic_family_leaf_ids, Mobject, MobjectFamily, Scene};
 
 fn nested_family() -> (Scene, MobjectFamily, [Mobject; 3]) {
     let scene = Scene::new();
@@ -24,9 +24,7 @@ fn nested_translation_commits_all_authoritative_leaves_once() {
         members.iter().map(Mobject::node_id).collect::<Vec<_>>()
     );
     let before = store.borrow().scene_revision();
-    let translation =
-        FamilyTranslation::begin(&store.borrow(), root.node_id(), 0.25, -0.5).unwrap();
-    translation.apply(&mut store.borrow_mut()).unwrap();
+    root.shift(0.25, -0.5).unwrap();
     assert_eq!(
         store.borrow().scene_revision(),
         before.checked_next().unwrap()
@@ -40,14 +38,14 @@ fn nested_translation_commits_all_authoritative_leaves_once() {
 fn stale_late_leaf_rejects_the_entire_translation() {
     let (scene, root, members) = nested_family();
     let store = scene.store();
-    let translation = FamilyTranslation::begin(&store.borrow(), root.node_id(), 1.0, 0.0).unwrap();
+    let observation = root.layout().unwrap();
     store
         .borrow_mut()
         .remove_node(members[2].node_id())
         .unwrap();
     let replacement = scene.circle(0.2).unwrap();
     let before = store.borrow().scene_revision();
-    assert!(translation.apply(&mut store.borrow_mut()).is_err());
+    assert!(observation.shift(1.0, 0.0).is_err());
     assert_eq!(store.borrow().scene_revision(), before);
     assert_eq!(members[0].center().unwrap(), (0.0, 0.0));
     assert_eq!(members[1].center().unwrap(), (0.0, 0.0));
@@ -64,10 +62,8 @@ fn aliased_occurrences_accumulate_without_touching_other_objects() {
         .unwrap();
     let unrelated = scene.circle(0.2).unwrap();
     let before = store.borrow().scene_revision();
-    assert!(FamilyTranslation::begin(&store.borrow(), root.node_id(), f64::NAN, 0.0).is_err());
-    let translation =
-        FamilyTranslation::begin(&store.borrow(), root.node_id(), 0.25, -0.5).unwrap();
-    translation.apply(&mut store.borrow_mut()).unwrap();
+    assert!(root.shift(f64::NAN, 0.0).is_err());
+    root.shift(0.25, -0.5).unwrap();
     assert_eq!(
         store.borrow().scene_revision(),
         before.checked_next().unwrap()

@@ -63,38 +63,29 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
                         stroke[\"alpha\"] = float(opacity)
 
 
-            class FakeTranslation:
-                def __init__(self, store, members, dx, dy):
-                    self.store = store
-                    self.members = list(members)
-                    self.dx = float(dx)
-                    self.dy = float(dy)
-
-                def apply(self):
-                    for member in self.members:
-                        member.shift(self.dx, self.dy)
-                        self.store.applied.append(member.identity)
-                    self.store.finishes += 1
-
-
             class FakeLayoutObservation:
                 def __init__(self, store, members):
                     self.store = store
                     self.members = list(members)
                     store.layout_queries += 1
 
+                def _apply(self, dx, dy):
+                    for member in self.members:
+                        member.shift(float(dx), float(dy))
+                        self.store.applied.append(member.identity)
+                    self.store.finishes += 1
+
+
                 def shiftBy(self, dx, dy):
                     self.store.shift_by.append((float(dx), float(dy)))
-                    return FakeTranslation(self.store, self.members, dx, dy)
+                    return self._apply(dx, dy)
 
                 def moveToPoint(self, x, y, edge_x, edge_y, mask_x, mask_y):
                     self.store.move_to_point.append(
                         (float(x), float(y), float(edge_x), float(edge_y), float(mask_x), float(mask_y))
                     )
                     # The fake family has center (1, 1) for aligned_edge == ORIGIN.
-                    return FakeTranslation(
-                        self.store,
-                        self.members,
+                    return self._apply(
                         (float(x) - 1.0) * float(mask_x),
                         (float(y) - 1.0) * float(mask_y),
                     )
