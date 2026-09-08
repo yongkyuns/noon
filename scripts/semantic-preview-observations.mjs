@@ -45,10 +45,12 @@ export function verifyFreshRun(before, after) {
   }
 }
 
-// The original fixture finishes its initial Succession at 1 s, then fades the
-// two late-created squares over 2.2 s. At the exact 1 s boundary the second
-// composition has admitted all four objects, but FadeIn still has zero opacity.
-// This checks captured evidence, not a second scheduler or scene model.
+// The original fixture finishes its initial Succession at 1 s. At that exact
+// boundary both original circles are visible, while the second composition has
+// already admitted the two late-created squares at zero FadeIn opacity. The
+// later samples must therefore add substantial visible area without changing
+// the four-object membership. This checks captured evidence, not a second
+// scheduler or scene model.
 export function verifyLateFamilyConstruction(frames) {
   for (const index of [0, 30, 63, 96]) {
     assert.ok(frames.has(index), `missing late-family preview frame ${index}`);
@@ -60,13 +62,14 @@ export function verifyLateFamilyConstruction(frames) {
   assert.equal(initial.foreground.count, 0, "initial Wait must not show future objects");
   assert.equal(beforeFade.sample.objectCount, 4,
     "second composition must admit all four objects at its start boundary");
-  assert.equal(beforeFade.foreground.count, 0,
-    "FadeIn start boundary must remain transparent");
+  assert.ok(beforeFade.foreground.count > 20,
+    "original circles must remain visible at the second composition boundary");
   for (const frame of [middle, final]) {
-    assert.ok(frame.foreground.count > 20, "late-family scene must become and remain visible");
+    assert.ok(frame.foreground.count > beforeFade.foreground.count * 1.5,
+      "late-created squares must add visible area after their transparent start boundary");
   }
   assert.notEqual(middle.imageSha256, beforeFade.imageSha256,
-    "late-family fade cannot remain at its transparent start image");
+    "late-family fade cannot remain at its transparent-square start image");
   assert.notEqual(middle.imageSha256, final.imageSha256,
     "late-family fade cannot jump to its final image");
   assert.equal(final.sample.objectCount, 4,
