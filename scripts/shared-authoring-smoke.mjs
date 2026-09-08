@@ -1031,8 +1031,8 @@ try {
   );
   assert.equal(exportBoundary.sentinelObjectCount, 0);
 
-  // A Rust-owned Scene must never silently switch to the Python document
-  // engine when finalization finds incompatible migration state. Explicit
+  // Normal Scene execution must never silently select the Python document
+  // engine, including before a Rust context exists. Explicit
   // export above is the codec boundary; each rejected run uses the same worker.
   const rejectedFinalizations = await page.evaluate(async () => {
     const failures = [];
@@ -1041,6 +1041,8 @@ try {
       'scene._reactive_signals.append({"legacy": True})',
       'scene._semantic_geometry_handles.clear()',
       'scene._tracks.append({"property": "position"})',
+      'scene = Scene()\nassert getattr(scene, "_canonical_authoring_context", None) is None\nscene._legacy_geometry_materialized = True',
+      'scene = Scene()\nassert getattr(scene, "_canonical_authoring_context", None) is None\nscene._reactive_signals.append({"legacy": True})',
     ];
     for (const corruption of corruptions) {
       const source = `from noon import Circle, Scene
