@@ -1,0 +1,187 @@
+name: Temporary 1202 sync current master
+
+on:
+  push:
+    branches: [codex/noon-preview-session]
+    paths: [.github/workflows/temp-1202-sync-master.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/noon-preview-session
+          fetch-depth: 0
+      - name: Merge current master and resolve the two reviewed conflicts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          git config user.name "Noon development agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-commit --no-ff origin/master || true
+
+          # Master's raster differential now uses the normal source runner, which
+          # subsumes the old explicit construct-scope harness repair.
+          git checkout --theirs scripts/manim-raster-differential.mjs
+
+          # Keep master's semantic-only raster host architecture, but delegate its
+          # bounded lifecycle and sampling to the reusable preview session.
+          cat > web/manim-raster-host.js <<'EOF'
+          import { PythonAuthoringClient } from "./authoring-client.js";
+          import { AuthoringExecutionClient } from "./authoring-execution-client.js";
+          import { SemanticPreviewSession } from "./semantic-preview-session.js";
+
+          const canvas = document.querySelector("#scene");
+          const readyPromise = Promise.resolve();
+
+          let preview = null;
+          let closed = false;
+          let currentFrameIndex = -1;
+          let currentLogicalTime = 0;
+          let activeFrameTimes = null;
+
+          function waitForPaint() {
+            return new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            });
+          }
+
+          async function load(source, loopDurationSeconds) {
+            await readyPromise;
+            if (closed) throw new Error("host raster page is closed");
+            if (typeof source !== "string" || source.trim() === "") {
+              throw new TypeError("host raster source must be non-empty");
+            }
+            const loopDuration = Number(loopDurationSeconds);
+            if (!Number.isFinite(loopDuration) || loopDuration <= 0) {
+              throw new RangeError("host raster loop duration must be positive and finite");
+            }
+            if (preview !== null) {
+              throw new Error("host raster page supports one authored scene per page");
+            }
+
+            preview = new SemanticPreviewSession({
+              createAuthoringClient: () => new PythonAuthoringClient(),
+              createExecutionClient: (options) => new AuthoringExecutionClient(canvas, options),
+            });
+            const result = await preview.open(source, { loopDurationSeconds: loopDuration });
+            return {
+              kind: "semantic_execution",
+              duration: result.authoredDuration,
+              objectCount: result.frame.objectCount,
+              rendererBackend: result.frame.rendererBackend,
+            };
+          }
+
+          async function advanceOneFrame(frameIndex, time) {
+            if (closed) throw new Error("host raster page is closed");
+            const sampled = await preview.sample(time);
+            currentLogicalTime = sampled.frame.publishedTime;
+            currentFrameIndex = frameIndex;
+          }
+
+          function normalizeFrameTimes(frameTimes, targetFrame) {
+            if (!Array.isArray(frameTimes) || frameTimes.length <= targetFrame) {
+              throw new RangeError("host raster frame-time map must cover the target frame");
+            }
+            return frameTimes.map((value, index) => {
+              const time = Number(value);
+              if (!Number.isFinite(time) || time < 0) {
+                throw new RangeError(`host raster frame ${index} has invalid logical time ${value}`);
+              }
+              if (index > 0 && time + 1e-12 < Number(frameTimes[index - 1])) {
+                throw new RangeError("host raster frame-time map must be monotonic");
+              }
+              return time;
+            });
+          }
+
+          async function renderThrough(frameIndex, frameTimes) {
+            if (closed) throw new Error("host raster page is closed");
+            if (preview === null) throw new Error("host raster scene has not been loaded");
+            const targetFrame = Number(frameIndex);
+            if (!Number.isSafeInteger(targetFrame) || targetFrame < 0) {
+              throw new RangeError("host raster frame index must be a non-negative integer");
+            }
+            const normalizedTimes = normalizeFrameTimes(frameTimes, targetFrame);
+            if (activeFrameTimes === null) {
+              activeFrameTimes = normalizedTimes;
+            } else {
+              if (activeFrameTimes.length !== normalizedTimes.length) {
+                throw new Error("host raster frame-time map cannot change after playback begins");
+              }
+              for (let index = 0; index < activeFrameTimes.length; index += 1) {
+                if (Math.abs(activeFrameTimes[index] - normalizedTimes[index]) > 1e-12) {
+                  throw new Error("host raster frame-time map cannot change after playback begins");
+                }
+              }
+            }
+            if (targetFrame < currentFrameIndex) {
+              throw new RangeError("host raster playback cannot move backwards");
+            }
+
+            for (let frame = currentFrameIndex + 1; frame <= targetFrame; frame += 1) {
+              await advanceOneFrame(frame, activeFrameTimes[frame]);
+            }
+            await waitForPaint();
+            if (closed) throw new Error("host raster page is closed");
+
+            const report = preview.snapshot;
+            if (report.state !== "ready") {
+              throw new Error(report.error ?? "preview session is not ready");
+            }
+            return {
+              error: null,
+              presented: true,
+              time: currentLogicalTime,
+              objectCount: report.frame.objectCount,
+              rendererBackend: report.frame.rendererBackend,
+              drawCalls: report.frame.drawCalls,
+              authoredDuration: report.authoredDuration,
+              frameIndex: currentFrameIndex,
+            };
+          }
+
+          function close() {
+            if (closed) return;
+            closed = true;
+            preview?.close();
+          }
+
+          window.noonHostRaster = {
+            ready: () => readyPromise,
+            load,
+            renderThrough,
+            status: () => preview?.snapshot ?? null,
+            close,
+          };
+          EOF
+          sed -i 's/^          //' web/manim-raster-host.js
+
+          git add scripts/manim-raster-differential.mjs web/manim-raster-host.js
+          test -z "$(git diff --name-only --diff-filter=U)"
+      - name: Validate resolved preview integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check web/manim-raster-host.js
+          node --check scripts/manim-raster-differential.mjs
+          node --test web/semantic-preview-session.test.mjs scripts/semantic-preview-observations.test.mjs
+          cargo fmt --all -- --check
+          cargo test -p noon-web live_family_constructor --lib
+          cargo test -p noon live_session --lib
+          git diff --check
+      - name: Commit clean master sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/temp-1202-master-conflicts.yml
+          git rm .github/workflows/temp-1202-sync-master.yml
+          git add -A
+          git commit -m "Merge current master into preview session"
+          git push origin HEAD:codex/noon-preview-session
