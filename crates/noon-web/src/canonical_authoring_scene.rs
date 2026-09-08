@@ -2259,6 +2259,32 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    /// Reuse inert typed membership operands to publish a detached family.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn create_live_family(
+        &mut self,
+        batch: SceneMembershipBatch,
+    ) -> Result<noon::MobjectFamily, String> {
+        if batch.kind != SceneMembershipBatchKind::Add || !batch.bindings.is_empty() {
+            return Err("live family construction requires unbound add operands".into());
+        }
+        let members = batch
+            .members
+            .iter()
+            .map(|member| match member {
+                OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle,
+                } => Ok(noon::MobjectFamilyMember::Mobject(handle)),
+                OwnedSceneMembershipMember::Family(family) => {
+                    Ok(noon::MobjectFamilyMember::Family(family))
+                }
+                _ => Err("live family construction cannot reserve wrapper bindings".to_owned()),
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        self.live_family(&members)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_shift_family(
         &mut self,
@@ -5740,6 +5766,18 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        /// Publish a complete Group/VGroup constructor through the live owner.
+        #[wasm_bindgen(js_name = createLiveFamily)]
+        pub fn create_live_family(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            self.inner
+                .create_live_family(batch.inner)
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(js_error)
+        }
+
         /// Begin an inert ordered family target. Member targets may be built
         /// bottom-up before the family node and edges publish through this context.
         #[wasm_bindgen(js_name = beginLiveFamilyTarget)]
@@ -7141,6 +7179,72 @@ mod tests {
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
         // Another owner-mediated mutation remains valid after both publications
         // and the rejected foreign member: no stale execution revision is hidden.
+        context.live_target_editor(&circle).unwrap();
+    }
+
+    #[test]
+    fn live_family_constructor_rejects_invalid_operands_without_poisoning_the_owner() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context.live_player(1.0).unwrap();
+        let foreign = noon::Scene::new().circle(0.2).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        for (kind, handle, wrapper_id) in [
+            (SceneMembershipBatchKind::Remove, circle.clone(), None),
+            (SceneMembershipBatchKind::Add, foreign, None),
+            (
+                SceneMembershipBatchKind::Add,
+                circle.clone(),
+                Some(ObjectId::new(2)),
+            ),
+        ] {
+            assert!(context
+                .create_live_family(SceneMembershipBatch {
+                    kind,
+                    members: vec![OwnedSceneMembershipMember::Mobject { wrapper_id, handle }],
+                    bindings: Vec::new(),
+                })
+                .is_err());
+            assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        }
+        context.live_target_editor(&circle).unwrap();
+    }
+
+    #[test]
+    fn live_family_constructor_preserves_shared_order_and_duplicate_suppression() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        context.live_player(1.0).unwrap();
+        let target = context.live_target_editor(&circle).unwrap();
+        let nested = context
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)])
+            .unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+        let family = context
+            .create_live_family(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                members: vec![
+                    OwnedSceneMembershipMember::Family(nested.clone()),
+                    OwnedSceneMembershipMember::Mobject {
+                        wrapper_id: None,
+                        handle: target.clone(),
+                    },
+                    OwnedSceneMembershipMember::Family(nested.clone()),
+                ],
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        let store = context.scene.store().borrow();
+        assert_eq!(store.scene_revision().get(), revision.get() + 1);
+        assert_eq!(
+            store
+                .semantic_family_members_checked(family.node_id())
+                .unwrap(),
+            &[nested.node_id(), target.node_id()]
+        );
+        drop(store);
         context.live_target_editor(&circle).unwrap();
     }
 
