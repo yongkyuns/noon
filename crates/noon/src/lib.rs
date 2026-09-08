@@ -44,8 +44,8 @@ pub use live_program::*;
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
-    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
-    TransformToRequest,
+    FadeTranslation, IndicateOptions, LiveLayoutTarget, LiveSession, LiveSessionError,
+    SubsetDisplayMode, TransformToRequest,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::*;

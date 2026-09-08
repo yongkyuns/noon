@@ -34,6 +34,36 @@ impl LiveContinuation for FamilyArrangement {
                     .map_err(|e| e.to_string())?;
                 live.arrange_family(&self.family, 0.0, 1.0, 0.3, false)
                     .map_err(|e| e.to_string())?;
+                let layout = live
+                    .effective_family_layout(&self.nested)
+                    .map_err(|e| e.to_string())?;
+                if (layout.width - 3.7).abs() > 1e-5 {
+                    return Err("live family layout did not observe the arranged members".into());
+                }
+                live.move_family_to(
+                    &self.nested,
+                    crate::LiveLayoutTarget::Point(0.0, 0.0),
+                    (0.0, 0.0),
+                    (1.0, 0.0),
+                )
+                .map_err(|e| e.to_string())?;
+                live.next_family_to(
+                    &self.nested,
+                    crate::LiveLayoutTarget::Point(0.0, 0.0),
+                    crate::semantic_mobject::ManimNextToArgs {
+                        direction: (0.0, 2.0),
+                        buff: 0.25,
+                        aligned_edge: (0.0, 0.0),
+                        mask: (0.0, 1.0),
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+                live.align_family_to(
+                    &self.nested,
+                    crate::LiveLayoutTarget::Mobject(&self.first),
+                    (0.0, 1.0),
+                )
+                .map_err(|e| e.to_string())?;
                 self.stage = 2;
                 live.wait_segment(0.5)
                     .map(ContinuationStep::Await)

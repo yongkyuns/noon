@@ -699,6 +699,48 @@ impl SemanticExecutionPlayer {
         .map(|_| ())
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_family_layout(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::EffectiveMobjectLayout, String> {
+        self.with_live_session(|live| live.effective_family_layout(family))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_move_family_to(
+        &mut self,
+        family: &noon::MobjectFamily,
+        target: noon::LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.move_family_to(family, target, edge, mask))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_next_family_to(
+        &mut self,
+        family: &noon::MobjectFamily,
+        target: noon::LiveLayoutTarget<'_>,
+        args: noon::semantic_mobject::ManimNextToArgs,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.next_family_to(family, target, args))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_align_family_to(
+        &mut self,
+        family: &noon::MobjectFamily,
+        target: noon::LiveLayoutTarget<'_>,
+        axis: (f64, f64),
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.align_family_to(family, target, axis))
+            .map(|_| ())
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_scale(
         &mut self,
