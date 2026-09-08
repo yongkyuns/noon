@@ -1,5 +1,7 @@
 """Ordinary fill/stroke color and paint-opacity animation over shared Rust."""
 
+import struct
+
 from noon import Circle, Color, Scene, linear
 
 
@@ -38,8 +40,17 @@ class OrdinaryPaintPlay(Scene):
             run_time=0.4,
             rate_func=linear,
         )
-        assert abs(circle.get_fill_opacity() - 0.8) < 1e-9
-        assert abs(circle.get_stroke_opacity() - 0.3) < 1e-9
+        # Completed effective paint is sampled from Rust's f32 runtime state.
+        # Round only the expected endpoints, not the observed getter values;
+        # retain the tight bound so even a one-f32-ULP error remains a failure.
+        expected_fill_opacity = struct.unpack("<f", struct.pack("<f", 0.8))[0]
+        expected_stroke_opacity = struct.unpack("<f", struct.pack("<f", 0.3))[0]
+        assert abs(circle.get_fill_opacity() - expected_fill_opacity) < 1e-9, (
+            f"effective fill opacity: {circle.get_fill_opacity()!r}, expected {expected_fill_opacity!r}"
+        )
+        assert abs(circle.get_stroke_opacity() - expected_stroke_opacity) < 1e-9, (
+            f"effective stroke opacity: {circle.get_stroke_opacity()!r}, expected {expected_stroke_opacity!r}"
+        )
         assert self.time == 0.4
 
         circle.set_fill(blue, opacity=1.0)
