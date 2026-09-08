@@ -2,7 +2,6 @@ import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
 import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
-import { SceneIdentityMap } from "./scene-identity.js";
 import {
   exampleUrl,
   filterGalleryExamples,
@@ -336,7 +335,6 @@ toolbarActions.prepend(resetButton);
 let selectedExampleId = null;
 let canonicalSource = "";
 let authoringClient = null;
-const sceneIdentities = new SceneIdentityMap();
 const drafts = new Map();
 const sourceCache = new Map();
 const generations = new PlaygroundGeneration();
@@ -514,11 +512,7 @@ function ensureRuntimePreparation() {
 
 async function ensureRuntimeReady({
   preparation = null,
-  semanticExecution = null,
-  sceneJson,
-  sceneSpecJson,
-  startRetained,
-  callbacks,
+  semanticExecution,
   authoringClient: client,
   loopDurationSeconds,
 }) {
@@ -526,13 +520,6 @@ async function ensureRuntimeReady({
   if (player !== null) return null;
 
   const task = (async () => {
-    if (startRetained && callbacks !== null && callbacks !== undefined) {
-      throw new Error(
-        "retained authoring with Python host callbacks is not supported yet; " +
-          "split the callback work from retained text instead of silently dropping either",
-      );
-    }
-
     const prepared = preparation ?? ensureRuntimePreparation();
     if (prepared === null) {
       throw new Error("execution runtime preparation is unavailable");
@@ -544,20 +531,10 @@ async function ensureRuntimeReady({
       patchStatus.value = "Preparing authored animation…";
       patchStatus.dataset.state = "running";
 
-      const ready = semanticExecution !== null
-        ? await nextPlayer.startSemanticExecution(semanticExecution, {
-            authoringClient: client,
-            loopDurationSeconds,
-          })
-        : startRetained
-          ? await nextPlayer.startRetainedCanonical(sceneSpecJson, {
-              loopDurationSeconds,
-            })
-          : await nextPlayer.start(sceneJson, {
-              loopDurationSeconds,
-              callbacks,
-              authoringClient: client,
-            });
+      const ready = await nextPlayer.startSemanticExecution(semanticExecution, {
+        authoringClient: client,
+        loopDurationSeconds,
+      });
       const initialState = await nextPlayer.state();
 
       player = nextPlayer;
@@ -568,12 +545,9 @@ async function ensureRuntimeReady({
       rendererBackend = ready.render.backend;
       status.dataset.rendererBackend = rendererBackend;
       status.dataset.executionMode = nextPlayer.mode;
-      status.dataset.executionTopology =
-        semanticExecution === null
-          ? "authoring-engine-render-workers"
-          : "python-semantic-engine-render-worker";
+      status.dataset.executionTopology = "python-semantic-engine-render-worker";
       status.dataset.runtimeStartup = "started-on-demand";
-      const sourceOwnsExecution = semanticExecution?.continuationGeneration != null;
+      const sourceOwnsExecution = semanticExecution.continuationGeneration != null;
       status.dataset.playbackControls = sourceOwnsExecution ? "unavailable" : "available";
       if (!sourceOwnsExecution) {
         playbackControls = new PlaygroundPlaybackControls(
@@ -829,10 +803,6 @@ async function runScene() {
               result = await ensureRuntimeReady({
                 preparation,
                 semanticExecution: registration.semanticExecution,
-                sceneJson: null,
-                sceneSpecJson: null,
-                startRetained: false,
-                callbacks: null,
                 authoringClient: client,
                 loopDurationSeconds,
               });
@@ -875,31 +845,16 @@ async function runScene() {
         await discardSemanticExecution(authored, client);
         return recordStale(runToken, "after-authoring");
       }
-      if (authored.kind !== "scene_document") {
-        throw new Error("Python scene source returned a PatchBatch");
+      const semanticExecution = authored.semanticExecution;
+      if (!semanticExecution) {
+        throw new Error("Python scene source must return shared semantic execution");
       }
 
-      const semanticExecution = authored.semanticExecution ?? null;
-      const runtimeDocument =
-        semanticExecution !== null
-          ? null
-          : authored.callbacks === null
-            ? sceneIdentities.stabilize(authored.document, authored.identities)
-            : authored.document;
-      const runtimeSceneSpec =
-        semanticExecution !== null ||
-        authored.sceneSpec === null ||
-        authored.sceneSpec === undefined
-          ? null
-          : sceneIdentities.stabilizeSceneSpec(authored.sceneSpec, authored.identities);
-      const sceneJson = runtimeDocument === null ? null : JSON.stringify(runtimeDocument);
-      const sceneSpecJson = runtimeSceneSpec === null ? null : JSON.stringify(runtimeSceneSpec);
-      const startRetained = semanticExecution === null && sceneSpecJson !== null;
       const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
 
       if (player !== null) {
         updatePlaybackControls({
-          supported: semanticExecution?.continuationGeneration == null,
+          supported: semanticExecution.continuationGeneration == null,
           player,
           durationSeconds: loopDurationSeconds,
         });
@@ -938,10 +893,6 @@ async function runScene() {
         result = await ensureRuntimeReady({
           preparation,
           semanticExecution,
-          sceneJson,
-          sceneSpecJson,
-          startRetained,
-          callbacks: authored.callbacks,
           authoringClient: client,
           loopDurationSeconds,
         });
@@ -952,17 +903,10 @@ async function runScene() {
           await discardSemanticExecution(authored, client);
           return recordStale(runToken, "after-restart");
         }
-        result = semanticExecution !== null
-          ? await player.reconcileSemanticExecution(semanticExecution, {
-              authoringClient: client,
-              loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
-            })
-          : await player.reconcileScene(sceneJson, {
-              sceneSpecJson,
-              callbacks: authored.callbacks,
-              authoringClient: client,
-              loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
-            });
+        result = await player.reconcileSemanticExecution(semanticExecution, {
+          authoringClient: client,
+          loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
+        });
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
       }
 

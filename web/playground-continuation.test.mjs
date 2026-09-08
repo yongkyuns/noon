@@ -55,11 +55,11 @@ test("source-owned semantic runs do not expose unsupported playback controls", (
   const runtimeStart = main.indexOf("async function ensureRuntimeReady(");
   const runtimeEnd = main.indexOf("async function ensureExecutionReady(", runtimeStart);
   const runtime = main.slice(runtimeStart, runtimeEnd);
-  assert.match(runtime, /semanticExecution\?\.continuationGeneration != null/);
+  assert.match(runtime, /semanticExecution\.continuationGeneration != null/);
   assert.match(runtime, /if \(!sourceOwnsExecution\) \{[\s\S]*new PlaygroundPlaybackControls/);
   assert.match(
     runScene,
-    /updatePlaybackControls\(\{\s*supported: semanticExecution\?\.continuationGeneration == null,/,
+    /updatePlaybackControls\(\{\s*supported: semanticExecution\.continuationGeneration == null,/,
   );
   assert.match(runtime, /playbackControls\?\.destroy\(\);\s*playbackControls = null;/);
 });
