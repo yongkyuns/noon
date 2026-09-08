@@ -5721,7 +5721,7 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, GeometryRef, HostCallbackId, RateFunction, SemanticMutationTransaction,
+        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticMutationTransaction,
         SemanticVec3, Vec2,
     };
 
