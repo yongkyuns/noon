@@ -125,5 +125,23 @@ fn main() -> Result<(), String> {
             json!({ "name": name, "times": times, "frames": frames })
         );
     }
+    for layout in ["fit", "fixed", "overdraw"] {
+        let context =
+            json!({"object_count": 16, "layout": layout, "aspect": 16.0 / 9.0, "duration": 2.0});
+        let mut session =
+            example_scenes::analytic_profile::session(16, layout.parse()?, 16.0 / 9.0, 2.0)?;
+        let times = [0.0, 0.5, 1.0, 2.0];
+        let mut frames = Vec::new();
+        for time in times {
+            session
+                .advance_to(time)
+                .map_err(|error| error.to_string())?;
+            frames.push(execution_frame_value(&session));
+        }
+        println!(
+            "{}",
+            json!({"name": format!("analytic_profile_{layout}"), "source": "analytic_profile", "context": context, "times": times, "frames": frames})
+        );
+    }
     Ok(())
 }
