@@ -797,7 +797,7 @@ from _manim_canonical_scene import (
     materialize_legacy_geometry,
 )
 from _manim_source_execution import (
-    BARRIER_GLOBAL, compile_authoring_source,
+    BARRIER_GLOBAL, compile_authoring_source, authoring_source_scope,
 )
 from noon import PatchBatch, Scene
 
@@ -810,7 +810,8 @@ __noon_code, __noon_portable_constructs = compile_authoring_source(
 )
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
-exec(__noon_code, __noon_namespace)
+with authoring_source_scope(export_document=bool(__noon_export_document)):
+    exec(__noon_code, __noon_namespace)
 
 if "result" in __noon_namespace:
     __noon_result = __noon_namespace["result"]

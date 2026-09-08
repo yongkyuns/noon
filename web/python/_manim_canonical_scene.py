@@ -28,6 +28,7 @@ import _manim_phase_b as _phase_b
 import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
+from _manim_source_execution import current_source_invocation
 import _noon_ir as _ir
 import noon as _base
 
@@ -62,6 +63,14 @@ _EXPORT_DOCUMENT_CONSTRUCT = "_noon_export_document_construct"
 _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
     "_noon_default_synchronous_continuation_candidate"
 )
+
+
+def _export_document_active(scene: _base.Scene) -> bool:
+    invocation = current_source_invocation()
+    return bool(
+        getattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
+        or (invocation is not None and invocation.export_document)
+    )
 
 
 def _json(value: object) -> str:
@@ -525,15 +534,20 @@ def _async_continuation_active(scene: _base.Scene) -> bool:
 
 
 def _default_synchronous_continuation_candidate(scene: _base.Scene) -> bool:
-    """Whether this ordinary construct may enter one supported JSPI barrier."""
-    return bool(getattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False))
+    """Whether this ordinary host stack may enter a supported JSPI barrier."""
+    invocation = current_source_invocation()
+    return bool(
+        getattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False)
+        or (invocation is not None and not invocation.export_document
+            and not _async_continuation_active(scene))
+    )
 
 
 def _start_default_synchronous_continuation(scene: _base.Scene) -> None:
     """Enter the existing synchronous continuation only before Rust mutation."""
     if (
         not _default_synchronous_continuation_candidate(scene)
-        or getattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
+        or _export_document_active(scene)
     ):
         return
     if _synchronous_continuation_active(scene):
@@ -548,6 +562,12 @@ def _start_default_synchronous_continuation(scene: _base.Scene) -> None:
             "Integration in this browser; use async construct or a JSPI-capable browser"
         )
     setattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, True)
+    invocation = current_source_invocation()
+    if invocation is not None:
+        invocation.cleanup.callback(_finish_synchronous_continuation_construct, scene)
+        if _reactive._current_authoring_scene() is not scene:
+            token = _reactive._enter_authoring_scene(scene)
+            invocation.cleanup.callback(_reactive._leave_authoring_scene, token)
 
 
 def _finish_synchronous_continuation_construct(scene: _base.Scene) -> None:
@@ -807,7 +827,7 @@ def _canonical_wait(
     scene: _base.Scene, duration: float = 1.0
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     _require_portable_barrier_admission(scene)
-    if getattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False):
+    if _export_document_active(scene):
         authority, _ = _timing_authority(scene)
         if authority == "canonical":
             try:
@@ -822,8 +842,9 @@ def _canonical_wait(
             _create_context is not None
             or getattr(scene, "_canonical_authoring_context", None) is not None
         )
-        and execution_context(scene) is not None
     ):
+        if execution_context(scene) is None:
+            raise NotImplementedError("Scene.wait request is unsupported by the shared Rust engine")
         _start_default_synchronous_continuation(scene)
     if _semantic_continuation_active(scene):
         try:
@@ -1044,7 +1065,7 @@ def _play_canonical_affine_lifecycle(
 
 def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):
     """Author the explicitly requested #959 external document."""
-    if not getattr(self, _EXPORT_DOCUMENT_CONSTRUCT, False):
+    if not _export_document_active(self):
         raise NotImplementedError("legacy play is available only for explicit document export")
     authority, _ = _timing_authority(self)
     if authority == "canonical":
@@ -2221,7 +2242,7 @@ def _play_canonical_composition(
 
 def _play(self, *args, **kwargs):
     _require_portable_barrier_admission(self)
-    if getattr(self, _EXPORT_DOCUMENT_CONSTRUCT, False):
+    if _export_document_active(self):
         # The requested external artifact still uses the #959 export codec.
         if len(args) == 1:
             classified = _canonical_affine_lifecycle_animation(self, args[0])
