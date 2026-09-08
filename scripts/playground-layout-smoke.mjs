@@ -127,8 +127,16 @@ try {
     if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
   });
 
+  // Hold the optional post-paint preload at its real module-load boundary so
+  // cold-layout assertions cannot race the automatic first source run.
+  let releasePreload;
+  const preloadGate = new Promise((resolve) => { releasePreload = resolve; });
+  await page.route("**/live-authoring-bootstrap.js", async (route) => {
+    await preloadGate;
+    await route.continue();
+  });
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
-    waitUntil: "load",
+    waitUntil: "domcontentloaded",
   });
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
 
@@ -154,7 +162,14 @@ try {
   assertCentered(deferredDesktop.canvas, deferredDesktop.wrap, "deferred desktop");
   assertNoOverflow(deferredDesktop, "deferred desktop");
 
-  await page.locator("#replace-scene").click();
+  releasePreload();
+  await page.waitForFunction(
+    () => ["ready", "error"].includes(document.querySelector("#status")?.dataset.liveAuthoring),
+    null,
+    { timeout: 60_000 },
+  );
+  assert.equal(await page.locator("#status").getAttribute("data-live-authoring"), "ready",
+    `automatic preload must finish after the cold layout is measured: ${await page.locator("#patch-status").textContent()}\n${browserErrors.join("\n")}`);
   await page.waitForFunction(
     () =>
       document.querySelector("#status")?.dataset.rendererBackend === "WebGL2" &&
