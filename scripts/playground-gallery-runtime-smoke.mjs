@@ -56,9 +56,9 @@ try {
   let next = 0;
   async function check({ entry, noJspi }) {
     const context = await browser.newContext({ ...options });
-    // Observe the existing authoring protocol without editing user source or
-    // changing engine clocks. Renderer metrics describe the last presentation,
-    // which can precede an authored static wait's completion.
+    // Observe shared execution result metadata on the existing authoring channel,
+    // not an exported scene representation. Renderer time is the last visible
+    // presentation and may precede completion of an authored static wait.
     await context.addInitScript(() => {
       window.__galleryAuthoringResults = [];
       window.Worker = new Proxy(window.Worker, {
@@ -68,7 +68,9 @@ try {
             if (data?.channel === 'noon.authoring' && data.type === 'result') {
               try {
                 const result = JSON.parse(data.resultJson);
-                if (result.kind === 'scene_document') window.__galleryAuthoringResults.push(result);
+                if (result.semantic_execution === true) {
+                  window.__galleryAuthoringResults.push({ duration: result.duration });
+                }
               } catch (error) { window.__galleryAuthoringCaptureError = String(error); }
             }
           });
@@ -121,7 +123,7 @@ try {
         result: window.__galleryAuthoringResults.at(-1), error: window.__galleryAuthoringCaptureError,
       }));
       assert.equal(authoring.error, undefined);
-      assert.ok(authoring.result?.semantic_execution, 'missing final shared authoring result');
+      assert.ok(authoring.result, 'missing final shared authoring result');
       result.authoredDuration = authoring.result.duration;
       assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
       if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
