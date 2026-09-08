@@ -15,10 +15,6 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const counts = integerList(process.env.NOON_AUTHORING_PERF_COUNTS ?? "1000,10000,100000");
 const samples = positiveInteger(process.env.NOON_AUTHORING_PERF_SAMPLES ?? "3", "samples");
 const scrubs = positiveInteger(process.env.NOON_AUTHORING_PERF_SCRUBS ?? "20", "scrubs");
-const cameraSamples = positiveInteger(
-  process.env.NOON_AUTHORING_PERF_CAMERA_SAMPLES ?? "30",
-  "camera samples",
-);
 const backend = process.env.NOON_AUTHORING_PERF_BACKEND ?? "webgpu";
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
 const artifactPath = path.resolve(
@@ -58,7 +54,6 @@ try {
       objects: String(objects),
       samples: String(samples),
       scrubs: String(scrubs),
-      camera_samples: String(cameraSamples),
     });
     process.stdout.write(`Authoring ${backend} ${objects.toLocaleString()} objects… `);
     await page.goto(`${baseUrl}/web/authoring-perf.html?${query}`, { waitUntil: "load" });
@@ -74,21 +69,26 @@ try {
     }
     const report = await page.evaluate(() => window.__NOON_AUTHORING_PERF__);
     assert.equal(report.workload.objects, objects);
-    assert.equal(report.workload.cameraSamples, cameraSamples);
+    assert.equal(report.schemaVersion, 2);
+    assert.equal(report.execution.mode, "semantic");
+    assert.equal(report.warmUnchanged.rebuiltCount, samples);
+    assert.equal(report.oneObjectSourceEdit.rebuiltCount, samples);
+    assert.equal(report.scrub.samples, scrubs);
+    assert.ok(report.renderer.instances > 0, "shared scene must render visible instances");
+    assert.deepEqual(errors, [], "authoring profile must finish without browser errors");
     cases.push(report);
     console.log(
-      `cold ${format(report.cold.timeToVisibleMs)} ms, ` +
-        `unchanged p95 ${format(report.warmUnchanged.timeToVisibleMs?.p95)} ms, ` +
-        `local edit p95 ${format(report.oneObjectEdit.timeToVisibleMs?.p95)} ms, ` +
-        `scrub p95 ${format(report.scrub.timeToVisibleMs?.p95)} ms, ` +
-        `camera encode/submit p95 ${format(report.stableCamera.encodeSubmitMs?.p95)} ms`,
+      `cold ${format(report.cold.totalRoundTripMs)} ms, ` +
+        `unchanged p95 ${format(report.warmUnchanged.totalRoundTripMs?.p95)} ms, ` +
+        `source edit p95 ${format(report.oneObjectSourceEdit.totalRoundTripMs?.p95)} ms, ` +
+        `seek control p95 ${format(report.scrub.controlRoundTripMs?.p95)} ms`,
     );
     await page.close();
   }
 
   const artifact = {
-    schemaVersion: 1,
-    benchmark: "Noon interactive authoring latency matrix",
+    schemaVersion: 2,
+    benchmark: "Noon shared authoring latency matrix",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
     host: {
@@ -100,7 +100,7 @@ try {
       totalMemoryBytes: os.totalmem(),
       node: process.version,
     },
-    configuration: { backend, counts, samples, scrubs, cameraSamples },
+    configuration: { backend, counts, samples, scrubs },
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });

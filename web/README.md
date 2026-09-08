@@ -47,7 +47,7 @@ The **Example** picker is intentionally a teaching sequence rather than a featur
 9. **Instanced field · 180** — analytic batching and dirty instance uploads on a semantic grid.
 10. **Morph stress · 1,000** — one deliberately dense profiling scene with twelve reusable morph targets.
 
-All picker scenes must execute through the Python authoring layer, compile through the native Rust `ScenePlayer`, and finish before the playground's four-second loop. The same validation runs in CI and in the Pages build.
+Gallery scenes execute through shared Rust semantic sessions. Source-owned `play()`/`wait()` continuations determine their duration; they are not constrained to a fixed four-second loop. Browser qualification exercises this path in CI.
 
 ## Semantic Python authoring
 
@@ -72,21 +72,21 @@ scene.play(Transform(left, Square(1.0, color=PURPLE)), run_time=1.0)
 result = scene
 ```
 
-`Vec2`, `ORIGIN`, direction/corner constants, named colors, object-aware layout, `Group`/`VGroup`, `run_time`, `wait`, and `.animate` all lower to the same versioned `SceneDocument`. The frontend does not introduce a second persistent semantic representation.
+`Vec2`, `ORIGIN`, direction/corner constants, named colors, object-aware layout, `Group`/`VGroup`, `run_time`, `wait`, and `.animate` use shared Rust semantic operations. Python owns authoring ergonomics and arbitrary Python callback invocation; Rust owns semantic and execution state.
 
 Sequential `.animate` operations are evaluated at semantic scene time. A later animation therefore starts from the exact endpoint authored by the previous animation rather than the object's original base snapshot.
 
-Cross-kind `Circle <-> Rectangle/Square` Transform is also semantic: the `SceneDocument` retains analytic source/target snapshots. The Rust compiler creates temporary fixed path geometry only for rendering the active transition. Same-kind Circle/Rectangle/Line Transforms remain analytic.
+Transform semantics are authored in Rust and lowered into renderer-independent execution data. Analytic primitives and fixed path geometry remain distinct execution representations.
 
 ## Live authoring
 
-Open **Python scene source** and click **Run Python scene** to build a complete versioned `SceneDocument`. Explicit object and track `key` values retain runtime identity across Python reruns. Compatible style, transform, and timeline edits reconcile into semantic patches; unsafe geometry or draw-order changes fall back to transactional replacement. Both paths preserve the playhead and existing canvas/GPU resources and restart ordered patch sequencing at zero.
+Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. A rerun replaces the session; it does not currently qualify incremental hot reload or identity preservation between independently authored scenes. Within a running session, shared Rust semantics own object identity and mutations.
 
-**Run Python patch** sends an incremental `PatchBatch` to that persistent runtime. The first Python action lazily downloads the pinned Pyodide runtime; playback continues while Python loads or runs, and deployed scenes still work without Pyodide when authoring controls are unused.
+Python loads lazily in a separate Pyodide worker. The normal playground does not serialize scene documents or allocate frontend semantic identities. Source continuations attach early so Rust execution can release each `play()`/`wait()` barrier. Direct Rust/WASM examples do not require Python.
 
-The worker loads Pyodide `314.0.5` from the official jsDelivr distribution, so Python authoring requires network access. The render/runtime wasm package remains local under `web/pkg/`.
+The worker loads the pinned Pyodide distribution from jsDelivr, so first-time Python authoring requires network access. The Rust/WASM package remains local under `web/pkg/`.
 
-The worker protocol carries Pyodide's already-encoded result JSON across the thread boundary and parses it once on the main thread. This avoids structured-cloning a large JavaScript object graph. Run `node web/scene-pipeline-perf.mjs` to benchmark transfer, parsing, validation, identity stabilization, diffing, and serialization independently at 1k/10k/100k objects.
+`node scripts/authoring-perf.mjs` measures cold authoring, unchanged source reruns, one-object source edits, and static seek control round trips through shared sessions. Schema 2 explicitly reports session replacements and unavailable isolated CPU/GPU, incremental-mutation, and camera-uniform timings. It cannot be compared with the removed scene-document profiler. `node scripts/perf-corpus.mjs` measures representative authored scenes, including moving cameras, through shared execution.
 
 ## Vector paths
 

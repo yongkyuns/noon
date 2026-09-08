@@ -1,345 +1,149 @@
-import init, { NoonCanvasPlayer } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
-import {
-  stableCameraSweepTargets,
-  summarizeStableCameraProfile,
-} from "./authoring-perf-scenarios.js";
 import { summarizeSamples } from "./frame-metrics.js";
-import { SceneIdentityMap } from "./scene-identity.js";
 
 const parameters = new URLSearchParams(location.search);
 const objectCount = positiveInteger("objects", 1_000);
 const samples = positiveInteger("samples", 5);
 const scrubSamples = positiveInteger("scrubs", 20);
-const cameraSamples = positiveInteger("camera_samples", 30);
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 const output = document.querySelector("#json");
-
-let client = null;
-let player = null;
-const identities = new SceneIdentityMap();
 const jank = new BrowserJankMonitor();
+let client = null;
+let execution = null;
+let executionError = null;
 
 try {
-  await init();
-  const source = await loadText("./python/examples/authoring_perf_scene.py");
+  const response = await fetch("./python/examples/authoring_perf_scene.py");
+  if (!response.ok) throw new Error(`Unable to load authoring source: HTTP ${response.status}`);
+  const source = await response.text();
   jank.start();
-
-  const cold = await coldRun(source);
+  const started = performance.now();
+  client = new PythonAuthoringClient();
+  await client.ready();
+  const workerStartupMs = performance.now() - started;
+  execution = new AuthoringExecutionClient(canvas, {
+    onError: (error) => { executionError = error; },
+  });
+  const cold = await runSource(source, 0, true);
+  cold.workerStartupMs = workerStartupMs;
+  cold.totalRoundTripMs += workerStartupMs;
   const unchanged = [];
+  const sourceEdits = [];
   for (let sample = 0; sample < samples; sample += 1) {
-    status.value = `Warm unchanged rerun ${sample + 1}/${samples} · ${objectCount.toLocaleString()} objects…`;
-    unchanged.push(await rerun(source, 0, "unchanged"));
+    status.value = `Unchanged source rerun ${sample + 1}/${samples}…`;
+    unchanged.push(await runSource(source, 0));
   }
-
-  const localEdit = [];
-  let variant = 1;
   for (let sample = 0; sample < samples; sample += 1) {
-    status.value = `One-object edit ${sample + 1}/${samples} · ${objectCount.toLocaleString()} objects…`;
-    localEdit.push(await rerun(source, variant, "one-object-style"));
-    variant = variant === 0 ? 1 : 0;
+    status.value = `One-object source edit ${sample + 1}/${samples}…`;
+    sourceEdits.push(await runSource(source, sample % 2 === 0 ? 1 : 0));
   }
-
-  status.value = `Scrub/seek profile · ${scrubSamples} samples…`;
-  const scrubs = profileScrubs(scrubSamples);
-
-  status.value = `Stable camera profile · ${cameraSamples} samples…`;
-  const cameraSweep = profileStableCamera(cameraSamples);
-
+  const scrubs = [];
+  for (let index = 0; index < scrubSamples; index += 1) {
+    status.value = `Static scene seek ${index + 1}/${scrubSamples}…`;
+    const target = ((index * 0.61803398875) % 1) * 3.8;
+    const seekStarted = performance.now();
+    const state = await execution.seek(target);
+    if (Math.abs(state.time - target) > 1e-5) throw new Error("seek did not reach its target");
+    // This is a control round trip, not an isolated GPU or presentation timer.
+    scrubs.push(performance.now() - seekStarted);
+  }
+  const metrics = (await execution.metrics()).metrics;
+  if (executionError) throw executionError;
   const report = {
-    schemaVersion: 1,
-    benchmark: "Noon interactive authoring time-to-visible profile",
+    schemaVersion: 2,
+    benchmark: "Noon shared authoring round-trip profile",
     generatedAt: new Date().toISOString(),
     environment: {
       userAgent: navigator.userAgent,
-      rendererBackend: player.rendererBackend(),
-      devicePixelRatio: window.devicePixelRatio || 1,
-      viewport: [canvas.width, canvas.height],
-      hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+      rendererBackend: execution.rendererBackend,
+      viewportCssPixels: [canvas.clientWidth, canvas.clientHeight],
     },
     workload: {
       objects: objectCount,
       warmSamples: samples,
       scrubSamples,
-      cameraSamples,
       source: "python/examples/authoring_perf_scene.py",
-      localEdit: "one stable-identity circle changes fill color",
-      stableCamera: "camera center moves while visible draw topology remains unchanged",
+      sourceEdit: "one circle changes fill color in a rebuilt semantic session",
+      camera: "authored",
+      seek: "static scene; this does not qualify animated seek parity",
     },
+    execution: { mode: execution.mode, rerun: "session-replacement" },
     cold,
     warmUnchanged: summarizeOperations(unchanged),
-    oneObjectEdit: summarizeOperations(localEdit),
-    scrub: summarizeScrubs(scrubs),
-    stableCamera: summarizeStableCameraProfile(cameraSweep),
+    oneObjectSourceEdit: summarizeOperations(sourceEdits),
+    scrub: { samples: scrubs.length, controlRoundTripMs: summarizeSamples(scrubs) },
+    renderer: {
+      objectCount: metrics.objectCount,
+      drawCalls: metrics.drawCalls,
+      instances: metrics.instancesDrawn,
+    },
+    unavailableMetrics: ["incrementalMutationLatency", "isolatedCpuTime", "gpuTime", "cameraUniformUpdateLatency"],
   };
-
-  window.__NOON_AUTHORING_PERF__ = report;
   output.textContent = JSON.stringify(report, null, 2);
-  status.value =
-    `Complete · unchanged visible p95 ${format(report.warmUnchanged.timeToVisibleMs?.p95)} ms · ` +
-    `one-object edit p95 ${format(report.oneObjectEdit.timeToVisibleMs?.p95)} ms · ` +
-    `camera encode/submit p95 ${format(report.stableCamera.encodeSubmitMs?.p95)} ms`;
+  window.__NOON_AUTHORING_PERF__ = report;
+  status.value = `Complete · unchanged rerun p95 ${format(report.warmUnchanged.totalRoundTripMs.p95)} ms · ` +
+    `source edit p95 ${format(report.oneObjectSourceEdit.totalRoundTripMs.p95)} ms`;
   status.dataset.state = "complete";
-  console.log("NOON_AUTHORING_PERF", report);
 } catch (error) {
   console.error(error);
   status.value = `Authoring benchmark failed: ${error}`;
   status.dataset.state = "error";
 } finally {
   jank.stop();
+  execution?.terminate();
   client?.terminate();
 }
 
-async function coldRun(source) {
-  status.value = `Cold Run · ${objectCount.toLocaleString()} objects…`;
-  const operationStarted = performance.now();
-
-  const workerStarted = performance.now();
-  client = new PythonAuthoringClient();
-  await client.ready();
-  const workerStartupMs = performance.now() - workerStarted;
-
-  const authored = await author(source, 0);
-  const stabilized = stabilize(authored.result);
-  const encoded = serialize(stabilized.document);
-
-  const createStarted = performance.now();
-  player = await NoonCanvasPlayer.create(canvas, encoded.json, 4.0);
-  const playerCreateMs = performance.now() - createStarted;
-  player.resize(canvas.width, canvas.height);
-  player.setCamera(0, 0, cameraHeight(objectCount));
-
-  const visible = await presentNextFrame();
-  const operationEnded = performance.now();
-  return {
-    timeToVisibleMs: operationEnded - operationStarted,
-    workerStartupMs,
-    workerRoundTripMs: authored.ms,
-    stabilizeMs: stabilized.ms,
-    serializeMs: encoded.ms,
-    serializedBytes: encoded.bytes,
-    playerCreateMs,
-    visibleFrameWaitAndSubmitMs: visible.waitAndSubmitMs,
-    frame: visible.frame,
-    longTasks: jank.summary(operationStarted, operationEnded),
-  };
-}
-
-async function rerun(source, variant, kind) {
-  const operationStarted = performance.now();
-  const authored = await author(source, variant);
-  const stabilized = stabilize(authored.result);
-  const encoded = serialize(stabilized.document);
-
-  const reconcileStarted = performance.now();
-  const playheadBefore = player.time();
-  const incremental = player.reconcileScene(encoded.json);
-  const reconcileMs = performance.now() - reconcileStarted;
-  if (player.time() !== playheadBefore) {
-    throw new Error(`${kind} reconciliation changed the current playhead`);
-  }
-
-  const visible = await presentNextFrame();
-  const operationEnded = performance.now();
-  return {
-    kind,
-    timeToVisibleMs: operationEnded - operationStarted,
-    workerRoundTripMs: authored.ms,
-    stabilizeMs: stabilized.ms,
-    serializeMs: encoded.ms,
-    serializedBytes: encoded.bytes,
-    reconcileMs,
-    incremental,
-    visibleFrameWaitAndSubmitMs: visible.waitAndSubmitMs,
-    frame: visible.frame,
-    longTasks: jank.summary(operationStarted, operationEnded),
-  };
-}
-
-async function author(source, variant) {
+async function runSource(source, variant, cold = false) {
+  status.value = cold ? `Cold authoring · ${objectCount} objects…` : status.value;
   const started = performance.now();
   const result = await client.run(source, { object_count: objectCount, variant });
-  const ms = performance.now() - started;
-  if (result.kind !== "scene_document") {
-    throw new Error("authoring performance source did not return a Scene");
+  const authoringRoundTripMs = performance.now() - started;
+  if (!result.semanticExecution || result.semanticExecution.continuationGeneration != null) {
+    throw new Error("authoring benchmark requires a completed shared static scene");
   }
-  return { result, ms };
-}
-
-function stabilize(result) {
-  const started = performance.now();
-  const document = identities.stabilize(result.document, result.identities);
-  return { document, ms: performance.now() - started };
-}
-
-function serialize(document) {
-  const started = performance.now();
-  const json = JSON.stringify(document);
-  return {
-    json,
-    ms: performance.now() - started,
-    bytes: new TextEncoder().encode(json).byteLength,
-  };
-}
-
-async function presentNextFrame() {
-  const started = performance.now();
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const timestamp = await nextAnimationFrame();
-    const submitStarted = performance.now();
-    const presented = player.renderFrame(timestamp);
-    const browserSubmitMs = performance.now() - submitStarted;
-    if (presented) {
-      return {
-        waitAndSubmitMs: performance.now() - started,
-        frame: frameSnapshot(browserSubmitMs),
-      };
-    }
-  }
-  throw new Error("authoring result did not present within eight animation frames");
-}
-
-function profileScrubs(count) {
-  const results = [];
-  for (let index = 0; index < count; index += 1) {
-    const target = ((index * 0.61803398875) % 1) * 3.8;
-    player.resetClock();
-    player.renderFrame(0);
-    const started = performance.now();
-    const presented = player.renderFrame(target * 1000);
-    const elapsed = performance.now() - started;
-    if (!presented) {
-      throw new Error(`scrub frame at ${target.toFixed(3)}s was not presented`);
-    }
-    results.push({
-      targetSeconds: target,
-      timeToVisibleMs: elapsed,
-      frame: frameSnapshot(elapsed),
+  const attachStarted = performance.now();
+  if (cold) {
+    await execution.startSemanticExecution(result.semanticExecution, {
+      authoringClient: client, initiallyPaused: true, loopDurationSeconds: 4,
     });
+  } else {
+    await execution.reconcileSemanticExecution(result.semanticExecution, { authoringClient: client });
+    await execution.pause();
   }
-  return results;
-}
-
-function profileStableCamera(count) {
-  const results = [];
-  const normalHeight = cameraHeight(objectCount);
-  const benchmarkHeight = normalHeight * 1.2;
-  const targets = stableCameraSweepTargets(count, benchmarkHeight);
-
-  player.resetClock();
-  player.setCamera(0, 0, benchmarkHeight);
-  if (!player.renderFrame(0)) {
-    throw new Error("camera benchmark bootstrap frame was not presented");
-  }
-
-  for (const target of targets) {
-    const started = performance.now();
-    player.setCamera(target.x, target.y, benchmarkHeight);
-    const presented = player.renderFrame(0);
-    const elapsed = performance.now() - started;
-    if (!presented) {
-      throw new Error("camera update did not present a frame");
-    }
-    results.push({
-      center: [target.x, target.y],
-      timeToVisibleMs: elapsed,
-      frame: frameSnapshot(elapsed),
-    });
-  }
-
-  player.setCamera(0, 0, normalHeight);
-  player.renderFrame(0);
-  return results;
-}
-
-function frameSnapshot(browserSubmitMs) {
+  await execution.advanceTo(0);
+  const ended = performance.now();
+  if (executionError) throw executionError;
   return {
-    browserSubmitMs,
-    cpuFrameMs: finite(player.lastCpuFrameMs()),
-    runtimeMs: finite(player.lastRuntimeEvaluationMs()),
-    prepareMs: finite(player.lastFramePrepareMs()),
-    uploadMs: finite(player.lastUploadMs()),
-    encodeSubmitMs: finite(player.lastEncodeSubmitMs()),
-    uploadBytes: player.lastBytesUploaded(),
-    drawCalls: player.lastDrawCalls(),
-    instances: player.lastInstancesDrawn(),
-    geometryCacheMisses: player.lastGeometryCacheMisses(),
+    totalRoundTripMs: ended - started,
+    authoringRoundTripMs,
+    attachAndPresentRoundTripMs: ended - attachStarted,
+    rebuilt: !cold,
+    longTasks: jank.summary(started, ended),
   };
 }
 
 function summarizeOperations(operations) {
   return {
     samples: operations.length,
-    incrementalCount: operations.filter(({ incremental }) => incremental).length,
-    timeToVisibleMs: summary(operations, "timeToVisibleMs"),
-    workerRoundTripMs: summary(operations, "workerRoundTripMs"),
-    stabilizeMs: summary(operations, "stabilizeMs"),
-    serializeMs: summary(operations, "serializeMs"),
-    serializedBytes: summary(operations, "serializedBytes"),
-    reconcileMs: summary(operations, "reconcileMs"),
-    visibleFrameWaitAndSubmitMs: summary(operations, "visibleFrameWaitAndSubmitMs"),
-    frameCpuMs: summarizeSamples(operations.map(({ frame }) => frame.cpuFrameMs)),
-    framePrepareMs: summarizeSamples(operations.map(({ frame }) => frame.prepareMs)),
-    frameUploadMs: summarizeSamples(operations.map(({ frame }) => frame.uploadMs)),
-    frameEncodeSubmitMs: summarizeSamples(operations.map(({ frame }) => frame.encodeSubmitMs)),
-    uploadBytes: summarizeSamples(operations.map(({ frame }) => frame.uploadBytes)),
-    longTaskCount: operations.reduce(
-      (sum, operation) => sum + (operation.longTasks.supported ? operation.longTasks.count : 0),
-      0,
+    rebuiltCount: operations.filter(({ rebuilt }) => rebuilt).length,
+    ...Object.fromEntries(
+      ["totalRoundTripMs", "authoringRoundTripMs", "attachAndPresentRoundTripMs"].map(
+        (field) => [field, summarizeSamples(operations.map((operation) => operation[field]))],
+      ),
     ),
   };
 }
 
-function summarizeScrubs(scrubs) {
-  return {
-    samples: scrubs.length,
-    timeToVisibleMs: summary(scrubs, "timeToVisibleMs"),
-    runtimeMs: summarizeSamples(scrubs.map(({ frame }) => frame.runtimeMs)),
-    prepareMs: summarizeSamples(scrubs.map(({ frame }) => frame.prepareMs)),
-    uploadMs: summarizeSamples(scrubs.map(({ frame }) => frame.uploadMs)),
-    encodeSubmitMs: summarizeSamples(scrubs.map(({ frame }) => frame.encodeSubmitMs)),
-    uploadBytes: summarizeSamples(scrubs.map(({ frame }) => frame.uploadBytes)),
-  };
-}
-
-function summary(values, field) {
-  return summarizeSamples(values.map((value) => value[field]));
-}
-
-function cameraHeight(count) {
-  const columns = Math.ceil(Math.sqrt(count * (16 / 9)));
-  const rows = Math.ceil(count / columns);
-  return Math.max(4.5, rows * 0.095);
-}
-
-async function loadText(path) {
-  const response = await fetch(path);
-  if (!response.ok) {
-    throw new Error(`Unable to load ${path}: HTTP ${response.status}`);
-  }
-  return response.text();
-}
-
-function nextAnimationFrame() {
-  return new Promise((resolve) => requestAnimationFrame(resolve));
-}
-
 function positiveInteger(name, fallback) {
   const value = parameters.get(name);
-  if (value === null) {
-    return fallback;
-  }
+  if (value === null) return fallback;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer`);
-  }
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
   return parsed;
-}
-
-function finite(value) {
-  return Number.isFinite(value) ? value : 0;
 }
 
 function format(value) {

@@ -1,6 +1,6 @@
 import math
 
-from noon import BLUE, RED, Circle, Scene, Vec2
+from noon import BLUE, RED, Circle, MovingCameraScene, Vec2, DEFAULT_FRAME_HEIGHT
 
 context_value = globals().get("context", {})
 if not isinstance(context_value, dict):
@@ -15,10 +15,11 @@ if object_count <= 0 or object_count > 100_000:
 if isinstance(variant, bool) or not isinstance(variant, int):
     raise TypeError("variant must be an integer")
 
-scene = Scene()
+scene = MovingCameraScene()
 aspect = 16.0 / 9.0
 columns = math.ceil(math.sqrt(object_count * aspect))
 rows = math.ceil(object_count / columns)
+scene.camera.frame.scale(max(4.5, rows * 0.095) / DEFAULT_FRAME_HEIGHT)
 spacing = 0.085
 radius = 0.026
 
@@ -29,6 +30,6 @@ for index in range(object_count):
     y = ((rows - 1) * 0.5 - row) * spacing
     color = RED if variant == 1 and index == object_count // 2 else BLUE
     dot = Circle(radius, color=color).set_stroke(None).move_to(Vec2(x, y))
-    scene.add(dot, key=f"perf.{index}")
+    scene.add(dot)
 
 result = scene
