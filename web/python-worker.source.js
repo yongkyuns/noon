@@ -118,8 +118,6 @@ async function initializePyodide() {
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
   self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
-  self.noonCreateAuthoringFamilyMemberHandle = () =>
-    authoringStore.createFamilyMember();
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
