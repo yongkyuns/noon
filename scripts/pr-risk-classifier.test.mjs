@@ -12,7 +12,6 @@ import {
 const canonicalRetainedRoutingChange = [
   "web/authoring-execution-client.js",
   "web/execution-worker-client.js",
-  "web/scene-identity.js",
 ];
 
 const retainedRuntimeChanges = [
