@@ -1,7 +1,7 @@
 """Public Noon authoring API.
 
 The public surface favors Manim-like semantic vocabulary. Browser authoring installs
-the shared Rust semantic scene facade used for execution and explicit export.
+the shared Rust semantic scene facade used for execution.
 """
 
 from __future__ import annotations
@@ -774,7 +774,7 @@ class _AnimationBuilder:
 
 
 class Scene(_ir.Scene):
-    """High-level scene facade whose authoritative mixed output is ``SceneSpec``."""
+    """Public scene facade; browser execution uses the shared Rust semantic store."""
 
     def __init__(self) -> None:
         super().__init__()
