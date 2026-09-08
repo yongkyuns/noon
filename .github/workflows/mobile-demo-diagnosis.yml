@@ -20,14 +20,17 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/mobile-repair-evidence"
           cp mobile-repair.patch.gz "$RUNNER_TEMP/mobile-repair-evidence/patch.gz"
+          cp mobile-followup.patch "$RUNNER_TEMP/mobile-followup.patch"
           gzip -dc mobile-repair.patch.gz > "$RUNNER_TEMP/mobile-repair.patch"
           echo "d9fee41e861ecdd46968388397d90c4e408f66800998b22a588c11a249513e5c  $RUNNER_TEMP/mobile-repair.patch" | sha256sum -c
           git restore mobile-repair.patch.gz
           git fetch --depth=1 origin "$BASE"
           git checkout --detach "$BASE"
           git apply --index "$RUNNER_TEMP/mobile-repair.patch"
+          git apply --index "$RUNNER_TEMP/mobile-followup.patch"
           git diff --cached --check
           git diff --cached --stat
+          git diff --cached > "$RUNNER_TEMP/mobile-repair-evidence/final.patch"
       - name: Python and worker contracts
         run: |
           python3 -m unittest discover -s web/python -p 'test_*.py'

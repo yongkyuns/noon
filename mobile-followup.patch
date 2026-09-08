@@ -1,0 +1,44 @@
+--- a/scripts/playground-main-thread-mobile-smoke.mjs
++++ b/scripts/playground-main-thread-mobile-smoke.mjs
+@@ -140,17 +140,31 @@
+       window.__mobileRun = window.__noonExampleGallery.select("parity-square-to-circle");
+       window.__mobileRun.catch(() => {});
+     });
+-    await page.waitForFunction(async () => {
+-      if (document.querySelector("#patch-status")?.dataset.state === "error") return true;
+-      const result = await window.__noonExampleGallery.executionMetrics();
+-      const time = result?.metrics?.time;
+-      if (time > 1.15 && time < 1.85 && result?.metrics?.objectCount === 1) {
+-        window.__mobileIntermediate = { time, backend: result.metrics.backend };
+-        return true;
++    let observation = null;
++    const sampleDeadline = Date.now() + 60_000;
++    while (Date.now() < sampleDeadline) {
++      // waitForFunction polls synchronous predicates; a Promise is truthy even
++      // when its eventual value is false. Await each metrics request explicitly.
++      const sample = await page.evaluate(async () => {
++        const gallery = window.__noonExampleGallery;
++        const patch = document.querySelector("#patch-status");
++        if (gallery.selectedExampleId !== "parity-square-to-circle" ||
++            patch?.dataset.exampleId !== "parity-square-to-circle") return null;
++        if (patch.dataset.state === "error") return { error: patch.value };
++        const result = await gallery.executionMetrics();
++        return result?.metrics ? {
++          time: result.metrics.time,
++          backend: result.metrics.backend,
++          objectCount: result.metrics.objectCount,
++        } : null;
++      });
++      assert.ok(!sample?.error, sample?.error);
++      if (sample?.time > 1.15 && sample.time < 1.85 && sample.objectCount === 1) {
++        observation = sample;
++        break;
+       }
+-      return false;
+-    }, null, { timeout: 60_000, polling: 25 });
+-    const observation = await page.evaluate(() => window.__mobileIntermediate);
++      await new Promise((resolve) => setTimeout(resolve, 25));
++    }
+     assert.ok(observation, "mobile source did not publish its intermediate transformation");
+     const intermediate = await page.locator("#scene").screenshot();
+     assert.ok(visiblePixels(intermediate) > 20, "mobile intermediate frame is blank");
