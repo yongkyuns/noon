@@ -177,7 +177,7 @@
       "surface": "Group/VGroup next_to submobject_to_align/index_of_submobject_to_align selection and arrange forwarded placement kwargs",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_next_to fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/WasmAuthoringFamilyArrange/WasmAuthoringFamilyTranslation"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/WasmAuthoringFamilyTranslation and noon::MobjectFamily::arrange"},
       "reason": "Default family relative placement and ordinary arrange sequencing are shared-Rust-owned, but explicit wrapper/member aligner selection and forwarded arrange placement kwargs still resolve in Python.",
       "replacement": "Expose shared family-member selection handles and route forwarded arrange alignment policy through the shared family placement API.",
       "migration_issue": "#61"
@@ -388,7 +388,7 @@
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/family_authoring.rs", "symbol": "FamilyArrangePlan/manim_family_arrange_deltas/MobjectFamily::arrange"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_arrange"}],
-      "reason": "The common Rust family planner owns direct-member order, validated bounds, spacing and recentering. MobjectFamily::arrange and LiveSession::arrange_family publish atomic translations; the WASM facade reuses the same planner and Python only supplies handles/options."
+      "reason": "The common Rust family planner owns direct-member order, validated bounds, spacing and recentering. MobjectFamily::arrange and LiveSession::arrange_family publish atomic translations; the WASM facade calls that same atomic operation directly. Python checks wrapper eligibility and supplies options without feeding bounds or applying per-leaf edits."
     },
     {
       "id": "rate-function.lookup",

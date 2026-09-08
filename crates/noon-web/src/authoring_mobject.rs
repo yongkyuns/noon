@@ -159,12 +159,12 @@ fn manim_family_align_to_delta(
 mod wasm {
     use std::{cell::RefCell, rc::Rc};
 
-    use noon::{semantic_family_leaf_ids, FamilyArrangePlan, FamilyTranslation};
+    use noon::{semantic_family_leaf_ids, FamilyTranslation};
     use noon_core::Bounds2D64;
     use wasm_bindgen::prelude::*;
 
     use super::{
-        manim_family_align_to_delta, manim_family_next_to_delta, render_f64, semantic_xy_f64,
+        manim_family_align_to_delta, manim_family_next_to_delta, semantic_xy_f64,
         FrontendFamilyTargetEditor, ManimNextToArgs, Mobject, SemanticNodeId, SemanticStore,
     };
 
@@ -320,7 +320,6 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyLayout {
         semantics: SharedSemanticStore,
-        family_id: SemanticNodeId,
         expected_leaves: Vec<SemanticNodeId>,
         next_leaf: usize,
         bounds: Option<Bounds2D64>,
@@ -330,96 +329,6 @@ mod wasm {
     pub struct WasmAuthoringFamilyTranslation {
         semantics: SharedSemanticStore,
         translation: FamilyTranslation,
-    }
-
-    #[wasm_bindgen]
-    pub struct WasmAuthoringFamilyArrange {
-        semantics: SharedSemanticStore,
-        plan: FamilyArrangePlan,
-        direction: (f64, f64),
-        buff: f64,
-        center: bool,
-        translations: Option<Vec<Option<FamilyTranslation>>>,
-        next_translation: usize,
-    }
-
-    impl WasmAuthoringFamilyArrange {
-        fn prepare(&mut self) -> Result<(), JsValue> {
-            if self.translations.is_none() {
-                let translations = self
-                    .plan
-                    .finish(self.direction.0, self.direction.1, self.buff, self.center)
-                    .map_err(js_error)?;
-                self.translations = Some(translations.into_iter().map(Some).collect());
-            }
-            Ok(())
-        }
-
-        fn mobject_member_id(
-            &self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<SemanticNodeId, JsValue> {
-            member.id_in_store(&self.semantics, "family arrange")
-        }
-    }
-
-    #[wasm_bindgen]
-    impl WasmAuthoringFamilyArrange {
-        #[wasm_bindgen(js_name = includeMobject)]
-        pub fn include_mobject(
-            &mut self,
-            member: &WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            let id = self.mobject_member_id(member)?;
-            self.plan
-                .accept_member_bounds(id, member.handle.layout_bounds().map_err(js_error)?)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = includeFamily)]
-        pub fn include_family(
-            &mut self,
-            layout: &WasmAuthoringFamilyLayout,
-        ) -> Result<(), JsValue> {
-            layout.ensure_complete()?;
-            if !Rc::ptr_eq(&self.semantics, &layout.semantics) {
-                return Err(JsValue::from_str(
-                    "family arrange and nested family belong to different authoring stores",
-                ));
-            }
-            self.plan
-                .accept_member_bounds(layout.family_id, layout.bounds)
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = nextTranslation)]
-        pub fn next_translation(&mut self) -> Result<WasmAuthoringFamilyTranslation, JsValue> {
-            self.prepare()?;
-            let translations = self.translations.as_mut().expect("prepared translations");
-            let slot = translations
-                .get_mut(self.next_translation)
-                .ok_or_else(|| JsValue::from_str("family arrange has no remaining translations"))?;
-            let translation = slot.take().ok_or_else(|| {
-                JsValue::from_str("family arrange translation was already consumed")
-            })?;
-            self.next_translation += 1;
-            Ok(WasmAuthoringFamilyTranslation {
-                semantics: Rc::clone(&self.semantics),
-                translation,
-            })
-        }
-
-        pub fn finish(&self) -> Result<(), JsValue> {
-            self.plan.ensure_complete().map_err(js_error)?;
-            if self.next_translation != self.plan.member_count() {
-                return Err(JsValue::from_str(&format!(
-                    "family arrange is incomplete: emitted {} of {} translations",
-                    self.next_translation,
-                    self.plan.member_count()
-                )));
-            }
-            Ok(())
-        }
     }
 
     impl WasmAuthoringFamilyLayout {
@@ -984,34 +893,23 @@ mod wasm {
                 semantic_family_leaf_ids(&self.semantics.borrow(), self.id).map_err(js_error)?;
             Ok(WasmAuthoringFamilyLayout {
                 semantics: Rc::clone(&self.semantics),
-                family_id: self.id,
                 expected_leaves,
                 next_leaf: 0,
                 bounds: None,
             })
         }
 
-        #[wasm_bindgen(js_name = arrangeSession)]
-        pub fn arrange_session(
+        /// Arrange authored family state through the shared atomic transaction.
+        pub fn arrange(
             &self,
             direction_x: f64,
             direction_y: f64,
             buff: f64,
             center: bool,
-        ) -> Result<WasmAuthoringFamilyArrange, JsValue> {
-            let direction = semantic_xy_f64(direction_x, direction_y).map_err(js_error)?;
-            let buff = render_f64("buffer", buff).map_err(js_error)?;
-            let plan =
-                FamilyArrangePlan::begin(&self.semantics.borrow(), self.id).map_err(js_error)?;
-            Ok(WasmAuthoringFamilyArrange {
-                semantics: Rc::clone(&self.semantics),
-                plan,
-                direction: (direction.x, direction.y),
-                buff,
-                center,
-                translations: None,
-                next_translation: 0,
-            })
+        ) -> Result<(), JsValue> {
+            noon::MobjectFamily::from_node(Rc::clone(&self.semantics), self.id)
+                .and_then(|family| family.arrange(direction_x, direction_y, buff, center))
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = targetEditor)]
