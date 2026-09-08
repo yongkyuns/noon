@@ -1,6 +1,15 @@
 from pathlib import Path
 import shutil
+import subprocess
 
+# Integrate the observed base without replaying old browser plumbing over it.
+for args in [
+    ['git', 'config', 'user.name', 'Yongkyun Shin'],
+    ['git', 'config', 'user.email', 'yongkyuns@gmail.com'],
+    ['git', 'fetch', '--depth=80', 'origin', '95f198804bc6f1983c4b86941888f611a4d9e89c', 'e4b0e30ec502eb34a2decac96b5f445a56e44a03'],
+    ['git', 'merge', '--no-ff', '--no-edit', 'e4b0e30ec502eb34a2decac96b5f445a56e44a03'],
+]:
+    subprocess.run(args, check=True)
 root = Path('.')
 carrier = Path(__file__).parent
 shutil.copyfile(carrier / 'playground-gallery-runtime-smoke.mjs', root / 'scripts/playground-gallery-runtime-smoke.mjs')
