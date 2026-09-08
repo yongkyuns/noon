@@ -19,7 +19,6 @@ const manifestPath = path.join(
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const ready = manifest.entries.filter((entry) => entry.status === "ready");
 assert.ok(ready.length >= 1, "expected exact-source Manim examples");
-const qualificationModes = new Set(["explicit-export", "shared-live"]);
 
 const parityManifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
 const parityManifest = JSON.parse(await readFile(parityManifestPath, "utf8"));
@@ -68,17 +67,9 @@ for (const entry of ready) {
   );
   assert.ok(entry.thumbnail, `${entry.id}: runnable examples require a static thumbnail`);
   assert.ok(entry.upstream_source, `${entry.id}: runnable examples require canonical upstream source`);
-  const qualificationMode = entry.qualification_mode ?? "explicit-export";
-  assert.ok(
-    qualificationModes.has(qualificationMode),
-    `${entry.id}: unknown qualification mode ${qualificationMode}`,
-  );
-  if (qualificationMode === "shared-live") {
-    assert.ok(
-      Number.isInteger(entry.expected_object_count) && entry.expected_object_count >= 0,
-      `${entry.id}: shared-live qualification requires a non-negative expected_object_count`,
-    );
-  }
+  assert.equal(entry.qualification_mode, "shared-live", `${entry.id}: ready examples require shared live qualification`);
+  assert.ok(Number.isInteger(entry.expected_object_count) && entry.expected_object_count >= 0,
+    `${entry.id}: shared-live qualification requires a non-negative expected_object_count`);
 
   const publicPath = path.join(repoRoot, "web", entry.path);
   const upstreamPath = path.join(repoRoot, entry.upstream_source);
@@ -124,26 +115,6 @@ async function waitForServer() {
   throw new Error(`Tutorial smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
-function latestEnd(document) {
-  const tracks = [...(document.tracks ?? []), ...(document.signal_tracks ?? [])];
-  if (tracks.length === 0) return 0;
-  return Math.max(...tracks.map((track) => track.timing.start_time + track.timing.duration));
-}
-
-function sceneDuration(result) {
-  const duration = Number(result.duration);
-  assert.ok(
-    Number.isFinite(duration) && duration >= 0,
-    "authoring result must expose finite non-negative Scene time",
-  );
-  const trackEnd = latestEnd(result.document);
-  assert.ok(
-    duration + 1e-9 >= trackEnd,
-    `Scene time ${duration} precedes latest emitted track end ${trackEnd}`,
-  );
-  return duration;
-}
-
 function expectedDuration(entry) {
   if (Number.isFinite(Number(entry.expected_duration))) {
     return Number(entry.expected_duration);
@@ -151,47 +122,6 @@ function expectedDuration(entry) {
   const fixture = parityFixtures.get(entry.parity_fixture);
   assert.ok(fixture, `${entry.id}: missing parity fixture`);
   return Number(fixture.expected_duration);
-}
-
-function assertDurationContract(entry, result) {
-  const actual = sceneDuration(result);
-  const expected = expectedDuration(entry);
-  assert.ok(
-    Math.abs(actual - expected) <= 1e-9,
-    `${entry.id}: expected duration ${expected}, got ${actual}`,
-  );
-}
-
-function authoredObjectCount(entry, result, retained) {
-  const geometryCount = result.document.objects.length;
-  const expectsRetainedText = entry.features?.includes("retained-text") ?? false;
-
-  if (expectsRetainedText) {
-    assert.equal(
-      geometryCount,
-      0,
-      `${entry.id}: retained text must not create placeholder geometry`,
-    );
-    assert.ok(retained, `${entry.id}: retained text requires a retained authoring document`);
-  }
-
-  if (retained == null) return geometryCount;
-
-  assert.equal(
-    retained.channel,
-    "noon.authoring.retained",
-    `${entry.id}: retained objects require the canonical retained authoring channel`,
-  );
-  assert.equal(
-    retained.protocol_version,
-    2,
-    `${entry.id}: retained objects require protocol v2`,
-  );
-  assert.ok(
-    Array.isArray(retained.objects),
-    `${entry.id}: retained authoring document requires an object list`,
-  );
-  return geometryCount + retained.objects.length;
 }
 
 let browser = null;
@@ -218,37 +148,21 @@ try {
     try {
       const source = readySources.get(entry.id);
       assert.ok(source, `${entry.id}: exact source was not loaded`);
-      if (entry.qualification_mode === "shared-live") {
-        // Migrated animations execute through the shared semantic continuation;
-        // an export document is no longer their canonical behavior proof.
-        const result = await page.evaluate(
-          (pythonSource) => window.noonManimCompat.runLive(pythonSource),
-          source,
-        );
-        const expected = expectedDuration(entry);
-        assert.ok(
-          Math.abs(result.duration - expected) <= 1e-9,
-          `${entry.id}: expected duration ${expected}, got ${result.duration}`,
-        );
-        assert.ok(result.metrics.presentedFrames > 0, `${entry.id}: shared execution did not render`);
-        assert.equal(
-          result.metrics.objectCount,
-          entry.expected_object_count,
-          `${entry.id}: shared execution published the wrong object count`,
-        );
-        console.log(`[PASS] ${entry.id}`);
-        continue;
-      }
       const result = await page.evaluate(
-        (pythonSource) => window.noonManimCompat.run(pythonSource),
+        (pythonSource) => window.noonManimCompat.runLive(pythonSource),
         source,
       );
-      const retained = await page.evaluate(
-        ({ result, label }) => window.noonManimCompat.retainedTextView(result, label),
-        { result, label: entry.id },
+      const expected = expectedDuration(entry);
+      assert.ok(
+        Math.abs(result.duration - expected) <= 1e-9,
+        `${entry.id}: expected duration ${expected}, got ${result.duration}`,
       );
-      assert.ok(authoredObjectCount(entry, result, retained) > 0, `${entry.id}: expected scene objects`);
-      assertDurationContract(entry, result);
+      assert.ok(result.metrics.presentedFrames > 0, `${entry.id}: shared execution did not render`);
+      assert.equal(
+        result.metrics.objectCount,
+        entry.expected_object_count,
+        `${entry.id}: shared execution published the wrong object count`,
+      );
       console.log(`[PASS] ${entry.id}`);
     } catch (error) {
       const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);

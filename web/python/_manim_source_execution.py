@@ -31,7 +31,6 @@ MODULE_BARRIER_GLOBAL = "_noon_await_module_barrier"
 
 @dataclass
 class _SourceInvocation:
-    export_document: bool
     cleanup: ExitStack
     authoring_scene_selected: bool = False
 
@@ -56,14 +55,14 @@ def current_source_invocation():
 
 
 @contextmanager
-def authoring_source_scope(*, export_document: bool = False):
+def authoring_source_scope():
     """Scope top-level host execution and restore continuation flags on exit.
 
-    Scene state and timing stay in Rust. The scope carries invocation mode and
-    host cleanup only; construct dispatch retains its portable/async handling.
+    Scene state and timing stay in Rust. The scope carries host context and
+    cleanup only; construct dispatch retains its portable/async handling.
     """
     with ExitStack() as cleanup:
-        token = _SOURCE_INVOCATION.set(_SourceInvocation(export_document, cleanup))
+        token = _SOURCE_INVOCATION.set(_SourceInvocation(cleanup))
         cleanup.callback(_SOURCE_INVOCATION.reset, token)
         yield
 

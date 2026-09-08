@@ -291,7 +291,7 @@
       "surface": "Single-leaf GrowFromPoint/Center/Edge, SpinInFromNothing and ShrinkToCenter",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "declare_and_activate_affine_lifecycle"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_play_canonical_affine_lifecycle"}]
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_affine_lifecycle_animation"}]
     },
     {
       "id": "animate.target-state",

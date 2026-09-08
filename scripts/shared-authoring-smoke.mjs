@@ -965,75 +965,8 @@ try {
     }
   }
 
-  // `exportDocument` is the explicit #959 codec boundary. It still runs the
-  // shared endpoint authoring operations, but it must never lease a renderer
-  // continuation from a normal def construct. Async source cannot satisfy that
-  // boundary and rejects before `Scene.setup` mutates the worker-resident scene.
-  const exportBoundary = await page.evaluate(async ({
-    ordinarySource,
-    asyncSource,
-    sentinelSource,
-  }) => {
-    const harness = window.sharedAuthoringSmoke;
-    let continuationRegistrations = 0;
-    const ordinary = await harness.authoring.run(ordinarySource, {}, {
-      exportDocument: true,
-      onSemanticContinuation() {
-        continuationRegistrations += 1;
-        throw new Error("document export must not register a continuation");
-      },
-    });
-    let asyncError = null;
-    try {
-      await harness.authoring.run(asyncSource, {}, { exportDocument: true });
-    } catch (error) {
-      asyncError = String(error);
-    }
-    const sentinel = await harness.authoring.run(sentinelSource, {}, { exportDocument: true });
-    return {
-      ordinary: {
-        duration: ordinary.duration,
-        objectCount: ordinary.document.objects.length,
-        translation: ordinary.document.objects[0].transform.translation,
-        animationTracks: ordinary.document.tracks,
-        hasSemanticExecution: Object.hasOwn(ordinary, "semanticExecution"),
-      },
-      continuationRegistrations,
-      asyncError,
-      sentinelObjectCount: sentinel.document.objects.length,
-    };
-  }, {
-    ordinarySource: ordinaryExportBoundarySource,
-    asyncSource: asyncExportBoundarySource,
-    sentinelSource: exportBoundarySentinelSource,
-  });
-  assert.equal(exportBoundary.ordinary.duration, 3);
-  assert.equal(exportBoundary.ordinary.objectCount, 1);
-  // Explicit exports retain authored base state and animation tracks rather
-  // than baking the live segment endpoint into a static document.
-  assert.deepEqual(exportBoundary.ordinary.translation, { x: 0, y: 0 });
-  const exportedMotion = exportBoundary.ordinary.animationTracks.find(
-    (track) => track.property === "position" || track.property === "transform",
-  );
-  assert.ok(exportedMotion, JSON.stringify(exportBoundary.ordinary.animationTracks));
-  const translation = exportedMotion.values.vec2 ?? {
-    from: exportedMotion.values.object.from.transform.translation,
-    to: exportedMotion.values.object.to.transform.translation,
-  };
-  assert.deepEqual(translation, { from: { x: 0, y: 0 }, to: { x: 2, y: 0 } });
-  assert.equal(exportedMotion.timing.start_time, 0);
-  assert.equal(exportedMotion.timing.duration, 2);
-  assert.equal(exportBoundary.ordinary.hasSemanticExecution, false);
-  assert.equal(exportBoundary.continuationRegistrations, 0);
-  assert.match(
-    exportBoundary.asyncError ?? "",
-    /exportDocument cannot run an async Scene construct/,
-  );
-  assert.equal(exportBoundary.sentinelObjectCount, 0);
-
-  // Normal Scene execution must never silently select the Python document
-  // engine, including before a Rust context exists. Explicit
-  // export above is the codec boundary; each rejected run uses the same worker.
+  // Reject legacy finalization without entering the document engine. Every
+  // rejected source uses the same worker, which must remain reusable.
   const rejectedFinalizations = await page.evaluate(async () => {
     const failures = [];
     const corruptions = [
@@ -1121,18 +1054,6 @@ author(result)
   } finally {
     await stopSampledSource(page);
   }
-
-  const topLevelExport = await page.evaluate(async () => {
-    const result = await window.sharedAuthoringSmoke.authoring.run(
-      "from noon import *\nresult = Scene()\ncircle = Circle(0.4)\nresult.add(circle)\nresult.wait(0.25)\nresult.play(circle.animate.shift(RIGHT), run_time=0.5, rate_func=linear)\nresult.wait(0.25)",
-      {}, { exportDocument: true, onSemanticContinuation() {
-        throw new Error("top-level export leased a continuation");
-      } },
-    );
-    return { duration: result.duration, objects: result.document.objects.length,
-      semantic: Object.hasOwn(result, "semanticExecution") };
-  });
-  assert.deepEqual(topLevelExport, { duration: 1, objects: 1, semantic: false });
 
   // A supported ordinary segment must fail at its JSPI capability gate instead
   // of silently using endpoint-only execution. The restore request verifies the

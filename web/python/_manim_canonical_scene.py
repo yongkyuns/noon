@@ -42,7 +42,6 @@ _CHECKPOINT_TAG = object()
 _ORIGINAL_AUTHORING_CHECKPOINT = _ir.Scene._authoring_checkpoint
 _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
 _ORIGINAL_BIND = _base.Mobject._bind_to_scene
-_ORIGINAL_PLAY = _base.Scene.play
 _ORIGINAL_BIND_POSITION = _base.Scene.bind_position
 _ORIGINAL_BIND_ROTATION = _base.Scene.bind_rotation
 _ORIGINAL_BIND_OPACITY = _base.Scene.bind_opacity
@@ -59,18 +58,9 @@ _ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
 _SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
 _PORTABLE_CONSTRUCT_MODE = "_noon_portable_construct_mode"
 _PORTABLE_BARRIER_CALL = "_noon_portable_barrier_call"
-_EXPORT_DOCUMENT_CONSTRUCT = "_noon_export_document_construct"
 _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
     "_noon_default_synchronous_continuation_candidate"
 )
-
-
-def _export_document_active(scene: _base.Scene) -> bool:
-    invocation = current_source_invocation()
-    return bool(
-        getattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
-        or (invocation is not None and invocation.export_document)
-    )
 
 
 def _json(value: object) -> str:
@@ -538,7 +528,7 @@ def _default_synchronous_continuation_candidate(scene: _base.Scene) -> bool:
     invocation = current_source_invocation()
     return bool(
         getattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False)
-        or (invocation is not None and not invocation.export_document
+        or (invocation is not None
             and not _async_continuation_active(scene))
     )
 
@@ -547,7 +537,6 @@ def _start_default_synchronous_continuation(scene: _base.Scene) -> None:
     """Enter the existing synchronous continuation only before Rust mutation."""
     if (
         not _default_synchronous_continuation_candidate(scene)
-        or _export_document_active(scene)
     ):
         return
     if _synchronous_continuation_active(scene):
@@ -583,15 +572,10 @@ def _semantic_continuation_active(scene: _base.Scene) -> bool:
 
 
 async def execute_construct(
-    scene: _base.Scene, *, export_document: bool = False, portable_constructs=None
+    scene: _base.Scene, *, portable_constructs=None
 ) -> None:
     """Run one Scene construct lifecycle with its canonical continuation mode."""
-    if export_document and inspect.iscoroutinefunction(scene.construct):
-        raise RuntimeError(
-            "exportDocument cannot run an async Scene construct; "
-            "async source requires a semantic continuation renderer"
-        )
-    canonical = not export_document and (
+    canonical = (
         _create_context is not None
         or getattr(scene, "_canonical_authoring_context", None) is not None
     )
@@ -600,7 +584,7 @@ async def execute_construct(
         scene.setup()
         try:
             portable_construct = None
-            if canonical and portable_constructs and not export_document:
+            if canonical and portable_constructs:
                 from _manim_source_execution import (
                     bind_portable_construct, has_portable_scene_methods,
                 )
@@ -614,16 +598,7 @@ async def execute_construct(
                     portable_construct = bind_portable_construct(
                         scene.construct, portable_constructs
                     )
-            if export_document:
-                # #959 owns this explicit codec/export boundary. Ordinary supported
-                # operations retain their existing Rust endpoint helpers here; they
-                # must not request a renderer continuation lease from an exporter.
-                setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, True)
-                try:
-                    scene.construct()
-                finally:
-                    setattr(scene, _EXPORT_DOCUMENT_CONSTRUCT, False)
-            elif portable_construct is not None:
+            if portable_construct is not None:
                 _begin_async_continuation_construct(scene)
                 setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
                 try:
@@ -690,7 +665,7 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
     invocation = current_source_invocation()
     from _manim_source_execution import has_portable_scene_methods
 
-    if (invocation is None or invocation.export_document
+    if (invocation is None
             or not isinstance(scene, _base.Scene)
             or getattr(method, "__func__", None) not in (_play, _canonical_wait)
             or not has_portable_scene_methods(
@@ -877,15 +852,6 @@ def _canonical_wait(
     scene: _base.Scene, duration: float = 1.0
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     _require_portable_barrier_admission(scene)
-    if _export_document_active(scene):
-        authority, _ = _timing_authority(scene)
-        if authority == "canonical":
-            try:
-                _context(scene).authoredWait(float(duration))
-            except Exception as error:
-                raise ValueError(str(error)) from None
-            return scene
-        return _ORIGINAL_WAIT(scene, duration)
     if (
         _default_synchronous_continuation_candidate(scene)
         and (
@@ -1025,114 +991,6 @@ def _canonical_affine_lifecycle_animation(
             return None
         return target, animation
     return None
-
-
-def _play_canonical_affine_lifecycle(
-    self: _base.Scene,
-    target: _base.Mobject,
-    animation: object,
-    *,
-    duration: float | None,
-    run_time: float | None,
-    start_time: float | None,
-    easing: str | None,
-    rate_func: object | None,
-    lag_ratio: float | None,
-    kwargs: dict[str, object],
-) -> _base.Scene | _SemanticContinuationAwaitable:
-    if start_time is not None or kwargs:
-        raise NotImplementedError("canonical affine lifecycle supports only play timing options")
-    resolved = _options.resolve(
-        builder_args=dict(getattr(animation, "anim_args", {})),
-        default_lag_ratio=0.0,
-        play_run_time=(run_time if run_time is not None else duration),
-        play_easing=easing,
-        play_rate_func=rate_func,
-        play_lag_ratio=lag_ratio,
-    )
-    if resolved.lag_ratio != 0.0 or resolved.path_arc != 0.0 or resolved.reverse_rate_function:
-        raise NotImplementedError("canonical affine lifecycle does not support lag or path options")
-    if getattr(animation, "_canonical_affine_lifecycle", None) == "shrink":
-        direction, endpoint, x, y, rotation_offset, color = "remove-to", "effective-center", 0.0, 0.0, 0.0, None
-    else:
-        direction, endpoint = "introduce-from", "point"
-        point = animation.point
-        x, y = float(point.x), float(point.y)
-        rotation_offset = -float(animation.angle) if animation.__class__.__name__ == "SpinInFromNothing" else 0.0
-        color = getattr(animation, "point_color", None)
-    rgba = (None, None, None, None) if color is None else (
-        float(color.red), float(color.green), float(color.blue), float(color.alpha)
-    )
-    _start_default_synchronous_continuation(self)
-    context = _context(self)
-    is_intro = direction == "introduce-from"
-    reservation = None
-    if target._scene is None:
-        reservation = _reserve_typed_binding(target, self, getattr(target, "_semantic_handle"), None)
-    object_id = str(reservation.object.id) if reservation is not None else str(target._object.id)
-    try:
-        _require_semantic_continuation_active(self)
-        if _semantic_continuation_active(self):
-            _prepare_semantic_continuation_callbacks(self, context)
-        method = (
-            context.beginOrdinaryAffineLifecycle
-            if _semantic_continuation_active(self)
-            else context.ordinaryPlayAffineLifecycle
-        )
-        method(
-            object_id,
-            getattr(target, "_semantic_handle"),
-            direction,
-            endpoint,
-            x,
-            y,
-            rotation_offset,
-            *rgba,
-            float(resolved.run_time),
-            str(resolved.rate_func),
-        )
-    except Exception as error:
-        raise ValueError(str(error)) from None
-    if reservation is not None:
-        _commit_typed_binding(target, self, reservation, getattr(target, "_semantic_handle"))
-        register = getattr(self, "_register_top_level", None)
-        if register is not None:
-            register(target)
-    if not is_intro:
-        def completed() -> None:
-            _reconcile_fade_membership(self, target, "out")
-    else:
-        completed = lambda: None
-    if _async_continuation_active(self):
-        return _continuation_awaitable(self, completed)
-    if _synchronous_continuation_active(self):
-        _synchronous_continuation_wait(self)
-        completed()
-        return self
-    completed()
-    return self
-
-
-def _play_legacy_compatibility(self: _base.Scene, *args, **kwargs):
-    """Author the explicitly requested #959 external document."""
-    if not _export_document_active(self):
-        raise NotImplementedError("legacy play is available only for explicit document export")
-    authority, _ = _timing_authority(self)
-    if authority == "canonical":
-        raise NotImplementedError(
-            "legacy Scene.play cannot follow canonical ValueTracker timing"
-        )
-    context = getattr(self, "_canonical_authoring_context", None)
-    ownership = getattr(context, "liveExecutionOwnership", None)
-    if callable(ownership) and str(ownership()) in {"active", "transferred", "returned"}:
-        raise NotImplementedError(
-            "an active canonical session cannot fall back to the legacy animation scheduler"
-        )
-    # Native Text timeline export stays in the canonical context. Its #959
-    # codec is store-derived at finalization, so geometry materialization must
-    # not force it through a geometry-only legacy document.
-    materialize_legacy_geometry(self)
-    return _ORIGINAL_PLAY(self, *args, **kwargs)
 
 
 def _canonical_fade_animation(
@@ -2291,25 +2149,6 @@ def _play_canonical_composition(
 
 def _play(self, *args, **kwargs):
     _require_portable_barrier_admission(self)
-    if _export_document_active(self):
-        # The requested external artifact still uses the #959 export codec.
-        if len(args) == 1:
-            classified = _canonical_affine_lifecycle_animation(self, args[0])
-            if classified is not None:
-                target, animation = classified
-                return _play_canonical_affine_lifecycle(
-                    self,
-                    target,
-                    animation,
-                    duration=kwargs.pop("duration", None),
-                    run_time=kwargs.pop("run_time", None),
-                    start_time=kwargs.pop("start_time", None),
-                    easing=kwargs.pop("easing", None),
-                    rate_func=kwargs.pop("rate_func", None),
-                    lag_ratio=kwargs.pop("lag_ratio", None),
-                    kwargs=kwargs,
-                )
-        return _play_legacy_compatibility(self, *args, **kwargs)
     if getattr(self, "_legacy_geometry_materialized", False):
         raise NotImplementedError("shared Scene.play cannot follow legacy geometry materialization")
 
