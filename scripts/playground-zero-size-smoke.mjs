@@ -93,16 +93,40 @@ async function startDeferredRuntime(page) {
 }
 
 async function waitForFrameAfter(page, previousFrames, label) {
-  await page.waitForFunction(
-    async (previous) => {
-      const status = document.querySelector("#status");
-      const report = await window.__noonExampleGallery.executionMetrics();
-      return status?.dataset.state !== "error" && report.metrics.presentedFrames > previous;
+  const current = await page.evaluate(
+    async ({ previous, label }) => {
+      const deadline = performance.now() + 10_000;
+      while (performance.now() < deadline) {
+        const report = await window.__noonExampleGallery.executionMetrics();
+        const metrics = report.metrics;
+        const canvas = document.querySelector("#scene");
+        const status = document.querySelector("#status");
+        const patchStatus = document.querySelector("#patch-status");
+        if (status?.dataset.state !== "error" && metrics.presentedFrames > previous) {
+          const rect = canvas.getBoundingClientRect();
+          return {
+            cssWidth: canvas.clientWidth,
+            cssHeight: canvas.clientHeight,
+            rectWidth: rect.width,
+            rectHeight: rect.height,
+            rendererBackend: status?.dataset.rendererBackend ?? "",
+            runtimeState: status?.dataset.state ?? "",
+            runtimeStartup: status?.dataset.runtimeStartup ?? "",
+            presentedFrames: metrics.presentedFrames,
+            renderedTime: metrics.time ?? null,
+            needsPresent: metrics.needsPresent ?? null,
+            executionMode: status?.dataset.executionMode ?? "",
+            metricTime: document.querySelector("#metric-time")?.value ?? "",
+            patchState: patchStatus?.dataset.state ?? "",
+            patchText: patchStatus?.value ?? patchStatus?.textContent ?? "",
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`${label}: no new frame was presented`);
     },
-    previousFrames,
-    { timeout: 10_000 },
+    { previous: previousFrames, label },
   );
-  const current = await snapshot(page);
   assert.ok(current.presentedFrames > previousFrames, `${label}: no new frame was presented`);
   assert.equal(current.rendererBackend, "WebGL2", `${label}: renderer backend changed`);
   assert.notEqual(current.runtimeState, "error", `${label}: runtime entered an error state`);
