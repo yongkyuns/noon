@@ -31,6 +31,9 @@ jobs:
         run: |
           export ENDPOINT_EVIDENCE="$RUNNER_TEMP/endpoint-evidence"
           echo "ENDPOINT_EVIDENCE=$ENDPOINT_EVIDENCE" >> "$GITHUB_ENV"
+          # Full branch history does not include refs/pull merge objects.
+          git fetch --no-tags origin "$ENDPOINT_BASE"
+          test "$(git rev-parse FETCH_HEAD)" = "$ENDPOINT_BASE"
           python3 - <<'PYTHON'
           """Final integration for the existing #1353 delta; not product source."""
           from pathlib import Path
