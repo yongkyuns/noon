@@ -12,7 +12,7 @@ use super::{
     SemanticLocalNodeToken, SemanticMutationTransactionError, SemanticNodeId, SemanticStore,
     SemanticTransactionNodeRef, TransactionNodeCatalog,
 };
-use crate::reactive::semantic_animations::validate_object_property_track;
+use crate::semantic_store::semantic_animations::validate_object_property_track;
 
 /// An authored animation intent whose references may name nodes staged by the
 /// same semantic transaction.

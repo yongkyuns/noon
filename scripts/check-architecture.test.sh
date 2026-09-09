@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='noon architecture gate ') as directory:
     (root / 'scripts').mkdir()
     names = ['check.sh', 'check-architecture.sh', 'layer-dependency-ratchet.sh',
              'layer_dependencies.py', 'architecture-ratchet.sh',
-             'architecture_migration_relocations.py', 'architecture_migration_relocations.json',
+             'architecture_retired_models.py',
              'noon-core-module-ownership-ratchet.sh', 'renderer-host-boundary-ratchet.sh',
              'active-perf-frontend-ratchet.sh']
     for name in names:

@@ -202,7 +202,7 @@ impl RetainedFramePreparer {
         })
     }
 
-    fn apply_family_reveal_to_scratch(
+    pub(super) fn apply_family_reveal_to_scratch(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
@@ -276,7 +276,7 @@ impl RetainedFramePreparer {
         Ok(())
     }
 
-    fn family_geometry_reveal(
+    pub(super) fn family_geometry_reveal(
         &self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
@@ -304,7 +304,7 @@ impl RetainedFramePreparer {
         }
     }
 
-    fn family_text_run_needs_outline(
+    pub(super) fn family_text_run_needs_outline(
         &self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
@@ -333,7 +333,7 @@ impl RetainedFramePreparer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn push_family_glyph_run(
+    pub(super) fn push_family_glyph_run(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,

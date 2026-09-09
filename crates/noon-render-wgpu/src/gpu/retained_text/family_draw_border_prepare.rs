@@ -1,3 +1,8 @@
+use super::*;
+use noon_core::{RetainedFamilyAnimationPlan, TextAnimationGlyphRef};
+use noon_runtime::RetainedFamilyFrame;
+use std::mem;
+
 use super::super::{
     retained_family_draw_border_then_fill_members_for_object, RetainedDrawBorderThenFillPhase,
     RetainedFamilyDrawBorderThenFillError,
@@ -193,7 +198,7 @@ impl RetainedFramePreparer {
         })
     }
 
-    fn apply_family_draw_border_then_fill_to_scratch(
+    pub(super) fn apply_family_draw_border_then_fill_to_scratch(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
@@ -276,7 +281,7 @@ impl RetainedFramePreparer {
         Ok(())
     }
 
-    fn family_text_run_needs_draw_border_paths(
+    pub(super) fn family_text_run_needs_draw_border_paths(
         &self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
@@ -306,7 +311,7 @@ impl RetainedFramePreparer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn push_family_draw_border_glyph_run(
+    pub(super) fn push_family_draw_border_glyph_run(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
@@ -389,7 +394,7 @@ impl RetainedFramePreparer {
     }
 }
 
-fn draw_border_glyph_style(
+pub(super) fn draw_border_glyph_style(
     run: &GlyphRun,
     object_style: Style,
     phase: RetainedDrawBorderThenFillPhase,

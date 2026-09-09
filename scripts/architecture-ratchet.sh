@@ -20,8 +20,8 @@ if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
 fi
 
 # Local gates inspect staged and unstaged code as well as committed changes.
-# Exact #959 relocation permissions are validated before the growth scan.
-relocation_permissions="$(python3 scripts/architecture_migration_relocations.py "$base")"
+# Retired authorities and namespaces stay absent throughout the working tree.
+python3 scripts/architecture_retired_models.py
 range="$base"
 fixture_path='crates/noon-compile/src/transaction_preflight/tests.rs'
 if [[ -f "$fixture_path" ]] && [[ "$(sed -n '1p' "$fixture_path")" != '#![cfg(test)]' ]]; then
@@ -39,12 +39,6 @@ while IFS= read -r line; do
   case "$line" in
     "+++ b/"*)
       current_file="${line#+++ b/}"
-      current_relocation_tokens=""
-      while IFS=$'\t' read -r allowed_path allowed_token; do
-        if [[ "$allowed_path" == "$current_file" ]]; then
-          current_relocation_tokens+=" $allowed_token"
-        fi
-      done <<< "$relocation_permissions"
       ;;
     +*)
       [[ "$line" == "+++ "* ]] && continue
@@ -54,14 +48,9 @@ while IFS= read -r line; do
       # The checker is tooling, not an engine consumer: its own enforcement
       # vocabulary necessarily names the forbidden types it checks. No product
       # path receives this exemption.
-      if [[ "$current_file" == 'scripts/architecture_migration_relocations.py' ]]; then
+      if [[ "$current_file" == 'scripts/architecture_retired_models.py' ]]; then
         migration_checked=""
       fi
-      # Each permission is bounded by a full-working-tree count and an exact
-      # reviewed file/symbol inventory; it cannot authorize new consumer paths.
-      for token in $current_relocation_tokens; do
-        migration_checked="${migration_checked//"$token"/}"
-      done
       if [[ "$migration_checked" =~ $forbidden ]]; then
         printf 'architecture ratchet: %s: +%s\n' "${current_file:-unknown}" "$added" >&2
         migration_found=1
@@ -110,25 +99,25 @@ make that absence structural. See #960/A5 and #961/A6.8.
 EOF
 fi
 
-normalized_runtime_module_indirection_found=0
-normalized_runtime_module_indirections="$(
+normalized_engine_module_indirection_found=0
+normalized_engine_module_indirections="$(
   git grep -nE \
     '^[[:space:]]*#\[[[:space:]]*path[[:space:]]*=|(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)' \
-    -- 'crates/noon-runtime/src' || true
+    -- 'crates/noon-runtime/src' 'crates/noon-render-wgpu/src' || true
 )"
 
-if [[ -n "$normalized_runtime_module_indirections" ]]; then
-  printf '%s\n' "$normalized_runtime_module_indirections" >&2
-  normalized_runtime_module_indirection_found=1
+if [[ -n "$normalized_engine_module_indirections" ]]; then
+  printf '%s\n' "$normalized_engine_module_indirections" >&2
+  normalized_engine_module_indirection_found=1
 fi
 
-if (( normalized_runtime_module_indirection_found != 0 )); then
+if (( normalized_engine_module_indirection_found != 0 )); then
   cat >&2 <<'EOF'
 
-noon-runtime module ownership was normalized by #983 and must stay explicit.
+Runtime and renderer module ownership must stay explicit.
 Organizational #[path] / include! indirection is structurally forbidden anywhere
-under crates/noon-runtime/src, including indirection that predates the current
-diff. Use ordinary Rust module layout instead. See #960/A5.2 and #961/A6.8.
+under noon-runtime/src and noon-render-wgpu/src, including indirection that predates
+the current diff. Use ordinary Rust modules. See #960/A5 and #961/A6.8.
 EOF
 fi
 
@@ -326,8 +315,8 @@ creating a second identity/store definition elsewhere. See #961/A6.3.
 EOF
 fi
 
-if (( migration_found != 0 || module_indirection_found != 0 || normalized_runtime_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || scene_player_consumer_spread_found != 0 || deleted_legacy_web_surface_found != 0 || identity_authority_found != 0 )); then
+if (( migration_found != 0 || module_indirection_found != 0 || normalized_engine_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || scene_player_consumer_spread_found != 0 || deleted_legacy_web_surface_found != 0 || identity_authority_found != 0 )); then
   exit 1
 fi
 
-echo "architecture migration-growth, module-growth, normalized-runtime-module, normalized-web-tool-player, ScenePlayer-consumer, deleted-legacy-web-surface, and semantic-identity ratchets passed"
+echo "architecture migration-growth, module-growth, normalized-engine-module, normalized-web-tool-player, ScenePlayer-consumer, deleted-legacy-web-surface, and semantic-identity ratchets passed"
