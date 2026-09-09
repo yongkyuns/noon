@@ -844,10 +844,8 @@ impl<'a> LiveSession<'a> {
         &mut self,
         options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, LiveSessionError> {
-        {
-            let store = self.store.borrow();
-            self.session.require_published_store(&store)?;
-        }
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = options
             .into_state(&mut self.store.borrow_mut())
             .map_err(LiveSessionError::Mobject)?;
@@ -860,6 +858,8 @@ impl<'a> LiveSession<'a> {
     /// scene membership or execution row until a later Add, FadeIn, or Create.
     #[cfg(feature = "native-text")]
     pub fn create_text(&mut self, text: crate::Text) -> Result<Mobject, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = crate::text_authoring::native_text_state(self.store, text)
             .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
         self.create_detached_mobject(state)
@@ -868,6 +868,8 @@ impl<'a> LiveSession<'a> {
     /// Compile and publish one detached Typst object through this live session.
     #[cfg(feature = "typst")]
     pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = crate::text_authoring::typst_state(self.store, text)
             .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
         self.create_detached_mobject(state)
@@ -879,6 +881,8 @@ impl<'a> LiveSession<'a> {
         &mut self,
         text: crate::MathTypst,
     ) -> Result<Mobject, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = crate::text_authoring::math_typst_state(self.store, text)
             .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
         self.create_detached_mobject(state)

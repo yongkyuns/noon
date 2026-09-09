@@ -454,6 +454,21 @@ impl<'a, 'store> FirstOccurrences<'a, 'store> {
     }
 }
 
+/// Validate the root identity used by semantic publication without traversing its members.
+/// Resource-producing callers use the same admission check before importing resources.
+pub fn validate_semantic_publication_root(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+) -> Result<(), SemanticPublicationLoweringError> {
+    let root_node = node_for_root_order(store, root)?;
+    if !matches!(root_node.kind(), SemanticNodeKind::Family) {
+        return Err(
+            SemanticLoweringError::Store(noon_core::SemanticStoreError::NotFamily(root)).into(),
+        );
+    }
+    Ok(())
+}
+
 /// Prepare root-relative painter effects against final staged membership/order.
 ///
 /// This is fallible compiler work before any publication. Only mutation targets,
@@ -464,12 +479,7 @@ pub fn prepare_semantic_root_order(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     root: SemanticNodeId,
 ) -> Result<Vec<ExecutionPatch>, SemanticPublicationLoweringError> {
-    let root_node = node_for_root_order(prepared.store(), root)?;
-    if !matches!(root_node.kind(), SemanticNodeKind::Family) {
-        return Err(
-            SemanticLoweringError::Store(noon_core::SemanticStoreError::NotFamily(root)).into(),
-        );
-    }
+    validate_semantic_publication_root(prepared.store(), root)?;
     if prepared.node_is_removed(root) {
         return Err(SemanticTransactionReadError::RemovedExistingNode(root).into());
     }
