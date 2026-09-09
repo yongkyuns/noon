@@ -2108,6 +2108,7 @@ impl SemanticExecutionPlayer {
         }
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     fn callback_token_from_json(token_json: &str) -> Result<CallbackPhaseToken, String> {
         let token: CallbackTokenWire = serde_json::from_str(token_json)
             .map_err(|error| format!("invalid callback token JSON: {error}"))?;
