@@ -205,7 +205,7 @@ jobs:
         run: |
           SECONDS=0
           set +e
-          timeout --signal=TERM 120s node scripts/retained-execution-worker-smoke.mjs
+          timeout --signal=TERM 120s node scripts/execution-worker-smoke.mjs
           status=$?
           set -e
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"

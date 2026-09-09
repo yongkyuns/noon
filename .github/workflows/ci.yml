@@ -170,8 +170,6 @@ jobs:
         run: node scripts/updater-callback-smoke.mjs
       - name: Test engine/render worker transports
         run: node scripts/execution-worker-smoke.mjs
-      - name: Test mixed retained worker transports
-        run: node scripts/retained-execution-worker-smoke.mjs
       - name: Test shared authoring routing, recovery, and termination
         run: node scripts/authoring-execution-router-smoke.mjs
       - name: Test required slow callbacks preserve shared execution order
