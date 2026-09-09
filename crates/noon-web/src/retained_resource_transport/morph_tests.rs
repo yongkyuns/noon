@@ -68,7 +68,7 @@ fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fal
         };
         let object = noon_compile::CompiledObject::new(
             ObjectId::new(0),
-            from.geometry.clone().into(),
+            from.geometry.clone(),
             from.transform,
             style,
         );
