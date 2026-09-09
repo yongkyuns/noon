@@ -482,7 +482,7 @@ for canonical in crates/noon/src/semantic_mobject.rs crates/noon/src/scene.rs cr
 done
 # The unconsumed slotted runtime wrapper must stay deleted even if a regression
 # already exists at the comparison base.
-for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy ExecutionCompactionStats ExecutionCompactionError TimedSceneInstance TimedSceneRuntimeError TimedSemanticScene SignalTimelineDefinition SignalTrackDefinition SignalTimelineError SemanticScene SceneBuildError; do
+for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy ExecutionCompactionStats ExecutionCompactionError TimedSceneInstance TimedSceneRuntimeError TimedSemanticScene SignalTimelineDefinition SignalTrackDefinition SignalTimelineError SemanticScene SceneBuildError RetainedFamilySceneInstance RetainedTextFamilySceneInstance RetainedFamilyPlanSceneInstance RetainedFamilyRuntimeError RetainedTextFamilyRuntimeError RetainedFamilyPlanRuntimeError RetainedTextFamilyFrame; do
   printf 'pub struct %s;\n' "$symbol" > src/runtime_wrapper_probe.rs
   git add src/runtime_wrapper_probe.rs
   git commit -qm 'restore retired runtime wrapper'

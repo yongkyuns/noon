@@ -3,7 +3,21 @@ use noon_core::{
     RetainedFamilyAnimationPlan,
 };
 
-use crate::RetainedFamilyFrame;
+use crate::FrameState;
+use noon_core::FamilyAnimationState;
+
+/// Evaluated retained frame plus content-independent family animation state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RetainedFamilyFrame<'a> {
+    pub retained: &'a FrameState,
+    pub family_animations: &'a [Option<FamilyAnimationState>],
+}
+
+impl RetainedFamilyFrame<'_> {
+    pub fn family_animation(&self, object_index: usize) -> Option<FamilyAnimationState> {
+        self.family_animations.get(object_index).copied().flatten()
+    }
+}
 
 /// Failure while binding one runtime family-animation slot to a prepared retained leaf.
 #[derive(Clone, Copy, Debug, PartialEq)]
